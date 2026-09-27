@@ -1,0 +1,41 @@
+{
+  "name": "gtnh-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first, safety-first agent foundation for GregTech: New Horizons on a private server.",
+  "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cli": "node src/app/cli.ts",
+    "agent:once": "node src/app/cli.ts once",
+    "check": "tsc -p tsconfig.json --noEmit && eslint . && prettier --check . && vitest run && tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^18.0.4",
+    "mineflayer": "^4.39.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.19.0",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  }
+}

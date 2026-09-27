@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+data/
+*.sqlite
+*.sqlite-*
+.env
+.env.*
+!.env.example
+agent.config.json
+# Mineflayer / prismarine-auth token caches must never be committed.
+.auth-cache/

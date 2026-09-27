@@ -1,0 +1,51 @@
+{
+  "minecraft": {
+    "host": "127.0.0.1",
+    "port": 25565,
+    "username": "gtnh_agent",
+    "auth": "offline",
+    "version": "1.7.10",
+    "allowedHostnames": [],
+    "enableLiveConnection": false,
+    "connectTimeoutMs": 15000
+  },
+  "database": { "path": "./data/agent.sqlite" },
+  "safety": {
+    "boundary": {
+      "min": { "x": -256, "y": 0, "z": -256 },
+      "max": { "x": 256, "y": 255, "z": 256 },
+      "allowedDimensions": ["overworld"]
+    },
+    "hazardAvoidanceRadius": 6,
+    "hostileThreatRadius": 10,
+    "minHealth": 10,
+    "hungerEatThreshold": 14,
+    "minHunger": 6,
+    "protectedItems": ["minecraft:diamond", "minecraft:nether_star", "minecraft:emerald"],
+    "approvedFoods": ["minecraft:bread", "minecraft:cooked_beef"],
+    "approvedFuels": ["minecraft:coal", "minecraft:charcoal"],
+    "maxFailuresPerActionPerTask": 2,
+    "maxStateAgeMs": 5000,
+    "maxClockSkewMs": 1000,
+    "maxMoveDistance": 64,
+    "maxRetreatDistance": 512,
+    "inventoryNearlyFullFraction": 0.9,
+    "interactionReach": 4.5
+  },
+  "routing": {
+    "homeLocationName": "home",
+    "dumpContainerId": "chest.main",
+    "machineWaitMs": 5000,
+    "refuelQuantity": 8,
+    "keepItems": []
+  },
+  "planner": { "provider": "mock", "maxPlanSteps": 8, "recentHistoryLimit": 10 },
+  "locations": {
+    "home": {
+      "dimension": "overworld",
+      "position": { "x": 0, "y": 64, "z": 0 },
+      "kind": "safe",
+      "note": "Replace with your base's safe spot"
+    }
+  }
+}

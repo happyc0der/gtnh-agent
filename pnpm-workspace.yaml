@@ -1,0 +1,9 @@
+# better-sqlite3 ships prebuilt N-API binaries for win32/darwin/linux (see node_modules/better-sqlite3/prebuilds),
+# so its node-gyp fallback build is not needed. Keep all dependency build scripts disabled.
+allowBuilds:
+  better-sqlite3: false
+
+# pnpm 12 links packages with Windows directory symlinks, which Node could not
+# follow on this machine (ENOENT through node_modules/<pkg>). The hoisted layout
+# writes a flat, npm-style node_modules with no symlinks.
+nodeLinker: hoisted
