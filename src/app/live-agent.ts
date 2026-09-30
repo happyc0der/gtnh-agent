@@ -434,3 +434,88 @@ export async function runLiveSession(
     db.close();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Watching (read-only)
+// ---------------------------------------------------------------------------
+
+/** One compact, human-readable line of what the agent sees now. */
+export function describeView(client: Gtnh1710Client, state: GameState): string {
+  const k = <T>(v: { known: true; value: T } | { known: false; reason?: string }): T | '?' =>
+    v.known ? v.value : '?';
+  const p = k(state.player.position);
+  const pos = p === '?' ? '?' : `(${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`;
+  const threats = state.nearbyThreats.known
+    ? `${state.nearbyThreats.value.hostileCount} hostile, ${state.nearbyThreats.value.unclassifiedCount} unidentified`
+    : '?';
+  const hazards = state.environmentHazards.known
+    ? state.environmentHazards.value.hazards
+        .slice(0, 3)
+        .map((h) => `${h.kind}@(${h.position.x},${h.position.y},${h.position.z})`)
+        .join(' ') || 'none'
+    : '?';
+  const entities = client.world
+    .nearbyEntities(16)
+    .slice(0, 4)
+    .map((e) => `${e.name}[${e.category}] ${e.distance.toFixed(1)}m`)
+    .join(', ');
+  // Other players exactly as the agent tracks them (compare with their own F3 X/Y/Z).
+  const players = client.world
+    .trackedEntities()
+    .filter((e) => e.kind === 'player')
+    .map(
+      (e) => `${e.classification.name}@(${e.x.toFixed(2)}, ${e.y.toFixed(2)}, ${e.z.toFixed(2)})`,
+    )
+    .join(' ');
+  const machines = state.machines.map((m) => `${m.name}@${m.id.slice(3)}=${m.status}`).join(' ');
+  const inv = state.inventory.known
+    ? Object.entries(state.inventory.value.items)
+        .map(([name, n]) => `${n} ${name}`)
+        .join(', ')
+    : '?';
+  return [
+    `pos ${pos} ${k(state.player.dimension)}`,
+    `health ${k(state.player.health)} food ${k(state.player.hunger)}`,
+    `threats ${threats}${entities ? ` (${entities})` : ''}`,
+    ...(players ? [`players ${players}`] : []),
+    `hazards ${hazards}`,
+    `machines ${machines || 'none'}`,
+    `inventory ${inv || 'empty'}`,
+    `open ${state.openContainerId ?? '-'}`,
+  ].join(' | ');
+}
+
+/**
+ * Stays connected for `seconds` (read-only: presence ticks only, so the bot stands where it
+ * is and other players can see it) and reports what the agent sees every `everySeconds`.
+ */
+export async function watchLive(
+  config: AgentConfig,
+  seconds: number,
+  everySeconds: number,
+  onLine: (line: string) => void,
+  log?: (line: string) => void,
+): Promise<void> {
+  await withLiveClient(
+    config,
+    async (client) => {
+      let stop = false;
+      const onInterrupt = (): void => {
+        stop = true;
+      };
+      process.once('SIGINT', onInterrupt);
+      try {
+        const end = Date.now() + seconds * 1000;
+        while (!stop && Date.now() < end) {
+          const state = await client.observe();
+          onLine(`${new Date().toISOString().slice(11, 19)} ${describeView(client, state)}`);
+          const wait = Math.min(everySeconds * 1000, Math.max(0, end - Date.now()));
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        }
+      } finally {
+        process.removeListener('SIGINT', onInterrupt);
+      }
+    },
+    log,
+  );
+}

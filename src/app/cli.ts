@@ -17,6 +17,7 @@ import {
   runLiveMove,
   setMovementHalted,
   summarizeObservation,
+  watchLive,
   withLiveClient,
 } from './live-agent.ts';
 import { runMockScenario } from './mock-agent.ts';
@@ -36,6 +37,9 @@ Usage:
       Connect, print what the agent can observe (and a map of the movement fence), disconnect.
       --radius widens the diagnostic entity (and, above 32, hazard) lists; the agent's own
       scans stay at 16 m (entities) and 32 m (hazards).
+  node src/app/cli.ts watch --live [--seconds 60] [--every 5]
+      Stay connected (read-only) and print what the agent sees every few seconds: to compare
+      with what you see in-game. The bot stands still and is visible to other players.
   node src/app/cli.ts move --live --to <x,y,z | location> [--tolerance N] [--dry-run] [--db <path>]
       WALK the player (needs MC_ENABLE_MOVEMENT=true and a fence). One action, validated,
       executed and verified like the agent's own; Ctrl+C stops it. --dry-run only plans it
@@ -132,6 +136,8 @@ async function main(argv: string[]): Promise<number> {
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
       count: { type: 'string', default: '1' },
+      seconds: { type: 'string', default: '60' },
+      every: { type: 'string', default: '5' },
       'max-cycles': { type: 'string', default: String(DEFAULT_SESSION_LIMITS.maxCycles) },
       'max-minutes': { type: 'string', default: String(DEFAULT_SESSION_LIMITS.maxMinutes) },
       tolerance: { type: 'string', default: '0.5' },
@@ -241,6 +247,18 @@ async function main(argv: string[]): Promise<number> {
       if (maps.length > 0) process.stdout.write(`${maps.join('\n')}\n`);
       if (out.result === null) return out.plan?.ok === true ? 0 : 1;
       return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'watch': {
+      if (!values.live) {
+        process.stderr.write(
+          'watch connects to the configured test server; pass --live to confirm.\n',
+        );
+        return 1;
+      }
+      const seconds = Math.max(1, Math.min(3600, Number(values.seconds) || 60));
+      const every = Math.max(1, Math.min(60, Number(values.every) || 5));
+      await watchLive(config, seconds, every, (line) => process.stdout.write(`${line}\n`), log);
+      return 0;
     }
     case 'run': {
       if (!values.live) {
