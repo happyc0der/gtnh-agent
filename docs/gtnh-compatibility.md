@@ -120,6 +120,41 @@ Live results (_verified_, 2026-09-30):
 
 No test produced a server warning (moved wrongly, moved too quickly, floating, illegal stance).
 
+## Chests (2026-09-30)
+
+Vanilla chests, tested with the chest in the pen (-5, 200, -5). Protocol facts (_verified_ from
+1.7.10's `NetHandlerPlayServer.processClickWindow` and `Container.slotClick` behaviour, and live):
+
+- Right-clicking a block is C08 with the held item. The client selects an empty hotbar slot (C09)
+  first, so the click can only open the chest.
+  - The server answers with S2D (window id, type 0 = chest, 27 or 54 slots), then S30 (chest
+    slots plus the player's 36).
+- Each click is C0E (window, slot, button, action number, mode 0) with the stack the client
+  believes was in the slot. The server applies the click, then compares.
+  - Match: S32 accepted, and NO slot updates.
+  - Mismatch: S32 rejected, plus an immediate full re-sync (S30, then the cursor as S2F window −1
+    slot −1). Further clicks are ignored until the client acknowledges with C0F.
+- **Items on the cursor are dropped into the world** when the window closes (C0D) or the player
+  disconnects.
+- **`setblock` over an existing chest drops its contents** in 1.7.10 with Forge: breakBlock runs
+  even when only the block's metadata changes. The operator tool checks with `testforblock`
+  first.
+
+Live results (_verified_, 2026-09-30):
+
+| Test                                    | Result                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------ |
+| Open `chest.pen`                        | Contents read exactly: 128 cobblestone, 3 diamonds, 16 bread.                        |
+| Withdraw 10 cobblestone                 | 12 clicks (pick up 64, place 10, put 54 back); player 0→10, chest 128→118, verified. |
+| Deposit 10 back                         | 2 clicks; player 10→0, chest 118→128, verified.                                      |
+| Withdraw 100 / deposit 100 (two stacks) | 50 clicks / 4 clicks; all deltas verified.                                           |
+| Withdraw a diamond (protected)          | Refused by the safety policy (`PROTECTED_ITEM`); nothing clicked.                    |
+| Withdraw 500 (more than there is)       | Refused as a precondition; nothing clicked.                                          |
+
+No item entity appeared near the pen afterwards (nothing was dropped), and the server logged no
+warnings. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
+click simulation (tests), not live.
+
 ## Machines (2026-09-30)
 
 GregTech sends machine state to clients on its own plugin channel, `GregTech`. Each message is a
@@ -271,8 +306,9 @@ Minecraft. GTNH adds hundreds of mods. None of the following is guaranteed to wo
 
 1. ~~Item identifiers~~ **Verified:** names come from the per-world FML registry; `@damage` is
    appended when non-zero (GT meta-items encode their sub-type there; for tools it is wear).
-2. A "container" can be opened and have items moved by a generic window API. This is likely false
-   for many GTNH containers.
+2. ~~A "container" can be opened and have items moved by a generic window API~~ **Verified for
+   vanilla chests** (see "Chests"). Still likely false for many GTNH containers, which is why
+   only plain `minecraft:chest` blocks are accepted.
 3. A generator's accepted fuels and fuel level are knowable. In reality this may need GUI scraping,
    a server-side helper mod, or manual configuration.
 4. ~~Machine `status` can be observed~~ **Partly verified** (see "Machines"): GregTech machines
@@ -300,8 +336,9 @@ with backups, never on a public server.
 4. **Movement in a fenced area. DONE 2026-09-30** (see "Walking"): our own walker (never digs,
    places, jumps or enters fluids) inside a glass pen. Boundary, lava, server-correction and stop
    checks all verified live.
-5. **One container type at a time.** Vanilla chest first, then each modded container. Verify
-   exact inventory deltas; keep a container on the allowlist only after it passes.
+5. **One container type at a time. Vanilla chest DONE 2026-09-30** (see "Chests"): exact deltas
+   verified live on both sides. Next: each modded container, one at a time, kept on the
+   allowlist only after it passes the same checks.
 6. **Machines (read-only). DONE 2026-09-30** for GregTech machines' enabled/running state (see
    "Machines"). Still open: power and machine contents (GUI read or a helper mod) before
    `INSPECT_MACHINE` can do more than look.

@@ -15,10 +15,12 @@ whether each is enabled and running, from GregTech's own network channel; stored
 With everything critical observable, a live cycle pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
 1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
-**Walking (2026-09-30):** with movement explicitly enabled and a fence configured, `MOVE_TO` and
-`RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence: no jumping, climbing,
-falling or block changes. Every other world-changing action still returns `NOT_IMPLEMENTED`. See
-[Walking in the test pen](#walking-in-the-test-pen).
+**Walking and chests (2026-09-30):** with movement explicitly enabled and a fence configured,
+`MOVE_TO` and `RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence (no jumping,
+climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, `WITHDRAW_ITEM` and
+`DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. The remaining
+world-changing actions return `NOT_IMPLEMENTED`. See
+[Walking in the test pen](#walking-in-the-test-pen) and [Chests](#chests).
 
 ## Requirements
 
@@ -44,35 +46,36 @@ cp agent.config.example.json agent.config.json
 
 ## Commands
 
-| Task                                         | Command                                          |
-| -------------------------------------------- | ------------------------------------------------ |
-| Unit + integration tests                     | `pnpm test`                                      |
-| Lint (incl. architectural boundaries)        | `pnpm lint`                                      |
-| Type check (strict)                          | `pnpm typecheck`                                 |
-| Format check / fix                           | `pnpm format:check` / `pnpm format`              |
-| Build to `dist/`                             | `pnpm build`                                     |
-| Everything                                   | `pnpm check`                                     |
-| **One mock agent cycle**                     | `pnpm agent:once`                                |
-| One cycle of a named scenario                | `pnpm agent:once --scenario hungry`              |
-| Scenario list                                | `pnpm cli scenarios`                             |
-| Throwaway in-memory DB                       | `pnpm agent:once --memory`                       |
-| Full cycle result                            | `pnpm agent:once --full`                         |
-| Recent action log                            | `pnpm cli history --limit 20`                    |
-| Resume a paused/blocked task                 | `pnpm cli task-resume --task task-action-fails`  |
-| Planner output JSON Schema                   | `pnpm cli plan-schema`                           |
-| Open plans / one task's latest plan          | `pnpm cli plan-show [--task <id>]`               |
-| Approve a plan waiting for approval          | `pnpm cli plan-approve --task <id> --plan <n>`   |
-| Reject a task's open plan                    | `pnpm cli plan-reject --task <id> --reason ...`  |
-| Show validated config                        | `pnpm cli config`                                |
-| **Observe the live test server (read-only)** | `pnpm cli observe --live`                        |
-| One agent cycle against the live server      | `pnpm cli once --live`                           |
-| Plan a walk and draw it (no movement)        | `pnpm cli move --live --to home --dry-run`       |
-| **Walk** (to `x,y,z` or a named location)    | `pnpm cli move --live --to=-0.5,200,-11.5`       |
-| Stop all walking / allow it again            | `pnpm cli halt` / `pnpm cli unhalt`              |
-| Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`     |
-| Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                             |
-| Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`     |
-| GregTech machine survey (channel + states)   | `node scripts/gt-machine-survey.ts --seconds 10` |
+| Task                                         | Command                                                                                   |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Unit + integration tests                     | `pnpm test`                                                                               |
+| Lint (incl. architectural boundaries)        | `pnpm lint`                                                                               |
+| Type check (strict)                          | `pnpm typecheck`                                                                          |
+| Format check / fix                           | `pnpm format:check` / `pnpm format`                                                       |
+| Build to `dist/`                             | `pnpm build`                                                                              |
+| Everything                                   | `pnpm check`                                                                              |
+| **One mock agent cycle**                     | `pnpm agent:once`                                                                         |
+| One cycle of a named scenario                | `pnpm agent:once --scenario hungry`                                                       |
+| Scenario list                                | `pnpm cli scenarios`                                                                      |
+| Throwaway in-memory DB                       | `pnpm agent:once --memory`                                                                |
+| Full cycle result                            | `pnpm agent:once --full`                                                                  |
+| Recent action log                            | `pnpm cli history --limit 20`                                                             |
+| Resume a paused/blocked task                 | `pnpm cli task-resume --task task-action-fails`                                           |
+| Planner output JSON Schema                   | `pnpm cli plan-schema`                                                                    |
+| Open plans / one task's latest plan          | `pnpm cli plan-show [--task <id>]`                                                        |
+| Approve a plan waiting for approval          | `pnpm cli plan-approve --task <id> --plan <n>`                                            |
+| Reject a task's open plan                    | `pnpm cli plan-reject --task <id> --reason ...`                                           |
+| Show validated config                        | `pnpm cli config`                                                                         |
+| **Observe the live test server (read-only)** | `pnpm cli observe --live`                                                                 |
+| One agent cycle against the live server      | `pnpm cli once --live`                                                                    |
+| Plan a walk and draw it (no movement)        | `pnpm cli move --live --to home --dry-run`                                                |
+| **Walk** (to `x,y,z` or a named location)    | `pnpm cli move --live --to=-0.5,200,-11.5`                                                |
+| Stop all walking and chest use / allow again | `pnpm cli halt` / `pnpm cli unhalt`                                                       |
+| Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
+| Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
+| Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
+| Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`                                              |
+| GregTech machine survey (channel + states)   | `node scripts/gt-machine-survey.ts --seconds 10`                                          |
 
 `agent:once` persists to `./data/agent.sqlite` by default (`AGENT_DB_PATH` or `--db` override).
 Try `pnpm agent:once --scenario action-fails` three times: two failures, then the third attempt is
@@ -131,6 +134,8 @@ and [docs/action-contract.md](docs/action-contract.md).
   network/multiblock changes or rare-item use.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
+- Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
+  and only if the block is a plain `minecraft:chest` (see below).
 - Protected items are never consumed or moved.
 
 ## Project notes
@@ -196,3 +201,30 @@ a steam macerator, and a macerator that is switched off. `observe` lists them wi
 
 `pnpm cli observe --live` and `move` draw a top-down map of the fence. To watch in-game, join
 `127.0.0.1:25570` with a GTNH 2.8.4 client as a whitelisted player.
+
+### Chests
+
+The second world-changing ability: moving exact amounts between the player and a configured
+vanilla chest. The test chest sits in the pen three blocks south of the centre, at (-5, 200, -5).
+It holds 128 cobblestone, 3 diamonds (a protected item) and 16 bread.
+
+- `node scripts/test-server-admin.ts pen chest` places it, but only where there is no chest: in
+  1.7.10 any `setblock` over a chest drops its contents into the world. `pen build` never
+  touches that block.
+- Settings: `MC_ENABLE_CONTAINERS=true`, and the chest in `agent.config.json` under
+  `minecraft.containers.chests` (`pen chest` prints the entry).
+- `pnpm cli chest --live --container chest.pen [--withdraw <item> | --deposit <item>] --count N`
+  runs `OPEN_CONTAINER`, then the move, as checked user actions in one connection. Both sides are
+  verified: player inventory and chest.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#chests)):
+
+- The chest is right-clicked only with an empty hand (the client switches to an empty hotbar
+  slot first), and only if the block really is a `minecraft:chest`. Trapped chests are refused
+  because they emit redstone.
+- Only predictable clicks are used: pick up a stack, put a stack into an empty slot, or place
+  one item at a time. Items are never merged into existing stacks.
+- Every click waits for the server's confirmation.
+- The cursor is never left holding items. A rejected click is re-synced, and the cursor is put
+  back into an empty slot.
+- Protected items never move, and neither do stacks with NBT data.

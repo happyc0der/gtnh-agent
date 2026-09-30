@@ -27,6 +27,7 @@ import {
 } from './gregtech.ts';
 import { ChunkStore, decodeChunkBulk, decodeChunkColumn, type ChunkFormat } from './chunk-data.ts';
 import { scanHazards, type HazardScan } from './hazard-scan.ts';
+import type { WindowSnapshot } from './container.ts';
 import { nameItemStack, type Registry } from './registry.ts';
 import type { Vec3, WalkWorld } from './walking.ts';
 import { ProtocolError } from './wire.ts';
@@ -95,6 +96,23 @@ const MAX_REPORTED_MACHINES = 64;
 /** The block every GregTech machine (and pipe) is. */
 const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 
+/** A chest the agent may use (from config). */
+export interface ContainerDefinition {
+  id: string;
+  name: string;
+  position: { x: number; y: number; z: number };
+}
+
+/** The container window the server has open for the player (window 0, the inventory, excluded). */
+export interface OpenWindow extends WindowSnapshot {
+  windowId: number;
+  inventoryType: number;
+  /** The configured container it belongs to, when the agent opened it; null otherwise. */
+  containerId: string | null;
+  /** Slots are known once the server has sent them (S30); until then `slots` is empty. */
+  slotsKnown: boolean;
+}
+
 export interface TrackedMachine {
   x: number;
   y: number;
@@ -123,6 +141,14 @@ export class WorldModel {
   #health: { health: number; food: number } | null = null;
   #heldSlot = 0;
   #window: Array<ItemStackData | null> | null = null;
+  #containers: readonly ContainerDefinition[] = [];
+  #openWindow: OpenWindow | null = null;
+  /** The stack on the cursor (S2F window -1 slot -1), only meaningful while a window is open. */
+  #cursor: ItemStackData | null = null;
+  /** The container the agent is about to open: claimed by the next open-window packet. */
+  #expectedContainer: string | null = null;
+  /** Counts S30s for the open window (the client waits for a re-sync after a rejected click). */
+  #windowSyncs = 0;
   #lastPacketAt: Date | null = null;
   #joined = false;
   /** Set when an inventory packet could not be decoded; cleared by the next full window refresh. */
@@ -191,6 +217,71 @@ export class WorldModel {
       case 'gt-other':
         return;
     }
+  }
+
+  /** Chests the agent may use (config); reported in GameState.storage. */
+  setContainers(defs: readonly ContainerDefinition[]): void {
+    this.#containers = defs;
+  }
+
+  /** The agent is about to open this container: the next window the server opens is it. */
+  expectContainer(containerId: string | null): void {
+    this.#expectedContainer = containerId;
+  }
+
+  /** Window 0 (the player's own inventory container), as last sent by the server. */
+  get inventoryWindow(): ReadonlyArray<ItemStackData | null> | null {
+    return this.#window;
+  }
+
+  get openWindow(): OpenWindow | null {
+    const w = this.#openWindow;
+    return w === null ? null : { ...w, slots: [...w.slots], cursor: this.#cursor };
+  }
+
+  get windowSyncs(): number {
+    return this.#windowSyncs;
+  }
+
+  get heldSlot(): number {
+    return this.#heldSlot;
+  }
+
+  /** C09 was sent: the server does not echo a hotbar change the client made itself. */
+  setHeldSlot(slot: number): void {
+    if (slot >= 0 && slot <= 8) this.#heldSlot = slot;
+  }
+
+  /** The server accepted a click: apply the predicted result (it sends no slot updates for it). */
+  applyWindowSnapshot(snapshot: WindowSnapshot): void {
+    const w = this.#openWindow;
+    if (w === null || !w.slotsKnown) return;
+    w.slots = [...snapshot.slots];
+    this.#cursor = snapshot.cursor;
+  }
+
+  /** The client closed the window (C0D). */
+  closeWindowLocally(): void {
+    this.#closeWindow();
+  }
+
+  /**
+   * Ends the open window. The player's part of it is the latest view of the inventory (the
+   * server does not update window 0 while another window is open), so it is copied back.
+   */
+  #closeWindow(): void {
+    const w = this.#openWindow;
+    if (
+      w !== null &&
+      w.slotsKnown &&
+      this.#window !== null &&
+      this.#window.length >= MIN_PLAYER_WINDOW_SLOTS
+    ) {
+      for (let i = 0; i < 36; i++)
+        this.#window[STORAGE_FIRST + i] = w.slots[w.containerSlots + i] ?? null;
+    }
+    this.#openWindow = null;
+    this.#cursor = null;
   }
 
   /** A GregTech message could not be decoded: stop reporting machines for this session. */
@@ -525,14 +616,54 @@ export class WorldModel {
         if (packet.windowId === 0) {
           this.#window = [...packet.items];
           this.#inventoryProblem = null;
+        } else if (packet.windowId === this.#openWindow?.windowId) {
+          const w = this.#openWindow;
+          if (packet.items.length === w.containerSlots + 36) {
+            w.slots = [...packet.items];
+            w.slotsKnown = true;
+          } else {
+            w.slots = [];
+            w.slotsKnown = false;
+            this.#inventoryProblem ??= `container window has ${packet.items.length} slots, expected ${w.containerSlots + 36}`;
+          }
+          this.#windowSyncs += 1;
         }
         return;
       case 'set-slot':
-        if (packet.windowId === 0 && this.#window !== null && packet.slot >= 0) {
+        if (packet.windowId === -1 && packet.slot === -1) {
+          this.#cursor = packet.item;
+        } else if (packet.windowId === 0 && this.#window !== null && packet.slot >= 0) {
           while (this.#window.length <= packet.slot) this.#window.push(null);
           this.#window[packet.slot] = packet.item;
+        } else if (
+          packet.windowId === this.#openWindow?.windowId &&
+          this.#openWindow.slotsKnown &&
+          packet.slot >= 0 &&
+          packet.slot < this.#openWindow.slots.length
+        ) {
+          const slots = [...this.#openWindow.slots];
+          slots[packet.slot] = packet.item;
+          this.#openWindow.slots = slots;
         }
         return;
+      case 'open-window':
+        this.#closeWindow();
+        this.#openWindow = {
+          windowId: packet.windowId,
+          inventoryType: packet.inventoryType,
+          containerSlots: packet.slotCount,
+          slots: [],
+          slotsKnown: false,
+          cursor: null,
+          containerId: this.#expectedContainer,
+        };
+        this.#expectedContainer = null;
+        return;
+      case 'close-window':
+        if (packet.windowId === this.#openWindow?.windowId) this.#closeWindow();
+        return;
+      case 'confirm-transaction':
+        return; // the client matches confirmations to its clicks
       case 'chat':
         this.#chat.push(packet.json.slice(0, 500));
         if (this.#chat.length > 20) this.#chat.shift();
@@ -577,13 +708,39 @@ export class WorldModel {
         generators: [],
       },
       machines: this.#machinesState(),
-      storage: [],
-      openContainerId: null,
+      storage: this.#storageState(),
+      openContainerId: this.#openWindow?.containerId ?? null,
       currentTask: null,
       knownRecipeState: null,
       lastAction: null,
     };
     return GameStateSchema.parse(state);
+  }
+
+  /** Configured chests; contents are known only while the agent has that chest open. */
+  #storageState(): GameState['storage'] {
+    return this.#containers.map((c) => {
+      const w = this.#openWindow;
+      let items: GameState['storage'][number]['items'] = unknown(
+        'chest contents are known only while the agent has it open',
+      );
+      if (w !== null && w.containerId === c.id && w.slotsKnown) {
+        const counts: Record<string, number> = {};
+        let problem: string | null = null;
+        for (let i = 0; i < w.containerSlots; i++) {
+          const s = w.slots[i];
+          if (s == null) continue;
+          const naming = nameItemStack(this.#registry, s.id, s.damage);
+          if (!naming.ok) {
+            problem = naming.reason;
+            break;
+          }
+          counts[naming.name] = (counts[naming.name] ?? 0) + s.count;
+        }
+        items = problem === null ? known(counts) : unknown(problem);
+      }
+      return { id: c.id, name: c.name, position: known({ ...c.position }), items };
+    });
   }
 
   /** GregTech machines within MACHINE_SCAN_RADIUS, nearest first. Stored energy is never sent. */
@@ -698,25 +855,39 @@ export class WorldModel {
 
   #heldTool(): GameState['player']['heldTool'] {
     if (this.#inventoryProblem !== null) return unknown(this.#inventoryProblem);
-    const w = this.#window;
-    if (w === null || w.length < MIN_PLAYER_WINDOW_SLOTS)
-      return unknown('inventory not received yet');
-    const stack = w[HOTBAR_FIRST + this.#heldSlot];
+    const slots = this.#playerSlots();
+    if (typeof slots === 'string') return unknown(slots);
+    const stack = slots[HOTBAR_FIRST - STORAGE_FIRST + this.#heldSlot];
     return stack === null || stack === undefined
       ? known(null)
       : unknown('held item durability is not known yet');
   }
 
+  /**
+   * The player's 36 storage slots (27 main, then 9 hotbar): from the open container window
+   * while there is one (window 0 is not updated then), otherwise from window 0.
+   */
+  #playerSlots(): Array<ItemStackData | null> | string {
+    const open = this.#openWindow;
+    if (open !== null) {
+      if (!open.slotsKnown) return 'container window contents not received yet';
+      return open.slots.slice(open.containerSlots, open.containerSlots + 36);
+    }
+    const w = this.#window;
+    if (w === null) return 'inventory not received yet';
+    if (w.length < MIN_PLAYER_WINDOW_SLOTS) return `unexpected player window size ${w.length}`;
+    return w.slice(STORAGE_FIRST, STORAGE_LAST + 1);
+  }
+
   #inventory(): Known<{ items: Record<string, number>; usedSlots: number; capacitySlots: number }> {
     if (this.#inventoryProblem !== null) return unknown(this.#inventoryProblem);
-    const w = this.#window;
-    if (w === null) return unknown('inventory not received yet');
-    if (w.length < MIN_PLAYER_WINDOW_SLOTS)
-      return unknown(`unexpected player window size ${w.length}`);
+    const slots = this.#playerSlots();
+    if (typeof slots === 'string') return unknown(slots);
     const items: Record<string, number> = {};
     let usedSlots = 0;
-    for (let slot = STORAGE_FIRST; slot <= STORAGE_LAST; slot++) {
-      const stack = w[slot];
+    for (let i = 0; i < slots.length; i++) {
+      const slot = STORAGE_FIRST + i;
+      const stack = slots[i];
       if (stack === null || stack === undefined) continue;
       if (stack.count <= 0) return unknown(`slot ${slot} has a non-positive stack size`);
       const naming = nameItemStack(this.#registry, stack.id, stack.damage);

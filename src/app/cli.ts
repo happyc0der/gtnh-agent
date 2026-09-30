@@ -10,6 +10,7 @@ import { errorMessage } from '../util/json.ts';
 import type { CycleResult } from './agent-loop.ts';
 import {
   movementStatus,
+  runLiveChest,
   runLiveCycle,
   runLiveMove,
   setMovementHalted,
@@ -35,6 +36,9 @@ Usage:
       WALK the player (needs MC_ENABLE_MOVEMENT=true and a fence). One action, validated,
       executed and verified like the agent's own; Ctrl+C stops it. --dry-run only plans it
       and draws the path on a map of the fence.
+  node src/app/cli.ts chest --live --container <id> [--withdraw <item> | --deposit <item>] [--count N]
+      Open a configured vanilla chest (needs MC_ENABLE_CONTAINERS=true) and optionally move
+      exactly N items, as checked user actions; prints the chest and inventory afterwards.
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
       Create / remove the stop file (nothing walks while it exists) / show movement settings.
   node src/app/cli.ts scenarios            List mock scenarios.
@@ -106,6 +110,10 @@ async function main(argv: string[]): Promise<number> {
       plan: { type: 'string' },
       reason: { type: 'string' },
       to: { type: 'string' },
+      container: { type: 'string' },
+      withdraw: { type: 'string' },
+      deposit: { type: 'string' },
+      count: { type: 'string', default: '1' },
       tolerance: { type: 'string', default: '0.5' },
       'dry-run': { type: 'boolean', default: false },
       live: { type: 'boolean', default: false },
@@ -213,6 +221,41 @@ async function main(argv: string[]): Promise<number> {
       if (maps.length > 0) process.stdout.write(`${maps.join('\n')}\n`);
       if (out.result === null) return out.plan?.ok === true ? 0 : 1;
       return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'chest': {
+      if (!values.live) {
+        process.stderr.write('chest uses the configured test server; pass --live to confirm.\n');
+        return 1;
+      }
+      if (values.container === undefined) {
+        process.stderr.write('chest requires --container <id>\n');
+        return 1;
+      }
+      if (values.withdraw !== undefined && values.deposit !== undefined) {
+        process.stderr.write('use either --withdraw or --deposit, not both\n');
+        return 1;
+      }
+      const quantity = Number(values.count);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        process.stderr.write('--count must be a positive whole number\n');
+        return 1;
+      }
+      const item = values.withdraw ?? values.deposit;
+      const out = await runLiveChest(
+        config,
+        dbPath,
+        values.container,
+        item === undefined
+          ? null
+          : { direction: values.withdraw !== undefined ? 'withdraw' : 'deposit', item, quantity },
+        log,
+      );
+      print({
+        actions: out.results.map((r) => (values.full ? r : compact('live-chest', dbPath, r))),
+        chest: out.chest,
+        inventory: out.inventory,
+      });
+      return out.results.every((r) => r.status === 'succeeded') ? 0 : 1;
     }
     case 'halt':
       print(setMovementHalted(config, true, values.reason));

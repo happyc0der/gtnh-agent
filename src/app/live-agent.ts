@@ -289,3 +289,83 @@ export async function runLiveMove(
     db.close();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Vanilla chests
+// ---------------------------------------------------------------------------
+
+export interface LiveChestResult {
+  results: CycleResult[];
+  /** The chest's contents and the player's inventory after the last action (when known). */
+  chest: Record<string, number> | null;
+  inventory: Record<string, number> | null;
+  info: ConnectionInfo;
+}
+
+/**
+ * Opens a configured chest and optionally moves items, as user-requested actions in one
+ * connection (OPEN_CONTAINER first, so the chest's contents are known and a withdrawal can
+ * be validated; then DEPOSIT_ITEM or WITHDRAW_ITEM). Each is validated, executed and
+ * verified like the agent's own actions. Stops after the first action that does not succeed.
+ */
+export async function runLiveChest(
+  config: AgentConfig,
+  dbPath: string,
+  containerId: string,
+  transfer: { direction: 'deposit' | 'withdraw'; item: string; quantity: number } | null,
+  log?: (line: string) => void,
+): Promise<LiveChestResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const deps = {
+            config,
+            client,
+            repos,
+            decisionProvider: new DeterministicDecisionProvider(),
+            planner: null,
+            clock: systemClock,
+            newId: randomIds,
+          };
+          const specs: ActionSpec[] = [{ type: 'OPEN_CONTAINER', args: { containerId } }];
+          if (transfer !== null) {
+            specs.push({
+              type: transfer.direction === 'deposit' ? 'DEPOSIT_ITEM' : 'WITHDRAW_ITEM',
+              args: { containerId, item: transfer.item, quantity: transfer.quantity },
+            });
+          }
+          const results: CycleResult[] = [];
+          for (const spec of specs) {
+            const result = await runUserAction(
+              deps,
+              spec,
+              `requested by the operator: chest ${containerId}`,
+            );
+            results.push(result);
+            if (result.status !== 'succeeded') break;
+          }
+          const state = await client.observe();
+          const chest = state.storage.find((s) => s.id === containerId);
+          return {
+            results,
+            chest: chest?.items.known ? chest.items.value : null,
+            inventory: state.inventory.known ? state.inventory.value.items : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}

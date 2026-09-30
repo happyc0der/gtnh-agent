@@ -105,7 +105,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     expect(state.power.availableEUt.known).toBe(false);
 
     const info = client.info();
-    expect(info.registry).toEqual({ items: 2005, blocks: 9 });
+    expect(info.registry).toEqual({ items: 2005, blocks: 11 });
     expect(info.identity).toEqual({
       motd: 'gtnh-agent-test (localhost only)',
       version: '1.7.10',

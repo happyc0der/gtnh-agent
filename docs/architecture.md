@@ -121,6 +121,36 @@ The `move` command runs one such action for a human (origin `user`). The repeate
 not apply to it (it is the human's decision each time), and its failures do not count against the
 agent's own attempts.
 
+## Chests
+
+`OPEN_CONTAINER`, `WITHDRAW_ITEM` and `DEPOSIT_ITEM` work on configured vanilla chests
+(`src/bot/gtnh1710/container.ts` plans; `Gtnh1710Client` sends). Three 1.7.10 facts shape the design:
+
+- The server confirms an accepted click (S32) without sending the resulting slots, so the client
+  must predict every click exactly.
+- On a mismatch the server rejects the click and re-sends the whole window.
+- Closing a window, or disconnecting, with items on the cursor DROPS them into the world.
+
+So, in layers:
+
+1. The executor validates as usual. The chest must be known storage within `interactionReach`,
+   the item must not be protected, and there must be enough of it. A withdrawal also needs the
+   chest's contents to be known, which they are only while the agent has it open, so
+   `OPEN_CONTAINER` comes first.
+2. The client opens only a configured chest whose block is `minecraft:chest` (never a trapped
+   chest), with an empty hand, and accepts only a chest window (27 or 54 slots).
+3. `planTransfer` builds the whole move from predictable clicks: pick up a stack, put it into an
+   EMPTY slot, or place one item at a time into a slot it filled itself. It never merges into
+   other stacks, so item stack limits never matter, and it never touches stacks with NBT data.
+   It refuses up front when the move cannot finish exactly.
+4. Clicks go one at a time, each waiting for the server's verdict. On a rejection the client
+   acknowledges it, takes the server's re-sync, puts whatever is on the cursor back into an empty
+   slot, and reports failure.
+5. The window stays open so the executor can verify both sides (player −/+ exactly, chest +/−
+   exactly). It closes only with an empty cursor.
+
+`halt()`, the stop file and an ongoing walk also block chest use.
+
 ## Why code, not AI, enforces safety
 
 - **Determinism and auditability.** A rule like "never deposit a protected item" must hold every
@@ -135,16 +165,16 @@ agent's own attempts.
 
 ## Enforced boundaries
 
-| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                 |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                             |
-| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) outside `src/bot/`.                                                                                                                                                                                                 |
-| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; every other world-changing action returns `NOT_IMPLEMENTED`. |
-| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                      |
-| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                   |
-| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                          |
-| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true.                                                                                                                                          |
-| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                               |
+| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) outside `src/bot/`.                                                                                                                                                                                                                                                                                                                                                                              |
+| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, and the chest packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; every other world-changing action returns `NOT_IMPLEMENTED`. |
+| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                   |
+| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                |
+| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                       |
+| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true.                                                                                                                                                                                                                                                                                                                       |
+| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Directory map
 

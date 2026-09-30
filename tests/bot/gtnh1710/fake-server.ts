@@ -10,6 +10,7 @@ import {
   i32,
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
+import { FakeChestSim, type FakeChest } from './fake-chests.ts';
 import {
   blockChangeFrame,
   chunkBulkFrame,
@@ -64,6 +65,10 @@ export interface FakeServerOptions {
   corruptChunks?: boolean;
   /** Stream the chunk columns around spawn after joining, as the real server does (default true). */
   sendChunks?: boolean;
+  /** Vanilla chests (their blocks must also be in blockOverrides). */
+  chests?: FakeChest[];
+  /** 1-based click numbers the server rejects (as if the client's claim did not match). */
+  rejectClicks?: number[];
 }
 
 export interface ReceivedPacket {
@@ -233,6 +238,8 @@ export class FakeGtnhServer {
   readonly confirmedPositions: ConfirmedPosition[] = [];
   /** Every placement (S08) the server sent: the join spawn and placePlayer() calls. */
   readonly placements: Array<{ x: number; eyeY: number; z: number }> = [];
+  /** Chest state of the most recent connection. */
+  chestSim: FakeChestSim | null = null;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -280,6 +287,8 @@ export class FakeGtnhServer {
       blockOverrides: options.blockOverrides ?? new Map(),
       voidColumns: options.voidColumns ?? new Set(),
       corruptChunks: options.corruptChunks ?? false,
+      chests: options.chests ?? [],
+      rejectClicks: options.rejectClicks ?? [],
     };
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
@@ -389,9 +398,11 @@ export class FakeGtnhServer {
 
   #onConnection(socket: Socket): void {
     this.#sockets.add(socket);
+    let sim: FakeChestSim | null = null;
     socket.on('close', () => {
       this.#sockets.delete(socket);
       this.#playSockets.delete(socket);
+      sim?.onDisconnect();
     });
     socket.on('error', () => undefined);
     let state: ReceivedPacket['state'] = 'handshaking';
@@ -457,6 +468,14 @@ export class FakeGtnhServer {
           );
           state = 'play';
           this.#playSockets.add(socket);
+          sim = new FakeChestSim({
+            chests: this.#opts.chests,
+            playerInventory: this.#opts.inventory,
+            modularUi: this.#opts.mods.some((m) => m.modid === 'modularui'),
+            rejectClicks: new Set(this.#opts.rejectClicks),
+            send,
+          });
+          this.chestSim = sim;
           send(
             plugin(
               'REGISTER',
@@ -503,6 +522,7 @@ export class FakeGtnhServer {
             break;
           }
           default:
+            sim?.handle(frame.packetId, r);
             break;
         }
       }

@@ -22,9 +22,10 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // ---------------------------------------------------------------------------
 // Outbound: the ONLY packets this client can ever send. Anything that could change
 // the world (digging, placing, clicking windows, chat/commands, using items,
-// attacking) is intentionally absent. The one exception is walking: 'player-move'
-// reports a new position, and the client only sends it for steps that walking.ts
-// has checked (see Gtnh1710Client).
+// attacking) is intentionally absent. The exceptions are walking ('player-move', only for
+// steps walking.ts has checked) and vanilla chests ('activate-block', 'select-slot',
+// 'click-window', 'confirm-transaction', 'close-window', only as container.ts plans them);
+// see Gtnh1710Client.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -35,7 +36,12 @@ export type OutboundKind =
   | 'plugin-message'
   | 'player-idle'
   | 'confirm-server-position'
-  | 'player-move';
+  | 'player-move'
+  | 'activate-block'
+  | 'select-slot'
+  | 'click-window'
+  | 'confirm-transaction'
+  | 'close-window';
 
 export interface OutboundPacket {
   kind: OutboundKind;
@@ -123,6 +129,82 @@ export const outbound = {
   },
 
   /**
+   * C08 Player Block Placement used ONLY to right-click (activate) a block with an EMPTY
+   * hand: the client selects an empty hotbar slot first, so nothing can be placed or used.
+   */
+  activateBlock(x: number, y: number, z: number, face: number): OutboundPacket {
+    if (!Number.isInteger(face) || face < 0 || face > 5) throw new ProtocolError('bad face');
+    if (!Number.isInteger(y) || y < 0 || y > 255) throw new ProtocolError('bad y');
+    return {
+      kind: 'activate-block',
+      frame: encodeFrame(
+        0x08,
+        Buffer.concat([
+          i32(x),
+          Buffer.from([y]),
+          i32(z),
+          Buffer.from([face]),
+          i16(-1), // held item: empty hand
+          Buffer.from([8, 8, 8]), // cursor at the face centre (sixteenths)
+        ]),
+      ),
+    };
+  },
+
+  /** C09 Held Item Change: select hotbar slot 0-8. */
+  selectHotbarSlot(slot: number): OutboundPacket {
+    if (!Number.isInteger(slot) || slot < 0 || slot > 8) throw new ProtocolError('bad hotbar slot');
+    return { kind: 'select-slot', frame: encodeFrame(0x09, i16(slot)) };
+  },
+
+  /**
+   * C0E Click Window, normal click (mode 0) only. `claimed` is the slot's stack before the
+   * click, which the server compares with its own (see container.ts).
+   */
+  clickWindow(
+    windowId: number,
+    slot: number,
+    button: 0 | 1,
+    actionNumber: number,
+    claimed: ItemStackData | null,
+    modularUi: boolean,
+  ): OutboundPacket {
+    if (windowId < 1 || windowId > 127) throw new ProtocolError('bad window id');
+    if (!Number.isInteger(slot) || slot < 0 || slot > 32767) throw new ProtocolError('bad slot');
+    if (actionNumber < 1 || actionNumber > 32767) throw new ProtocolError('bad action number');
+    return {
+      kind: 'click-window',
+      frame: encodeFrame(
+        0x0e,
+        Buffer.concat([
+          Buffer.from([windowId]),
+          i16(slot),
+          Buffer.from([button]),
+          i16(actionNumber),
+          Buffer.from([0]), // mode 0: normal click
+          writeItemStack(claimed, modularUi),
+        ]),
+      ),
+    };
+  },
+
+  /** C0F Confirm Transaction: acknowledge a click the server rejected (it then re-syncs). */
+  confirmTransaction(windowId: number, actionNumber: number): OutboundPacket {
+    return {
+      kind: 'confirm-transaction',
+      frame: encodeFrame(
+        0x0f,
+        Buffer.concat([Buffer.from([windowId]), i16(actionNumber), bool(true)]),
+      ),
+    };
+  },
+
+  /** C0D Close Window. The caller must make sure nothing is on the cursor (it would be dropped). */
+  closeWindow(windowId: number): OutboundPacket {
+    return { kind: 'close-window', frame: encodeFrame(0x0d, Buffer.from([windowId])) };
+  },
+
+  /**
    * C06 Player Position And Look, used to acknowledge a position the server just set
    * (S08). The caller passes the server's packet, never a computed position.
    */
@@ -190,6 +272,15 @@ export type PlayPacket =
   | ({ type: 'server-position'; onGround: boolean } & ServerPosition)
   | { type: 'held-item'; slot: number }
   | { type: 'set-slot'; windowId: number; slot: number; item: ItemStackData | null }
+  | {
+      type: 'open-window';
+      windowId: number;
+      inventoryType: number;
+      title: string;
+      slotCount: number;
+    }
+  | { type: 'close-window'; windowId: number }
+  | { type: 'confirm-transaction'; windowId: number; actionNumber: number; accepted: boolean }
   | { type: 'window-items'; windowId: number; items: Array<ItemStackData | null> }
   | { type: 'plugin-message'; channel: string; data: Buffer }
   | { type: 'disconnect'; reason: string }
@@ -292,6 +383,27 @@ export const VANILLA_DECODING: PlayDecodeOptions = { itemStackSizeVarInt: false,
  * 1.7.10 item stack: short id (-1 = empty), byte count, short damage, short NBT length
  * (+ gzip NBT), and with ModularUI a trailing VarInt holding the real stack size.
  */
+/**
+ * An item stack as 1.7.10 writes it (plus GTNH ModularUI's VarInt stack size). Only
+ * NBT-free stacks are ever sent.
+ */
+export function writeItemStack(stack: ItemStackData | null, modularUi: boolean): Buffer {
+  if (stack === null) return i16(-1);
+  if (stack.hasNbt) throw new ProtocolError('refusing to send an item stack with NBT data');
+  const b = Buffer.alloc(7);
+  b.writeInt16BE(stack.id, 0);
+  b.writeInt8(((stack.count & 0xff) << 24) >> 24, 2); // vanilla byte (truncated above 127)
+  b.writeInt16BE(stack.damage, 3);
+  b.writeInt16BE(-1, 5); // no NBT
+  return modularUi ? Buffer.concat([b, encodeVarInt(stack.count)]) : b;
+}
+
+function i16(n: number): Buffer {
+  const b = Buffer.alloc(2);
+  b.writeInt16BE(n);
+  return b;
+}
+
 export function readItemStack(
   r: Reader,
   options: PlayDecodeOptions = VANILLA_DECODING,
@@ -365,6 +477,24 @@ export function decodePlay(
       const length = r.varShort();
       return { type: 'plugin-message', channel, data: Buffer.from(r.bytes(length)) };
     }
+    case 0x2d: {
+      const windowId = r.u8();
+      const inventoryType = r.u8();
+      const title = r.string();
+      const slotCount = r.u8();
+      r.bool(); // use the title as given
+      if (inventoryType === 11) r.i32(); // horse inventories carry the horse's entity id
+      return { type: 'open-window', windowId, inventoryType, title, slotCount };
+    }
+    case 0x2e:
+      return { type: 'close-window', windowId: r.u8() };
+    case 0x32:
+      return {
+        type: 'confirm-transaction',
+        windowId: r.u8(),
+        actionNumber: r.i16(),
+        accepted: r.bool(),
+      };
     case 0x40:
       return { type: 'disconnect', reason: r.string() };
     case 0x0c: {

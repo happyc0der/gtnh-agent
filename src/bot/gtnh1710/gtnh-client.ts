@@ -9,6 +9,15 @@ import { assertValidatedAction, type ValidatedAction } from '../../domain/valida
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
+import {
+  applyClick,
+  containerRange,
+  planEmptyCursor,
+  planTransfer,
+  playerRange,
+  type Click,
+  type TransferDirection,
+} from './container.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
 import {
@@ -16,6 +25,7 @@ import {
   decodeLogin,
   decodePlay,
   outbound,
+  PLAYER_EYE_HEIGHT,
   type OutboundKind,
   type OutboundPacket,
   type PlayDecodeOptions,
@@ -23,6 +33,7 @@ import {
   type ServerPosition,
   VANILLA_DECODING,
 } from './packets.ts';
+import { resolveItemName } from './registry.ts';
 import { parseIdentity, statusPing, type ServerIdentity } from './status-ping.ts';
 import {
   planWalk,
@@ -43,6 +54,14 @@ const IDLE_TICK_MS = 50;
 const WALK_TICK_MS = 50;
 /** After the last step, ticks to wait for a server correction before calling a walk done. */
 const SETTLE_TICKS = 5;
+/** How long to wait for a chest window, and for the server's verdict on one click. */
+const WINDOW_OPEN_TIMEOUT_MS = 3_000;
+const CLICK_TIMEOUT_MS = 3_000;
+/** Server reach is 8 blocks to the block centre; the client stays well inside it. */
+const MAX_CHEST_DISTANCE = 6;
+const VANILLA_CHEST = 'minecraft:chest';
+/** 1.7.10 window types: 0 = chest (27 or 54 slots). */
+const CHEST_WINDOW_TYPE = 0;
 /** The server sends at least a time update every second; within this window the state is current. */
 const FRESHNESS_WINDOW_MS = 3_000;
 /**
@@ -115,6 +134,10 @@ export class Gtnh1710Client implements MinecraftClient {
   #listeners: Array<() => void> = [];
   #walking = false;
   #haltReason: string | null = null;
+  /** Server verdicts on our clicks (S32), by action number. */
+  readonly #clickVerdicts = new Map<number, boolean>();
+  #nextActionNumber = 1;
+  #usingContainer = false;
 
   constructor(opts: Gtnh1710ClientOptions) {
     this.#opts = opts;
@@ -169,6 +192,13 @@ export class Gtnh1710Client implements MinecraftClient {
     };
     this.#world.setChunkFormat({ neid: this.#decoding.neid });
     this.#world.setServerMods(this.#identity.mods);
+    this.#world.setContainers(
+      Object.entries(cfg.containers.chests).map(([id, c]) => ({
+        id,
+        name: c.name,
+        position: { ...c.position },
+      })),
+    );
     this.#log(`block format: ${this.#decoding.neid ? 'NotEnoughIDs (16-bit ids)' : 'vanilla'}`);
     this.#log(
       `item stack format: ${this.#decoding.itemStackSizeVarInt ? 'ModularUI (VarInt stack size)' : 'vanilla'}`,
@@ -227,10 +257,21 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'RETURN_TO_SAFE_LOCATION':
         // A retreat is how the agent gets away from a threat, so threats do not stop it.
         return this.#walkTo(validated.resolvedTarget, { stopForThreats: false });
-      case 'EAT_FOOD':
       case 'OPEN_CONTAINER':
+        return this.#containerAction(action.args.containerId, null);
       case 'DEPOSIT_ITEM':
+        return this.#containerAction(action.args.containerId, {
+          direction: 'to_container',
+          item: action.args.item,
+          quantity: action.args.quantity,
+        });
       case 'WITHDRAW_ITEM':
+        return this.#containerAction(action.args.containerId, {
+          direction: 'to_player',
+          item: action.args.item,
+          quantity: action.args.quantity,
+        });
+      case 'EAT_FOOD':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
         return Promise.resolve(
@@ -240,6 +281,232 @@ export class Gtnh1710Client implements MinecraftClient {
           ),
         );
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Vanilla chests
+
+  /** Why container use cannot start now, or null. */
+  #containerBlocker(): string | null {
+    const cfg = this.#opts.config;
+    if (!cfg.containers.enabled) return 'containers are disabled (MC_ENABLE_CONTAINERS)';
+    if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return `the stop file ${cfg.movement.stopFile} exists`;
+    }
+    if (this.#walking) return 'the player is walking';
+    return null;
+  }
+
+  /**
+   * OPEN_CONTAINER (transfer null), DEPOSIT_ITEM and WITHDRAW_ITEM on a configured vanilla
+   * chest. The chest window stays open afterwards (so the chest's side can be verified);
+   * the cursor is always empty when this returns, unless it reports that it is not.
+   */
+  async #containerAction(
+    containerId: string,
+    transfer: { direction: TransferDirection; item: string; quantity: number } | null,
+  ): Promise<ClientActionResult> {
+    const blocker = this.#containerBlocker();
+    if (blocker !== null) {
+      const code = this.#opts.config.containers.enabled ? 'REFUSED' : 'NOT_IMPLEMENTED';
+      return failed(`not using the chest: ${blocker}`, code);
+    }
+    if (this.#usingContainer) return failed('a chest operation is already running', 'REFUSED');
+    this.#usingContainer = true;
+    try {
+      const opened = await this.#openChest(containerId);
+      if (opened !== null) return opened;
+      if (transfer === null) {
+        const w = this.#world.openWindow;
+        return ok(`opened ${containerId}`, {
+          windowId: w?.windowId ?? null,
+          slots: w?.containerSlots ?? null,
+        });
+      }
+      return await this.#transfer(transfer);
+    } finally {
+      this.#usingContainer = false;
+    }
+  }
+
+  /** Opens the chest (or keeps it open); returns a failure, or null when it is open. */
+  async #openChest(containerId: string): Promise<ClientActionResult | null> {
+    const chest = this.#opts.config.containers.chests[containerId];
+    if (chest === undefined) return failed(`${containerId} is not a configured chest`, 'REFUSED');
+    const open = this.#world.openWindow;
+    if (open !== null && open.containerId === containerId && open.slotsKnown) return null;
+    if (open !== null) {
+      const closed = this.#closeOpenWindow();
+      if (closed !== null) return closed;
+    }
+
+    const { x, y, z } = chest.position;
+    const blockId = this.#world.blockAt(x, y, z);
+    const blockName = blockId === undefined ? undefined : this.#world.registry?.blocks.get(blockId);
+    if (blockName !== VANILLA_CHEST) {
+      return failed(
+        `the block at (${x}, ${y}, ${z}) is ${blockName ?? 'not loaded'}, not a ${VANILLA_CHEST}`,
+        'REFUSED',
+      );
+    }
+    const me = this.#world.ownPosition;
+    if (me === null) return failed('player position unknown', 'REFUSED');
+    const eyes = { x: me.x, y: me.y + PLAYER_EYE_HEIGHT, z: me.z };
+    const reach = Math.hypot(x + 0.5 - eyes.x, y + 0.5 - eyes.y, z + 0.5 - eyes.z);
+    if (reach > MAX_CHEST_DISTANCE) {
+      return failed(
+        `the chest is ${reach.toFixed(1)} blocks away (max ${MAX_CHEST_DISTANCE})`,
+        'REFUSED',
+      );
+    }
+
+    // An empty hand, so the right-click can only open the chest, never place or use an item.
+    const hand = this.#emptyHotbarSlot();
+    if (hand === null) return failed('no empty hotbar slot to click with', 'REFUSED');
+    if (hand !== this.#world.heldSlot) {
+      this.#send(outbound.selectHotbarSlot(hand));
+      this.#world.setHeldSlot(hand);
+    }
+
+    this.#world.expectContainer(containerId);
+    this.#send(outbound.activateBlock(x, y, z, 1));
+    await this.#waitFor(() => {
+      const w = this.#world.openWindow;
+      return w !== null && w.slotsKnown;
+    }, WINDOW_OPEN_TIMEOUT_MS);
+    this.#world.expectContainer(null);
+    const w = this.#world.openWindow;
+    if (w === null || !w.slotsKnown) return failed('the chest did not open', 'FAILED');
+    if (
+      w.containerId !== containerId ||
+      w.inventoryType !== CHEST_WINDOW_TYPE ||
+      (w.containerSlots !== 27 && w.containerSlots !== 54)
+    ) {
+      const closed = this.#closeOpenWindow();
+      return (
+        closed ??
+        failed(
+          `an unexpected window opened (type ${w.inventoryType}, ${w.containerSlots} slots)`,
+          'FAILED',
+        )
+      );
+    }
+    return null;
+  }
+
+  #emptyHotbarSlot(): number | null {
+    const w = this.#world.openWindow;
+    const inv = this.#world.inventoryWindow;
+    const hotbar = (j: number) =>
+      w !== null && w.slotsKnown ? w.slots[w.containerSlots + 27 + j] : inv?.[36 + j];
+    if (hotbar(this.#world.heldSlot) == null) return this.#world.heldSlot;
+    for (let j = 0; j < 9; j++) if (hotbar(j) == null) return j;
+    return null;
+  }
+
+  /** Moves exactly `quantity` of `item` with confirmed clicks; the cursor ends empty. */
+  async #transfer(t: {
+    direction: TransferDirection;
+    item: string;
+    quantity: number;
+  }): Promise<ClientActionResult> {
+    const target = resolveItemName(this.#world.registry, t.item);
+    if (target === null) return failed(`${t.item} is not in the item registry`, 'REFUSED');
+    const start = this.#world.openWindow;
+    if (start === null || !start.slotsKnown)
+      return failed('the chest window is not open', 'FAILED');
+    const plan = planTransfer(start, t.direction, target, t.quantity);
+    if (!plan.ok) return failed(`not moving items: ${plan.reason}`, 'REFUSED');
+    const source = t.direction === 'to_player' ? containerRange(start) : playerRange(start);
+
+    let done = 0;
+    for (const click of plan.clicks) {
+      const result = await this.#click(click);
+      if (result !== 'accepted') {
+        const recovered = await this.#recoverCursor(source);
+        return failed(
+          `click ${done + 1} of ${plan.clicks.length} was ${result}; ${recovered}`,
+          'FAILED',
+          { clicksDone: done },
+        );
+      }
+      done += 1;
+    }
+    const end = this.#world.openWindow;
+    if (end?.cursor != null) return failed('the cursor is not empty after moving items', 'ERROR');
+    return ok(
+      `moved ${t.quantity} ${t.item} ${t.direction === 'to_player' ? 'from the chest' : 'into the chest'} in ${plan.clicks.length} clicks`,
+      { clicks: plan.clicks.length },
+    );
+  }
+
+  /** One predicted click, sent and confirmed by the server before anything else happens. */
+  async #click(click: Click): Promise<'accepted' | 'rejected' | 'unanswered' | 'unpredictable'> {
+    const w = this.#world.openWindow;
+    if (w === null || !w.slotsKnown || this.#phase !== 'play') return 'unanswered';
+    const predicted = applyClick(w, click);
+    if (!predicted.ok) return 'unpredictable';
+    const action = this.#nextActionNumber;
+    this.#nextActionNumber = action >= 32767 ? 1 : action + 1;
+    this.#clickVerdicts.delete(action);
+    // A rejection comes with an immediate re-sync of the window: count from before the click.
+    const syncsBefore = this.#world.windowSyncs;
+    this.#send(
+      outbound.clickWindow(
+        w.windowId,
+        click.slot,
+        click.button,
+        action,
+        predicted.claimed,
+        this.#decoding.itemStackSizeVarInt,
+      ),
+    );
+    await this.#waitFor(() => this.#clickVerdicts.has(action), CLICK_TIMEOUT_MS);
+    const verdict = this.#clickVerdicts.get(action);
+    this.#clickVerdicts.delete(action);
+    if (verdict === undefined) return 'unanswered';
+    if (!verdict) {
+      // The server re-sends the window with its rejection, and ignores further clicks until
+      // the rejection is acknowledged.
+      this.#send(outbound.confirmTransaction(w.windowId, action));
+      await this.#waitFor(() => this.#world.windowSyncs > syncsBefore, CLICK_TIMEOUT_MS);
+      return 'rejected';
+    }
+    this.#world.applyWindowSnapshot(predicted.window);
+    return 'accepted';
+  }
+
+  /** After a failed click: put whatever is on the cursor back into an empty slot. */
+  async #recoverCursor(preferred: [number, number]): Promise<string> {
+    let emptied = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const w = this.#world.openWindow;
+      if (w === null) return 'the window closed';
+      if (w.cursor === null) break;
+      const clicks = planEmptyCursor(w, preferred);
+      if (clicks === null) break;
+      for (const c of clicks) {
+        if ((await this.#click(c)) !== 'accepted') break;
+        emptied += 1;
+      }
+    }
+    const w = this.#world.openWindow;
+    if (w?.cursor != null) {
+      return `ITEMS MAY BE ON THE CURSOR (${w.cursor.count} of id ${w.cursor.id}); the window was left open`;
+    }
+    return emptied > 0 ? 'the cursor was emptied' : 'nothing was on the cursor';
+  }
+
+  /** Closes the open window, but never with items on the cursor (the server would drop them). */
+  #closeOpenWindow(): ClientActionResult | null {
+    const w = this.#world.openWindow;
+    if (w === null) return null;
+    if (w.cursor !== null)
+      return failed('refusing to close a window with items on the cursor', 'ERROR');
+    this.#send(outbound.closeWindow(w.windowId));
+    this.#world.closeWindowLocally();
+    return null;
   }
 
   /** Stops a walk in progress at its next step and refuses new walks (e.g. on Ctrl+C). */
@@ -286,6 +553,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (!this.#opts.config.presenceTicks) return 'walking needs presence ticks (MC_PRESENCE_TICKS)';
     if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
     if (existsSync(resolvePath(m.stopFile))) return `the stop file ${m.stopFile} exists`;
+    if (this.#usingContainer) return 'a chest operation is running';
     return null;
   }
 
@@ -586,6 +854,13 @@ export class Gtnh1710Client implements MinecraftClient {
         break;
       case 'disconnect':
         throw new Error(`Kicked: ${chatText(packet.reason)}`);
+      case 'confirm-transaction':
+        if (packet.windowId === this.#world.openWindow?.windowId) {
+          this.#clickVerdicts.set(packet.actionNumber, packet.accepted);
+        }
+        break;
+      case 'open-window':
+      case 'close-window':
       case 'join-game':
       case 'chat':
       case 'spawn-position':

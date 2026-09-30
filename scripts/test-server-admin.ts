@@ -15,6 +15,9 @@
  *   node scripts/test-server-admin.ts pen build          Build (or reset) the glass movement pen.
  *   node scripts/test-server-admin.ts pen tp [--wait N]  Teleport the agent's player to the pen
  *                                                        centre, waiting up to N s for it to be online.
+ *   node scripts/test-server-admin.ts pen chest          Place the test chest in the pen (only if there is
+ *                                                        none): 128 cobblestone, 3 diamonds (a protected
+ *                                                        item) and 16 bread, three blocks south of the centre.
  * Settings (.env): TEST_SERVER_DIR (the server folder), TEST_PEN_CENTER="x,y,z" (the centre
  * block at the player's feet level) and TEST_PEN_RADIUS (interior half-width, default 4).
  */
@@ -197,6 +200,8 @@ function penCommands(pen: Pen): string[] {
       out.push(`setblock ${x} ${c.y - 1} ${z} minecraft:glass`);
       const wall = Math.abs(x - c.x) === r + 1 || Math.abs(z - c.z) === r + 1;
       for (let dy = 0; dy < 3; dy++) {
+        // Never touch the test chest's block: replacing a chest drops its contents.
+        if (x === c.x && z === c.z + 3 && dy === 0) continue;
         out.push(`setblock ${x} ${c.y + dy} ${z} minecraft:${wall ? 'glass' : 'air'}`);
       }
     }
@@ -282,6 +287,33 @@ async function main(argv: string[]): Promise<number> {
     });
     return 0;
   }
+  if (command === 'pen' && sub === 'chest') {
+    const { center: c } = penFromEnv(process.env);
+    const at = { x: c.x, y: c.y, z: c.z + 3 };
+    // 1.7.10 item NBT uses numeric ids: cobblestone 4, diamond 264, bread 297 (vanilla ids).
+    const items =
+      '{Items:[{Slot:0b,id:4s,Count:64b,Damage:0s},{Slot:1b,id:4s,Count:64b,Damage:0s},' +
+      '{Slot:2b,id:264s,Count:3b,Damage:0s},{Slot:3b,id:297s,Count:16b,Damage:0s}]}';
+    const reply = await withRcon(async (rcon) => {
+      // In 1.7.10 ANY setblock over a chest runs its break logic, which drops the contents
+      // into the world (the bot would pick them up). So never replace an existing chest.
+      const found = await rcon.command(`testforblock ${at.x} ${at.y} ${at.z} minecraft:chest`);
+      if (/successfully/i.test(found)) {
+        return `a chest is already at (${at.x}, ${at.y}, ${at.z}); left as it is (replacing it would drop its contents)`;
+      }
+      return rcon.command(`setblock ${at.x} ${at.y} ${at.z} minecraft:chest 2 replace ${items}`);
+    });
+    print({
+      reply,
+      'agent.config.json': {
+        minecraft: {
+          containers: { chests: { 'chest.pen': { name: 'Pen test chest', position: at } } },
+        },
+      },
+      env: { MC_ENABLE_CONTAINERS: 'true' },
+    });
+    return 0;
+  }
   if (command === 'pen' && sub === 'tp') {
     const pen = penFromEnv(process.env);
     const { username } = loadConfig().config.minecraft;
@@ -306,7 +338,7 @@ async function main(argv: string[]): Promise<number> {
     });
   }
   process.stderr.write(
-    'Usage: node scripts/test-server-admin.ts rcon "<command>" | pen show | pen build | pen tp [--wait N]\n',
+    'Usage: node scripts/test-server-admin.ts rcon "<command>" | pen show | pen build | pen chest | pen tp [--wait N]\n',
   );
   return 1;
 }

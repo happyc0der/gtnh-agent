@@ -62,3 +62,21 @@ export function nameItemStack(registry: Registry | null, id: number, damage: num
     ? { ok: true, name }
     : { ok: false, reason: `registry name ${JSON.stringify(name)} is not a valid item name` };
 }
+
+/**
+ * The registry id and damage for an agent-facing item name (the inverse of nameItemStack),
+ * or null if the registry does not name it. Items are preferred over blocks of the same name.
+ */
+export function resolveItemName(
+  registry: Registry | null,
+  name: string,
+): { id: number; damage: number } | null {
+  if (registry === null) return null;
+  const m = /^(.*)@(\d{1,5})$/.exec(name);
+  const base = m === null ? name : (m[1] ?? '');
+  const damage = m === null ? 0 : Number(m[2]);
+  for (const map of [registry.items, registry.blocks]) {
+    for (const [id, n] of map) if (n === base) return { id, damage };
+  }
+  return null;
+}

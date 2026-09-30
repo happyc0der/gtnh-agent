@@ -52,7 +52,12 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 **Not in the allowlist, by design:** lava interaction, dropping items, combat, placing or breaking
 blocks, wrenching, cable/energy-network changes, multiblock changes, and rare-item consumption.
 
-**On the live GTNH client**, `MOVE_TO` and `RETURN_TO_SAFE_LOCATION` are walks. They need
+**On the live GTNH client**, `OPEN_CONTAINER`, `DEPOSIT_ITEM` and `WITHDRAW_ITEM` work on
+configured vanilla chests when `MC_ENABLE_CONTAINERS=true` (otherwise `NOT_IMPLEMENTED`). They are
+refused (`REFUSED`, before any click) for an unconfigured chest, a block that is not a plain
+`minecraft:chest`, no empty hotbar slot, or an amount that cannot be moved exactly. A rejected click
+fails the action (`FAILED`) after the cursor has been emptied back into the window. See
+[architecture: chests](architecture.md#chests). `MOVE_TO` and `RETURN_TO_SAFE_LOCATION` are walks. They need
 `MC_ENABLE_MOVEMENT=true` and a fence; without them they return `NOT_IMPLEMENTED`. A walk is
 refused (`REFUSED`, nothing sent) when the target is off the fence's level, outside the fence or
 unreachable over walkable blocks. It stops (`FAILED`) on a server correction, a health drop, a
