@@ -14,7 +14,7 @@ import { memoryRepos } from '../../fixtures/index.ts';
 import { encodeFrame } from '../../../src/bot/gtnh1710/wire.ts';
 import { assessDangers } from '../../../src/safety/safety-policy.ts';
 import { BLOCK } from './chunk-fixtures.ts';
-import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+import { DEFAULT_MODS, FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
 
 const servers: FakeGtnhServer[] = [];
 const clients: Gtnh1710Client[] = [];
@@ -299,6 +299,32 @@ describe('Gtnh1710Client entity tracking', () => {
     // The zombie 30 m away is tracked but outside the scan radius.
     expect(client.world.nearbyEntities().map((e) => e.entityId)).not.toContain(105);
     expect(client.world.trackedEntityCount).toBe(8);
+  });
+
+  it('an identified passive modded mob (Et Futurum rabbit) is not a threat on the verified version', async () => {
+    const rabbit = {
+      kind: 'modded' as const,
+      entityId: 201,
+      modId: 'etfuturum',
+      typeId: 3,
+      ...at(3, 0),
+    };
+    const verified = await start({
+      entities: [rabbit],
+      mods: [...DEFAULT_MODS, { modid: 'etfuturum', version: '2.6.2.25-GTNH' }],
+    });
+    await verified.client.connect();
+    expect((await threats(verified.client)).unclassifiedCount).toBe(0);
+    expect(verified.client.world.nearbyEntities().map((e) => [e.name, e.category])).toEqual([
+      ['etfuturum.rabbit', 'passive'],
+    ]);
+
+    const otherVersion = await start({
+      entities: [rabbit],
+      mods: [...DEFAULT_MODS, { modid: 'etfuturum', version: '2.7.0' }],
+    });
+    await otherVersion.client.connect();
+    expect((await threats(otherVersion.client)).unclassifiedCount).toBe(1);
   });
 
   it('follows relative moves, teleports and removals', async () => {

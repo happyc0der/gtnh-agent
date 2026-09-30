@@ -52,6 +52,8 @@ const ENTITY_PACKETS: ReadonlySet<number> = new Set([0x0c, 0x0e, 0x0f, 0x13, 0x1
 export interface TrackedEntity {
   kind: 'player' | 'mob' | 'object' | 'modded';
   classification: Classification;
+  /** Forge mod entity type (modded entities only), as announced by the FML spawn message. */
+  modType: { modId: string; typeId: number } | null;
   x: number;
   y: number;
   z: number;
@@ -107,6 +109,7 @@ export class WorldModel {
   /** Loaded chunk columns: arrival times (for entity readiness) and block ids (for hazards). */
   readonly #store = new ChunkStore();
   #chunkFormat: ChunkFormat = { neid: false };
+  #modVersions: ReadonlyMap<string, string> = new Map();
   /** Registry id -> hazard code; rebuilt when the registry arrives (ids are per world). */
   #blockCodes: Uint8Array | null = null;
   /** Set when block data was lost: the hazard scan cannot be trusted for this session. */
@@ -115,6 +118,11 @@ export class WorldModel {
   setRegistry(registry: Registry): void {
     this.#registry = registry;
     this.#blockCodes = buildBlockCodeTable(registry);
+  }
+
+  /** Mod versions the server reports (modid -> version); entity identifications are version-bound. */
+  setServerMods(mods: ReadonlyArray<{ modid: string; version: string }>): void {
+    this.#modVersions = new Map(mods.map((m) => [m.modid, m.version]));
   }
 
   /** Chunk data layout, chosen from the server's mod list (NotEnoughIDs or vanilla). */
@@ -200,7 +208,12 @@ export class WorldModel {
       case 'fml-entity-spawn':
         this.#track(message.entityId, {
           kind: 'modded',
-          classification: classifyModded(message.modId, message.typeId),
+          classification: classifyModded(
+            message.modId,
+            message.typeId,
+            this.#modVersions.get(message.modId),
+          ),
+          modType: { modId: message.modId, typeId: message.typeId },
           x: message.x,
           y: message.y,
           z: message.z,
@@ -234,6 +247,11 @@ export class WorldModel {
       }
     }
     return out.sort((a, b) => a.distance - b.distance);
+  }
+
+  /** Snapshot of every tracked entity (diagnostics and research tools). */
+  trackedEntities(): Array<TrackedEntity & { entityId: number }> {
+    return [...this.#entities].map(([entityId, e]) => ({ ...e, entityId }));
   }
 
   get trackedEntityCount(): number {
@@ -353,6 +371,7 @@ export class WorldModel {
       case 'spawn-player':
         this.#track(packet.entityId, {
           kind: 'player',
+          modType: null,
           classification: { name: `player:${packet.name}`, category: 'ignored' },
           x: packet.x,
           y: packet.y,
@@ -362,6 +381,7 @@ export class WorldModel {
       case 'spawn-mob':
         this.#track(packet.entityId, {
           kind: 'mob',
+          modType: null,
           classification: classifyVanillaMob(packet.mobType),
           x: packet.x,
           y: packet.y,
@@ -371,6 +391,7 @@ export class WorldModel {
       case 'spawn-object':
         this.#track(packet.entityId, {
           kind: 'object',
+          modType: null,
           classification: classifyVanillaObject(packet.objectType),
           x: packet.x,
           y: packet.y,

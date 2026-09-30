@@ -66,15 +66,163 @@ export const VANILLA_OBJECTS: ReadonlyMap<number, Classification> = new Map<numb
  */
 export const HOSTILE_MODS: ReadonlySet<string> = new Set(['SpecialMobs']);
 
+export interface ModdedEntityEntry {
+  modId: string;
+  typeId: number;
+  /** The entity's registry name, as the server saves it. */
+  name: string;
+  category: EntityCategory;
+  /** Identification evidence: matching votes / all votes (scripts/identify-entities.ts). */
+  votes: number;
+  total: number;
+  /** Mod version the identification was made with; the entry applies to that version only. */
+  modVersion: string;
+}
+
 /**
- * Exact (modId, modEntityTypeId) classifications, keyed "modId#typeId". Filled from
- * verified identification only (see docs/gtnh-compatibility.md); empty entries stay
- * unclassified and are treated as dangers.
+ * Identified Forge entity types for GTNH 2.8.4, produced by scripts/identify-entities.ts:
+ * live entities (mod + type number + position) matched to the names and positions the
+ * server writes to its region files (test world, 2026-09-30). Type numbers are fixed by
+ * each mod's code, so an entry holds for any world running the same mod version, and is
+ * ignored (unclassified, fail closed) for any other version.
+ *
+ * Rule for `passive`: at least 10 votes, all agreeing, and an entity that does not attack.
+ * `hostile` entries only add names (hostile and unclassified are treated alike).
  */
-export const MODDED_ENTITIES: ReadonlyMap<string, Classification> = new Map<
-  string,
-  Classification
->();
+export const MODDED_ENTITY_TABLE: readonly ModdedEntityEntry[] = [
+  // Combined evidence of two runs (150 s + 600 s, 4,750 saved entities read, 206 matches, 0 conflicts).
+  // Et Futurum rabbits never attack. (Vanilla's "killer bunny" variant only exists via commands.)
+  {
+    modId: 'etfuturum',
+    typeId: 3,
+    name: 'etfuturum.rabbit',
+    category: 'passive',
+    votes: 175,
+    total: 175,
+    modVersion: '2.6.2.25-GTNH',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 18,
+    name: 'SpecialMobs.DarkCreeper',
+    category: 'hostile',
+    votes: 1,
+    total: 1,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 20,
+    name: 'SpecialMobs.DirtCreeper',
+    category: 'hostile',
+    votes: 4,
+    total: 4,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 22,
+    name: 'SpecialMobs.DrowningCreeper',
+    category: 'hostile',
+    votes: 7,
+    total: 7,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 24,
+    name: 'SpecialMobs.FireCreeper',
+    category: 'hostile',
+    votes: 2,
+    total: 2,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 25,
+    name: 'SpecialMobs.GravelCreeper',
+    category: 'hostile',
+    votes: 2,
+    total: 2,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 26,
+    name: 'SpecialMobs.GravityCreeper',
+    category: 'hostile',
+    votes: 2,
+    total: 2,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 27,
+    name: 'SpecialMobs.JumpingCreeper',
+    category: 'hostile',
+    votes: 3,
+    total: 3,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 64,
+    name: 'SpecialMobs.GiantSkeleton',
+    category: 'hostile',
+    votes: 3,
+    total: 3,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 66,
+    name: 'SpecialMobs.PoisonSkeleton',
+    category: 'hostile',
+    votes: 2,
+    total: 2,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 67,
+    name: 'SpecialMobs.SniperSkeleton',
+    category: 'hostile',
+    votes: 1,
+    total: 1,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 89,
+    name: 'SpecialMobs.ToughSpider',
+    category: 'hostile',
+    votes: 1,
+    total: 1,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 102,
+    name: 'SpecialMobs.FishingZombie',
+    category: 'hostile',
+    votes: 2,
+    total: 2,
+    modVersion: '3.6.3',
+  },
+  {
+    modId: 'SpecialMobs',
+    typeId: 103,
+    name: 'SpecialMobs.GiantZombie',
+    category: 'hostile',
+    votes: 1,
+    total: 1,
+    modVersion: '3.6.3',
+  },
+];
+
+const TABLE_BY_KEY: ReadonlyMap<string, ModdedEntityEntry> = new Map(
+  MODDED_ENTITY_TABLE.map((e) => [`${e.modId}#${e.typeId}`, e]),
+);
 
 export function classifyVanillaMob(mobType: number): Classification {
   return VANILLA_MOBS.get(mobType) ?? { name: `mob#${mobType}`, category: 'unclassified' };
@@ -84,10 +232,20 @@ export function classifyVanillaObject(objectType: number): Classification {
   return VANILLA_OBJECTS.get(objectType) ?? { name: `object#${objectType}`, category: 'ignored' };
 }
 
-export function classifyModded(modId: string, typeId: number): Classification {
+/**
+ * `serverModVersion` is the version the server reports for `modId` (from its status ping).
+ * A table entry applies only when it matches the version the entry was verified with.
+ */
+export function classifyModded(
+  modId: string,
+  typeId: number,
+  serverModVersion: string | undefined,
+): Classification {
   const key = `${modId}#${typeId}`;
-  const exact = MODDED_ENTITIES.get(key);
-  if (exact !== undefined) return exact;
-  if (HOSTILE_MODS.has(modId)) return { name: key, category: 'hostile' };
+  const entry = TABLE_BY_KEY.get(key);
+  if (entry !== undefined && entry.modVersion === serverModVersion) {
+    return { name: entry.name, category: entry.category };
+  }
+  if (HOSTILE_MODS.has(modId)) return { name: entry?.name ?? key, category: 'hostile' };
   return { name: key, category: 'unclassified' };
 }

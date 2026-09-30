@@ -1,7 +1,11 @@
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { FmlClientHandshake, MultipartAssembler } from '../../../src/bot/gtnh1710/fml-handshake.ts';
-import { classifyModded, classifyVanillaMob } from '../../../src/bot/gtnh1710/entity-types.ts';
+import {
+  classifyModded,
+  classifyVanillaMob,
+  MODDED_ENTITY_TABLE,
+} from '../../../src/bot/gtnh1710/entity-types.ts';
 import {
   decodeFmlRuntimeMessage,
   decodePlay,
@@ -218,12 +222,36 @@ describe('entity packets', () => {
     expect(() => decodeFmlRuntimeMessage(Buffer.from([2, 0, 0]))).toThrow(ProtocolError);
   });
 
+  it('identified modded types apply only to the mod version they were verified with', () => {
+    expect(classifyModded('etfuturum', 3, '2.6.2.25-GTNH')).toEqual({
+      name: 'etfuturum.rabbit',
+      category: 'passive',
+    });
+    expect(classifyModded('etfuturum', 3, '2.7.0')).toEqual({
+      name: 'etfuturum#3',
+      category: 'unclassified',
+    });
+    expect(classifyModded('SpecialMobs', 18, '9.9.9')).toEqual({
+      name: 'SpecialMobs.DarkCreeper',
+      category: 'hostile', // the whole mod is hostile, whatever the version
+    });
+  });
+
+  it('every passive identification meets the evidence rule (>= 10 votes, all agreeing)', () => {
+    const keys = MODDED_ENTITY_TABLE.map((e) => `${e.modId}#${e.typeId}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const e of MODDED_ENTITY_TABLE.filter((x) => x.category === 'passive')) {
+      expect(e.votes, e.name).toBeGreaterThanOrEqual(10);
+      expect(e.votes, e.name).toBe(e.total);
+    }
+  });
+
   it('classifies fail-closed: unknown vanilla ids and unlisted mods are unclassified', () => {
     expect(classifyVanillaMob(54).category).toBe('hostile');
     expect(classifyVanillaMob(92).category).toBe('passive');
     expect(classifyVanillaMob(200)).toEqual({ name: 'mob#200', category: 'unclassified' });
-    expect(classifyModded('SpecialMobs', 999).category).toBe('hostile');
-    expect(classifyModded('etfuturum', 3)).toEqual({
+    expect(classifyModded('SpecialMobs', 999, '3.6.3').category).toBe('hostile');
+    expect(classifyModded('etfuturum', 3, undefined)).toEqual({
       name: 'etfuturum#3',
       category: 'unclassified',
     });

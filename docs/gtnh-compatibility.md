@@ -108,7 +108,14 @@ Verified with `scripts/entity-survey.ts` (20 s of live traffic) and `pnpm cli ob
 - **Coverage is declared:** the entity scan radius is 16 m; if `hostileThreatRadius` is
   configured larger, the state is treated as unknown rather than "no hostiles".
 
-Still to do: identify modded entity types (so passive animals stop counting as threats).
+**Identifying modded entity types** (`scripts/identify-entities.ts`): Forge never sends names,
+but the server saves every entity with its registry name and position. The tool keeps the
+read-only client connected, snapshots where it sees each entity, reads the chunks the server
+saves (region files: header timestamps, zlib NBT, `Level.Entities[].id/Pos`), and counts a vote
+when a saved entity's nearest live entity (within 1.5 blocks, within 3 s of the save) is a modded
+one. Two runs (150 s + 600 s): 4,750 saved entities read, 206 matches, **no conflicting votes**. `etfuturum#3` = `etfuturum.rabbit` (175/175 votes; now passive), and 13 Special Mobs types named (e.g. `#24` FireCreeper, `#64` GiantSkeleton, `#89` ToughSpider). Results go into `MODDED_ENTITY_TABLE` (`src/bot/gtnh1710/entity-types.ts`) with their evidence and the mod
+version they were verified with; an entry applies only when the server runs that exact version.
+A `passive` entry needs at least 10 votes, all agreeing (enforced by a test).
 
 ## Lava, void and damaging blocks (2026-09-30)
 

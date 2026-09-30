@@ -141,6 +141,7 @@ export class Gtnh1710Client implements MinecraftClient {
       neid: this.#identity.mods.some((m) => m.modid === 'neid'),
     };
     this.#world.setChunkFormat({ neid: this.#decoding.neid });
+    this.#world.setServerMods(this.#identity.mods);
     this.#log(`block format: ${this.#decoding.neid ? 'NotEnoughIDs (16-bit ids)' : 'vanilla'}`);
     this.#log(
       `item stack format: ${this.#decoding.itemStackSizeVarInt ? 'ModularUI (VarInt stack size)' : 'vanilla'}`,
