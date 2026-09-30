@@ -22,6 +22,7 @@ import {
   syncConfigToDatabase,
   type CycleResult,
 } from './agent-loop.ts';
+import { runSession, type SessionLimits, type SessionResult } from './live-session.ts';
 
 /**
  * Connects the READ-ONLY GTNH client, runs `fn`, and always disconnects afterwards.
@@ -359,6 +360,70 @@ export async function runLiveChest(
             inventory: state.inventory.known ? state.inventory.value.items : null,
             info: client.info(),
           };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bounded auto-run
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs cycles for the current task on ONE connection until the task is done or anything
+ * needs a human (see live-session.ts). Ctrl+C halts a walk at its next step and stops the
+ * run before its next cycle; so does the stop file (`cli halt`, also from another terminal).
+ */
+export async function runLiveSession(
+  config: AgentConfig,
+  dbPath: string,
+  limits: SessionLimits,
+  onCycle: (result: CycleResult, index: number) => void,
+  log?: (line: string) => void,
+): Promise<SessionResult & { info: ConnectionInfo }> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        let interrupted = false;
+        const onInterrupt = (): void => {
+          interrupted = true;
+          client.halt('interrupted (Ctrl+C)');
+        };
+        process.once('SIGINT', onInterrupt);
+        try {
+          const stopFile = resolve(config.minecraft.movement.stopFile);
+          const result = await runSession(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: new MockPlannerProvider([]),
+              clock: systemClock,
+              newId: randomIds,
+            },
+            limits,
+            {
+              stopRequested: () =>
+                interrupted
+                  ? 'interrupted (Ctrl+C)'
+                  : existsSync(stopFile)
+                    ? `the stop file ${stopFile} exists`
+                    : null,
+              onCycle,
+            },
+          );
+          return { ...result, info: client.info() };
         } finally {
           process.removeListener('SIGINT', onInterrupt);
         }

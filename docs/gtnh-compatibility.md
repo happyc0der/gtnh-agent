@@ -161,8 +161,15 @@ warnings.
 2. `OPEN_CONTAINER`.
 3. `WITHDRAW_ITEM` 10, validated from remembered contents while the chest was closed, then 11
    clicks against the live chest; verified 0→10 and 128→118.
-4. `NO_ACTIVE_TASK`: the task was completed with its plan. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
-   click simulation (tests), not live.
+4. `NO_ACTIVE_TASK`: the task was completed with its plan.
+
+**Bounded auto-run** (_verified_, 2026-09-30):
+
+- `run --live` did the same task in 3 cycles on one connection (1.8 s) and stopped with "the task
+  is completed".
+- In a corner-walking task, `cli halt` from another process halted the second walk mid-way, and
+  the run stopped after that cycle. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
+  click simulation (tests), not live.
 
 ## Machines (2026-09-30)
 

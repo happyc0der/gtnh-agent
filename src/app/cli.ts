@@ -13,6 +13,7 @@ import {
   movementStatus,
   runLiveChest,
   runLiveCycle,
+  runLiveSession,
   runLiveMove,
   setMovementHalted,
   summarizeObservation,
@@ -20,6 +21,7 @@ import {
 } from './live-agent.ts';
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
+import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
 import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
@@ -41,6 +43,11 @@ Usage:
   node src/app/cli.ts chest --live --container <id> [--withdraw <item> | --deposit <item>] [--count N]
       Open a configured vanilla chest (needs MC_ENABLE_CONTAINERS=true) and optionally move
       exactly N items, as checked user actions; prints the chest and inventory afterwards.
+  node src/app/cli.ts run --live [--max-cycles N] [--max-minutes M] [--db <path>] [--verbose]
+      BOUNDED auto-run of the current task on one connection: ordinary cycles back to back,
+      stopping when the task is done or anything needs you (a pause, rejection, failure,
+      approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
+      stop file (pnpm cli halt) or Ctrl+C.
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
       Create / remove the stop file (nothing walks while it exists) / show movement settings.
   node src/app/cli.ts scenarios            List mock scenarios.
@@ -122,6 +129,8 @@ async function main(argv: string[]): Promise<number> {
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
       count: { type: 'string', default: '1' },
+      'max-cycles': { type: 'string', default: String(DEFAULT_SESSION_LIMITS.maxCycles) },
+      'max-minutes': { type: 'string', default: String(DEFAULT_SESSION_LIMITS.maxMinutes) },
       tolerance: { type: 'string', default: '0.5' },
       'dry-run': { type: 'boolean', default: false },
       live: { type: 'boolean', default: false },
@@ -229,6 +238,36 @@ async function main(argv: string[]): Promise<number> {
       if (maps.length > 0) process.stdout.write(`${maps.join('\n')}\n`);
       if (out.result === null) return out.plan?.ok === true ? 0 : 1;
       return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'run': {
+      if (!values.live) {
+        process.stderr.write('run acts on the configured test server; pass --live to confirm.\n');
+        return 1;
+      }
+      const limits = {
+        maxCycles: Number(values['max-cycles']),
+        maxMinutes: Number(values['max-minutes']),
+        pauseMs: DEFAULT_SESSION_LIMITS.pauseMs,
+      };
+      const invalid = checkLimits(limits);
+      if (invalid !== null) {
+        process.stderr.write(`${invalid}\n`);
+        return 1;
+      }
+      const out = await runLiveSession(
+        config,
+        dbPath,
+        limits,
+        (r, i) => process.stderr.write(`[cycle ${i}] ${r.summary}\n`),
+        log,
+      );
+      print({
+        stopReason: out.stopReason,
+        task: { taskId: out.taskId, status: out.taskStatus },
+        cycles: out.cycles.map((c) => c.summary),
+        seconds: Number((out.elapsedMs / 1000).toFixed(1)),
+      });
+      return out.taskStatus === 'completed' ? 0 : 1;
     }
     case 'chest': {
       if (!values.live) {

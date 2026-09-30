@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   runSingleCycle,
   syncConfigToDatabase,
@@ -10,6 +10,12 @@ import {
 import { runMockScenario } from '../../src/app/mock-agent.ts';
 import { findScenario } from '../../src/app/scenarios.ts';
 import { addTask, completeTask, listTasks } from '../../src/app/task-commands.ts';
+import {
+  checkLimits,
+  DEFAULT_SESSION_LIMITS,
+  runSession,
+  type SessionLimits,
+} from '../../src/app/live-session.ts';
 import { Gtnh1710Client } from '../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type AgentConfig } from '../../src/config/env.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
@@ -21,7 +27,7 @@ import { systemClock } from '../../src/util/clock.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
 import { BLOCK } from '../bot/gtnh1710/chunk-fixtures.ts';
 import type { FakeStack } from '../bot/gtnh1710/fake-chests.ts';
-import { FakeGtnhServer } from '../bot/gtnh1710/fake-server.ts';
+import { FakeGtnhServer, spawnFrame } from '../bot/gtnh1710/fake-server.ts';
 
 // The fake world: a grass floor at y=105, the player at (-4.5, 106, -7.5), a chest at
 // (-5, 106, -6) with 128 cobblestone, a walking fence around both.
@@ -226,5 +232,139 @@ describe('live tasks', () => {
     expect(repos.memory.getValue(CURRENT_TASK_KEY)).toBeNull();
     expect(repos.plans.latestForTask('fetch')?.status).toBe('rejected');
     expect((await liveCycle()).decision?.reasonCodes).toEqual(['NO_ACTIVE_TASK']);
+  });
+});
+
+describe('bounded auto-run', () => {
+  async function session(
+    limits: Partial<SessionLimits> = {},
+    stop: () => string | null = () => null,
+  ) {
+    const client = new Gtnh1710Client({
+      config: config.minecraft,
+      clock: systemClock,
+      retryDelayMs: 50,
+    });
+    await client.connect();
+    try {
+      return await runSession(
+        {
+          config,
+          client,
+          repos,
+          decisionProvider: new DeterministicDecisionProvider(),
+          planner: new MockPlannerProvider([]),
+          clock: systemClock,
+          newId,
+        },
+        { ...DEFAULT_SESSION_LIMITS, pauseMs: 50, ...limits },
+        { stopRequested: stop },
+      );
+    } finally {
+      await client.disconnect();
+    }
+  }
+
+  it('finishes the task on one connection and stops there', async () => {
+    addTask(repos, config, { taskId: 'fetch', goal: 'Fetch', plan: fetchPlan(), now: new Date() });
+    const logins = server.logins;
+    const run = await session();
+    expect(run.cycles.map((c) => c.summary)).toEqual([
+      'REQUEST_PLANNER -> MOVE_TO -> succeeded',
+      'REQUEST_PLANNER -> OPEN_CONTAINER -> succeeded',
+      'REQUEST_PLANNER -> WITHDRAW_ITEM -> succeeded',
+    ]);
+    expect(run).toMatchObject({ stopReason: 'the task is completed', taskStatus: 'completed' });
+    expect(server.logins - logins).toBe(1);
+    expect(total(server.chestSim.playerSlots(), COBBLE)).toBe(10);
+    expect(server.chestSim.dropped).toEqual([]);
+  });
+
+  it('stops at the first cycle that does not succeed', async () => {
+    const tooMany = fetchPlan({
+      steps: [
+        {
+          step: 1,
+          action: {
+            type: 'WITHDRAW_ITEM',
+            args: { containerId: 'chest.test', item: 'minecraft:cobblestone', quantity: 500 },
+          },
+          rationale: 'More than there is.',
+        },
+      ],
+    });
+    addTask(repos, config, { taskId: 'greedy', goal: 'Too many', plan: tooMany, now: new Date() });
+    const run = await session();
+    expect(run.cycles).toHaveLength(1);
+    expect(run.stopReason).toMatch(/^stopped after: REQUEST_PLANNER -> WITHDRAW_ITEM -> rejected/);
+    expect(run.taskStatus).toBe('blocked');
+  });
+
+  it('stops after a non-task decision, at the cycle limit, when asked, or without a task', async () => {
+    expect((await session()).stopReason).toBe('there is no current task (cli task-add)');
+
+    addTask(repos, config, { taskId: 'fetch', goal: 'Fetch', plan: fetchPlan(), now: new Date() });
+    expect(await session({}, () => 'the stop file exists')).toMatchObject({
+      cycles: [],
+      stopReason: 'the stop file exists',
+    });
+    const limited = await session({ maxCycles: 1 });
+    expect(limited.cycles).toHaveLength(1);
+    expect(limited.stopReason).toBe('reached the limit of 1 cycles');
+    expect(() => checkLimits({ maxCycles: 0, maxMinutes: 5, pauseMs: 0 })).not.toThrow();
+    expect(checkLimits({ maxCycles: 0, maxMinutes: 5, pauseMs: 0 })).toBe(
+      'max cycles must be 1-200',
+    );
+  });
+});
+
+describe('bounded auto-run and safety', () => {
+  it('stops after a safety response (a retreat) instead of carrying on with the task', async () => {
+    config = {
+      ...config,
+      locations: {
+        home: {
+          dimension: 'overworld',
+          position: { x: -0.5, y: 106, z: -4.5 },
+          kind: 'safe',
+          note: null,
+        },
+      },
+    };
+    syncConfigToDatabase(config, repos);
+    addTask(repos, config, { taskId: 'fetch', goal: 'Fetch', plan: fetchPlan(), now: new Date() });
+    const client = new Gtnh1710Client({
+      config: config.minecraft,
+      clock: systemClock,
+      retryDelayMs: 50,
+    });
+    await client.connect();
+    try {
+      server.broadcast(
+        spawnFrame({ kind: 'mob', entityId: 900, mobType: 54, x: -6, y: 106, z: -9 }),
+      );
+      await vi.waitFor(() => expect(client.world.nearbyEntities(16)).toHaveLength(1));
+      const run = await runSession(
+        {
+          config,
+          client,
+          repos,
+          decisionProvider: new DeterministicDecisionProvider(),
+          planner: new MockPlannerProvider([]),
+          clock: systemClock,
+          newId,
+        },
+        { ...DEFAULT_SESSION_LIMITS, pauseMs: 50 },
+        { stopRequested: () => null },
+      );
+      expect(run.cycles.map((c) => c.summary)).toEqual([
+        'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> succeeded',
+      ]);
+      expect(run.stopReason).toMatch(/RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> succeeded$/);
+      // The task itself did not move on.
+      expect(repos.plans.openForTask('fetch')?.nextStep).toBe(0);
+    } finally {
+      await client.disconnect();
+    }
   });
 });

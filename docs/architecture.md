@@ -95,6 +95,20 @@ The live server knows nothing about the agent's tasks, so they come from agent m
   remembered "before" with the live "after", so a chest changed by someone else shows up as a
   verification failure.
 
+### Bounded auto-run
+
+`src/app/live-session.ts` (`cli run --live`) runs ordinary cycles back to back on one connection
+for the current task. It adds no decision logic and no checks of its own. It only decides whether
+to start another cycle, and it continues only while each cycle:
+
+- succeeded;
+- asked for no attention;
+- decided `REQUEST_PLANNER`, `EXECUTE_KNOWN_SAFE_STEP` or `WAIT_FOR_MACHINE` (task progress).
+
+Anything else stops it: a finished task, a safety retreat, eating, upkeep, a pause, a failure,
+the cycle or time cap, the stop file, Ctrl+C or a lost connection. There is still no open-ended
+loop: every run is started by a human and bounded.
+
 ## Plans across cycles
 
 A validated plan is stored in the `plans` table with its progress, so a multi-step plan advances one

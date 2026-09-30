@@ -6,8 +6,9 @@ A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTN
 **Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
 simulated world or a private GTNH 2.8.4 test server. On the test server the agent observes,
 **walks inside a fenced pen** and **moves exact amounts to and from configured chests**. It works on
-**live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`.
-No autonomous loop, no model and no GPU use.
+**live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`,
+or back to back in a **bounded auto-run** (`run --live`) that stops as soon as anything needs you.
+No open-ended loop, no model and no GPU use.
 
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
 the test server and observes position, dimension, health, food, a named inventory, nearby
@@ -74,6 +75,7 @@ cp agent.config.example.json agent.config.json
 | **Walk** (to `x,y,z` or a named location)    | `pnpm cli move --live --to=-0.5,200,-11.5`                                                |
 | Stop all walking and chest use / allow again | `pnpm cli halt` / `pnpm cli unhalt`                                                       |
 | Add a live task with your plan / list tasks  | `pnpm cli task-add --task <id> --goal <text> --plan <file>` / `pnpm cli task-list`        |
+| Bounded auto-run of the current task         | `pnpm cli run --live [--max-cycles 20] [--max-minutes 10]`                                |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
@@ -264,3 +266,25 @@ Verified live on 2026-09-30:
 3. The withdrawal in the next connection, from memory (verified 0→10 for the player, 128→118 for
    the chest).
 4. A pause once the task was complete.
+
+### Bounded auto-run
+
+`pnpm cli run --live` runs the current task's cycles back to back on ONE connection, so a chest
+opened in one cycle is still open in the next. Every cycle is the same `runSingleCycle`, with the
+same decision logic, validation, execution and verification. The run only decides whether to
+start another cycle. It stops:
+
+- when the task is completed, or there is none;
+- after any cycle that did not succeed or asks for attention: a pause, rejection, failure,
+  verification failure, approval or error;
+- after any cycle whose decision was not plain task progress, such as a safety retreat, eating or
+  upkeep, so you see why the agent turned aside;
+- at `--max-cycles` (default 20, at most 200) or `--max-minutes` (default 10, at most 60);
+- at the stop file (`pnpm cli halt`, also from another terminal or over SSH) or Ctrl+C, checked
+  before every cycle. A walk in progress halts at its next step.
+
+Verified live on 2026-09-30:
+
+- the fetch task ran in 3 cycles (1.8 s) and stopped with "the task is completed";
+- a corner-walking task stopped when `pnpm cli halt` ran mid-walk: the walk halted, then the run
+  stopped.
