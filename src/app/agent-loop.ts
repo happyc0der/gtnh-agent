@@ -155,18 +155,17 @@ interface ChosenAction {
   origin: ActionOrigin;
 }
 
-/**
- * Runs exactly ONE observe -> decide -> validate -> execute -> verify cycle and stops.
- * There is intentionally no loop here; continuous operation is a later milestone.
- */
-export async function runSingleCycle(
-  deps: AgentDeps,
-  options: { state?: unknown } = {},
-): Promise<CycleResult> {
-  const { config, client, repos, clock, newId } = deps;
-  const cycleId = newId('cyc');
-  repos.events.append(cycleId, 'CYCLE_START', { at: clock.now().toISOString() });
+interface CycleFrame {
+  cycleId: string;
+  finish: (result: Omit<CycleResult, 'cycleId'>) => CycleResult;
+  errorResult: (summary: string) => CycleResult;
+}
 
+/** Opens a cycle in the event log and returns how to close it. */
+function startCycle(deps: AgentDeps, idPrefix: string, detail: object = {}): CycleFrame {
+  const { repos, clock, newId } = deps;
+  const cycleId = newId(idPrefix);
+  repos.events.append(cycleId, 'CYCLE_START', { at: clock.now().toISOString(), ...detail });
   const finish = (result: Omit<CycleResult, 'cycleId'>): CycleResult => {
     const full = { cycleId, ...result };
     repos.events.append(cycleId, 'CYCLE_END', {
@@ -190,25 +189,70 @@ export async function runSingleCycle(
       summary,
     });
   };
+  return { cycleId, finish, errorResult };
+}
 
-  // 1. Observe (or receive) the game state; invalid state never reaches the router.
+/** Observes (or receives) the state, validates it, overlays agent memory and persists a snapshot. */
+async function observeState(
+  deps: AgentDeps,
+  cycleId: string,
+  given: unknown,
+): Promise<{ state: GameState; stateSnapshotId: number } | { error: string }> {
+  const { client, repos } = deps;
   let raw: unknown;
   try {
-    raw = options.state ?? (await client.observe());
+    raw = given ?? (await client.observe());
   } catch (error) {
-    return errorResult(`Observation failed: ${errorMessage(error)}`);
+    return { error: `Observation failed: ${errorMessage(error)}` };
   }
   const parsedState = GameStateSchema.safeParse(raw);
   if (!parsedState.success) {
-    return errorResult(
-      `Observed state failed schema validation: ${parsedState.error.issues[0]?.message ?? 'unknown'}`,
-    );
+    return {
+      error: `Observed state failed schema validation: ${parsedState.error.issues[0]?.message ?? 'unknown'}`,
+    };
   }
   const state = overlayAgentMemory(parsedState.data, repos);
-
-  // 2. Persist the snapshot.
   const stateSnapshotId = repos.snapshots.insert(cycleId, state);
   repos.events.append(cycleId, 'STATE', { stateSnapshotId, observedAt: state.timestamp });
+  return { state, stateSnapshotId };
+}
+
+function newExecutor(deps: AgentDeps): ActionExecutor {
+  return new ActionExecutor({
+    client: deps.client,
+    log: new SqliteActionLog(deps.repos),
+    history: deps.repos.actions,
+    clock: deps.clock,
+    newId: deps.newId,
+  });
+}
+
+function outcomeSummary(head: string, outcome: ExecutionOutcome, status: CycleStatus): string {
+  const violations = outcome.validation.violations.map((v) => v.code);
+  return (
+    `${head} -> ${status}` +
+    (violations.length > 0 ? ` [${violations.join(', ')}]` : '') +
+    (outcome.validation.preconditionFailures.length > 0
+      ? ` [preconditions: ${outcome.validation.preconditionFailures.join('; ')}]`
+      : '')
+  );
+}
+
+/**
+ * Runs exactly ONE observe -> decide -> validate -> execute -> verify cycle and stops.
+ * There is intentionally no loop here; continuous operation is a later milestone.
+ */
+export async function runSingleCycle(
+  deps: AgentDeps,
+  options: { state?: unknown } = {},
+): Promise<CycleResult> {
+  const { config, repos, clock, newId } = deps;
+  const { cycleId, finish, errorResult } = startCycle(deps, 'cyc');
+
+  // 1-2. Observe (or receive) the game state and persist it; invalid state never reaches the router.
+  const observed = await observeState(deps, cycleId, options.state);
+  if ('error' in observed) return errorResult(observed.error);
+  const { state, stateSnapshotId } = observed;
 
   // 3. Hard safety validation of the state itself.
   const ctx = buildSafetyContext(config, repos, clock.now());
@@ -251,14 +295,7 @@ export async function runSingleCycle(
   const action = createAction({ ...chosen, taskId }, { newId, now: () => clock.now() });
 
   // 6-10. Validate, persist, execute, verify, persist: all inside the executor.
-  const executor = new ActionExecutor({
-    client,
-    log: new SqliteActionLog(repos),
-    history: repos.actions,
-    clock,
-    newId,
-  });
-  const outcome = await executor.execute(action, state, ctx, cycleId);
+  const outcome = await newExecutor(deps).execute(action, state, ctx, cycleId);
 
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
   const planHalted = planStep === null ? false : updatePlanProgress(repos, planStep, outcome);
@@ -286,13 +323,7 @@ export async function runSingleCycle(
     });
   }
 
-  const violations = outcome.validation.violations.map((v) => v.code);
-  const summary =
-    `${decision.decision} -> ${action.type} -> ${status}` +
-    (violations.length > 0 ? ` [${violations.join(', ')}]` : '') +
-    (outcome.validation.preconditionFailures.length > 0
-      ? ` [preconditions: ${outcome.validation.preconditionFailures.join('; ')}]`
-      : '');
+  const summary = outcomeSummary(`${decision.decision} -> ${action.type}`, outcome, status);
 
   return finish({
     status,
@@ -310,6 +341,51 @@ export async function runSingleCycle(
     },
     outcome,
     summary,
+  });
+}
+
+/**
+ * Runs ONE action a human asked for directly (e.g. `cli move`), through the same executor
+ * as a cycle: schema, the hard safety policy and preconditions against a fresh
+ * observation, then execution and verification. Only the decision step is skipped; nothing
+ * here is autonomous, and task state is left alone.
+ */
+export async function runUserAction(
+  deps: AgentDeps,
+  spec: ActionSpec,
+  reason: string,
+): Promise<CycleResult> {
+  const { config, repos, clock, newId } = deps;
+  const { cycleId, finish, errorResult } = startCycle(deps, 'usr', { userAction: spec.type });
+  const observed = await observeState(deps, cycleId, undefined);
+  if ('error' in observed) return errorResult(observed.error);
+  const { state, stateSnapshotId } = observed;
+
+  const ctx = buildSafetyContext(config, repos, clock.now());
+  const stateViolations = assessStateReliability(state, ctx);
+  if (stateViolations.length > 0) repos.violations.insertMany(cycleId, null, stateViolations);
+  // The executor refuses anything but a pause or an observation while the state is unreliable.
+  const action = createAction(
+    { spec, reason, origin: 'user', taskId: null },
+    { newId, now: () => clock.now() },
+  );
+  const outcome = await newExecutor(deps).execute(action, state, ctx, cycleId);
+  return finish({
+    status: outcome.status,
+    needsUserAttention: outcome.status !== 'succeeded',
+    stateSnapshotId,
+    stateViolations,
+    decision: null,
+    planner: null,
+    action: {
+      actionId: action.actionId,
+      type: action.type,
+      args: action.args,
+      origin: action.origin,
+      reason: action.reason,
+    },
+    outcome,
+    summary: outcomeSummary(`USER -> ${action.type}`, outcome, outcome.status),
   });
 }
 

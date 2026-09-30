@@ -16,10 +16,11 @@ import {
   type ItemStackData,
   type PlayPacket,
 } from './packets.ts';
-import { buildBlockCodeTable } from './block-hazards.ts';
+import { BLOCK_CODE, buildBlockCodeTable } from './block-hazards.ts';
 import { ChunkStore, decodeChunkBulk, decodeChunkColumn, type ChunkFormat } from './chunk-data.ts';
 import { scanHazards, type HazardScan } from './hazard-scan.ts';
 import { nameItemStack, type Registry } from './registry.ts';
+import type { Vec3, WalkWorld } from './walking.ts';
 import { ProtocolError } from './wire.ts';
 
 /**
@@ -527,6 +528,38 @@ export class WorldModel {
     const pos = this.#position;
     if (pos === null || this.#blockCodes === null) return null;
     return scanHazards(this.#store, this.#blockCodes, { x: pos.x, y: pos.feetY, z: pos.z }, radius);
+  }
+
+  /** The player's feet position: where the client walked it, or where the server placed it. */
+  get ownPosition(): Vec3 | null {
+    const p = this.#position;
+    return p === null ? null : { x: p.x, y: p.feetY, z: p.z };
+  }
+
+  /** Walking: the client moved the player (the server only reports corrections, as S08). */
+  setOwnPosition(p: Vec3): void {
+    this.#position = { x: p.x, feetY: p.y, z: p.z };
+  }
+
+  get health(): number | null {
+    return this.#health?.health ?? null;
+  }
+
+  /**
+   * Live block access for walking; null while the registry or block data is missing or
+   * unreliable. Lookups stay live: if the block data becomes unreliable mid-walk, every
+   * block reads as not loaded and the walk stops.
+   */
+  walkWorld(): WalkWorld | null {
+    const registry = this.#registry;
+    const codes = this.#blockCodes;
+    if (registry === null || codes === null || this.#hazardProblem !== null) return null;
+    return {
+      blockAt: (x, y, z) =>
+        this.#hazardProblem === null ? this.#store.blockAt(x, y, z) : undefined,
+      blockName: (id) => registry.blocks.get(id),
+      hazardCode: (id) => codes[id] ?? BLOCK_CODE.unknown,
+    };
   }
 
   /** Block id at a position (diagnostics/tests); undefined if its chunk is not loaded. */

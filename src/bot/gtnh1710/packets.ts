@@ -22,7 +22,9 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // ---------------------------------------------------------------------------
 // Outbound: the ONLY packets this client can ever send. Anything that could change
 // the world (digging, placing, clicking windows, chat/commands, using items,
-// attacking, moving to a new position) is intentionally absent.
+// attacking) is intentionally absent. The one exception is walking: 'player-move'
+// reports a new position, and the client only sends it for steps that walking.ts
+// has checked (see Gtnh1710Client).
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -32,7 +34,8 @@ export type OutboundKind =
   | 'keep-alive'
   | 'plugin-message'
   | 'player-idle'
-  | 'confirm-server-position';
+  | 'confirm-server-position'
+  | 'player-move';
 
 export interface OutboundPacket {
   kind: OutboundKind;
@@ -89,8 +92,39 @@ export const outbound = {
   },
 
   /**
-   * C06 Player Position And Look, used ONLY to acknowledge a position the server just
-   * set (S08). The caller passes the server's packet, never a computed position.
+   * C06 Player Position And Look for one walking step (feet position; the head is at
+   * feet + eye height, which is what 1.7.10 expects as "stance").
+   */
+  playerMove(
+    step: { x: number; feetY: number; z: number; yaw: number; pitch: number },
+    onGround: boolean,
+  ): OutboundPacket {
+    const values = [step.x, step.feetY, step.z, step.yaw, step.pitch];
+    if (!values.every(Number.isFinite)) throw new ProtocolError('refusing a non-finite position');
+    // 1.7.10 kicks for "Illegal position" beyond 3.2e7 and "Illegal stance" outside 0.1-1.65.
+    if (Math.abs(step.x) >= 3.2e7 || Math.abs(step.z) >= 3.2e7) {
+      throw new ProtocolError('refusing an out-of-world position');
+    }
+    return {
+      kind: 'player-move',
+      frame: encodeFrame(
+        0x06,
+        Buffer.concat([
+          f64(step.x),
+          f64(step.feetY),
+          f64(step.feetY + PLAYER_EYE_HEIGHT),
+          f64(step.z),
+          f32(step.yaw),
+          f32(step.pitch),
+          bool(onGround),
+        ]),
+      ),
+    };
+  },
+
+  /**
+   * C06 Player Position And Look, used to acknowledge a position the server just set
+   * (S08). The caller passes the server's packet, never a computed position.
    */
   confirmServerPosition(server: ServerPosition, onGround: boolean): OutboundPacket {
     const feetY = server.eyeY - PLAYER_EYE_HEIGHT;

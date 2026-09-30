@@ -8,7 +8,14 @@ import { plannerResponseJsonSchema } from '../planner/plan-schema.ts';
 import { systemClock } from '../util/clock.ts';
 import { errorMessage } from '../util/json.ts';
 import type { CycleResult } from './agent-loop.ts';
-import { runLiveCycle, summarizeObservation, withLiveClient } from './live-agent.ts';
+import {
+  movementStatus,
+  runLiveCycle,
+  runLiveMove,
+  setMovementHalted,
+  summarizeObservation,
+  withLiveClient,
+} from './live-agent.ts';
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
@@ -21,9 +28,15 @@ Usage:
   node src/app/cli.ts once --live [--db <path> | --memory] [--full] [--verbose]
       Run ONE cycle against the configured private GTNH test server (read-only).
   node src/app/cli.ts observe --live [--radius N] [--verbose]
-      Connect read-only, print what the agent can observe, disconnect.
+      Connect, print what the agent can observe (and a map of the movement fence), disconnect.
       --radius widens the diagnostic entity (and, above 32, hazard) lists; the agent's own
       scans stay at 16 m (entities) and 32 m (hazards).
+  node src/app/cli.ts move --live --to <x,y,z | location> [--tolerance N] [--dry-run] [--db <path>]
+      WALK the player (needs MC_ENABLE_MOVEMENT=true and a fence). One action, validated,
+      executed and verified like the agent's own; Ctrl+C stops it. --dry-run only plans it
+      and draws the path on a map of the fence.
+  node src/app/cli.ts halt [--reason <text>] / unhalt / movement
+      Create / remove the stop file (nothing walks while it exists) / show movement settings.
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -92,6 +105,9 @@ async function main(argv: string[]): Promise<number> {
       task: { type: 'string' },
       plan: { type: 'string' },
       reason: { type: 'string' },
+      to: { type: 'string' },
+      tolerance: { type: 'string', default: '0.5' },
+      'dry-run': { type: 'boolean', default: false },
       live: { type: 'boolean', default: false },
       radius: { type: 'string', default: '16' },
       verbose: { type: 'boolean', default: false },
@@ -125,18 +141,24 @@ async function main(argv: string[]): Promise<number> {
         return 1;
       }
       const radius = Math.max(1, Math.min(128, Number(values.radius) || 16));
-      const summary = await withLiveClient(
+      const { summary, map } = await withLiveClient(
         config,
-        async (client) =>
-          summarizeObservation(
-            await client.observe(),
-            client.info(),
-            client.world.nearbyEntities(radius),
-            radius > 32 ? client.world.diagnosticHazardScan(radius) : null,
-          ),
+        async (client) => ({
+          summary: {
+            ...summarizeObservation(
+              await client.observe(),
+              client.info(),
+              client.world.nearbyEntities(radius),
+              radius > 32 ? client.world.diagnosticHazardScan(radius) : null,
+            ),
+            movement: movementStatus(config),
+          },
+          map: client.previewWalk(null)?.map ?? [],
+        }),
         log,
       );
       print(summary);
+      if (map.length > 0) process.stdout.write(`\n${map.join('\n')}\n`);
       return 0;
     }
     case 'once': {
@@ -157,6 +179,49 @@ async function main(argv: string[]): Promise<number> {
       print(values.full ? result : compact(scenario.name, dbPath, result));
       return result.status === 'error' ? 1 : 0;
     }
+    case 'move': {
+      if (!values.live) {
+        process.stderr.write('move walks on the configured test server; pass --live to confirm.\n');
+        return 1;
+      }
+      if (values.to === undefined) {
+        process.stderr.write('move requires --to <x,y,z | location name>\n');
+        return 1;
+      }
+      const tolerance = Number(values.tolerance);
+      if (!Number.isFinite(tolerance)) {
+        process.stderr.write('--tolerance must be a number\n');
+        return 1;
+      }
+      const out = await runLiveMove(config, dbPath, values.to, {
+        tolerance,
+        dryRun: values['dry-run'],
+        ...(log ? { log } : {}),
+      });
+      print(
+        out.result === null
+          ? { dryRun: true, plan: out.plan }
+          : values.full
+            ? { result: out.result, connection: out.info }
+            : compact('live-move', dbPath, out.result),
+      );
+      const maps = [
+        ...(out.mapBefore.length > 0 ? ['', 'Before (planned path):', ...out.mapBefore] : []),
+        ...(out.mapAfter.length > 0 ? ['', 'After:', ...out.mapAfter] : []),
+      ];
+      if (maps.length > 0) process.stdout.write(`${maps.join('\n')}\n`);
+      if (out.result === null) return out.plan?.ok === true ? 0 : 1;
+      return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'halt':
+      print(setMovementHalted(config, true, values.reason));
+      return 0;
+    case 'unhalt':
+      print(setMovementHalted(config, false));
+      return 0;
+    case 'movement':
+      print(movementStatus(config));
+      return 0;
     case 'scenarios':
       for (const s of SCENARIOS) {
         process.stdout.write(

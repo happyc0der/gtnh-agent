@@ -1,7 +1,12 @@
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { Gtnh1710Client, type ConnectionInfo } from '../bot/gtnh1710/gtnh-client.ts';
 import type { HazardScan } from '../bot/gtnh1710/hazard-scan.ts';
 import type { NearbyEntity } from '../bot/gtnh1710/world-model.ts';
+import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
 import type { AgentConfig } from '../config/env.ts';
+import type { ActionSpec } from '../domain/actions.ts';
+import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
@@ -9,7 +14,13 @@ import { MockPlannerProvider } from '../planner/mock-planner-provider.ts';
 import { DeterministicDecisionProvider } from '../system1/decision-provider.ts';
 import { systemClock } from '../util/clock.ts';
 import { randomIds } from '../util/ids.ts';
-import { runSingleCycle, syncConfigToDatabase, type CycleResult } from './agent-loop.ts';
+import {
+  buildSafetyContext,
+  runSingleCycle,
+  runUserAction,
+  syncConfigToDatabase,
+  type CycleResult,
+} from './agent-loop.ts';
 
 /**
  * Connects the READ-ONLY GTNH client, runs `fn`, and always disconnects afterwards.
@@ -135,6 +146,130 @@ export async function runLiveCycle(
         return { result, info: client.info() };
       },
       log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Walking
+// ---------------------------------------------------------------------------
+
+/** Movement settings and whether the stop file currently halts all walking. */
+export function movementStatus(config: AgentConfig): Record<string, unknown> {
+  const m = config.minecraft.movement;
+  return {
+    enabled: m.enabled,
+    fence: m.fence,
+    stopFile: resolve(m.stopFile),
+    halted: existsSync(resolve(m.stopFile)),
+  };
+}
+
+/**
+ * Creates (halt) or removes (resume) the stop file. While it exists no walk starts, and
+ * a walk in progress stops at its next step, even in another process.
+ */
+export function setMovementHalted(
+  config: AgentConfig,
+  halted: boolean,
+  reason = 'halted by the operator',
+): { stopFile: string; halted: boolean; changed: boolean } {
+  const file = resolve(config.minecraft.movement.stopFile);
+  const existed = existsSync(file);
+  if (halted && !existed) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${new Date().toISOString()} ${reason}\n`);
+  } else if (!halted && existed) {
+    rmSync(file);
+  }
+  return { stopFile: file, halted, changed: existed !== halted };
+}
+
+const COORDINATES = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+
+export interface LiveMoveResult {
+  /** Null for a dry run. */
+  result: CycleResult | null;
+  plan: WalkPlan | null;
+  mapBefore: string[];
+  mapAfter: string[];
+  info: ConnectionInfo;
+}
+
+/**
+ * Walks the player to `to` ("x,y,z" feet coordinates, or a named location) as ONE
+ * user-requested action: validated, executed and verified like the agent's own actions.
+ * A dry run only plans the walk and draws it. Ctrl+C halts the walk at its next step.
+ */
+export async function runLiveMove(
+  config: AgentConfig,
+  dbPath: string,
+  to: string,
+  options: { tolerance: number; dryRun: boolean; log?: (line: string) => void },
+): Promise<LiveMoveResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    let spec: ActionSpec;
+    let target: Position;
+    const m = COORDINATES.exec(to);
+    if (m !== null) {
+      target = { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) };
+      spec = { type: 'MOVE_TO', args: { target, tolerance: options.tolerance } };
+    } else {
+      const location = buildSafetyContext(config, repos, new Date()).locations.get(to);
+      if (location === undefined)
+        throw new Error(`Unknown location "${to}" (use x,y,z or a named location)`);
+      target = location.position;
+      spec =
+        location.kind === 'safe'
+          ? { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: to } }
+          : { type: 'MOVE_TO', args: { target, tolerance: options.tolerance } };
+    }
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const before = client.previewWalk(target);
+          if (options.dryRun) {
+            return {
+              result: null,
+              plan: before?.plan ?? null,
+              mapBefore: before?.map ?? [],
+              mapAfter: [],
+              info: client.info(),
+            };
+          }
+          const result = await runUserAction(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: null,
+              clock: systemClock,
+              newId: randomIds,
+            },
+            spec,
+            `requested by the operator: move --to ${to}`,
+          );
+          return {
+            result,
+            plan: before?.plan ?? null,
+            mapBefore: before?.map ?? [],
+            mapAfter: client.previewWalk(null)?.map ?? [],
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      options.log,
     );
   } finally {
     db.close();

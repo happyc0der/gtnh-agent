@@ -185,7 +185,10 @@ export function spawnFrame(e: FakeEntity): Buffer {
 
 export class FakeGtnhServer {
   readonly received: ReceivedPacket[] = [];
+  /** Every C06 the client sent: echoes of server placements and walking steps. */
   readonly confirmedPositions: ConfirmedPosition[] = [];
+  /** Every placement (S08) the server sent: the join spawn and placePlayer() calls. */
+  readonly placements: Array<{ x: number; eyeY: number; z: number }> = [];
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -269,6 +272,24 @@ export class FakeGtnhServer {
   teleportEntity(entityId: number, x: number, y: number, z: number): void {
     this.broadcast(
       encodeFrame(0x18, Buffer.concat([i32(entityId), fixed(x, y, z), Buffer.from([0, 0])])),
+    );
+  }
+
+  /** S08: the server places the player, as after a teleport or a move it rejected. */
+  placePlayer(x: number, eyeY: number, z: number): void {
+    this.placements.push({ x, eyeY, z });
+    this.broadcast(
+      encodeFrame(
+        0x08,
+        Buffer.concat([f64(x), f64(eyeY), f64(z), f32(0), f32(0), Buffer.from([0])]),
+      ),
+    );
+  }
+
+  /** C06 packets that are walking steps (not exact echoes of a placement). */
+  walkSteps(): ConfirmedPosition[] {
+    return this.confirmedPositions.filter(
+      (p) => !this.placements.some((s) => s.x === p.x && s.z === p.z && s.eyeY === p.headY),
     );
   }
 
@@ -491,6 +512,7 @@ export class FakeGtnhServer {
       ),
     );
     send(encodeFrame(0x05, Buffer.concat([i32(0), i32(64), i32(0)])));
+    this.placements.push({ x: o.spawn.x, eyeY: o.spawn.eyeY, z: o.spawn.z });
     send(
       encodeFrame(
         0x08,

@@ -1,7 +1,10 @@
+import { existsSync } from 'node:fs';
 import { connect, type Socket } from 'node:net';
+import { resolve as resolvePath } from 'node:path';
 import type { MinecraftConfig } from '../../config/env.ts';
 import { assertPrivateDestination } from '../../config/network.ts';
 import type { GameState } from '../../domain/game-state.ts';
+import type { Position } from '../../domain/common.ts';
 import { assertValidatedAction, type ValidatedAction } from '../../domain/validated-action.ts';
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
@@ -20,16 +23,30 @@ import {
   VANILLA_DECODING,
 } from './packets.ts';
 import { parseIdentity, statusPing, type ServerIdentity } from './status-ping.ts';
+import {
+  planWalk,
+  renderWalkMap,
+  segmentProblem,
+  stepsAlong,
+  yawTowards,
+  type Fence,
+  type Vec3,
+  type WalkPlan,
+} from './walking.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
 import { WorldModel } from './world-model.ts';
 
 /** Vanilla clients send one "player" packet per tick (20 per second). */
 const IDLE_TICK_MS = 50;
+/** Walking sends one position per tick. */
+const WALK_TICK_MS = 50;
+/** After the last step, ticks to wait for a server correction before calling a walk done. */
+const SETTLE_TICKS = 5;
 /** The server sends at least a time update every second; within this window the state is current. */
 const FRESHNESS_WINDOW_MS = 3_000;
 /**
- * Reported with presence packets. The client never moves, so this only matters for fall
- * handling (no vertical movement means no fall damage either way).
+ * Reported with every presence and walking packet. The walker only ever stands or walks on
+ * a full block (never jumps or falls), so the player is always on the ground.
  */
 const ON_GROUND = true;
 
@@ -62,15 +79,22 @@ export interface ConnectionInfo {
 type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
 
 /**
- * READ-ONLY client for a private GTNH (Minecraft 1.7.10 + Forge) server.
+ * Client for a private GTNH (Minecraft 1.7.10 + Forge) server: read-only, except that it
+ * can WALK when movement is explicitly enabled with a fence.
  *
  * Guarantees, enforced here and in packets.ts:
  *  - never connects unless live connections are enabled, an identity marker is set, the
  *    host is private, and the server's status ping shows that marker, Forge and GregTech;
  *  - can only send: handshake, status request, login start, keep-alive, FML handshake /
- *    channel registration, idle ticks, and confirmations of server-assigned positions;
- *  - perform() only supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER; every
- *    world-changing action returns NOT_IMPLEMENTED without sending anything.
+ *    channel registration, idle ticks, confirmations of server-assigned positions, and
+ *    walking steps;
+ *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
+ *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled (NOT_IMPLEMENTED
+ *    otherwise); every other world-changing action returns NOT_IMPLEMENTED without
+ *    sending anything;
+ *  - a walk stays on one level inside the fence, and every step is re-checked just before
+ *    it is sent; it stops on a server correction, a health drop, a nearby threat (MOVE_TO),
+ *    a blocked or dangerous way ahead, the stop file, halt(), or a lost connection.
  */
 export class Gtnh1710Client implements MinecraftClient {
   readonly kind = 'gtnh1710';
@@ -88,6 +112,8 @@ export class Gtnh1710Client implements MinecraftClient {
   #connectedAt: Date | null = null;
   #confirmedPositions = 0;
   #listeners: Array<() => void> = [];
+  #walking = false;
+  #haltReason: string | null = null;
 
   constructor(opts: Gtnh1710ClientOptions) {
     this.#opts = opts;
@@ -196,7 +222,10 @@ export class Gtnh1710Client implements MinecraftClient {
         // Recorded by the agent; deliberately not sent as in-game chat.
         return Promise.resolve(ok('pause recorded (not sent in-game)', { acknowledged: true }));
       case 'MOVE_TO':
+        return this.#walkTo(action.args.target, { stopForThreats: true });
       case 'RETURN_TO_SAFE_LOCATION':
+        // A retreat is how the agent gets away from a threat, so threats do not stop it.
+        return this.#walkTo(validated.resolvedTarget, { stopForThreats: false });
       case 'EAT_FOOD':
       case 'OPEN_CONTAINER':
       case 'DEPOSIT_ITEM':
@@ -205,11 +234,189 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'REFUEL_KNOWN_GENERATOR':
         return Promise.resolve(
           failed(
-            `${action.type} is not available: the GTNH client is read-only`,
+            `${action.type} is not available: the GTNH client can only observe and walk`,
             'NOT_IMPLEMENTED',
           ),
         );
     }
+  }
+
+  /** Stops a walk in progress at its next step and refuses new walks (e.g. on Ctrl+C). */
+  halt(reason: string): void {
+    this.#haltReason = reason;
+  }
+
+  /**
+   * Plans a walk without moving (for previews and dry runs), with a text map of the fence.
+   * Works whether or not movement is enabled; null when no fence is configured.
+   */
+  previewWalk(target: Position | null): { plan: WalkPlan | null; map: string[] } | null {
+    const m = this.#opts.config.movement;
+    if (m.fence === null) return null;
+    const fence = fenceOf(m.fence);
+    const world = this.#world.walkWorld();
+    const from = this.#world.ownPosition;
+    if (world === null || from === null) {
+      return { plan: { ok: false, reason: 'block data or position unknown' }, map: [] };
+    }
+    const plan = target === null ? null : planWalk(world, fence, from, target, m.maxPathLength);
+    const entities = this.#world.nearbyEntities(64).map((e) => ({
+      id: e.entityId,
+      threat: e.category === 'hostile' || e.category === 'unclassified',
+    }));
+    const positions = new Map(this.#world.trackedEntities().map((e) => [e.entityId, e]));
+    const map = renderWalkMap(world, fence, {
+      player: from,
+      target,
+      path: plan?.ok === true ? plan.waypoints : [],
+      entities: entities.flatMap((e) => {
+        const p = positions.get(e.id);
+        return p === undefined ? [] : [{ x: p.x, z: p.z, threat: e.threat }];
+      }),
+    });
+    return { plan, map };
+  }
+
+  /** Why walking cannot start or continue now, or null. */
+  #movementBlocker(): string | null {
+    const m = this.#opts.config.movement;
+    if (!m.enabled) return 'movement is disabled (MC_ENABLE_MOVEMENT)';
+    if (m.fence === null) return 'no movement fence is configured (MC_MOVEMENT_FENCE_MIN/MAX)';
+    if (!this.#opts.config.presenceTicks) return 'walking needs presence ticks (MC_PRESENCE_TICKS)';
+    if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
+    if (existsSync(resolvePath(m.stopFile))) return `the stop file ${m.stopFile} exists`;
+    return null;
+  }
+
+  async #walkTo(
+    target: Readonly<Position> | null,
+    options: { stopForThreats: boolean },
+  ): Promise<ClientActionResult> {
+    const m = this.#opts.config.movement;
+    const blocker = this.#movementBlocker();
+    if (blocker !== null || m.fence === null) {
+      return failed(`not walking: ${blocker}`, m.enabled ? 'REFUSED' : 'NOT_IMPLEMENTED');
+    }
+    if (target === null) return failed('not walking: no resolved target', 'ERROR');
+    if (this.#walking) return failed('not walking: a walk is already in progress', 'REFUSED');
+    const fence = fenceOf(m.fence);
+    const world = this.#world.walkWorld();
+    const from = this.#world.ownPosition;
+    if (world === null || from === null) {
+      return failed('not walking: block data or position unknown', 'REFUSED');
+    }
+    const plan = planWalk(world, fence, from, target, m.maxPathLength);
+    if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
+
+    const steps = stepsAlong(plan.waypoints);
+    this.#log(
+      `walking ${plan.length.toFixed(2)} blocks in ${steps.length} steps (${plan.waypoints.length - 1} stretch(es))`,
+    );
+    const placementsAtStart = this.#confirmedPositions;
+    const healthAtStart = this.#world.health;
+    let at: Vec3 = from;
+    let taken = 0;
+    const stopped = (reason: string): ClientActionResult => {
+      const where = this.#world.ownPosition ?? at;
+      this.#log(`walk stopped after ${taken}/${steps.length} steps: ${reason}`);
+      return failed(`walk stopped after ${taken} of ${steps.length} steps: ${reason}`, 'FAILED', {
+        stepsTaken: taken,
+        stepsPlanned: steps.length,
+        x: where.x,
+        y: where.y,
+        z: where.z,
+      });
+    };
+
+    this.#walking = true;
+    this.#stopIdle();
+    try {
+      for (const next of steps) {
+        const reason = this.#stepProblem(world, fence, at, next, {
+          placementsAtStart,
+          healthAtStart,
+          stopForThreats: options.stopForThreats,
+        });
+        if (reason !== null) return stopped(reason);
+        this.#send(
+          outbound.playerMove(
+            { x: next.x, feetY: next.y, z: next.z, yaw: yawTowards(at, next), pitch: 0 },
+            ON_GROUND,
+          ),
+        );
+        this.#world.setOwnPosition(next);
+        at = next;
+        taken += 1;
+        await delay(WALK_TICK_MS);
+      }
+      // A correction (S08) or a kick arrives within a few ticks of a move the server rejects.
+      for (let i = 0; i < SETTLE_TICKS; i++) {
+        if (this.#phase !== 'play') return stopped('the connection closed');
+        if (this.#confirmedPositions !== placementsAtStart) {
+          return stopped('the server corrected the final position');
+        }
+        this.#send(outbound.playerIdle(ON_GROUND));
+        await delay(WALK_TICK_MS);
+      }
+      if (this.#phase !== 'play') return stopped('the connection closed');
+      if (this.#confirmedPositions !== placementsAtStart) {
+        return stopped('the server corrected the final position');
+      }
+      return ok(`walked ${plan.length.toFixed(2)} blocks in ${steps.length} steps`, {
+        steps: steps.length,
+        distance: Number(plan.length.toFixed(3)),
+        x: at.x,
+        y: at.y,
+        z: at.z,
+      });
+    } finally {
+      this.#walking = false;
+      if (this.#phase === 'play') this.#startIdle();
+    }
+  }
+
+  /** Why the next step must not be taken, or null. Checked immediately before every step. */
+  #stepProblem(
+    world: NonNullable<ReturnType<WorldModel['walkWorld']>>,
+    fence: Fence,
+    from: Vec3,
+    to: Vec3,
+    guard: { placementsAtStart: number; healthAtStart: number | null; stopForThreats: boolean },
+  ): string | null {
+    if (this.#phase !== 'play') return 'the connection closed';
+    const blocker = this.#movementBlocker();
+    if (blocker !== null) return blocker;
+    if (this.#confirmedPositions !== guard.placementsAtStart) {
+      return 'the server corrected the position';
+    }
+    const health = this.#world.health;
+    if (guard.healthAtStart !== null && health !== null && health < guard.healthAtStart) {
+      return `health dropped from ${guard.healthAtStart} to ${health}`;
+    }
+    if (guard.stopForThreats) {
+      if (!this.#world.entitiesReady(this.#opts.clock.now())) {
+        return 'the entities around the player are not fully known';
+      }
+      const radius = this.#opts.config.movement.threatRadius;
+      const threat = this.#world
+        .nearbyEntities(radius)
+        .find((e) => e.category === 'hostile' || e.category === 'unclassified');
+      if (threat !== undefined) {
+        return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
+      }
+    }
+    const problem = segmentProblem(world, fence, from, to);
+    return problem === null ? null : `the way ahead is not clear: ${problem}`;
+  }
+
+  #startIdle(): void {
+    if (this.#idleTimer !== null || this.#walking) return;
+    this.#idleTimer = setInterval(() => this.#send(outbound.playerIdle(ON_GROUND)), IDLE_TICK_MS);
+  }
+
+  #stopIdle(): void {
+    if (this.#idleTimer !== null) clearInterval(this.#idleTimer);
+    this.#idleTimer = null;
   }
 
   // -------------------------------------------------------------------------
@@ -429,14 +636,15 @@ export class Gtnh1710Client implements MinecraftClient {
     }
   }
 
-  /** Acknowledge the server's placement (exact echo) and start idle ticks, if presence is enabled. */
+  /**
+   * Acknowledge the server's placement (exact echo) and start idle ticks, if presence is
+   * enabled. A placement during a walk stops the walk (its step check sees the count change).
+   */
   #onServerPosition(position: ServerPosition): void {
     if (!this.#opts.config.presenceTicks) return;
     this.#send(outbound.confirmServerPosition(position, ON_GROUND));
     this.#confirmedPositions += 1;
-    if (this.#idleTimer === null) {
-      this.#idleTimer = setInterval(() => this.#send(outbound.playerIdle(ON_GROUND)), IDLE_TICK_MS);
-    }
+    this.#startIdle();
   }
 
   #send(packet: OutboundPacket): void {
@@ -455,8 +663,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#phase === 'closed') return;
     this.#phase = 'closed';
     this.#closedReason = reason;
-    if (this.#idleTimer !== null) clearInterval(this.#idleTimer);
-    this.#idleTimer = null;
+    this.#stopIdle();
     const socket = this.#socket;
     if (socket !== null && !socket.destroyed) {
       if (graceful) {
@@ -515,6 +722,10 @@ export class Gtnh1710Client implements MinecraftClient {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fenceOf(f: { min: Position; max: Position }): Fence {
+  return { min: { ...f.min }, max: { ...f.max } };
 }
 
 /** Plain text of a chat-component JSON string (best effort, for error messages). */

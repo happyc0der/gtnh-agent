@@ -9,7 +9,9 @@ import tseslint from 'typescript-eslint';
  *  - no shell/process spawning anywhere in the agent;
  *  - mineflayer may only be imported by the adapter in src/bot/mineflayer-client.ts;
  *  - only the ActionExecutor may mint ValidatedAction tokens;
- *  - only the Minecraft adapters in src/bot/ may open network sockets.
+ *  - only the Minecraft adapters in src/bot/ may open network sockets (plus the operator's
+ *    RCON tool, scripts/test-server-admin.ts, which is not part of the agent);
+ *  - the agent (src/) may never import operator tools from scripts/.
  */
 const noShell = [
   { name: 'child_process', message: 'The agent must not run shell commands.' },
@@ -25,6 +27,12 @@ const noMinting = {
   message: 'Only the ActionExecutor may mint ValidatedAction tokens.',
 };
 
+const noScripts = {
+  group: ['**/scripts/**'],
+  message:
+    'The agent must not import operator tools from scripts/ (they run with server-operator rights).',
+};
+
 const socketMessage = 'Only the Minecraft adapters in src/bot/ may open network sockets.';
 const noSockets = [
   ...['net', 'node:net'].map((name) => ({
@@ -37,7 +45,7 @@ const noSockets = [
   ),
 ];
 
-/** @param {{ mineflayer?: boolean, minting?: boolean, sockets?: boolean }} allow */
+/** @param {{ mineflayer?: boolean, minting?: boolean, sockets?: boolean, scripts?: boolean }} allow */
 const boundaries = (allow) => [
   'error',
   {
@@ -46,7 +54,7 @@ const boundaries = (allow) => [
       ...(allow.mineflayer ? [] : [noMineflayer]),
       ...(allow.sockets ? [] : noSockets),
     ],
-    patterns: allow.minting ? [] : [noMinting],
+    patterns: [...(allow.minting ? [] : [noMinting]), ...(allow.scripts ? [] : [noScripts])],
   },
 ];
 
@@ -85,6 +93,15 @@ export default tseslint.config(
   {
     files: ['tests/**/*.ts'],
     rules: { 'no-restricted-imports': boundaries({ minting: true, sockets: true }) },
+  },
+  {
+    files: ['scripts/**/*.ts'],
+    rules: { 'no-restricted-imports': boundaries({ scripts: true }) },
+  },
+  {
+    // The operator's RCON tool: localhost-only, password from the test server's own files.
+    files: ['scripts/test-server-admin.ts'],
+    rules: { 'no-restricted-imports': boundaries({ scripts: true, sockets: true }) },
   },
   {
     files: ['eslint.config.js'],

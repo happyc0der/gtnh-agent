@@ -5,6 +5,52 @@ import { EntityIdSchema, ItemNameSchema, LocationNameSchema } from '../domain/co
 import { NamedLocationSchema, SafetyConfigSchema } from '../domain/safety.ts';
 import { checkPrivateHost } from './network.ts';
 
+/** Integer block coordinates (a block, not a point). */
+const BlockPositionSchema = z.strictObject({
+  x: z.int().min(-30_000_000).max(30_000_000),
+  y: z.int().min(1).max(254),
+  z: z.int().min(-30_000_000).max(30_000_000),
+});
+
+/** Largest fence the walker searches (blocks per side). */
+export const MAX_FENCE_SIDE = 64;
+
+/**
+ * Walking (the only world-changing ability of the live client). Off by default: the
+ * client walks only with `enabled` true AND a fence, on the fence's single level.
+ */
+export const MovementConfigSchema = z
+  .strictObject({
+    enabled: z.boolean().default(false),
+    /**
+     * Blocks the player's feet may be in (inclusive), all on one level (min.y === max.y).
+     * The player's whole body must stay inside. Null refuses all movement.
+     */
+    fence: z
+      .strictObject({ min: BlockPositionSchema, max: BlockPositionSchema })
+      .nullable()
+      .default(null),
+    /** While this file exists no walk starts, and a walk in progress stops at its next step. */
+    stopFile: z.string().min(1).max(500).default('./data/STOP'),
+    /** A hostile or unidentified entity this close stops a MOVE_TO walk. */
+    threatRadius: z.number().min(1).max(64).default(10),
+    /** Longest single walk (path length in blocks). */
+    maxPathLength: z.number().min(1).max(128).default(32),
+  })
+  .superRefine((m, ctx) => {
+    if (m.fence === null) return;
+    const { min, max } = m.fence;
+    const issue = (message: string): void => {
+      ctx.addIssue({ code: 'custom', path: ['fence'], message });
+    };
+    if (min.y !== max.y) issue('fence min.y and max.y must be equal: walking stays on one level');
+    if (min.x > max.x || min.z > max.z) issue('fence min must be <= max');
+    if (max.x - min.x + 1 > MAX_FENCE_SIDE || max.z - min.z + 1 > MAX_FENCE_SIDE) {
+      issue(`fence sides must be at most ${MAX_FENCE_SIDE} blocks`);
+    }
+  });
+export type MovementConfig = z.infer<typeof MovementConfigSchema>;
+
 export const MinecraftConfigSchema = z
   .strictObject({
     host: z.string().min(1).max(253).default('127.0.0.1'),
@@ -29,12 +75,13 @@ export const MinecraftConfigSchema = z
      */
     serverIdentityMarker: z.string().min(3).max(64).nullable().default(null),
     /**
-     * Send idle "still here" packets (at the exact server-assigned position) so the server
-     * ticks the player and reports health/food. Never sends a different position.
+     * Send idle "still here" packets (at the player's current position) so the server
+     * ticks the player and reports health/food. Only walking (below) changes that position.
      */
     presenceTicks: z.boolean().default(true),
     /** After joining, how long to wait for the first health and inventory packets. */
     initialStateGraceMs: z.int().min(0).max(30_000).default(3_000),
+    movement: MovementConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -139,6 +186,12 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_PRESENCE_TICKS'))) set(['minecraft', 'presenceTicks'], v === 'true');
   if ((v = e('MC_ENABLE_LIVE_CONNECTION')))
     set(['minecraft', 'enableLiveConnection'], v === 'true');
+  if ((v = e('MC_ENABLE_MOVEMENT'))) set(['minecraft', 'movement', 'enabled'], v === 'true');
+  if ((v = e('MC_MOVEMENT_FENCE_MIN')))
+    set(['minecraft', 'movement', 'fence', 'min'], xyz('MC_MOVEMENT_FENCE_MIN', v));
+  if ((v = e('MC_MOVEMENT_FENCE_MAX')))
+    set(['minecraft', 'movement', 'fence', 'max'], xyz('MC_MOVEMENT_FENCE_MAX', v));
+  if ((v = e('MC_MOVEMENT_STOP_FILE'))) set(['minecraft', 'movement', 'stopFile'], v);
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))
     set(['safety', 'boundary', 'min'], xyz('SAFETY_BOUNDARY_MIN', v));
