@@ -3,10 +3,12 @@
 A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTNH) on a
 **private** server you control.
 
-**Milestone 1 status:** mock-only. One human-triggered observe → decide → validate → execute →
-verify cycle against a simulated world. There is no autonomous loop, no model, no GPU use, and no real
-server connection. GTNH compatibility of Mineflayer is **unverified and likely blocked**; see
-[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
+**Milestone 1 status:** the agent runs mock-only: one human-triggered observe → decide → validate →
+execute → verify cycle against a simulated world, with no autonomous loop, no model and no GPU use.
+
+**Connection spike (2026-09-30):** a read-only raw 1.7.10 client completed the Forge handshake and
+**joined a private GTNH 2.8.4 test world**; Mineflayer refuses 1.7.10 outright. The agent loop is not
+connected to the server yet. See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
 ## Requirements
 
@@ -32,23 +34,25 @@ cp agent.config.example.json agent.config.json
 
 ## Commands
 
-| Task                                  | Command                                         |
-| ------------------------------------- | ----------------------------------------------- |
-| Unit + integration tests              | `pnpm test`                                     |
-| Lint (incl. architectural boundaries) | `pnpm lint`                                     |
-| Type check (strict)                   | `pnpm typecheck`                                |
-| Format check / fix                    | `pnpm format:check` / `pnpm format`             |
-| Build to `dist/`                      | `pnpm build`                                    |
-| Everything                            | `pnpm check`                                    |
-| **One mock agent cycle**              | `pnpm agent:once`                               |
-| One cycle of a named scenario         | `pnpm agent:once --scenario hungry`             |
-| Scenario list                         | `pnpm cli scenarios`                            |
-| Throwaway in-memory DB                | `pnpm agent:once --memory`                      |
-| Full cycle result                     | `pnpm agent:once --full`                        |
-| Recent action log                     | `pnpm cli history --limit 20`                   |
-| Resume a paused/blocked task          | `pnpm cli task-resume --task task-action-fails` |
-| Planner output JSON Schema            | `pnpm cli plan-schema`                          |
-| Show validated config                 | `pnpm cli config`                               |
+| Task                                     | Command                                         |
+| ---------------------------------------- | ----------------------------------------------- |
+| Unit + integration tests                 | `pnpm test`                                     |
+| Lint (incl. architectural boundaries)    | `pnpm lint`                                     |
+| Type check (strict)                      | `pnpm typecheck`                                |
+| Format check / fix                       | `pnpm format:check` / `pnpm format`             |
+| Build to `dist/`                         | `pnpm build`                                    |
+| Everything                               | `pnpm check`                                    |
+| **One mock agent cycle**                 | `pnpm agent:once`                               |
+| One cycle of a named scenario            | `pnpm agent:once --scenario hungry`             |
+| Scenario list                            | `pnpm cli scenarios`                            |
+| Throwaway in-memory DB                   | `pnpm agent:once --memory`                      |
+| Full cycle result                        | `pnpm agent:once --full`                        |
+| Recent action log                        | `pnpm cli history --limit 20`                   |
+| Resume a paused/blocked task             | `pnpm cli task-resume --task task-action-fails` |
+| Planner output JSON Schema               | `pnpm cli plan-schema`                          |
+| Show validated config                    | `pnpm cli config`                               |
+| Test server: identity ping + login tests | `pnpm spike:connect`                            |
+| Test server: Forge handshake join test   | `node scripts/fml-join-spike.ts`                |
 
 `agent:once` persists to `./data/agent.sqlite` by default (`AGENT_DB_PATH` or `--db` override).
 Try `pnpm agent:once --scenario action-fails` three times: two failures, then the third attempt is
@@ -109,3 +113,13 @@ and [docs/action-contract.md](docs/action-contract.md).
   (prebuilt binaries are used).
 - TypeScript is pinned to 6.0.x because `typescript-eslint` 8.70 supports TypeScript < 6.1.
 - Local LLM integration is designed but not implemented: [docs/local-llm-integration.md](docs/local-llm-integration.md).
+
+## Private GTNH test server
+
+The connection spikes target a local test server in `~/Projects/gtnh-test-server` (outside this
+repo): the official GTNH 2.8.4 Java 17-25 server pack on Temurin 21, bound to `127.0.0.1:25570`,
+offline mode, whitelist on, throwaway world `agent-test`. Start it with `start-test-server.bat` in
+that folder and stop it by typing `stop` in its window. Wait ~30 s after it prints "Done" before
+connecting; until then Forge rejects connections with "Server is still starting!". Both spike
+scripts refuse to log in unless the server's MOTD contains `gtnh-agent-test` and it reports Forge
+with GregTech.

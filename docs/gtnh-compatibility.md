@@ -1,8 +1,39 @@
 # GTNH compatibility
 
-**Status: unverified.** Nothing in this repository has been tested against a GregTech: New
-Horizons server. Every claim below is labelled as _verified_ (checked in this repo's installed
-dependencies) or _assumption_ (to be tested).
+**Status: connection verified on a private test server (2026-09-30); everything else unverified.**
+A Node client completed the Forge handshake and joined a GTNH 2.8.4 world (read-only). Mineflayer
+cannot. Every claim below is labelled as _verified_ (observed or checked in installed code) or
+_assumption_ (to be tested).
+
+## Test server results (2026-09-30)
+
+Setup: official `GT_New_Horizons_2.8.4_Server_Java_17-25.zip` on Temurin 21, fresh RWG world,
+`server-ip=127.0.0.1`, port 25570, `online-mode=false`, whitelist on (`gtnh_agent`, owner). Server
+folder: `~/Projects/gtnh-test-server` (outside this repo). Commands: `pnpm spike:connect`,
+`node scripts/fml-join-spike.ts`; raw results are written to `data/spike/` (gitignored).
+
+| Test                                                                | Result (verified)                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server identity (1.7 status ping)                                   | FML server, **287 mods**: Forge 10.13.4.1614, `gregtech`, `dreamcraft` 2.7.268, `lwjgl3ify` 2.1.16, **`neid` 2.1.10** (NotEnoughIDs changes block/chunk packet formats).                                                                                                                                                     |
+| Right after "Done"                                                  | For ~30 s the server answers every connection with _"Server is still starting! Please wait before reconnecting."_ Adapters must retry.                                                                                                                                                                                       |
+| `minecraft-protocol` `ping()` with version 1.7.10                   | Uses the legacy pre-1.7 ping, so no mod list; replaced by `scripts/status-ping.ts`.                                                                                                                                                                                                                                          |
+| Plain client (minecraft-protocol, no Forge handshake)               | Login succeeds, server sends `REGISTER` + `FML\|HS` ServerHello, then only keep-alives. **Never receives Join Game**; no kick message.                                                                                                                                                                                       |
+| **Mineflayer 4.39** via `MineflayerClient`                          | **Refused by mineflayer itself:** `Server version '1.7.10' is not supported. Oldest supported version is '1.8.8'.` (hard check in `mineflayer/lib/loader.js`).                                                                                                                                                               |
+| **Raw 1.7.10 client + FML handshake** (`scripts/fml-join-spike.ts`) | **Joined.** Handshake done in ~110 ms by echoing the server's mod list; Join Game (survival, hard, dimension 0, `RWG`); spawned at (-4.5, 106.0, -7.5); server logged `gtnh_agent … logged in` / `left the game` with no warnings. Stayed 10 s, sent nothing but keep-alive and handshake replies.                           |
+| Registry                                                            | The handshake's `ModIdData` (485,837 bytes, larger than a vanilla plugin message, sent with Forge's extended length) maps **10,987 items and 4,038 blocks**, e.g. `gregtech:gt.metaitem.01` = 7495, `dreamcraft:item.EngravedQuantumChip` = 5717. IDs are assigned **per world**: read them at every login, never hard-code. |
+| Health/food                                                         | **No health packet in 10 s.** Likely because 1.7.10 only ticks a player when the client sends movement packets (to verify). The bot must send position packets, which means doing its own gravity/collision physics (1.7.10 movement is client-side).                                                                        |
+| Plugin traffic                                                      | ~2,300 plugin messages in 10 s, 2,070 of them on the `GregTech` channel. Possible source of machine state; needs research.                                                                                                                                                                                                   |
+
+**Implications for the adapter:**
+
+1. **Mineflayer is out for GTNH.** Its version gate, vanilla-only parsers, lack of Forge's extended
+   plugin-message length and NotEnoughIDs changes all break on this server. `MineflayerClient`
+   stays a disabled skeleton.
+2. **A small custom 1.7.10 protocol client is feasible**: the spike already does login, the Forge
+   handshake, keep-alives, join, position and inventory parsing, and the registry.
+3. **Observation first:** inventory names come from the per-world registry; health/food need the
+   player to be ticked; machine/power state may need a server-side helper mod.
+4. **Movement is the hard part**: client-authoritative physics with modded collision boxes.
 
 ## What was verified (from installed packages, 2026-09-26)
 
@@ -53,10 +84,8 @@ Minecraft. GTNH adds hundreds of mods. None of the following is guaranteed to wo
 Run on a **disposable copy** of a world on a server you control, in creative-disabled survival,
 with backups, never on a public server.
 
-1. **Connectivity spike (read-only).** With `MC_ENABLE_LIVE_CONNECTION=true` against a local
-   GTNH server: can any Node client complete the FML handshake? Evaluate a Forge-capable transport
-   (for example a community FML-handshake plugin for node-minecraft-protocol), or a thin server-side
-   helper mod that exposes state over a local socket. Record the result here.
+1. **Connectivity spike (read-only). DONE 2026-09-30:** a raw Node client with a hand-written
+   FML handshake joins; mineflayer does not. See "Test server results" above.
 2. **Observation only.** Implement and verify `observe()` field by field: position, dimension,
    health, food, inventory (including a GT meta-item), nearby hostiles and lava. For each field,
    compare against the in-game F3/NEI view in at least 10 situations. Anything unreliable stays `unknown`.

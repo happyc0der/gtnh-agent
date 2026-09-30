@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "cli": "node src/app/cli.ts",
     "agent:once": "node src/app/cli.ts once",
+    "spike:connect": "node scripts/connectivity-spike.ts",
     "check": "tsc -p tsconfig.json --noEmit && eslint . && prettier --check . && vitest run && tsc -p tsconfig.build.json"
   },
   "dependencies": {
