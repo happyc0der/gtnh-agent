@@ -16,12 +16,19 @@ export type Position = z.infer<typeof PositionSchema>;
 /**
  * Namespaced item identifier, optionally with 1.7.10-style metadata:
  * `minecraft:bread`, `gregtech:gt.metaitem.01@2032`.
- * The exact identifiers GTNH exposes through the adapter are UNVERIFIED (docs/gtnh-compatibility.md).
+ *
+ * The character set matches the real GTNH 2.8.4 registry (verified against all 15,025
+ * names on 2026-09-30): namespaces may contain `|` (`BuildCraft|Core:engineBlock`), and
+ * names may contain `|`, `'` and single inner spaces (`Natura:N Crops`). No other
+ * punctuation, no leading/trailing or double spaces, no control characters.
  */
 export const ItemNameSchema = z
   .string()
   .max(128)
-  .regex(/^[A-Za-z0-9_.-]+:[A-Za-z0-9_./-]+(?:@\d{1,5})?$/, 'expected namespace:item[@meta]');
+  .regex(
+    /^[A-Za-z0-9_.|-]+:[A-Za-z0-9_./|'-]+(?: [A-Za-z0-9_./|'-]+)*(?:@\d{1,5})?$/,
+    'expected namespace:item[@meta]',
+  );
 export type ItemName = z.infer<typeof ItemNameSchema>;
 
 /** Identifier for things the agent tracks: containers, machines, generators, tasks. */

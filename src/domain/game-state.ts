@@ -131,7 +131,7 @@ export const GameStateSchema = z.strictObject({
   schemaVersion: z.literal(GAME_STATE_SCHEMA_VERSION),
   /** When this state was observed. Used for staleness checks. */
   timestamp: TimestampSchema,
-  source: z.enum(['mock', 'mineflayer', 'fixture']),
+  source: z.enum(['mock', 'mineflayer', 'gtnh1710', 'fixture']),
   player: PlayerSchema,
   inventory: knownSchema(InventorySchema),
   nearbyThreats: knownSchema(ThreatsSchema),

@@ -1,39 +1,78 @@
 # GTNH compatibility
 
-**Status: connection verified on a private test server (2026-09-30); everything else unverified.**
-A Node client completed the Forge handshake and joined a GTNH 2.8.4 world (read-only). Mineflayer
-cannot. Every claim below is labelled as _verified_ (observed or checked in installed code) or
-_assumption_ (to be tested).
+**Status (2026-09-30): read-only observation works on a private GTNH 2.8.4 test server.**
+The agent's own client (`src/bot/gtnh1710/`, `Gtnh1710Client`) joins via the Forge handshake and
+reports position, dimension, health, food and a fully named inventory. Threats, machines and
+power are not observable yet, so the agent always fails closed (pauses) against the live server.
+Mineflayer cannot connect at all. Every claim below is labelled as _verified_ (observed or checked
+in installed code) or _assumption_ (to be tested).
 
 ## Test server results (2026-09-30)
 
 Setup: official `GT_New_Horizons_2.8.4_Server_Java_17-25.zip` on Temurin 21, fresh RWG world,
 `server-ip=127.0.0.1`, port 25570, `online-mode=false`, whitelist on (`gtnh_agent`, owner). Server
-folder: `~/Projects/gtnh-test-server` (outside this repo). Commands: `pnpm spike:connect`,
-`node scripts/fml-join-spike.ts`; raw results are written to `data/spike/` (gitignored).
+folder: `~/Projects/gtnh-test-server` (outside this repo). Commands: `pnpm spike:connect`
+(the mineflayer/minecraft-protocol comparison) and `pnpm cli observe --live` (the agent's client);
+raw spike results are written to `data/spike/` (gitignored).
 
-| Test                                                                | Result (verified)                                                                                                                                                                                                                                                                                                            |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Server identity (1.7 status ping)                                   | FML server, **287 mods**: Forge 10.13.4.1614, `gregtech`, `dreamcraft` 2.7.268, `lwjgl3ify` 2.1.16, **`neid` 2.1.10** (NotEnoughIDs changes block/chunk packet formats).                                                                                                                                                     |
-| Right after "Done"                                                  | For ~30 s the server answers every connection with _"Server is still starting! Please wait before reconnecting."_ Adapters must retry.                                                                                                                                                                                       |
-| `minecraft-protocol` `ping()` with version 1.7.10                   | Uses the legacy pre-1.7 ping, so no mod list; replaced by `scripts/status-ping.ts`.                                                                                                                                                                                                                                          |
-| Plain client (minecraft-protocol, no Forge handshake)               | Login succeeds, server sends `REGISTER` + `FML\|HS` ServerHello, then only keep-alives. **Never receives Join Game**; no kick message.                                                                                                                                                                                       |
-| **Mineflayer 4.39** via `MineflayerClient`                          | **Refused by mineflayer itself:** `Server version '1.7.10' is not supported. Oldest supported version is '1.8.8'.` (hard check in `mineflayer/lib/loader.js`).                                                                                                                                                               |
-| **Raw 1.7.10 client + FML handshake** (`scripts/fml-join-spike.ts`) | **Joined.** Handshake done in ~110 ms by echoing the server's mod list; Join Game (survival, hard, dimension 0, `RWG`); spawned at (-4.5, 106.0, -7.5); server logged `gtnh_agent … logged in` / `left the game` with no warnings. Stayed 10 s, sent nothing but keep-alive and handshake replies.                           |
-| Registry                                                            | The handshake's `ModIdData` (485,837 bytes, larger than a vanilla plugin message, sent with Forge's extended length) maps **10,987 items and 4,038 blocks**, e.g. `gregtech:gt.metaitem.01` = 7495, `dreamcraft:item.EngravedQuantumChip` = 5717. IDs are assigned **per world**: read them at every login, never hard-code. |
-| Health/food                                                         | **No health packet in 10 s.** Likely because 1.7.10 only ticks a player when the client sends movement packets (to verify). The bot must send position packets, which means doing its own gravity/collision physics (1.7.10 movement is client-side).                                                                        |
-| Plugin traffic                                                      | ~2,300 plugin messages in 10 s, 2,070 of them on the `GregTech` channel. Possible source of machine state; needs research.                                                                                                                                                                                                   |
+| Test                                                  | Result (verified)                                                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server identity (1.7 status ping)                     | FML server, **287 mods**: Forge 10.13.4.1614, `gregtech`, `dreamcraft` 2.7.268, `lwjgl3ify` 2.1.16, **`neid` 2.1.10** (NotEnoughIDs changes block/chunk packet formats).                                                                                                                                                     |
+| Right after "Done"                                    | For ~30 s the server answers every connection with _"Server is still starting! Please wait before reconnecting."_ Adapters must retry.                                                                                                                                                                                       |
+| `minecraft-protocol` `ping()` with version 1.7.10     | Uses the legacy pre-1.7 ping, so no mod list; replaced by `src/bot/gtnh1710/status-ping.ts`.                                                                                                                                                                                                                                 |
+| Plain client (minecraft-protocol, no Forge handshake) | Login succeeds, server sends `REGISTER` + `FML\|HS` ServerHello, then only keep-alives. **Never receives Join Game**; no kick message.                                                                                                                                                                                       |
+| **Mineflayer 4.39** via `MineflayerClient`            | **Refused by mineflayer itself:** `Server version '1.7.10' is not supported. Oldest supported version is '1.8.8'.` (hard check in `mineflayer/lib/loader.js`).                                                                                                                                                               |
+| **Raw 1.7.10 client + FML handshake** (first spike)   | **Joined.** Handshake done in ~110 ms by echoing the server's mod list; Join Game (survival, hard, dimension 0, `RWG`); spawned at (-4.5, 106.0, -7.5); server logged `gtnh_agent … logged in` / `left the game` with no warnings. Stayed 10 s, sent nothing but keep-alive and handshake replies.                           |
+| Registry                                              | The handshake's `ModIdData` (485,837 bytes, larger than a vanilla plugin message, sent with Forge's extended length) maps **10,987 items and 4,038 blocks**, e.g. `gregtech:gt.metaitem.01` = 7495, `dreamcraft:item.EngravedQuantumChip` = 5717. IDs are assigned **per world**: read them at every login, never hard-code. |
+| Health/food                                           | **No health packet in 10 s.** Likely because 1.7.10 only ticks a player when the client sends movement packets (to verify). The bot must send position packets, which means doing its own gravity/collision physics (1.7.10 movement is client-side).                                                                        |
+| Plugin traffic                                        | ~2,300 plugin messages in 10 s, 2,070 of them on the `GregTech` channel. Possible source of machine state; needs research.                                                                                                                                                                                                   |
 
 **Implications for the adapter:**
 
 1. **Mineflayer is out for GTNH.** Its version gate, vanilla-only parsers, lack of Forge's extended
    plugin-message length and NotEnoughIDs changes all break on this server. `MineflayerClient`
    stays a disabled skeleton.
-2. **A small custom 1.7.10 protocol client is feasible**: the spike already does login, the Forge
-   handshake, keep-alives, join, position and inventory parsing, and the registry.
-3. **Observation first:** inventory names come from the per-world registry; health/food need the
-   player to be ticked; machine/power state may need a server-side helper mod.
+2. **A small custom 1.7.10 protocol client is feasible**, and is now implemented read-only (below).
+3. **Machine/power state** may need a server-side helper mod; GregTech's own plugin traffic is a
+   possible alternative (research).
 4. **Movement is the hard part**: client-authoritative physics with modded collision boxes.
+
+## Read-only live client (`Gtnh1710Client`, 2026-09-30)
+
+Live `pnpm cli observe --live` on the test server (verified):
+
+| Field          | Result                                                                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Position       | (-4.5, 106, -7.5), identical to the server log's login position.                                                                                 |
+| Dimension      | `overworld` (1.7.10 numeric IDs are mapped; unknown IDs become `dim_<id>`).                                                                      |
+| Health / food  | 20 / 20, but only once the client acknowledges the server's placement (see presence below).                                                      |
+| Inventory      | `1 x questbook:ItemQuestBook`: the starter quest book GTNH gives new players, named through the per-world registry.                              |
+| Held item      | Unknown: the durability of modded items is not known yet.                                                                                        |
+| Threats        | Unknown by design: vanilla mobs arrive as normal spawn packets, **modded mobs via FML spawn messages**; hostility classification is still to do. |
+| Machines/power | Unknown/empty.                                                                                                                                   |
+
+Findings while building it (verified):
+
+- **GTNH item stacks are not vanilla.** ModularUI (`modularui` 1.2.20) patches `PacketBuffer` so every
+  non-empty item stack is followed by its full stack size as a VarInt (vanilla sends a byte, capped at
+  127). Confirmed by disassembling its `PacketBufferMixin` (injected after `writeNBTTagCompoundToBuffer`)
+  and by live bytes (`18 60 01 00 00 ff ff 01` for one quest book). The client enables this decoding
+  only when the server's mod list contains `modularui`.
+- **Registry names are not all `[A-Za-z0-9_.-]`:** 274 of 15,025 contain `|` (`BuildCraft|Core:...`),
+  spaces (`Natura:N Crops`) or apostrophes. `ItemNameSchema` accepts exactly these; all 15,025 pass.
+- **Presence:** in 1.7.10 the server only updates a player (health/food packets, hunger, damage) when
+  the client sends player packets. With `presenceTicks` (default on) the client echoes the server's
+  own position packet once (the server logs no "moved wrongly") and then sends idle ticks. It never
+  sends any other position. While connected the bot is an ordinary player: it can be hurt and gets hungry.
+- **Undecodable packets degrade instead of disconnecting:** a bad inventory packet marks the inventory
+  (and held item/armor) unknown until the next full inventory refresh; the connection stays up.
+- **Clean disconnect:** the client closes with a TCP FIN, so the server logs `Disconnected`, not
+  `Connection reset`.
+
+What the client can send is fixed in `packets.ts` (`outbound`): handshake, status request, login
+start, keep-alive, plugin messages on `REGISTER`/`FML|HS` only, idle ticks, and echoes of
+server-assigned positions. `perform()` supports only `OBSERVE_STATE`, `WAIT` and `PAUSE_AND_ASK_USER`;
+every other action returns `NOT_IMPLEMENTED` without sending anything (tested).
 
 ## What was verified (from installed packages, 2026-09-26)
 
@@ -67,8 +106,8 @@ Minecraft. GTNH adds hundreds of mods. None of the following is guaranteed to wo
 
 ## Unverified assumptions in the current code
 
-1. Item identifiers are `namespace:name[@meta]` strings (`ItemNameSchema`). The adapter may need a
-   mapping table from raw numeric IDs.
+1. ~~Item identifiers~~ **Verified:** names come from the per-world FML registry; `@damage` is
+   appended when non-zero (GT meta-items encode their sub-type there; for tools it is wear).
 2. A "container" can be opened and have items moved by a generic window API. This is likely false
    for many GTNH containers.
 3. A generator's accepted fuels and fuel level are knowable. In reality this may need GUI scraping,
@@ -86,11 +125,11 @@ with backups, never on a public server.
 
 1. **Connectivity spike (read-only). DONE 2026-09-30:** a raw Node client with a hand-written
    FML handshake joins; mineflayer does not. See "Test server results" above.
-2. **Observation only.** Implement and verify `observe()` field by field: position, dimension,
-   health, food, inventory (including a GT meta-item), nearby hostiles and lava. For each field,
-   compare against the in-game F3/NEI view in at least 10 situations. Anything unreliable stays `unknown`.
-3. **Registry mapping.** Build and test a mapping from raw IDs/metadata to stable item names for the
-   items the agent will touch. Protected-items matching must be tested with real GT items.
+2. **Observation only. STARTED 2026-09-30:** position, dimension, health, food and inventory work
+   (see "Read-only live client"). Still to do: compare against the in-game F3/NEI view in at least 10
+   situations (including GT meta-items and big stacks), then nearby hostiles and lava/void.
+3. **Registry mapping. DONE for inventory names** (per-world registry). Still to test: protected-item
+   matching with real GT items.
 4. **Movement in a fenced area.** Enable `MOVE_TO` with a pathfinder configured to never dig,
    place, parkour or enter fluids, inside a small walled test area with a lava pit outside the
    boundary. Verify that boundary and hazard checks stop it.

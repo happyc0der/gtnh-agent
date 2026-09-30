@@ -8,7 +8,8 @@ import tseslint from 'typescript-eslint';
  * Architectural boundaries (see docs/architecture.md), enforced by lint:
  *  - no shell/process spawning anywhere in the agent;
  *  - mineflayer may only be imported by the adapter in src/bot/mineflayer-client.ts;
- *  - only the ActionExecutor may mint ValidatedAction tokens.
+ *  - only the ActionExecutor may mint ValidatedAction tokens;
+ *  - only the Minecraft adapters in src/bot/ may open network sockets.
  */
 const noShell = [
   { name: 'child_process', message: 'The agent must not run shell commands.' },
@@ -24,11 +25,27 @@ const noMinting = {
   message: 'Only the ActionExecutor may mint ValidatedAction tokens.',
 };
 
-/** @param {{ mineflayer: boolean, minting: boolean }} allow */
+const socketMessage = 'Only the Minecraft adapters in src/bot/ may open network sockets.';
+const noSockets = [
+  ...['net', 'node:net'].map((name) => ({
+    name,
+    importNames: ['connect', 'createConnection', 'Socket', 'createServer', 'Server'],
+    message: socketMessage,
+  })),
+  ...['tls', 'node:tls', 'dgram', 'node:dgram', 'http', 'node:http', 'https', 'node:https'].map(
+    (name) => ({ name, message: socketMessage }),
+  ),
+];
+
+/** @param {{ mineflayer?: boolean, minting?: boolean, sockets?: boolean }} allow */
 const boundaries = (allow) => [
   'error',
   {
-    paths: [...noShell, ...(allow.mineflayer ? [] : [noMineflayer])],
+    paths: [
+      ...noShell,
+      ...(allow.mineflayer ? [] : [noMineflayer]),
+      ...(allow.sockets ? [] : noSockets),
+    ],
     patterns: allow.minting ? [] : [noMinting],
   },
 ];
@@ -50,16 +67,24 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'no-eval': 'error',
       'no-new-func': 'error',
-      'no-restricted-imports': boundaries({ mineflayer: false, minting: false }),
+      'no-restricted-imports': boundaries({}),
     },
   },
   {
-    files: ['src/bot/mineflayer-client.ts'],
-    rules: { 'no-restricted-imports': boundaries({ mineflayer: true, minting: false }) },
+    files: ['src/bot/**/*.ts'],
+    rules: { 'no-restricted-imports': boundaries({ sockets: true }) },
   },
   {
-    files: ['src/executor/action-executor.ts', 'tests/**/*.ts'],
-    rules: { 'no-restricted-imports': boundaries({ mineflayer: false, minting: true }) },
+    files: ['src/bot/mineflayer-client.ts'],
+    rules: { 'no-restricted-imports': boundaries({ mineflayer: true, sockets: true }) },
+  },
+  {
+    files: ['src/executor/action-executor.ts'],
+    rules: { 'no-restricted-imports': boundaries({ minting: true }) },
+  },
+  {
+    files: ['tests/**/*.ts'],
+    rules: { 'no-restricted-imports': boundaries({ minting: true, sockets: true }) },
   },
   {
     files: ['eslint.config.js'],

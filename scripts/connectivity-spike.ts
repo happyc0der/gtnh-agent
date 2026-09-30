@@ -26,7 +26,7 @@ import { defaultConfig } from '../src/config/env.ts';
 import { checkPrivateHost } from '../src/config/network.ts';
 import { systemClock } from '../src/util/clock.ts';
 import { errorMessage } from '../src/util/json.ts';
-import { statusPing } from './status-ping.ts';
+import { statusPing } from '../src/bot/gtnh1710/status-ping.ts';
 
 const { values } = parseArgs({
   options: {

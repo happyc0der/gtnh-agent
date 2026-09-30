@@ -1,3 +1,4 @@
+import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
 /**
@@ -60,4 +61,23 @@ export function checkPrivateHost(host: string, allowedHostnames: readonly string
     ok: false,
     reason: `${host} is a hostname that is not in MC_ALLOWED_HOSTNAMES; add it only if it is a private server you control`,
   };
+}
+
+/** Refuses anything that is not (or does not resolve exclusively to) a private address. */
+export async function assertPrivateDestination(
+  host: string,
+  allowedHostnames: readonly string[],
+  resolve: (host: string) => Promise<string[]> = async (h) =>
+    (await lookup(h, { all: true })).map((a) => a.address),
+): Promise<void> {
+  const check = checkPrivateHost(host, allowedHostnames);
+  if (!check.ok) throw new Error(`Refusing to connect: ${check.reason}`);
+  if (check.kind !== 'allowlisted-hostname') return;
+  const addresses = await resolve(host);
+  const bad = addresses.filter((a) => !isPrivateIpAddress(a));
+  if (addresses.length === 0 || bad.length > 0) {
+    throw new Error(
+      `Refusing to connect: ${host} resolves to non-private address(es): ${bad.join(', ') || 'none'}`,
+    );
+  }
 }

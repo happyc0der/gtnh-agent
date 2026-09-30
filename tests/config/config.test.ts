@@ -2,9 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertPrivateDestination, MineflayerClient } from '../../src/bot/mineflayer-client.ts';
+import { MineflayerClient } from '../../src/bot/mineflayer-client.ts';
 import { defaultConfig, loadConfig } from '../../src/config/env.ts';
-import { checkPrivateHost, isPrivateIpAddress } from '../../src/config/network.ts';
+import {
+  assertPrivateDestination,
+  checkPrivateHost,
+  isPrivateIpAddress,
+} from '../../src/config/network.ts';
 import { testClock } from '../fixtures/index.ts';
 
 const dirs: string[] = [];

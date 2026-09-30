@@ -1,7 +1,6 @@
-import { lookup } from 'node:dns/promises';
 import type { Bot } from 'mineflayer';
 import type { MinecraftConfig } from '../config/env.ts';
-import { checkPrivateHost, isPrivateIpAddress } from '../config/network.ts';
+import { assertPrivateDestination } from '../config/network.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
@@ -177,23 +176,4 @@ function normalizeDimension(raw: unknown): string {
   const byId: Record<string, string> = { '0': 'overworld', '-1': 'the_nether', '1': 'the_end' };
   const s = String(raw);
   return byId[s] ?? s.replace(/^minecraft:/, '');
-}
-
-/** Refuses anything that is not (or does not resolve exclusively to) a private address. */
-export async function assertPrivateDestination(
-  host: string,
-  allowedHostnames: readonly string[],
-  resolve: (host: string) => Promise<string[]> = async (h) =>
-    (await lookup(h, { all: true })).map((a) => a.address),
-): Promise<void> {
-  const check = checkPrivateHost(host, allowedHostnames);
-  if (!check.ok) throw new Error(`Refusing to connect: ${check.reason}`);
-  if (check.kind !== 'allowlisted-hostname') return;
-  const addresses = await resolve(host);
-  const bad = addresses.filter((a) => !isPrivateIpAddress(a));
-  if (addresses.length === 0 || bad.length > 0) {
-    throw new Error(
-      `Refusing to connect: ${host} resolves to non-private address(es): ${bad.join(', ') || 'none'}`,
-    );
-  }
 }

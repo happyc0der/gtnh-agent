@@ -30,7 +30,7 @@ export type ClientActionResult = z.infer<typeof ClientActionResultSchema>;
  *   block placing/breaking, no arbitrary code.
  */
 export interface MinecraftClient {
-  readonly kind: 'mock' | 'mineflayer';
+  readonly kind: 'mock' | 'mineflayer' | 'gtnh1710';
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   observe(): Promise<GameState>;

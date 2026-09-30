@@ -8,14 +8,19 @@ import { plannerResponseJsonSchema } from '../planner/plan-schema.ts';
 import { systemClock } from '../util/clock.ts';
 import { errorMessage } from '../util/json.ts';
 import type { CycleResult } from './agent-loop.ts';
+import { runLiveCycle, summarizeObservation, withLiveClient } from './live-agent.ts';
 import { runMockScenario } from './mock-agent.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
-const USAGE = `gtnh-agent (milestone 1: mock only, single cycle, no autonomy)
+const USAGE = `gtnh-agent (single cycle, no autonomy; the live client is read-only)
 
 Usage:
   node src/app/cli.ts once [--scenario <name>] [--db <path> | --memory] [--full]
       Run ONE observe/decide/validate/execute/verify cycle against the mock world.
+  node src/app/cli.ts once --live [--db <path> | --memory] [--full] [--verbose]
+      Run ONE cycle against the configured private GTNH test server (read-only).
+  node src/app/cli.ts observe --live [--verbose]
+      Connect read-only, print what the agent can observe, disconnect.
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -74,6 +79,8 @@ async function main(argv: string[]): Promise<number> {
       full: { type: 'boolean', default: false },
       limit: { type: 'string', default: '10' },
       task: { type: 'string' },
+      live: { type: 'boolean', default: false },
+      verbose: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -89,8 +96,34 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
   };
 
+  const log = values.verbose
+    ? (line: string): void => {
+        process.stderr.write(`[gtnh1710] ${line}\n`);
+      }
+    : undefined;
+
   switch (command) {
+    case 'observe': {
+      if (!values.live) {
+        process.stderr.write(
+          'observe connects to the configured test server; pass --live to confirm.\n',
+        );
+        return 1;
+      }
+      const summary = await withLiveClient(
+        config,
+        async (client) => summarizeObservation(await client.observe(), client.info()),
+        log,
+      );
+      print(summary);
+      return 0;
+    }
     case 'once': {
+      if (values.live) {
+        const { result, info } = await runLiveCycle(config, dbPath, log);
+        print(values.full ? { result, connection: info } : compact('live', dbPath, result));
+        return result.status === 'error' ? 1 : 0;
+      }
       const scenario = findScenario(values.scenario);
       if (scenario === undefined) {
         process.stderr.write(

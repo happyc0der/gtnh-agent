@@ -11,7 +11,9 @@ flowchart TD
     subgraph World["Minecraft boundary (src/bot)"]
         MC["MinecraftClient interface"]
         MOCK["MockMinecraftClient<br/>(full simulation)"]
-        MF["MineflayerClient<br/>(skeleton, disabled)"]
+        MF["MineflayerClient<br/>(skeleton; cannot join GTNH)"]
+        G17["Gtnh1710Client<br/>(1.7.10 + Forge, read-only)"]
+        MC --- G17
         MC --- MOCK
         MC --- MF
     end
@@ -88,13 +90,15 @@ flowchart TD
 
 ## Enforced boundaries
 
-| Boundary                           | Enforcement                                                                                                                                                                                                        |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                    |
-| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                          |
-| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies. |
-| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true.                                                 |
-| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                      |
+| Boundary                           | Enforcement                                                                                                                                                                                                                 |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                             |
+| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) outside `src/bot/`.                                                                                                                 |
+| Read-only live client              | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions); world-changing actions return `NOT_IMPLEMENTED`. |
+| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                   |
+| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.          |
+| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true.                                                          |
+| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                               |
 
 ## Directory map
 
@@ -104,7 +108,7 @@ src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Kn
 src/safety       safety policy, boundaries, protected items, forbidden-action classifier
 src/system1      router, decision providers, action proposer
 src/planner      plan schema, validator, planner interface, mock planner
-src/bot          MinecraftClient interface, mock client, Mineflayer skeleton
+src/bot          MinecraftClient interface, mock client, gtnh1710/ read-only live client, Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/app          agent loop, mock scenarios, CLI

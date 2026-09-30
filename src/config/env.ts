@@ -22,6 +22,19 @@ export const MinecraftConfigSchema = z
     /** Must be explicitly true before MineflayerClient will open a socket. */
     enableLiveConnection: z.boolean().default(false),
     connectTimeoutMs: z.int().min(1000).max(120_000).default(15_000),
+    /**
+     * Text that MUST appear in the server's MOTD before a live client logs in, so the
+     * agent can never join the wrong server (e.g. another server on the same machine).
+     * Live connections are refused while this is null.
+     */
+    serverIdentityMarker: z.string().min(3).max(64).nullable().default(null),
+    /**
+     * Send idle "still here" packets (at the exact server-assigned position) so the server
+     * ticks the player and reports health/food. Never sends a different position.
+     */
+    presenceTicks: z.boolean().default(true),
+    /** After joining, how long to wait for the first health and inventory packets. */
+    initialStateGraceMs: z.int().min(0).max(30_000).default(3_000),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -122,6 +135,8 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_AUTH'))) set(['minecraft', 'auth'], v);
   if ((v = e('MC_VERSION'))) set(['minecraft', 'version'], v);
   if ((v = e('MC_ALLOWED_HOSTNAMES'))) set(['minecraft', 'allowedHostnames'], list(v));
+  if ((v = e('MC_SERVER_MARKER'))) set(['minecraft', 'serverIdentityMarker'], v);
+  if ((v = e('MC_PRESENCE_TICKS'))) set(['minecraft', 'presenceTicks'], v === 'true');
   if ((v = e('MC_ENABLE_LIVE_CONNECTION')))
     set(['minecraft', 'enableLiveConnection'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);

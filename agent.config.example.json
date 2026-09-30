@@ -7,13 +7,26 @@
     "version": "1.7.10",
     "allowedHostnames": [],
     "enableLiveConnection": false,
+    "serverIdentityMarker": null,
+    "presenceTicks": true,
+    "initialStateGraceMs": 3000,
     "connectTimeoutMs": 15000
   },
-  "database": { "path": "./data/agent.sqlite" },
+  "database": {
+    "path": "./data/agent.sqlite"
+  },
   "safety": {
     "boundary": {
-      "min": { "x": -256, "y": 0, "z": -256 },
-      "max": { "x": 256, "y": 255, "z": 256 },
+      "min": {
+        "x": -256,
+        "y": 0,
+        "z": -256
+      },
+      "max": {
+        "x": 256,
+        "y": 255,
+        "z": 256
+      },
       "allowedDimensions": ["overworld"]
     },
     "hazardAvoidanceRadius": 6,
@@ -39,11 +52,19 @@
     "refuelQuantity": 8,
     "keepItems": []
   },
-  "planner": { "provider": "mock", "maxPlanSteps": 8, "recentHistoryLimit": 10 },
+  "planner": {
+    "provider": "mock",
+    "maxPlanSteps": 8,
+    "recentHistoryLimit": 10
+  },
   "locations": {
     "home": {
       "dimension": "overworld",
-      "position": { "x": 0, "y": 64, "z": 0 },
+      "position": {
+        "x": 0,
+        "y": 64,
+        "z": 0
+      },
       "kind": "safe",
       "note": "Replace with your base's safe spot"
     }

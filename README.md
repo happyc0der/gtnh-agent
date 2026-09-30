@@ -3,12 +3,15 @@
 A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTNH) on a
 **private** server you control.
 
-**Milestone 1 status:** the agent runs mock-only: one human-triggered observe → decide → validate →
-execute → verify cycle against a simulated world, with no autonomous loop, no model and no GPU use.
+**Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
+simulated world or, **read-only**, against a private GTNH 2.8.4 test server. No autonomous loop, no
+model and no GPU use.
 
-**Connection spike (2026-09-30):** a read-only raw 1.7.10 client completed the Forge handshake and
-**joined a private GTNH 2.8.4 test world**; Mineflayer refuses 1.7.10 outright. The agent loop is not
-connected to the server yet. See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
+**Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
+the test server and observes position, dimension, health, food and a named inventory. It cannot
+change the world: every world-changing action returns `NOT_IMPLEMENTED`. Threats are not observable
+yet, so live cycles always pause (fail closed). Mineflayer cannot connect to GTNH (it rejects
+1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
 ## Requirements
 
@@ -34,25 +37,26 @@ cp agent.config.example.json agent.config.json
 
 ## Commands
 
-| Task                                     | Command                                         |
-| ---------------------------------------- | ----------------------------------------------- |
-| Unit + integration tests                 | `pnpm test`                                     |
-| Lint (incl. architectural boundaries)    | `pnpm lint`                                     |
-| Type check (strict)                      | `pnpm typecheck`                                |
-| Format check / fix                       | `pnpm format:check` / `pnpm format`             |
-| Build to `dist/`                         | `pnpm build`                                    |
-| Everything                               | `pnpm check`                                    |
-| **One mock agent cycle**                 | `pnpm agent:once`                               |
-| One cycle of a named scenario            | `pnpm agent:once --scenario hungry`             |
-| Scenario list                            | `pnpm cli scenarios`                            |
-| Throwaway in-memory DB                   | `pnpm agent:once --memory`                      |
-| Full cycle result                        | `pnpm agent:once --full`                        |
-| Recent action log                        | `pnpm cli history --limit 20`                   |
-| Resume a paused/blocked task             | `pnpm cli task-resume --task task-action-fails` |
-| Planner output JSON Schema               | `pnpm cli plan-schema`                          |
-| Show validated config                    | `pnpm cli config`                               |
-| Test server: identity ping + login tests | `pnpm spike:connect`                            |
-| Test server: Forge handshake join test   | `node scripts/fml-join-spike.ts`                |
+| Task                                         | Command                                         |
+| -------------------------------------------- | ----------------------------------------------- |
+| Unit + integration tests                     | `pnpm test`                                     |
+| Lint (incl. architectural boundaries)        | `pnpm lint`                                     |
+| Type check (strict)                          | `pnpm typecheck`                                |
+| Format check / fix                           | `pnpm format:check` / `pnpm format`             |
+| Build to `dist/`                             | `pnpm build`                                    |
+| Everything                                   | `pnpm check`                                    |
+| **One mock agent cycle**                     | `pnpm agent:once`                               |
+| One cycle of a named scenario                | `pnpm agent:once --scenario hungry`             |
+| Scenario list                                | `pnpm cli scenarios`                            |
+| Throwaway in-memory DB                       | `pnpm agent:once --memory`                      |
+| Full cycle result                            | `pnpm agent:once --full`                        |
+| Recent action log                            | `pnpm cli history --limit 20`                   |
+| Resume a paused/blocked task                 | `pnpm cli task-resume --task task-action-fails` |
+| Planner output JSON Schema                   | `pnpm cli plan-schema`                          |
+| Show validated config                        | `pnpm cli config`                               |
+| **Observe the live test server (read-only)** | `pnpm cli observe --live`                       |
+| One agent cycle against the live server      | `pnpm cli once --live`                          |
+| Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                            |
 
 `agent:once` persists to `./data/agent.sqlite` by default (`AGENT_DB_PATH` or `--db` override).
 Try `pnpm agent:once --scenario action-fails` three times: two failures, then the third attempt is
@@ -116,10 +120,19 @@ and [docs/action-contract.md](docs/action-contract.md).
 
 ## Private GTNH test server
 
-The connection spikes target a local test server in `~/Projects/gtnh-test-server` (outside this
-repo): the official GTNH 2.8.4 Java 17-25 server pack on Temurin 21, bound to `127.0.0.1:25570`,
-offline mode, whitelist on, throwaway world `agent-test`. Start it with `start-test-server.bat` in
-that folder and stop it by typing `stop` in its window. Wait ~30 s after it prints "Done" before
-connecting; until then Forge rejects connections with "Server is still starting!". Both spike
-scripts refuse to log in unless the server's MOTD contains `gtnh-agent-test` and it reports Forge
-with GregTech.
+The live commands target a local test server in `~/Projects/gtnh-test-server` (outside this repo):
+the official GTNH 2.8.4 Java 17-25 server pack on Temurin 21, bound to `127.0.0.1:25570`, offline
+mode, whitelist on, throwaway world `agent-test`. Start it with `start-test-server.bat` in that
+folder and stop it by typing `stop` in its window. The client retries while Forge still reports
+"Server is still starting!" (about 30 s after "Done").
+
+Live commands need three settings (for example in a local `.env`, which is gitignored):
+
+```ini
+MC_PORT=25570
+MC_ENABLE_LIVE_CONNECTION=true
+MC_SERVER_MARKER=gtnh-agent-test
+```
+
+The client refuses to log in unless the host is private and the server's status ping shows that
+MOTD marker, Forge, GregTech and 1.7.10. Add `--verbose` to see the connection trace.
