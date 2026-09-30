@@ -250,6 +250,9 @@ pnpm cli task-list
   it and withdraws 10. It is validated exactly like a planner's plan (schema, step limit, every
   step's static safety), so a plan that would, for example, take a protected item is refused and
   nothing is stored. Set `requiresUserApproval` to review it with `plan-approve` first.
+- **Tasks can wait for machines:** `--machines gt:3.200.-1,...` (the ids `observe` prints). While
+  one is busy, or not seen yet, the agent waits (`WAIT_FOR_MACHINE`). If one is switched off, it
+  pauses. Otherwise the plan goes on.
 - **Finishing the plan finishes the task**; the next cycle pauses with `NO_ACTIVE_TASK`. Use
   `pnpm cli task-complete --task <id>` to close a task early.
 - **Chest memory.** Each cycle is a new connection, so a chest opened in one cycle is closed in the
@@ -286,5 +289,7 @@ start another cycle. It stops:
 Verified live on 2026-09-30:
 
 - the fetch task ran in 3 cycles (1.8 s) and stopped with "the task is completed";
+- with `--machines` on a macerator busy with a 30 s recipe, it waited 6 times (30 s), then walked,
+  opened the chest and withdrew (33 s in all);
 - a corner-walking task stopped when `pnpm cli halt` ran mid-walk: the walk halted, then the run
   stopped.

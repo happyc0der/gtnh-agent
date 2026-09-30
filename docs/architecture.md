@@ -88,6 +88,14 @@ The live server knows nothing about the agent's tasks, so they come from agent m
   and never see it. A completed or failed task is never filled in.
 - A plan the human wrote (`--plan`) goes through `validatePlan` exactly like a planner's plan. It
   is stored with planner `operator`, and when it completes it completes the task.
+- Machines the task depends on (`--machines`, table `task_machines`) become the live state's
+  `knownRecipeState.requiredMachineIds`, so System 1's machine rules apply:
+  - busy or **not seen** → `WAIT_FOR_MACHINE`;
+  - switched off (`error`) → pause;
+  - unpowered → the planner;
+  - otherwise the plan goes on.
+    An unseen machine is never assumed ready. Right after connecting, GregTech's machine packets
+    may not have arrived yet.
 - **Container memory:** the loop records every container whose contents it sees (before and after
   each action). A later cycle, in a new connection with the chest closed, gets those contents back
   for `memory.containerContentsMaxAgeMs`, but only for the executor's feasibility checks. The live

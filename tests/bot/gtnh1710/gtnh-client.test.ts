@@ -133,6 +133,26 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     expect(Math.abs((p?.headY ?? 0) - (p?.feetY ?? 0) - PLAYER_EYE_HEIGHT)).toBeLessThan(1e-9);
   });
 
+  it('WAIT lasts until the OBSERVED time (last packet) has advanced by its duration', async () => {
+    const { client } = await start();
+    await client.connect();
+    const before = await client.observe();
+    const action = createAction(
+      {
+        spec: { type: 'WAIT', args: { durationMs: 300 } },
+        reason: 'test',
+        origin: 'test',
+        taskId: null,
+      },
+      { newId: sequentialIds(), now: () => new Date() },
+    );
+    expect(await client.perform(mintValidatedAction(action, null, new Date()))).toMatchObject({
+      ok: true,
+    });
+    const after = await client.observe();
+    expect(Date.parse(after.timestamp) - Date.parse(before.timestamp)).toBeGreaterThanOrEqual(300);
+  });
+
   it('refuses every world-changing action without sending anything new', async () => {
     const { server, client } = await start();
     await client.connect();

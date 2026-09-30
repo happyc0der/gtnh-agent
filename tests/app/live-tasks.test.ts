@@ -27,7 +27,12 @@ import { systemClock } from '../../src/util/clock.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
 import { BLOCK } from '../bot/gtnh1710/chunk-fixtures.ts';
 import type { FakeStack } from '../bot/gtnh1710/fake-chests.ts';
-import { FakeGtnhServer, spawnFrame } from '../bot/gtnh1710/fake-server.ts';
+import {
+  FakeGtnhServer,
+  gtBlockEventsMessage,
+  gtTileEntityMessage,
+  spawnFrame,
+} from '../bot/gtnh1710/fake-server.ts';
 
 // The fake world: a grass floor at y=105, the player at (-4.5, 106, -7.5), a chest at
 // (-5, 106, -6) with 128 cobblestone, a walking fence around both.
@@ -366,5 +371,94 @@ describe('bounded auto-run and safety', () => {
     } finally {
       await client.disconnect();
     }
+  });
+});
+
+describe('tasks that depend on machines', () => {
+  const MACHINE = { x: -3, y: 106, z: -7 };
+  const IDLE = 64;
+  const BUSY = 64 | 8;
+  const OFF = 0;
+
+  async function withMachine(common: number, run: (client: Gtnh1710Client) => Promise<void>) {
+    config = { ...config, routing: { ...config.routing, machineWaitMs: 100 } };
+    addTask(repos, config, {
+      taskId: 'after-macerator',
+      goal: 'Fetch cobblestone once the macerator is done',
+      plan: fetchPlan(),
+      now: new Date(),
+      machines: [`gt:${MACHINE.x}.${MACHINE.y}.${MACHINE.z}`],
+    });
+    const client = new Gtnh1710Client({
+      config: config.minecraft,
+      clock: systemClock,
+      retryDelayMs: 50,
+    });
+    await client.connect();
+    try {
+      server.sendGregTech(gtTileEntityMessage(MACHINE.x, MACHINE.y, MACHINE.z, 301, common));
+      await vi.waitFor(async () => expect((await client.observe()).machines).toHaveLength(1));
+      await run(client);
+    } finally {
+      await client.disconnect();
+    }
+  }
+
+  const deps = (client: Gtnh1710Client) => ({
+    config,
+    client,
+    repos,
+    decisionProvider: new DeterministicDecisionProvider(),
+    planner: new MockPlannerProvider([]),
+    clock: systemClock,
+    newId,
+  });
+
+  it('waits while a required machine is busy, then carries on with the plan', async () => {
+    await withMachine(BUSY, async (client) => {
+      const run = await runSession(
+        deps(client),
+        { ...DEFAULT_SESSION_LIMITS, pauseMs: 50 },
+        {
+          stopRequested: () => null,
+          onCycle: (_r, i) => {
+            // The recipe finishes after two waits.
+            if (i === 2) {
+              server.sendGregTech(
+                gtBlockEventsMessage(0, [{ ...MACHINE, eventId: 0, value: IDLE }]),
+              );
+            }
+          },
+        },
+      );
+      const summaries = run.cycles.map((c) => c.summary);
+      expect(summaries.slice(0, 2)).toEqual([
+        'WAIT_FOR_MACHINE -> WAIT -> succeeded',
+        'WAIT_FOR_MACHINE -> WAIT -> succeeded',
+      ]);
+      expect(summaries.slice(-3)).toEqual([
+        'REQUEST_PLANNER -> MOVE_TO -> succeeded',
+        'REQUEST_PLANNER -> OPEN_CONTAINER -> succeeded',
+        'REQUEST_PLANNER -> WITHDRAW_ITEM -> succeeded',
+      ]);
+      expect(run.stopReason).toBe('the task is completed');
+    });
+  });
+
+  it('pauses (and the run stops) when a required machine is switched off', async () => {
+    await withMachine(OFF, async (client) => {
+      const run = await runSession(
+        deps(client),
+        { ...DEFAULT_SESSION_LIMITS, pauseMs: 50 },
+        {
+          stopRequested: () => null,
+        },
+      );
+      expect(run.cycles.map((c) => c.summary)).toEqual([
+        'PAUSE_AND_ASK_USER -> PAUSE_AND_ASK_USER -> paused',
+      ]);
+      expect(repos.tasks.get('after-macerator')?.status).toBe('paused');
+      expect(repos.plans.openForTask('after-macerator')?.nextStep).toBe(0);
+    });
   });
 });

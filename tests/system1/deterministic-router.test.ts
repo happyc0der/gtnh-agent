@@ -209,8 +209,14 @@ describe('System1 deterministic router', () => {
       ).toEqual(['MACHINE_ERROR']);
     });
 
-    it('required machine unknown -> REQUEST_PLANNER', () => {
+    it('required machine not seen (unknown) -> WAIT_FOR_MACHINE, never assumed ready', () => {
       const d = route((w) => void ((w.machines[0] as { status: string }).status = 'unknown'));
+      expect(d.decision).toBe('WAIT_FOR_MACHINE');
+      expect(d.reasonCodes).toEqual(['MACHINE_UNKNOWN']);
+    });
+
+    it('required machine unpowered -> REQUEST_PLANNER', () => {
+      const d = route((w) => void ((w.machines[0] as { status: string }).status = 'unpowered'));
       expect(d.decision).toBe('REQUEST_PLANNER');
       expect(d.reasonCodes).toEqual(['MACHINE_NOT_READY']);
     });

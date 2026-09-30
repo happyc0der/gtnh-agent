@@ -168,7 +168,19 @@ warnings.
 - `run --live` did the same task in 3 cycles on one connection (1.8 s) and stopped with "the task
   is completed".
 - In a corner-walking task, `cli halt` from another process halted the second walk mid-way, and
-  the run stopped after that cycle. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
+  the run stopped after that cycle.
+- A task with `--machines gt:3.200.-1`, on a macerator placed mid-recipe (600 ticks, 0 EU/t),
+  waited 6 cycles while the macerator was busy, then ran its plan: 9 cycles, 33 s, completed.
+
+Two things this found (_verified_, fixed):
+
+- **Right after connecting, a required machine may not have been seen yet.** The router used to
+  send such a machine to the planner, and an operator plan carried on. An unseen required
+  machine now means wait.
+- **WAIT has to wait for observed time.** A live state is timestamped with the arrival of the last
+  server packet, so it lags the clock by up to one packet interval. A clock-exact 5000 ms wait
+  showed 4990 ms of observed time and failed verification. The live WAIT now also waits until
+  the observed time has advanced by the full duration. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
   click simulation (tests), not live.
 
 ## Machines (2026-09-30)

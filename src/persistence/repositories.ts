@@ -82,6 +82,25 @@ export class TaskRepository {
     if (r.changes === 0) throw new Error(`No task ${id}`);
   }
 
+  /** Machines (observed ids) the task depends on; replaces any earlier list. */
+  setRequiredMachines(taskId: string, machineIds: readonly string[]): void {
+    this.#db.transaction(() => {
+      this.#db.prepare('DELETE FROM task_machines WHERE task_id = ?').run(taskId);
+      const insert = this.#db.prepare(
+        'INSERT INTO task_machines (task_id, machine_id) VALUES (?, ?)',
+      );
+      for (const id of new Set(machineIds)) insert.run(taskId, id);
+    })();
+  }
+
+  requiredMachines(taskId: string): string[] {
+    return (
+      this.#db
+        .prepare('SELECT machine_id FROM task_machines WHERE task_id = ? ORDER BY machine_id')
+        .all(taskId) as Array<{ machine_id: string }>
+    ).map((r) => r.machine_id);
+  }
+
   list(): Task[] {
     const ids = this.#db.prepare('SELECT id FROM tasks ORDER BY created_at, id').all() as Array<{
       id: string;

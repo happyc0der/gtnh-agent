@@ -17,8 +17,13 @@ export type TaskCommandResult =
 export function addTask(
   repos: Repositories,
   config: AgentConfig,
-  input: { taskId: string; goal: string; plan: unknown; now: Date },
+  input: { taskId: string; goal: string; plan: unknown; now: Date; machines?: readonly string[] },
 ): TaskCommandResult {
+  const machines = input.machines ?? [];
+  if (machines.length > 16) return { ok: false, error: 'at most 16 machines per task' };
+  const badMachine = machines.find((m) => !EntityIdSchema.safeParse(m).success);
+  if (badMachine !== undefined)
+    return { ok: false, error: `bad machine id ${JSON.stringify(badMachine)}` };
   if (!EntityIdSchema.safeParse(input.taskId).success) {
     return { ok: false, error: `task id must be 1-64 characters of [A-Za-z0-9_.:-]` };
   }
@@ -49,6 +54,7 @@ export function addTask(
   }
   const stored = repos.transaction(() => {
     repos.tasks.ensure({ id: input.taskId, goal, subgoal: null, status: 'active' });
+    repos.tasks.setRequiredMachines(input.taskId, machines);
     repos.memory.setValue(CURRENT_TASK_KEY, input.taskId);
     return plan === null
       ? null
@@ -66,6 +72,7 @@ export function addTask(
       goal,
       status: 'active',
       current: true,
+      machines,
       plan:
         stored === null
           ? null

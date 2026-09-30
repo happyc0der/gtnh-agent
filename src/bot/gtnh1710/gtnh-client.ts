@@ -243,12 +243,7 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'OBSERVE_STATE':
         return Promise.resolve(ok('observation is taken by the executor after every action'));
       case 'WAIT':
-        return new Promise((resolve) =>
-          setTimeout(
-            () => resolve(ok(`waited ${action.args.durationMs} ms`)),
-            action.args.durationMs,
-          ),
-        );
+        return this.#wait(action.args.durationMs);
       case 'PAUSE_AND_ASK_USER':
         // Recorded by the agent; deliberately not sent as in-game chat.
         return Promise.resolve(ok('pause recorded (not sent in-game)', { acknowledged: true }));
@@ -507,6 +502,26 @@ export class Gtnh1710Client implements MinecraftClient {
     this.#send(outbound.closeWindow(w.windowId));
     this.#world.closeWindowLocally();
     return null;
+  }
+
+  /**
+   * WAIT's postcondition is "observed time advanced by at least `ms`", and a live state is
+   * timestamped with the arrival of the last server packet (the honest "as of"). So wait
+   * until both the clock and the observed world have moved on by `ms`; the server sends at
+   * least a time update every second, so this adds at most about a second.
+   */
+  async #wait(ms: number): Promise<ClientActionResult> {
+    const clock = this.#opts.clock;
+    const start = clock.now().getTime();
+    const observedStart = this.#world.lastPacketAt?.getTime() ?? start;
+    await delay(ms);
+    await this.#waitFor(
+      () =>
+        clock.now().getTime() - start >= ms &&
+        (this.#world.lastPacketAt?.getTime() ?? 0) - observedStart >= ms,
+      Math.max(3_000, ms),
+    );
+    return ok(`waited ${clock.now().getTime() - start} ms`);
   }
 
   /** Stops a walk in progress at its next step and refuses new walks (e.g. on Ctrl+C). */

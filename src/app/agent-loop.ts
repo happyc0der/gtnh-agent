@@ -126,6 +126,20 @@ function overlayAgentMemory(state: GameState, repos: Repositories, config: Agent
           status: task.status,
         },
       };
+      // Machines the task depends on: System 1 waits while one is busy and pauses if one is
+      // switched off (or missing: an unobserved machine is 'unknown').
+      const machines = repos.tasks.requiredMachines(task.id);
+      if (machines.length > 0 && next.knownRecipeState === null) {
+        next = {
+          ...next,
+          knownRecipeState: {
+            target: task.goal.slice(0, 200),
+            missingComponents: {},
+            requiredMachineIds: machines.slice(0, 16),
+            nextKnownSafeStep: null,
+          },
+        };
+      }
     }
   }
   const maxAge = config.memory.containerContentsMaxAgeMs;

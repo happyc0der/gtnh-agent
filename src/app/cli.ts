@@ -55,10 +55,12 @@ Usage:
                                            Show recent logged actions.
   node src/app/cli.ts task-resume --task <id> [--db <path>]
                                            Mark a paused/blocked task active again.
-  node src/app/cli.ts task-add --task <id> --goal <text> [--plan <plan.json>] [--db <path>]
+  node src/app/cli.ts task-add --task <id> --goal <text> [--plan <plan.json>] [--machines <ids>] [--db <path>]
                                            Add a task and make it the live agent's current task,
                                            with an optional plan you wrote (validated like a
                                            planner's). Each once --live then runs one step.
+                                           --machines gt:x.y.z,...: wait while one is busy,
+                                           pause if one is switched off.
   node src/app/cli.ts task-complete --task <id> / task-list [--db <path>]
   node src/app/cli.ts plan-show [--task <id>] [--db <path>]
                                            Show a task's latest plan, or every open plan.
@@ -123,6 +125,7 @@ async function main(argv: string[]): Promise<number> {
       task: { type: 'string' },
       plan: { type: 'string' },
       goal: { type: 'string' },
+      machines: { type: 'string' },
       reason: { type: 'string' },
       to: { type: 'string' },
       container: { type: 'string' },
@@ -388,6 +391,10 @@ async function main(argv: string[]): Promise<number> {
                 goal: values.goal ?? '',
                 plan: planJson,
                 now: new Date(),
+                machines: (values.machines ?? '')
+                  .split(',')
+                  .map((m) => m.trim())
+                  .filter((m) => m.length > 0),
               })
             : command === 'task-complete'
               ? completeTask(repos, taskId)

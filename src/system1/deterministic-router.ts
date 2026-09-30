@@ -58,7 +58,8 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  *   5. no active task                                  -> PAUSE_AND_ASK_USER
  *      required machine busy                           -> WAIT_FOR_MACHINE
  *      required machine error                          -> PAUSE_AND_ASK_USER
- *      required machine unknown/unpowered              -> REQUEST_PLANNER
+ *      required machine not seen (unknown)             -> WAIT_FOR_MACHINE (never assume it is ready)
+ *      required machine unpowered                      -> REQUEST_PLANNER
  *   6. known validated next step                       -> EXECUTE_KNOWN_SAFE_STEP
  *   7. otherwise                                       -> REQUEST_PLANNER
  */
@@ -200,7 +201,12 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     if (required.some((m) => m.status === 'busy')) {
       return decide('WAIT_FOR_MACHINE', CONFIDENCE.wait, ['MACHINE_BUSY']);
     }
-    if (required.some((m) => m.status === 'unknown' || m.status === 'unpowered')) {
+    // A machine the agent cannot see (not observed yet, or its chunk not loaded) might be
+    // busy: a step that depends on it waits rather than assume it is ready.
+    if (required.some((m) => m.status === 'unknown')) {
+      return decide('WAIT_FOR_MACHINE', CONFIDENCE.wait, ['MACHINE_UNKNOWN']);
+    }
+    if (required.some((m) => m.status === 'unpowered')) {
       return decide('REQUEST_PLANNER', CONFIDENCE.planner, ['MACHINE_NOT_READY']);
     }
 

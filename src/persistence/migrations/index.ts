@@ -1,6 +1,7 @@
 import { migration001Initial } from './001-initial.ts';
 import { migration002Plans } from './002-plans.ts';
 import { migration003LiveTasks } from './003-live-tasks.ts';
+import { migration004TaskMachines } from './004-task-machines.ts';
 
 export interface Migration {
   version: number;
@@ -16,4 +17,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration001Initial,
   migration002Plans,
   migration003LiveTasks,
+  migration004TaskMachines,
 ];
