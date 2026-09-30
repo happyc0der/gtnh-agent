@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultConfig } from '../../src/config/env.ts';
 import { ACTION_TYPES, type ActionSpec } from '../../src/domain/actions.ts';
 import type { GameState } from '../../src/domain/game-state.ts';
 import { known, unknown } from '../../src/domain/known.ts';
@@ -245,6 +246,49 @@ describe('rule 4: protected items', () => {
       }),
     ).toContain('NOT_APPROVED_FUEL');
   });
+});
+
+describe('protected items with real GTNH 2.8.4 registry names', () => {
+  // Names taken from the live GTNH registry (FML ModIdData) and the bot's real inventory.
+  const protectedList = [
+    'gregtech:gt.metaitem.01', // every GT meta item variant (@damage)
+    'dreamcraft:item.EngravedQuantumChip',
+    'BuildCraft|Core:engineBlock', // '|' in the namespace
+    'Natura:N Crops@3', // a space in the name, one exact variant
+    'questbook:ItemQuestBook', // the starter book the bot carries
+  ];
+  const ctx = () => ({ ...safetyCtx(), protectedItems: new Set(protectedList) });
+  const deposit = (item: string) =>
+    evaluateAction(
+      action({ type: 'DEPOSIT_ITEM', args: { containerId: 'chest.main', item, quantity: 1 } }),
+      makeState(),
+      ctx(),
+      emptyFailureHistory,
+    ).violations.map((v) => v.code);
+
+  it('accepts these names in the config schema', () => {
+    expect(
+      defaultConfig({ safety: { protectedItems: protectedList } }).safety.protectedItems,
+    ).toEqual(protectedList);
+  });
+
+  it.each([
+    'gregtech:gt.metaitem.01@32600',
+    'gregtech:gt.metaitem.01',
+    'dreamcraft:item.EngravedQuantumChip',
+    'BuildCraft|Core:engineBlock',
+    'Natura:N Crops@3',
+    'questbook:ItemQuestBook',
+  ])('refuses to move %s', (item) => {
+    expect(deposit(item)).toContain('PROTECTED_ITEM');
+  });
+
+  it.each(['gregtech:gt.metaitem.02@32600', 'Natura:N Crops@4', 'Natura:N Crops'])(
+    'does not over-match %s',
+    (item) => {
+      expect(deposit(item)).not.toContain('PROTECTED_ITEM');
+    },
+  );
 });
 
 describe('rule 5: no world/base modification', () => {

@@ -55,6 +55,9 @@ cp agent.config.example.json agent.config.json
 | Recent action log                            | `pnpm cli history --limit 20`                   |
 | Resume a paused/blocked task                 | `pnpm cli task-resume --task task-action-fails` |
 | Planner output JSON Schema                   | `pnpm cli plan-schema`                          |
+| Open plans / one task's latest plan          | `pnpm cli plan-show [--task <id>]`              |
+| Approve a plan waiting for approval          | `pnpm cli plan-approve --task <id> --plan <n>`  |
+| Reject a task's open plan                    | `pnpm cli plan-reject --task <id> --reason ...` |
 | Show validated config                        | `pnpm cli config`                               |
 | **Observe the live test server (read-only)** | `pnpm cli observe --live`                       |
 | One agent cycle against the live server      | `pnpm cli once --live`                          |
@@ -64,6 +67,11 @@ cp agent.config.example.json agent.config.json
 `agent:once` persists to `./data/agent.sqlite` by default (`AGENT_DB_PATH` or `--db` override).
 Try `pnpm agent:once --scenario action-fails` three times: two failures, then the third attempt is
 refused with `REPEATED_FAILURE` and the task stays blocked until `task-resume`.
+
+Plans are stored and run **one validated step per cycle**: `pnpm agent:once --scenario needs-planner`
+runs step 1 of a two-step plan, and running it again runs step 2 without asking the planner again.
+`--scenario planner-needs-approval` stores a plan that needs approval and pauses. Nothing runs until
+you approve it: `plan-show`, then `plan-approve` (which also resumes the paused task).
 
 Example output (abridged):
 

@@ -12,8 +12,9 @@ import { GameStateSchema, LastActionSchema, type GameState } from '../domain/gam
 import type { SafetyViolation } from '../domain/safety.ts';
 import { ActionExecutor, type ExecutionOutcome } from '../executor/action-executor.ts';
 import { SqliteActionLog } from '../executor/action-log.ts';
+import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
-import { PlannerResponseSchema, type PlannerResponse } from '../planner/plan-schema.ts';
+import { PlannerResponseSchema, type Plan, type PlannerResponse } from '../planner/plan-schema.ts';
 import { validatePlan } from '../planner/plan-validator.ts';
 import { buildPlannerRequest, type PlannerProvider } from '../planner/planner-provider.ts';
 import { mergeProtectedItems } from '../safety/protected-items.ts';
@@ -39,8 +40,14 @@ export type CycleStatus =
   'succeeded' | 'rejected' | 'failed' | 'verification_failed' | 'paused' | 'error';
 
 export type PlannerOutcome =
-  | { kind: 'plan-accepted'; goal: string; steps: number }
-  | { kind: 'approval-required'; goal: string; steps: number }
+  /** A new plan was stored as active and its first step proposed. */
+  | { kind: 'plan-accepted'; planId: number; goal: string; steps: number }
+  /** The task's active plan continued with its next step (the planner was not asked again). */
+  | { kind: 'plan-step'; planId: number; goal: string; step: number; steps: number }
+  /** A new plan needs a human's approval before anything runs. */
+  | { kind: 'approval-required'; planId: number; goal: string; steps: number }
+  /** The task's plan is still waiting for approval (the planner was not asked again). */
+  | { kind: 'approval-pending'; planId: number; goal: string; steps: number }
   | { kind: 'plan-rejected'; issues: string[] }
   | { kind: 'escalation'; reason: string; message: string }
   | { kind: 'unavailable' };
@@ -230,10 +237,12 @@ export async function runSingleCycle(
   const proposal = proposeAction(decision, state, routerCtx);
   let chosen: ChosenAction;
   let planner: PlannerOutcome | null = null;
+  let planStep: PlanStepRef | null = null;
   if (proposal.kind === 'planner') {
     const consulted = await consultPlanner(deps, state, ctx, cycleId, stateSnapshotId);
     chosen = consulted.chosen;
     planner = consulted.outcome;
+    planStep = consulted.planStep;
   } else {
     chosen = { spec: proposal.spec, reason: proposal.reason, origin: 'deterministic-router' };
   }
@@ -251,11 +260,15 @@ export async function runSingleCycle(
   });
   const outcome = await executor.execute(action, state, ctx, cycleId);
 
-  // Task bookkeeping: pauses and rejections halt the task until a human resumes it.
+  // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
+  const planHalted = planStep === null ? false : updatePlanProgress(repos, planStep, outcome);
+
+  // Task bookkeeping: pauses, rejections and failed plans halt the task until a human resumes it.
   const paused = action.type === 'PAUSE_AND_ASK_USER' && outcome.status === 'succeeded';
   const status: CycleStatus = paused ? 'paused' : outcome.status;
   const needsUserAttention =
     paused ||
+    planHalted ||
     outcome.status === 'rejected' ||
     decision.requiresHumanConfirmation ||
     status === 'verification_failed';
@@ -263,6 +276,7 @@ export async function runSingleCycle(
     repos.transaction(() => {
       if (paused) repos.tasks.setStatus(taskId, 'paused');
       else if (outcome.status === 'rejected') repos.tasks.setStatus(taskId, 'blocked');
+      else if (planHalted) repos.tasks.setStatus(taskId, 'paused');
       repos.checkpoints.add(
         taskId,
         `${action.type}:${outcome.status}`,
@@ -299,25 +313,130 @@ export async function runSingleCycle(
   });
 }
 
+interface PlanStepRef {
+  planId: number;
+  /** 0-based index of the step being executed. */
+  stepIndex: number;
+  failureHandling: Plan['failureHandling'];
+}
+
+const reviewHint = (taskId: string, planId: number): string =>
+  `Review: node src/app/cli.ts plan-show --task ${taskId}; then plan-approve (or plan-reject) --task ${taskId} --plan ${planId}.`;
+
+type Consulted = { chosen: ChosenAction; outcome: PlannerOutcome; planStep: PlanStepRef | null };
+
+function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'): Consulted {
+  const step = stored.plan.steps[stored.nextStep];
+  if (step === undefined) throw new Error(`plan ${stored.id} has no step ${stored.nextStep}`);
+  const total = stored.plan.steps.length;
+  const outcome: PlannerOutcome =
+    outcomeKind === 'plan-accepted'
+      ? { kind: 'plan-accepted', planId: stored.id, goal: stored.plan.goal, steps: total }
+      : {
+          kind: 'plan-step',
+          planId: stored.id,
+          goal: stored.plan.goal,
+          step: stored.nextStep + 1,
+          steps: total,
+        };
+  return {
+    chosen: {
+      spec: step.action,
+      reason:
+        `plan #${stored.id} "${stored.plan.goal}" step ${stored.nextStep + 1}/${total}: ${step.rationale}`.slice(
+          0,
+          500,
+        ),
+      origin: 'planner',
+    },
+    outcome,
+    planStep: {
+      planId: stored.id,
+      stepIndex: stored.nextStep,
+      failureHandling: stored.plan.failureHandling,
+    },
+  };
+}
+
+/**
+ * After a plan step ran: advance on success; on failure count it against the plan's retry
+ * budget and, once exhausted, fail the plan. Returns true if the task must now wait for a
+ * human (a rejected step, or a failure policy other than REPLAN).
+ */
+function updatePlanProgress(
+  repos: Repositories,
+  ref: PlanStepRef,
+  outcome: ExecutionOutcome,
+): boolean {
+  switch (outcome.status) {
+    case 'succeeded':
+      repos.plans.advance(ref.planId);
+      return false;
+    case 'rejected':
+      repos.plans.setStatus(
+        ref.planId,
+        'failed',
+        `step ${ref.stepIndex + 1} rejected: ${outcome.validation.violations.map((v) => v.code).join(', ') || outcome.validation.preconditionFailures.join('; ')}`.slice(
+          0,
+          500,
+        ),
+      );
+      return true;
+    case 'failed':
+    case 'verification_failed': {
+      const failures = repos.plans.recordStepFailure(ref.planId);
+      if (failures <= ref.failureHandling.maxRetriesPerStep) return false; // retry next cycle
+      repos.plans.setStatus(
+        ref.planId,
+        'failed',
+        `step ${ref.stepIndex + 1} failed ${failures} time(s)`,
+      );
+      // REPLAN: the next cycle asks the planner again. PAUSE_AND_ASK_USER and RETREAT_HOME
+      // (no retreat directive exists yet) wait for a human.
+      return ref.failureHandling.onStepFailure !== 'REPLAN';
+    }
+  }
+}
+
 async function consultPlanner(
   deps: AgentDeps,
   state: GameState,
   ctx: SafetyContext,
   cycleId: string,
   stateSnapshotId: number,
-): Promise<{ chosen: ChosenAction; outcome: PlannerOutcome }> {
+): Promise<Consulted> {
   const { config, repos, planner } = deps;
-  const pauseWith = (
-    question: string,
-    outcome: PlannerOutcome,
-  ): { chosen: ChosenAction; outcome: PlannerOutcome } => ({
+  const pauseWith = (question: string, outcome: PlannerOutcome): Consulted => ({
     chosen: {
       spec: { type: 'PAUSE_AND_ASK_USER', args: { question: question.slice(0, 500) } },
       reason: `planner: ${outcome.kind}`,
       origin: 'deterministic-router',
     },
     outcome,
+    planStep: null,
   });
+
+  const taskId = state.currentTask?.taskId ?? null;
+  if (taskId === null) {
+    return pauseWith('There is no task to plan for. What should the agent do?', {
+      kind: 'unavailable',
+    });
+  }
+
+  // An open plan takes precedence over asking the planner again.
+  const open = repos.plans.openForTask(taskId);
+  if (open?.status === 'pending_approval') {
+    return pauseWith(
+      `Plan #${open.id} "${open.plan.goal}" (${open.plan.steps.length} steps) is still waiting for approval. ${reviewHint(taskId, open.id)}`,
+      {
+        kind: 'approval-pending',
+        planId: open.id,
+        goal: open.plan.goal,
+        steps: open.plan.steps.length,
+      },
+    );
+  }
+  if (open?.status === 'active') return stepOf(open, 'plan-step');
 
   if (planner === null || config.planner.provider === 'none') {
     return pauseWith(
@@ -328,7 +447,6 @@ async function consultPlanner(
     );
   }
 
-  const taskId = state.currentTask?.taskId ?? null;
   const limit = config.planner.recentHistoryLimit;
   const request = buildPlannerRequest({
     state,
@@ -383,10 +501,13 @@ async function consultPlanner(
   }
 
   const validation = validatePlan(response.plan, ctx, config.planner.maxPlanSteps);
-  if (taskId !== null) {
-    repos.checkpoints.add(taskId, 'plan', { plan: response.plan, validation }, stateSnapshotId);
-  }
   if (!validation.ok || validation.plan === null) {
+    repos.checkpoints.add(
+      taskId,
+      'plan-rejected',
+      { plan: response.plan, validation },
+      stateSnapshotId,
+    );
     const stepViolations = validation.stepViolations.flatMap((s) => s.violations);
     const issues = [
       ...validation.schemaIssues,
@@ -413,29 +534,24 @@ async function consultPlanner(
   }
 
   const plan = validation.plan;
-  if (plan.requiresUserApproval) {
+  const stored = repos.plans.create(
+    taskId,
+    plan,
+    plan.requiresUserApproval ? 'pending_approval' : 'active',
+    planner.name,
+  );
+  repos.checkpoints.add(
+    taskId,
+    'plan',
+    { planId: stored.id, status: stored.status, plan },
+    stateSnapshotId,
+  );
+  if (stored.status === 'pending_approval') {
+    // The commands come before the planner's explanation so truncation cannot cut them off.
     return pauseWith(
-      `Approve plan "${plan.goal}" (${plan.steps.length} steps)? ${plan.explanation}`,
-      {
-        kind: 'approval-required',
-        goal: plan.goal,
-        steps: plan.steps.length,
-      },
+      `Approve plan #${stored.id} "${plan.goal}" (${plan.steps.length} steps)? ${reviewHint(taskId, stored.id)} Planner: ${plan.explanation}`,
+      { kind: 'approval-required', planId: stored.id, goal: plan.goal, steps: plan.steps.length },
     );
   }
-  const first = plan.steps[0];
-  if (first === undefined) {
-    return pauseWith('The planner returned an empty plan.', {
-      kind: 'plan-rejected',
-      issues: ['empty plan'],
-    });
-  }
-  return {
-    chosen: {
-      spec: first.action,
-      reason: `plan "${plan.goal}" step 1/${plan.steps.length}: ${first.rationale}`.slice(0, 500),
-      origin: 'planner',
-    },
-    outcome: { kind: 'plan-accepted', goal: plan.goal, steps: plan.steps.length },
-  };
+  return stepOf(stored, 'plan-accepted');
 }

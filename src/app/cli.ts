@@ -10,6 +10,7 @@ import { errorMessage } from '../util/json.ts';
 import type { CycleResult } from './agent-loop.ts';
 import { runLiveCycle, summarizeObservation, withLiveClient } from './live-agent.ts';
 import { runMockScenario } from './mock-agent.ts';
+import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
 const USAGE = `gtnh-agent (single cycle, no autonomy; the live client is read-only)
@@ -28,6 +29,14 @@ Usage:
                                            Show recent logged actions.
   node src/app/cli.ts task-resume --task <id> [--db <path>]
                                            Mark a paused/blocked task active again.
+  node src/app/cli.ts plan-show [--task <id>] [--db <path>]
+                                           Show a task's latest plan, or every open plan.
+  node src/app/cli.ts plan-approve --task <id> [--plan <n>] [--db <path>]
+                                           Approve the plan waiting for approval (and resume
+                                           the task it paused). Nothing runs until the next
+                                           cycle, which executes one validated step.
+  node src/app/cli.ts plan-reject --task <id> [--plan <n>] [--reason <text>] [--db <path>]
+                                           Reject the task's open plan.
   node src/app/cli.ts plan-schema          Print the planner output JSON Schema.
   node src/app/cli.ts config               Print the validated configuration.
 `;
@@ -81,6 +90,8 @@ async function main(argv: string[]): Promise<number> {
       full: { type: 'boolean', default: false },
       limit: { type: 'string', default: '10' },
       task: { type: 'string' },
+      plan: { type: 'string' },
+      reason: { type: 'string' },
       live: { type: 'boolean', default: false },
       radius: { type: 'string', default: '16' },
       verbose: { type: 'boolean', default: false },
@@ -188,6 +199,38 @@ async function main(argv: string[]): Promise<number> {
       print({ task: task.id, previousStatus: task.status, status: 'active' });
       db.close();
       return 0;
+    }
+    case 'plan-show':
+    case 'plan-approve':
+    case 'plan-reject': {
+      if (command !== 'plan-show' && values.task === undefined) {
+        process.stderr.write(`${command} requires --task <id>\n`);
+        return 1;
+      }
+      const planId = values.plan === undefined ? undefined : Number(values.plan);
+      if (planId !== undefined && !Number.isSafeInteger(planId)) {
+        process.stderr.write('--plan must be a plan number\n');
+        return 1;
+      }
+      const db = openDatabase(dbPath);
+      try {
+        const repos = createRepositories(db, systemClock);
+        const taskId = values.task;
+        const result =
+          taskId === undefined || command === 'plan-show'
+            ? showPlans(repos, taskId)
+            : command === 'plan-approve'
+              ? approvePlan(repos, taskId, planId)
+              : rejectPlan(repos, taskId, planId, values.reason);
+        if (!result.ok) {
+          process.stderr.write(`${result.error}\n`);
+          return 1;
+        }
+        print(result.value);
+        return 0;
+      } finally {
+        db.close();
+      }
     }
     case 'plan-schema':
       print(plannerResponseJsonSchema());

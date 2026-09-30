@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IN_MEMORY, openDatabase, runMigrations, type Db } from '../../src/persistence/database.ts';
 import { MIGRATIONS } from '../../src/persistence/migrations/index.ts';
 import { createRepositories, type Repositories } from '../../src/persistence/repositories.ts';
+import type { Plan } from '../../src/planner/plan-schema.ts';
 import { makeState, testClock } from '../fixtures/index.ts';
 
 let dir: string;
@@ -27,7 +28,7 @@ describe('migrations', () => {
   it('apply once and are idempotent', () => {
     expect(runMigrations(db)).toEqual([]);
     const versions = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(versions).toEqual([{ version: 1 }]);
+    expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
   });
 
   it('create every required table', () => {
@@ -187,5 +188,80 @@ describe('repositories', () => {
     ).toThrow('boom');
     expect(repos.tasks.get('t9')).toBeNull();
     expect(repos.events.forCycle('c')).toEqual([]);
+  });
+});
+
+describe('plans', () => {
+  const plan = (goal: string): Plan => ({
+    goal,
+    steps: [
+      {
+        step: 1,
+        action: { type: 'INSPECT_MACHINE', args: { machineId: 'machine.macerator.1' } },
+        rationale: 'first look',
+      },
+      {
+        step: 2,
+        action: { type: 'INSPECT_MACHINE', args: { machineId: 'machine.macerator.1' } },
+        rationale: 'second look',
+      },
+    ],
+    requiresUserApproval: false,
+    explanation: 'test plan',
+    failureHandling: {
+      onStepFailure: 'PAUSE_AND_ASK_USER',
+      maxRetriesPerStep: 1,
+      escalationMessage: 'stop',
+    },
+  });
+
+  beforeEach(() => {
+    repos.tasks.ensure({ id: 'task-a', goal: 'A', subgoal: null, status: 'active' });
+  });
+
+  it('keeps at most one open plan per task (a new plan supersedes the old one)', () => {
+    const first = repos.plans.create('task-a', plan('first'), 'pending_approval', 'mock');
+    expect(repos.plans.openForTask('task-a')?.id).toBe(first.id);
+    const second = repos.plans.create('task-a', plan('second'), 'active', 'mock');
+    expect(repos.plans.get(first.id)).toMatchObject({
+      status: 'superseded',
+      statusReason: 'replaced by a newer plan',
+    });
+    expect(repos.plans.openForTask('task-a')?.id).toBe(second.id);
+    expect(repos.plans.listOpen().map((p) => p.id)).toEqual([second.id]);
+  });
+
+  it('advances step by step, resets failures, and completes after the last step', () => {
+    const p = repos.plans.create('task-a', plan('advance'), 'active', 'mock');
+    expect(repos.plans.recordStepFailure(p.id)).toBe(1);
+    expect(repos.plans.recordStepFailure(p.id)).toBe(2);
+    expect(repos.plans.advance(p.id)).toMatchObject({
+      nextStep: 1,
+      stepFailures: 0,
+      status: 'active',
+    });
+    expect(repos.plans.advance(p.id)).toMatchObject({
+      nextStep: 2,
+      status: 'completed',
+      statusReason: 'all steps verified',
+    });
+    expect(repos.plans.openForTask('task-a')).toBeNull();
+    expect(repos.plans.latestForTask('task-a')?.id).toBe(p.id);
+  });
+
+  it('does not advance a plan that stopped being active', () => {
+    const p = repos.plans.create('task-a', plan('stopped'), 'active', 'mock');
+    repos.plans.setStatus(p.id, 'rejected', 'no');
+    expect(repos.plans.advance(p.id)).toMatchObject({ status: 'rejected', nextStep: 0 });
+  });
+
+  it('refuses invalid plans, unknown tasks and unknown plan ids', () => {
+    const bad = { ...plan('bad'), steps: [] } as unknown as Plan;
+    expect(() => repos.plans.create('task-a', bad, 'active', 'mock')).toThrow();
+    expect(() => repos.plans.create('task-missing', plan('x'), 'active', 'mock')).toThrow(
+      /FOREIGN KEY/,
+    );
+    expect(() => repos.plans.setStatus(999, 'failed')).toThrow(/No plan 999/);
+    expect(repos.plans.get(999)).toBeNull();
   });
 });

@@ -14,9 +14,12 @@ Nothing in this milestone downloads, loads or calls a model. The planner is `Moc
 | High-level planner  | `PlannerProvider` (`src/planner/planner-provider.ts`)   | `MockPlannerProvider` (fixtures) | A local-LLM adapter (e.g. Ollama)                                              |
 | Fast bounded choice | `DecisionProvider` (`src/system1/decision-provider.ts`) | `DeterministicDecisionProvider`  | Optional small classifier, **always** wrapped in `SafetyFirstDecisionProvider` |
 
-The planner is consulted **only** when System 1 returns `REQUEST_PLANNER`: no known step, a
-required machine in an unknown/unpowered state, or other low-confidence situations. Safety,
-vitals and upkeep never reach the model.
+The planner is consulted **only** when System 1 returns `REQUEST_PLANNER` (no known step, a
+required machine in an unknown/unpowered state, or other low-confidence situations) **and** the task
+has no open plan. Safety, vitals and upkeep never reach the model. A returned plan is stored and run
+one validated step per cycle; a plan with `requiresUserApproval` runs nothing until a human approves
+it with `node src/app/cli.ts plan-approve --task <id> --plan <n>` (see
+[architecture: plans across cycles](architecture.md#plans-across-cycles)).
 
 ## Adapter requirements (must all hold before merging a real adapter)
 

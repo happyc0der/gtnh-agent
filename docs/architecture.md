@@ -52,16 +52,16 @@ flowchart TD
 
 ## Roles
 
-| Component                                                        | Role                                                                                                                                                      | Authority                                                                                                                     |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **MinecraftClient** (`src/bot`)                                  | The only boundary to the game. `observe()` returns a normalized `GameState`; `perform()` takes a `ValidatedAction` token.                                 | Performs actions, but only ones minted by the executor (runtime-checked).                                                     |
-| **Safety policy** (`src/safety`)                                 | Pure functions: state reliability, dangers, per-action rules, protected items, boundaries, forbidden-modification denylist, repeated-failure cap.         | **Veto over everything.** No model can override it.                                                                           |
-| **Deterministic router** (`src/system1/deterministic-router.ts`) | System 1: prioritized, transparent rules that map a state to one of 8 bounded decisions, with confidence, reason codes and facts.                         | Chooses _what kind_ of step; cannot execute.                                                                                  |
-| **Future System-1 model**                                        | Optional small local classifier implementing `DecisionProvider`.                                                                                          | Must be wrapped in `SafetyFirstDecisionProvider`: safety-driven router decisions always win, invalid output becomes PAUSE.    |
-| **Action proposer** (`src/system1/action-proposer.ts`)           | Turns one decision into exactly one allowlisted action (approaching a target first if it is out of reach).                                                | Proposes only.                                                                                                                |
-| **Future LLM planner**                                           | Implements `PlannerProvider`: returns a strict `Plan` or an `Escalation`. Called only for `REQUEST_PLANNER`.                                              | **None.** Plans are validated; only step 1 can be proposed per cycle, and it goes through the executor like any other action. |
-| **ActionExecutor** (`src/executor`)                              | The single controlled path: schema → safety → preconditions → persist → execute → observe → verify → persist.                                             | Sole minter of `ValidatedAction` (lint-enforced).                                                                             |
-| **Persistence** (`src/persistence`)                              | SQLite (better-sqlite3): tasks, checkpoints, state snapshots, action logs, an append-only event log, safety violations, named locations, protected items. | Audit trail; failure history feeds the repeated-failure rule.                                                                 |
+| Component                                                        | Role                                                                                                                                                                                 | Authority                                                                                                                                                   |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MinecraftClient** (`src/bot`)                                  | The only boundary to the game. `observe()` returns a normalized `GameState`; `perform()` takes a `ValidatedAction` token.                                                            | Performs actions, but only ones minted by the executor (runtime-checked).                                                                                   |
+| **Safety policy** (`src/safety`)                                 | Pure functions: state reliability, dangers, per-action rules, protected items, boundaries, forbidden-modification denylist, repeated-failure cap.                                    | **Veto over everything.** No model can override it.                                                                                                         |
+| **Deterministic router** (`src/system1/deterministic-router.ts`) | System 1: prioritized, transparent rules that map a state to one of 8 bounded decisions, with confidence, reason codes and facts.                                                    | Chooses _what kind_ of step; cannot execute.                                                                                                                |
+| **Future System-1 model**                                        | Optional small local classifier implementing `DecisionProvider`.                                                                                                                     | Must be wrapped in `SafetyFirstDecisionProvider`: safety-driven router decisions always win, invalid output becomes PAUSE.                                  |
+| **Action proposer** (`src/system1/action-proposer.ts`)           | Turns one decision into exactly one allowlisted action (approaching a target first if it is out of reach).                                                                           | Proposes only.                                                                                                                                              |
+| **Future LLM planner**                                           | Implements `PlannerProvider`: returns a strict `Plan` or an `Escalation`. Called only for `REQUEST_PLANNER`, and only when the task has no open plan.                                | **None.** Plans are validated and stored; one step per cycle goes through the executor like any other action. Plans that ask for approval wait for a human. |
+| **ActionExecutor** (`src/executor`)                              | The single controlled path: schema → safety → preconditions → persist → execute → observe → verify → persist.                                                                        | Sole minter of `ValidatedAction` (lint-enforced).                                                                                                           |
+| **Persistence** (`src/persistence`)                              | SQLite (better-sqlite3): tasks, checkpoints, plans with their progress, state snapshots, action logs, an append-only event log, safety violations, named locations, protected items. | Audit trail; failure history feeds the repeated-failure rule.                                                                                               |
 
 ## One cycle
 
@@ -70,11 +70,33 @@ flowchart TD
 3. Hard safety check of the _state_: unknown, stale or inconsistent → forced `PAUSE_AND_ASK_USER`,
    whatever any decision provider says.
 4. Ask the `DecisionProvider` (the deterministic router) for one decision.
-5. Convert it to exactly one proposed action (consulting the planner for `REQUEST_PLANNER`).
+5. Convert it to exactly one proposed action. For `REQUEST_PLANNER`: run the next step of the
+   task's active plan; or, if its plan still waits for approval, pause; or else ask the planner for
+   a new plan (see [Plans across cycles](#plans-across-cycles)).
 6. Validate the action (schema, safety policy, preconditions) and persist the result.
 7. Execute through `MinecraftClient.perform()` only if validation passed.
 8. Observe again and verify the action's postcondition.
 9. Persist the outcome; pause or block the task if needed. **Stop.**
+
+## Plans across cycles
+
+A validated plan is stored in the `plans` table with its progress, so a multi-step plan advances one
+step per cycle instead of being re-planned (and restarted) every cycle. A task has at most one open
+plan; a newer plan supersedes it.
+
+| Status             | Meaning                                                             | Next                                                                                                                                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pending_approval` | The plan set `requiresUserApproval`. Nothing has run.               | The cycle pauses the task and asks. `plan-approve --task <id> --plan <n>` makes it `active` and resumes the task; `plan-reject` rejects it. Resuming the task alone does not approve it.                                                        |
+| `active`           | Approved or not needing approval.                                   | Each cycle that reaches `REQUEST_PLANNER` proposes the next step; the executor validates it against the current state.                                                                                                                          |
+| `completed`        | Every step executed and verified.                                   | The next `REQUEST_PLANNER` asks the planner again.                                                                                                                                                                                              |
+| `failed`           | A step was rejected, or failed more than `maxRetriesPerStep` times. | Rejected step: the task is blocked. Exhausted retries: `REPLAN` leaves the task active (the next cycle asks the planner, with the failure history); `PAUSE_AND_ASK_USER` and `RETREAT_HOME` pause the task (there is no retreat directive yet). |
+| `rejected`         | A human rejected it.                                                | After `task-resume`, the planner is asked for a new plan.                                                                                                                                                                                       |
+| `superseded`       | Replaced by a newer plan for the same task.                         | Nothing.                                                                                                                                                                                                                                        |
+
+Safety does not depend on the stored plan: every step is validated again, against the state of the
+cycle that runs it, and the repeated-failure rule still applies across plans (a `REPLAN` that proposes
+the same failing action is refused with `REPEATED_FAILURE`). Dangers, vitals and upkeep are routed
+before the planner, so a plan simply waits while System 1 handles them.
 
 ## Why code, not AI, enforces safety
 

@@ -135,6 +135,7 @@ describe('agent loop behaviour', () => {
     });
     expect(result.planner).toEqual({
       kind: 'plan-accepted',
+      planId: 1,
       goal: 'Fetch cobblestone for the next step',
       steps: 2,
     });
@@ -143,6 +144,7 @@ describe('agent loop behaviour', () => {
       'plan',
       'WITHDRAW_ITEM:succeeded',
     ]);
+    expect(repos.plans.get(1)).toMatchObject({ status: 'active', nextStep: 1 });
     db.close();
   });
 

@@ -237,7 +237,7 @@ export const SCENARIOS: readonly Scenario[] = [
   ),
   scenario(
     'needs-planner',
-    'Active task with no known step; the mock planner returns a 2-step plan (step 1 runs).',
+    'Active task with no known step; the mock planner returns a 2-step plan (one step per run).',
     { decision: 'REQUEST_PLANNER', actionType: 'WITHDRAW_ITEM', status: 'succeeded' },
     noKnownStep,
     {
