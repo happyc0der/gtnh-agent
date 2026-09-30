@@ -1,12 +1,12 @@
 # GTNH compatibility
 
-**Status (2026-09-30): read-only observation works on a private GTNH 2.8.4 test server.**
-The agent's own client (`src/bot/gtnh1710/`, `Gtnh1710Client`) joins via the Forge handshake and
-reports position, dimension, health, food, a fully named inventory and **nearby entities
-(vanilla and modded mobs)**. Lava/void, machines and power are not observable yet, so the agent
-still fails closed (pauses) against the live server. Mineflayer cannot connect at all. Every
-claim below is labelled as _verified_ (observed or checked in installed code) or _assumption_
-(to be tested).
+**Status (2026-09-30): read-only observation of every safety-critical field works on a
+private GTNH 2.8.4 test server.** The agent's own client (`src/bot/gtnh1710/`, `Gtnh1710Client`)
+joins via the Forge handshake and reports position, dimension, health, food, a fully named
+inventory, nearby entities (vanilla and modded) and lava/void/damaging blocks. A live agent cycle
+now has no state violations; it pauses only because it has no task. Machines, power and held-item
+durability are not observable yet. Mineflayer cannot connect at all. Every claim below is labelled
+as _verified_ (observed or checked in installed code) or _assumption_ (to be tested).
 
 ## Test server results (2026-09-30)
 
@@ -108,8 +108,36 @@ Verified with `scripts/entity-survey.ts` (20 s of live traffic) and `pnpm cli ob
 - **Coverage is declared:** the entity scan radius is 16 m; if `hostileThreatRadius` is
   configured larger, the state is treated as unknown rather than "no hostiles".
 
-Still to do: identify modded entity types (so passive animals stop counting as threats), and
-lava/void detection from chunk block data (NotEnoughIDs changes the block data format).
+Still to do: identify modded entity types (so passive animals stop counting as threats).
+
+## Lava, void and damaging blocks (2026-09-30)
+
+- **NotEnoughIDs (`neid` 2.1.10) changes the block data format.** Verified from its mixins
+  (`Constants`: 20,480 bytes per section, 327,936 per full column; `getBlockData()` writes the
+  16-bit ids through a default, big-endian `ByteBuffer`; the add/MSB arrays are removed) and on
+  252 live columns, every inflated byte accounted for. Per column: all sections' u16 ids, then
+  u16 metadata, block light, sky light, biomes.
+- **Block changes are NEID-format too:** Block Change (0x23) metadata is a short; Multi Block
+  Change (0x22) records are 6 bytes (u16 position, u16 id, u16 metadata). Verified live (flowing
+  water/lava updates parsed with 0 bytes left over).
+- **Hazard table** (`src/bot/gtnh1710/block-hazards.ts`): built by reviewing every GTNH 2.8.4
+  block name matching burning/fluid/poison/contact-damage keywords (252 candidates). Kinds:
+  `lava` (lava, molten metals, magma, pyrotheum, hot coolant, steam), `fire`, `harmful_fluid`
+  (flux goo, liquid death, poison, sludge, acid), `damaging_block` (cactus, thorns, brambles,
+  spikes, bear traps, berry bushes). Decorative look-alikes are excluded (fireproof wood,
+  firefly jars, lava tanks, lavastone, wall markings). Conservative: when unsure, listed.
+- **Void** = a column with no block at all from y=0 up to the player's feet (a drop into the void).
+- **Scan:** sphere of 32 m for blocks, circle of 32 m for void columns; only exposed hazard blocks
+  (a face not touching another hazard) and void-area edges are listed, since the nearest hazard
+  to any outside point is always one of those. At most 256 are listed; beyond that the declared
+  `scanRadius` shrinks to what the list completely covers. Fail closed: any column in range that
+  has not arrived, could not be decoded, or contains a block id missing from the registry makes
+  hazards unknown; a lost block-change packet makes them unknown for the session.
+- **Live cross-check:** a 90 m diagnostic scan (23 ms) found 199 cacti (desert around spawn, the
+  nearest at 33.6 m, just outside the agent's 32 m scan) and exposed lava at (-56, 55, 34),
+  (-56, 53, 32), ...: the same blocks an independent probe found.
+- A bug caught by tests before it reached the agent: the first void check looked at the whole
+  16x16 layer of a chunk section instead of the single column, so it could never report void.
 
 ## What was verified (from installed packages, 2026-09-26)
 
@@ -162,7 +190,7 @@ with backups, never on a public server.
 
 1. **Connectivity spike (read-only). DONE 2026-09-30:** a raw Node client with a hand-written
    FML handshake joins; mineflayer does not. See "Test server results" above.
-2. **Observation only. STARTED 2026-09-30:** position, dimension, health, food and inventory work
+2. **Observation only. MOSTLY DONE 2026-09-30:** position, dimension, health, food and inventory work
    (see "Read-only live client"). Still to do: compare against the in-game F3/NEI view in at least 10
    situations (including GT meta-items and big stacks). Nearby entities: done (see "Entity
    tracking"); modded entity identification and lava/void are next.

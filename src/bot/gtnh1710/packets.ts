@@ -1,4 +1,5 @@
 import { gunzipSync } from 'node:zlib';
+import type { ColumnHeader } from './chunk-data.ts';
 import {
   bool,
   encodeFrame,
@@ -164,8 +165,22 @@ export type PlayPacket =
   | { type: 'destroy-entities'; entityIds: number[] }
   | { type: 'entity-move'; entityId: number; dx: number; dy: number; dz: number }
   | ({ type: 'entity-teleport'; entityId: number } & EntityPosition)
-  | { type: 'chunk-data'; chunkX: number; chunkZ: number; unload: boolean }
-  | { type: 'chunk-bulk'; columns: Array<{ chunkX: number; chunkZ: number }> }
+  | {
+      type: 'chunk-data';
+      header: ColumnHeader;
+      groundUp: boolean;
+      /** "Ground-up continuous" with no sections is how 1.7.10 unloads a column. */
+      unload: boolean;
+      compressed: Buffer;
+    }
+  | { type: 'chunk-bulk'; columns: ColumnHeader[]; skyLight: boolean; compressed: Buffer }
+  | { type: 'block-change'; x: number; y: number; z: number; blockId: number }
+  | {
+      type: 'multi-block-change';
+      chunkX: number;
+      chunkZ: number;
+      records: Array<{ x: number; y: number; z: number; blockId: number }>;
+    }
   | { type: 'unhandled'; id: number };
 
 /** Entity position in blocks (the protocol sends 1/32-block fixed point). */
@@ -229,9 +244,15 @@ export interface PlayDecodeOptions {
    * Verified by disassembling modularui-1.2.20's PacketBufferMixin and by live packets.
    */
   itemStackSizeVarInt: boolean;
+  /**
+   * NotEnoughIDs (modid `neid`) widens block ids and metadata to 16 bits: chunk sections
+   * carry u16 ids and metadata, Block Change metadata is a short, and Multi Block Change
+   * records are 6 bytes. Verified from notenoughIDs-2.1.10's mixins and live packets.
+   */
+  neid: boolean;
 }
 
-export const VANILLA_DECODING: PlayDecodeOptions = { itemStackSizeVarInt: false };
+export const VANILLA_DECODING: PlayDecodeOptions = { itemStackSizeVarInt: false, neid: false };
 
 /**
  * 1.7.10 item stack: short id (-1 = empty), byte count, short damage, short NBT length
@@ -352,28 +373,77 @@ export function decodePlay(
     case 0x18:
       return { type: 'entity-teleport', entityId: r.i32(), ...fixedPointPosition(r) };
     case 0x21: {
-      // Chunk Data: only the header is read (block data is not decoded yet).
       const chunkX = r.i32();
       const chunkZ = r.i32();
       const groundUp = r.bool();
       const primaryBitMask = r.u16();
-      // "ground-up continuous" with no sections is how 1.7.10 unloads a chunk column.
-      return { type: 'chunk-data', chunkX, chunkZ, unload: groundUp && primaryBitMask === 0 };
+      const addBitMask = r.u16();
+      const compressed = Buffer.from(r.bytes(r.i32()));
+      return {
+        type: 'chunk-data',
+        header: { chunkX, chunkZ, primaryBitMask, addBitMask },
+        groundUp,
+        unload: groundUp && primaryBitMask === 0,
+        compressed,
+      };
     }
     case 0x26: {
-      // Map Chunk Bulk: column count, compressed data, then per-column metadata. Layout
-      // verified live on GTNH (NotEnoughIDs does not change the header; 0 bytes left over).
+      // Map Chunk Bulk: column count, one compressed stream, then per-column headers.
+      // NotEnoughIDs does not change this header (verified live: 0 bytes left over).
       const columnCount = r.i16();
       const dataLength = r.i32();
-      r.bool(); // sky light sent
-      r.bytes(dataLength);
-      const columns: Array<{ chunkX: number; chunkZ: number }> = [];
+      const skyLight = r.bool();
+      const compressed = Buffer.from(r.bytes(dataLength));
+      const columns: ColumnHeader[] = [];
       for (let i = 0; i < columnCount; i++) {
-        columns.push({ chunkX: r.i32(), chunkZ: r.i32() });
-        r.u16(); // primary bit mask
-        r.u16(); // add bit mask
+        columns.push({
+          chunkX: r.i32(),
+          chunkZ: r.i32(),
+          primaryBitMask: r.u16(),
+          addBitMask: r.u16(),
+        });
       }
-      return { type: 'chunk-bulk', columns };
+      return { type: 'chunk-bulk', columns, skyLight, compressed };
+    }
+    case 0x23: {
+      const x = r.i32();
+      const y = r.u8();
+      const z = r.i32();
+      const blockId = r.varInt();
+      if (options.neid)
+        r.i16(); // metadata (short with NEID)
+      else r.u8(); // metadata (byte in vanilla)
+      return { type: 'block-change', x, y, z, blockId };
+    }
+    case 0x22: {
+      const chunkX = r.i32();
+      const chunkZ = r.i32();
+      const count = r.u16();
+      const dataSize = r.i32();
+      const recordSize = options.neid ? 6 : 4;
+      if (dataSize !== count * recordSize) {
+        throw new ProtocolError(
+          `multi block change: ${dataSize} bytes for ${count} records of ${recordSize}`,
+        );
+      }
+      const records: Array<{ x: number; y: number; z: number; blockId: number }> = [];
+      for (let i = 0; i < count; i++) {
+        const pos = r.u16(); // x<<12 | z<<8 | y
+        let blockId: number;
+        if (options.neid) {
+          blockId = r.u16();
+          r.u16(); // metadata
+        } else {
+          blockId = r.u16() >> 4; // id<<4 | meta
+        }
+        records.push({
+          x: chunkX * 16 + (pos >> 12),
+          y: pos & 0xff,
+          z: chunkZ * 16 + ((pos >> 8) & 15),
+          blockId,
+        });
+      }
+      return { type: 'multi-block-change', chunkX, chunkZ, records };
     }
     default:
       return { type: 'unhandled', id: packetId };

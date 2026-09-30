@@ -138,7 +138,10 @@ export class Gtnh1710Client implements MinecraftClient {
     // Wire-format quirks are chosen from the server's own mod list, never guessed.
     this.#decoding = {
       itemStackSizeVarInt: this.#identity.mods.some((m) => m.modid === 'modularui'),
+      neid: this.#identity.mods.some((m) => m.modid === 'neid'),
     };
+    this.#world.setChunkFormat({ neid: this.#decoding.neid });
+    this.#log(`block format: ${this.#decoding.neid ? 'NotEnoughIDs (16-bit ids)' : 'vanilla'}`);
     this.#log(
       `item stack format: ${this.#decoding.itemStackSizeVarInt ? 'ModularUI (VarInt stack size)' : 'vanilla'}`,
     );
@@ -390,6 +393,8 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'entity-teleport':
       case 'chunk-data':
       case 'chunk-bulk':
+      case 'block-change':
+      case 'multi-block-change':
       case 'unhandled':
         break; // observation only: already folded into the world model above
     }

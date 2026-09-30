@@ -16,7 +16,11 @@ import {
   type ItemStackData,
   type PlayPacket,
 } from './packets.ts';
+import { buildBlockCodeTable } from './block-hazards.ts';
+import { ChunkStore, decodeChunkBulk, decodeChunkColumn, type ChunkFormat } from './chunk-data.ts';
+import { scanHazards, type HazardScan } from './hazard-scan.ts';
 import { nameItemStack, type Registry } from './registry.ts';
+import { ProtocolError } from './wire.ts';
 
 /**
  * 1.7.10 player inventory window (id 0): 0 crafting output, 1-4 crafting grid, 5-8 armor,
@@ -39,7 +43,8 @@ export const ENTITY_SCAN_RADIUS = 16;
  */
 export const ENTITY_SETTLE_MS = 250;
 
-const HAZARDS_UNKNOWN = 'lava/void detection needs chunk data, which is not decoded yet';
+/** Packet ids whose loss would leave the block picture (and so the hazard scan) incomplete. */
+const BLOCK_PACKETS: ReadonlySet<number> = new Set([0x21, 0x22, 0x23, 0x26]);
 
 /** Packet ids whose loss would leave the entity picture incomplete. */
 const ENTITY_PACKETS: ReadonlySet<number> = new Set([0x0c, 0x0e, 0x0f, 0x13, 0x15, 0x17, 0x18]);
@@ -99,11 +104,22 @@ export class WorldModel {
   #selfEntityId: number | null = null;
   /** Set when an entity packet could not be decoded: the entity picture may be incomplete. */
   #entityProblem: string | null = null;
-  /** Loaded chunk columns ("cx,cz") and when each arrived (ms since epoch). */
-  readonly #chunks = new Map<string, number>();
+  /** Loaded chunk columns: arrival times (for entity readiness) and block ids (for hazards). */
+  readonly #store = new ChunkStore();
+  #chunkFormat: ChunkFormat = { neid: false };
+  /** Registry id -> hazard code; rebuilt when the registry arrives (ids are per world). */
+  #blockCodes: Uint8Array | null = null;
+  /** Set when block data was lost: the hazard scan cannot be trusted for this session. */
+  #hazardProblem: string | null = null;
 
   setRegistry(registry: Registry): void {
     this.#registry = registry;
+    this.#blockCodes = buildBlockCodeTable(registry);
+  }
+
+  /** Chunk data layout, chosen from the server's mod list (NotEnoughIDs or vanilla). */
+  setChunkFormat(format: ChunkFormat): void {
+    this.#chunkFormat = format;
   }
 
   get registry(): Registry | null {
@@ -159,6 +175,9 @@ export class WorldModel {
         this.#position = null;
         return;
       default:
+        if (BLOCK_PACKETS.has(packetId)) {
+          this.#hazardProblem ??= `undecodable block packet 0x${packetId.toString(16)}: ${reason}`;
+        }
         if (ENTITY_PACKETS.has(packetId)) {
           this.markEntityProblem(`undecodable entity packet 0x${packetId.toString(16)}: ${reason}`);
         }
@@ -222,7 +241,7 @@ export class WorldModel {
   }
 
   get loadedChunkCount(): number {
-    return this.#chunks.size;
+    return this.#store.size;
   }
 
   /**
@@ -245,7 +264,7 @@ export class WorldModel {
     let missing = 0;
     for (let cx = minX; cx <= maxX; cx++) {
       for (let cz = minZ; cz <= maxZ; cz++) {
-        const at = this.#chunks.get(`${cx},${cz}`);
+        const at = this.#store.receivedAt(cx, cz);
         if (at === undefined) missing += 1;
         else latest = Math.max(latest, at);
       }
@@ -277,14 +296,59 @@ export class WorldModel {
         this.#dimension = packet.dimension;
         this.#position = null;
         this.#entities.clear();
-        this.#chunks.clear();
+        this.#store.clear();
         return;
-      case 'chunk-data':
-        if (packet.unload) this.#chunks.delete(`${packet.chunkX},${packet.chunkZ}`);
-        else this.#chunks.set(`${packet.chunkX},${packet.chunkZ}`, at.getTime());
+      case 'chunk-data': {
+        const { chunkX, chunkZ } = packet.header;
+        if (packet.unload) {
+          this.#store.unload(chunkX, chunkZ);
+          return;
+        }
+        try {
+          const sections = decodeChunkColumn(
+            packet.header,
+            packet.groundUp,
+            packet.compressed,
+            this.#chunkFormat,
+          );
+          if (packet.groundUp) this.#store.setColumn(chunkX, chunkZ, sections, at.getTime());
+          else
+            this.#store.updateSections(
+              chunkX,
+              chunkZ,
+              sections,
+              packet.header.primaryBitMask,
+              at.getTime(),
+            );
+        } catch (error) {
+          if (!(error instanceof ProtocolError)) throw error;
+          if (packet.groundUp) this.#store.markBad(chunkX, chunkZ, error.message, at.getTime());
+          else
+            this.#hazardProblem ??= `undecodable chunk update ${chunkX},${chunkZ}: ${error.message}`;
+        }
         return;
+      }
       case 'chunk-bulk':
-        for (const c of packet.columns) this.#chunks.set(`${c.chunkX},${c.chunkZ}`, at.getTime());
+        try {
+          for (const c of decodeChunkBulk(
+            packet.columns,
+            packet.skyLight,
+            packet.compressed,
+            this.#chunkFormat,
+          )) {
+            this.#store.setColumn(c.header.chunkX, c.header.chunkZ, c.sections, at.getTime());
+          }
+        } catch (error) {
+          if (!(error instanceof ProtocolError)) throw error;
+          for (const c of packet.columns)
+            this.#store.markBad(c.chunkX, c.chunkZ, error.message, at.getTime());
+        }
+        return;
+      case 'block-change':
+        this.#store.setBlock(packet.x, packet.y, packet.z, packet.blockId);
+        return;
+      case 'multi-block-change':
+        for (const r of packet.records) this.#store.setBlock(r.x, r.y, r.z, r.blockId);
         return;
       case 'spawn-player':
         this.#track(packet.entityId, {
@@ -389,7 +453,7 @@ export class WorldModel {
       },
       inventory: this.#inventory(),
       nearbyThreats: this.#threats(now),
-      environmentHazards: unknown(HAZARDS_UNKNOWN),
+      environmentHazards: this.#hazards(),
       power: {
         availableEUt: unknown('GTNH EU is not observable through the protocol'),
         generators: [],
@@ -419,6 +483,34 @@ export class WorldModel {
       unclassifiedCount: unclassified.length,
       nearestUnclassifiedDistance: unclassified[0]?.distance ?? null,
     });
+  }
+
+  #hazards(): GameState['environmentHazards'] {
+    if (this.#hazardProblem !== null) return unknown(this.#hazardProblem);
+    if (!this.#joined) return unknown('not joined yet');
+    const pos = this.#position;
+    if (pos === null) return unknown('player position unknown');
+    if (this.#blockCodes === null) return unknown('block registry not received yet');
+    const scan = scanHazards(this.#store, this.#blockCodes, { x: pos.x, y: pos.feetY, z: pos.z });
+    if (!scan.ok) return unknown(scan.reason);
+    return known({
+      scanRadius: scan.scanRadius,
+      lavaNearby: scan.hazards.some((h) => h.kind === 'lava'),
+      voidNearby: scan.hazards.some((h) => h.kind === 'void'),
+      hazards: scan.hazards.map(({ kind, position }) => ({ kind, position })),
+    });
+  }
+
+  /** Hazard scan with a custom radius, for diagnostics only (the agent always uses the default). */
+  diagnosticHazardScan(radius: number): HazardScan | null {
+    const pos = this.#position;
+    if (pos === null || this.#blockCodes === null) return null;
+    return scanHazards(this.#store, this.#blockCodes, { x: pos.x, y: pos.feetY, z: pos.z }, radius);
+  }
+
+  /** Block id at a position (diagnostics/tests); undefined if its chunk is not loaded. */
+  blockAt(x: number, y: number, z: number): number | undefined {
+    return this.#store.blockAt(x, y, z);
   }
 
   #armor(): GameState['player']['armor'] {

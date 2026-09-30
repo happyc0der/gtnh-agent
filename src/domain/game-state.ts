@@ -45,8 +45,15 @@ export const InventorySchema = z.strictObject({
 });
 export type Inventory = z.infer<typeof InventorySchema>;
 
+/**
+ * A block or column to keep away from. `lava` covers lava and other burning liquids/blocks
+ * (molten metals, magma); `fire` open flames; `harmful_fluid` poisonous or corrosive fluids;
+ * `damaging_block` blocks that hurt on contact (cactus, thorns, spikes); `void` a column
+ * with nothing below the player's level.
+ */
+export const HAZARD_KINDS = ['lava', 'fire', 'harmful_fluid', 'damaging_block', 'void'] as const;
 export const HazardSchema = z.strictObject({
-  kind: z.enum(['lava', 'void']),
+  kind: z.enum(HAZARD_KINDS),
   position: PositionSchema,
 });
 export type Hazard = z.infer<typeof HazardSchema>;

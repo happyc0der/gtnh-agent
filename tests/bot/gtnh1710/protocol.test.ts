@@ -24,6 +24,14 @@ import {
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
 import { dimensionName, WorldModel } from '../../../src/bot/gtnh1710/world-model.ts';
+import { chunkBulkFrame, flatWorld, neidColumn } from './chunk-fixtures.ts';
+
+/** Decode one frame the way the client does on a GTNH (ModularUI + NEID) server. */
+function decodeFrame(frame: Buffer) {
+  const f = new FrameDecoder().push(frame)[0];
+  if (f === undefined) throw new Error('no frame');
+  return decodePlay(f.packetId, f.body, { itemStackSizeVarInt: true, neid: true });
+}
 
 describe('wire codec', () => {
   it.each([0, 1, 127, 128, 255, 25565, 2 ** 21, 2 ** 31 - 1, -1])('VarInt round-trips %i', (n) => {
@@ -115,7 +123,7 @@ describe('inbound packets', () => {
       encodeVarInt(1000),
       Buffer.from([0xff, 0xff]),
     ]);
-    expect(decodePlay(0x30, new Reader(body), { itemStackSizeVarInt: true })).toEqual({
+    expect(decodePlay(0x30, new Reader(body), { itemStackSizeVarInt: true, neid: false })).toEqual({
       type: 'window-items',
       windowId: 0,
       items: [{ id: 263, count: 1000, damage: 0, hasNbt: false }, null],
@@ -441,10 +449,11 @@ describe('world model', () => {
       known: false,
       reason: /waiting for 9 nearby chunk/,
     });
-    const columns = [-1, 0, 1].flatMap((cx) =>
-      [-1, 0, 1].map((cz) => ({ chunkX: cx, chunkZ: cz })),
+    const world = flatWorld();
+    const bulk = decodeFrame(
+      chunkBulkFrame([-1, 0, 1].flatMap((cx) => [-1, 0, 1].map((cz) => neidColumn(cx, cz, world)))),
     );
-    w.apply({ type: 'chunk-bulk', columns }, at);
+    w.apply(bulk, at);
     expect(w.toGameState(at).nearbyThreats).toMatchObject({ known: false, reason: /settling/ });
     const later = new Date(at.getTime() + 300);
     let s = w.toGameState(later);
@@ -474,7 +483,7 @@ describe('world model', () => {
     expect(w.trackedEntityCount).toBe(0);
     expect(w.loadedChunkCount).toBe(0); // the new dimension's chunks have not arrived yet
     expect(w.toGameState(later).nearbyThreats.known).toBe(false);
-    w.apply({ type: 'chunk-bulk', columns }, at);
+    w.apply(bulk, at);
     s = w.toGameState(later);
     expect(s.nearbyThreats).toMatchObject({
       known: true,

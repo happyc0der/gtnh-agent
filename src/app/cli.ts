@@ -21,7 +21,8 @@ Usage:
       Run ONE cycle against the configured private GTNH test server (read-only).
   node src/app/cli.ts observe --live [--radius N] [--verbose]
       Connect read-only, print what the agent can observe, disconnect.
-      --radius widens the diagnostic entity list (threats are always counted within 16 m).
+      --radius widens the diagnostic entity (and, above 32, hazard) lists; the agent's own
+      scans stay at 16 m (entities) and 32 m (hazards).
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -112,13 +113,15 @@ async function main(argv: string[]): Promise<number> {
         );
         return 1;
       }
+      const radius = Math.max(1, Math.min(128, Number(values.radius) || 16));
       const summary = await withLiveClient(
         config,
         async (client) =>
           summarizeObservation(
             await client.observe(),
             client.info(),
-            client.world.nearbyEntities(Math.max(1, Math.min(128, Number(values.radius) || 16))),
+            client.world.nearbyEntities(radius),
+            radius > 32 ? client.world.diagnosticHazardScan(radius) : null,
           ),
         log,
       );

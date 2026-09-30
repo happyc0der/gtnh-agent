@@ -59,7 +59,8 @@ blocks, wrenching, cable/energy-network changes, multiblock changes, and rare-it
    `LAVA`, `DROP`, `ATTACK`, `SHELL`, …) → `FORBIDDEN_MODIFICATION`, pause.
 2. **Unreliable state** (critical field unknown, older than `maxStateAgeMs`, from the future, or
    internally inconsistent) → refused, pause. Only `PAUSE_AND_ASK_USER` and `OBSERVE_STATE` remain available.
-3. **Danger gate.** Outside the boundary/dimension, nothing but pause/observe. Near lava/void,
+3. **Danger gate.** Outside the boundary/dimension, nothing but pause/observe. Near lava, fire,
+   harmful fluids, damaging blocks (cactus, spikes, ...) or void,
    hostile mobs or **unidentified entities** (fail closed: an entity type the agent cannot classify
    counts as hostile), only `RETURN_TO_SAFE_LOCATION`. With low health/hunger only, also `EAT_FOOD`.
 4. **Coverage.** Observations declare how far they looked (`nearbyThreats.scanRadius`,

@@ -1,4 +1,5 @@
 import { Gtnh1710Client, type ConnectionInfo } from '../bot/gtnh1710/gtnh-client.ts';
+import type { HazardScan } from '../bot/gtnh1710/hazard-scan.ts';
 import type { NearbyEntity } from '../bot/gtnh1710/world-model.ts';
 import type { AgentConfig } from '../config/env.ts';
 import type { GameState } from '../domain/game-state.ts';
@@ -56,6 +57,7 @@ export function summarizeObservation(
   state: GameState,
   info: ConnectionInfo,
   nearby: readonly NearbyEntity[] = [],
+  wideHazardScan: HazardScan | null = null,
 ): Record<string, unknown> {
   const inv = state.inventory.known ? state.inventory.value : null;
   return {
@@ -77,6 +79,30 @@ export function summarizeObservation(
     nearbyEntities: nearby.map(
       (e) => `${e.distance.toFixed(1).padStart(5)} m  ${e.category.padEnd(12)} ${e.name}`,
     ),
+    hazards: state.environmentHazards.known
+      ? {
+          scanRadius: state.environmentHazards.value.scanRadius,
+          lavaNearby: state.environmentHazards.value.lavaNearby,
+          voidNearby: state.environmentHazards.value.voidNearby,
+          count: state.environmentHazards.value.hazards.length,
+          nearest: state.environmentHazards.value.hazards.slice(0, 5),
+        }
+      : null,
+    diagnosticHazards:
+      wideHazardScan === null
+        ? null
+        : wideHazardScan.ok
+          ? {
+              scanRadius: wideHazardScan.scanRadius,
+              count: wideHazardScan.hazards.length,
+              nearest: wideHazardScan.hazards
+                .slice(0, 5)
+                .map(
+                  (h) =>
+                    `${h.distance.toFixed(1)} m ${h.kind} at (${h.position.x}, ${h.position.y}, ${h.position.z})`,
+                ),
+            }
+          : { unavailable: wideHazardScan.reason },
     unknown: unknownFields(state),
     registry: info.registry,
     sentPackets: info.outboundCounts,

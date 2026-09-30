@@ -8,10 +8,11 @@ simulated world or, **read-only**, against a private GTNH 2.8.4 test server. No 
 model and no GPU use.
 
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
-the test server and observes position, dimension, health, food, a named inventory and nearby
-entities (vanilla and modded mobs; unidentified modded types count as hostile). It cannot change the
-world: every world-changing action returns `NOT_IMPLEMENTED`. Lava/void is not observable yet, so
-live cycles always pause (fail closed). Mineflayer cannot connect to GTNH (it rejects
+the test server and observes position, dimension, health, food, a named inventory, nearby
+entities (vanilla and modded mobs; unidentified modded types count as hostile) and lava, fire,
+harmful fluids, damaging blocks and void within 32 m. It cannot change the world: every
+world-changing action returns `NOT_IMPLEMENTED`. With everything critical observable, a live cycle
+now pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
 1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
 ## Requirements

@@ -10,6 +10,14 @@ import {
   i32,
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
+import {
+  blockChangeFrame,
+  chunkBulkFrame,
+  flatWorld,
+  multiBlockChangeFrame,
+  neidColumn,
+  TEST_BLOCK_REGISTRY,
+} from './chunk-fixtures.ts';
 
 /**
  * A scripted stand-in for a GTNH 1.7.10 Forge server, following the sequence observed
@@ -48,6 +56,12 @@ export interface FakeServerOptions {
   corruptInventory?: boolean;
   /** Entities present when the client joins. */
   entities?: FakeEntity[];
+  /** Blocks that differ from the flat test world ("x,y,z" -> id). */
+  blockOverrides?: ReadonlyMap<string, number>;
+  /** Columns ("x,z") with no blocks at all (holes to the void). */
+  voidColumns?: ReadonlySet<string>;
+  /** Send chunk bulks whose data does not inflate. */
+  corruptChunks?: boolean;
   /** Stream the chunk columns around spawn after joining, as the real server does (default true). */
   sendChunks?: boolean;
 }
@@ -75,6 +89,7 @@ export const DEFAULT_MODS = [
   { modid: 'gregtech', version: 'MC1710' },
   { modid: 'dreamcraft', version: '2.7.268' },
   { modid: 'modularui', version: '1.2.20' },
+  { modid: 'neid', version: '2.1.10' },
 ];
 
 const plugin = (channel: string, data: Buffer): Buffer =>
@@ -198,7 +213,7 @@ export class FakeGtnhServer {
         [9001, 'BuildCraft|Core:engineBlock'],
         [9002, 'Natura:N Crops'],
       ],
-      blocks: options.blocks ?? [[1, 'minecraft:stone']],
+      blocks: options.blocks ?? TEST_BLOCK_REGISTRY,
       registryFiller: options.registryFiller ?? 2000,
       spawn: options.spawn ?? { x: -4.5, eyeY: 107.62000000476837, z: -7.5, yaw: 0, pitch: 0 },
       inventory: options.inventory ?? [
@@ -215,6 +230,9 @@ export class FakeGtnhServer {
       corruptInventory: options.corruptInventory ?? false,
       entities: options.entities ?? [],
       sendChunks: options.sendChunks ?? true,
+      blockOverrides: options.blockOverrides ?? new Map(),
+      voidColumns: options.voidColumns ?? new Set(),
+      corruptChunks: options.corruptChunks ?? false,
     };
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
@@ -255,6 +273,19 @@ export class FakeGtnhServer {
   }
 
   /** 1.7.10 chunk unload: Chunk Data, ground-up continuous, no sections, empty data. */
+  /** A single block change (NEID format), e.g. lava appearing next to the player. */
+  setBlock(x: number, y: number, z: number, id: number): void {
+    this.broadcast(blockChangeFrame(x, y, z, id));
+  }
+
+  setBlocks(
+    chunkX: number,
+    chunkZ: number,
+    records: Array<{ x: number; y: number; z: number; id: number }>,
+  ): void {
+    this.broadcast(multiBlockChangeFrame(chunkX, chunkZ, records));
+  }
+
   unloadChunk(chunkX: number, chunkZ: number): void {
     this.broadcast(
       encodeFrame(
@@ -484,8 +515,8 @@ export class FakeGtnhServer {
     // An unknown packet id the client must skip without desynchronizing.
     send(encodeFrame(0x35, Buffer.from('opaque tile entity data')));
     if (o.sendChunks) {
-      // Nearest-first, 5 columns per Map Chunk Bulk, like the real server. Block data is
-      // omitted (length 0): the client only reads the column headers so far.
+      // Nearest-first, 5 columns per Map Chunk Bulk, like the real server, with real
+      // NotEnoughIDs-format block data for a flat world (plus test overrides).
       const cx0 = Math.floor(o.spawn.x / 16);
       const cz0 = Math.floor(o.spawn.z / 16);
       const columns: Array<[number, number]> = [];
@@ -496,12 +527,14 @@ export class FakeGtnhServer {
       );
       for (let i = 0; i < columns.length; i += 5) {
         const batch = columns.slice(i, i + 5);
-        const count = Buffer.alloc(2);
-        count.writeInt16BE(batch.length);
-        const meta = batch.map(([cx, cz]) =>
-          Buffer.concat([i32(cx), i32(cz), Buffer.from([0, 0x7f, 0, 0])]),
+        const world = flatWorld(o.blockOverrides, o.voidColumns);
+        send(
+          chunkBulkFrame(
+            batch.map(([cx, cz]) => neidColumn(cx, cz, world)),
+            true,
+            o.corruptChunks,
+          ),
         );
-        send(encodeFrame(0x26, Buffer.concat([count, i32(0), Buffer.from([1]), ...meta])));
       }
     }
     for (const entity of o.entities) send(spawnFrame(entity));

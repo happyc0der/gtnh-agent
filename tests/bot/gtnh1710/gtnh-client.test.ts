@@ -12,6 +12,8 @@ import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import { memoryRepos } from '../../fixtures/index.ts';
 import { encodeFrame } from '../../../src/bot/gtnh1710/wire.ts';
+import { assessDangers } from '../../../src/safety/safety-policy.ts';
+import { BLOCK } from './chunk-fixtures.ts';
 import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
 
 const servers: FakeGtnhServer[] = [];
@@ -95,15 +97,19 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
         nearestUnclassifiedDistance: null,
       },
     });
-    expect(state.environmentHazards.known).toBe(false);
+    // Flat test world: bedrock, a grass floor, nothing dangerous within the 32 m scan.
+    expect(state.environmentHazards).toEqual({
+      known: true,
+      value: { scanRadius: 32, lavaNearby: false, voidNearby: false, hazards: [] },
+    });
     expect(state.power.availableEUt.known).toBe(false);
 
     const info = client.info();
-    expect(info.registry).toEqual({ items: 2005, blocks: 1 });
+    expect(info.registry).toEqual({ items: 2005, blocks: 8 });
     expect(info.identity).toEqual({
       motd: 'gtnh-agent-test (localhost only)',
       version: '1.7.10',
-      mods: 6,
+      mods: 7,
     });
     expect(info.handshakeStep).toBe('DONE');
     expect(server.handshakeHosts[1]).toBe('127.0.0.1\0FML\0');
@@ -229,7 +235,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     await expect(client.observe()).rejects.toThrow(/connection lost/);
   });
 
-  it('a live cycle against the server fails closed (threats unknown) and only records a pause', async () => {
+  it('a live cycle with everything observable pauses only because there is no task', async () => {
     const { server, client } = await start();
     await client.connect();
     const repos = memoryRepos();
@@ -244,11 +250,11 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
       clock: systemClock,
       newId: sequentialIds(),
     });
-    expect(result.decision?.decision).toBe('PAUSE_AND_ASK_USER');
-    expect(result.stateViolations.map((v) => v.code)).toEqual(['STATE_UNKNOWN']);
-    expect(result.stateViolations[0]?.message).toBe(
-      'Critical state is unknown: environmentHazards',
-    );
+    expect(result.stateViolations).toEqual([]);
+    expect(result.decision).toMatchObject({
+      decision: 'PAUSE_AND_ASK_USER',
+      reasonCodes: ['NO_ACTIVE_TASK'],
+    });
     expect(result.status).toBe('paused');
     expect(server.playPacketIds().every((id) => ALLOWED_PLAY_IDS.has(id))).toBe(true);
   });
@@ -347,6 +353,77 @@ describe('Gtnh1710Client entity tracking', () => {
       reason: /undecodable entity packet 0xf/,
     });
     expect(s.player.position.known).toBe(true); // everything else keeps working
+  });
+});
+
+describe('Gtnh1710Client lava and void detection', () => {
+  // The fake player stands at (-4.5, 106, -7.5) on a grass floor at y=105.
+  const hazardsOf = async (client: Gtnh1710Client) => {
+    const s = await client.observe();
+    if (!s.environmentHazards.known)
+      throw new Error(`hazards unknown: ${s.environmentHazards.reason}`);
+    return s.environmentHazards.value;
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 150));
+
+  it('reports lava next to the player, and the safety policy sees the danger', async () => {
+    const overrides = new Map([
+      ['-2,106,-8', BLOCK.lava], // 2.5 m away
+      ['-12,106,-8', BLOCK.cactus], // 7.5 m away
+    ]);
+    const { client } = await start({ blockOverrides: overrides });
+    await client.connect();
+    const h = await hazardsOf(client);
+    expect(h.lavaNearby).toBe(true);
+    expect(h.hazards.map((x) => [x.kind, x.position])).toEqual([
+      ['lava', { x: -1.5, y: 106.5, z: -7.5 }],
+      ['damaging_block', { x: -11.5, y: 106.5, z: -7.5 }],
+    ]);
+    const state = await client.observe();
+    const ctx = {
+      config: defaultConfig().safety,
+      protectedItems: new Set<string>(),
+      locations: new Map(),
+      now: new Date(),
+    };
+    expect(assessDangers(state, ctx).map((v) => v.code)).toEqual(['HAZARD_PROXIMITY']);
+  });
+
+  it('follows block changes: lava appearing and disappearing', async () => {
+    const { server, client } = await start();
+    await client.connect();
+    expect((await hazardsOf(client)).hazards).toEqual([]);
+    server.setBlock(-5, 106, -5, BLOCK.lava); // single block change, ~2.6 m away
+    await settle();
+    expect((await hazardsOf(client)).hazards.map((x) => x.kind)).toEqual(['lava']);
+    server.setBlocks(-1, -1, [
+      { x: -5, y: 106, z: -5, id: BLOCK.air }, // lava gone
+      { x: -8, y: 106, z: -8, id: BLOCK.fire }, // fire lit
+    ]);
+    await settle();
+    expect((await hazardsOf(client)).hazards.map((x) => [x.kind, x.position])).toEqual([
+      ['fire', { x: -7.5, y: 106.5, z: -7.5 }],
+    ]);
+  });
+
+  it('finds holes to the void (only their edges are listed)', async () => {
+    const holes = new Set<string>();
+    for (let x = -10; x <= -8; x++) for (let z = -8; z <= -6; z++) holes.add(`${x},${z}`);
+    const { client } = await start({ voidColumns: holes });
+    await client.connect();
+    const h = await hazardsOf(client);
+    expect(h.voidNearby).toBe(true);
+    expect(h.hazards.every((x) => x.kind === 'void')).toBe(true);
+    expect(h.hazards).toHaveLength(8); // 3x3 hole: 8 edge columns, the centre is not listed
+  });
+
+  it('undecodable chunk data makes hazards unknown but keeps everything else', async () => {
+    const { client } = await start({ corruptChunks: true }, { initialStateGraceMs: 500 });
+    await client.connect();
+    const s = await client.observe();
+    expect(s.environmentHazards).toMatchObject({ known: false, reason: /block data unusable/ });
+    expect(s.nearbyThreats.known).toBe(true); // chunks still "arrived" for entity purposes
+    expect(s.player.position.known).toBe(true);
   });
 });
 
