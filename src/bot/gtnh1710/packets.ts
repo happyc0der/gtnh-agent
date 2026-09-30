@@ -9,7 +9,7 @@ import {
   i32,
   ProtocolError,
   u16,
-  type Reader,
+  Reader,
 } from './wire.ts';
 
 /** Minecraft 1.7.6-1.7.10 protocol number. */
@@ -158,7 +158,56 @@ export type PlayPacket =
   | { type: 'window-items'; windowId: number; items: Array<ItemStackData | null> }
   | { type: 'plugin-message'; channel: string; data: Buffer }
   | { type: 'disconnect'; reason: string }
+  | ({ type: 'spawn-player'; entityId: number; name: string } & EntityPosition)
+  | ({ type: 'spawn-object'; entityId: number; objectType: number } & EntityPosition)
+  | ({ type: 'spawn-mob'; entityId: number; mobType: number } & EntityPosition)
+  | { type: 'destroy-entities'; entityIds: number[] }
+  | { type: 'entity-move'; entityId: number; dx: number; dy: number; dz: number }
+  | ({ type: 'entity-teleport'; entityId: number } & EntityPosition)
+  | { type: 'chunk-data'; chunkX: number; chunkZ: number; unload: boolean }
+  | { type: 'chunk-bulk'; columns: Array<{ chunkX: number; chunkZ: number }> }
   | { type: 'unhandled'; id: number };
+
+/** Entity position in blocks (the protocol sends 1/32-block fixed point). */
+export interface EntityPosition {
+  x: number;
+  y: number;
+  z: number;
+}
+
+function fixedPointPosition(r: Reader): EntityPosition {
+  return { x: r.i32() / 32, y: r.i32() / 32, z: r.i32() / 32 };
+}
+
+/** Forge "FML" channel runtime messages the agent uses (FMLRuntimeCodec discriminators). */
+export type FmlRuntimeMessage =
+  | ({ type: 'fml-entity-spawn'; entityId: number; modId: string; typeId: number } & EntityPosition)
+  | ({ type: 'fml-entity-adjust'; entityId: number } & EntityPosition)
+  | { type: 'fml-other'; discriminator: number };
+
+/**
+ * Decodes the start of a Forge 1.7.10 "FML" channel message. Only the leading fields are
+ * read (the spawn message continues with rotation, DataWatcher and spawn data, which the
+ * agent does not need). Layout verified against live GTNH traffic on 2026-09-30.
+ *   2 EntitySpawnMessage:  int entityId, string modId, int modEntityTypeId, int x/y/z (1/32)
+ *   3 EntityAdjustMessage: int entityId, int x/y/z (1/32)
+ */
+export function decodeFmlRuntimeMessage(data: Buffer): FmlRuntimeMessage {
+  const r = new Reader(data);
+  const discriminator = r.u8();
+  switch (discriminator) {
+    case 2: {
+      const entityId = r.i32();
+      const modId = r.string(256);
+      const typeId = r.i32();
+      return { type: 'fml-entity-spawn', entityId, modId, typeId, ...fixedPointPosition(r) };
+    }
+    case 3:
+      return { type: 'fml-entity-adjust', entityId: r.i32(), ...fixedPointPosition(r) };
+    default:
+      return { type: 'fml-other', discriminator };
+  }
+}
 
 export function decodeLogin(packetId: number, r: Reader): LoginPacket {
   switch (packetId) {
@@ -263,6 +312,69 @@ export function decodePlay(
     }
     case 0x40:
       return { type: 'disconnect', reason: r.string() };
+    case 0x0c: {
+      const entityId = r.varInt();
+      r.string(); // uuid
+      const name = r.string();
+      const properties = r.varInt();
+      for (let i = 0; i < properties; i++) {
+        r.string(); // name
+        r.string(); // value
+        r.string(); // signature
+      }
+      return { type: 'spawn-player', entityId, name, ...fixedPointPosition(r) };
+    }
+    case 0x0e: {
+      const entityId = r.varInt();
+      const objectType = r.i8();
+      return { type: 'spawn-object', entityId, objectType, ...fixedPointPosition(r) };
+    }
+    case 0x0f: {
+      const entityId = r.varInt();
+      const mobType = r.u8();
+      return { type: 'spawn-mob', entityId, mobType, ...fixedPointPosition(r) };
+    }
+    case 0x13: {
+      const count = r.u8();
+      const entityIds: number[] = [];
+      for (let i = 0; i < count; i++) entityIds.push(r.i32());
+      return { type: 'destroy-entities', entityIds };
+    }
+    case 0x15:
+    case 0x17: // relative move (+ look, which is ignored)
+      return {
+        type: 'entity-move',
+        entityId: r.i32(),
+        dx: r.i8() / 32,
+        dy: r.i8() / 32,
+        dz: r.i8() / 32,
+      };
+    case 0x18:
+      return { type: 'entity-teleport', entityId: r.i32(), ...fixedPointPosition(r) };
+    case 0x21: {
+      // Chunk Data: only the header is read (block data is not decoded yet).
+      const chunkX = r.i32();
+      const chunkZ = r.i32();
+      const groundUp = r.bool();
+      const primaryBitMask = r.u16();
+      // "ground-up continuous" with no sections is how 1.7.10 unloads a chunk column.
+      return { type: 'chunk-data', chunkX, chunkZ, unload: groundUp && primaryBitMask === 0 };
+    }
+    case 0x26: {
+      // Map Chunk Bulk: column count, compressed data, then per-column metadata. Layout
+      // verified live on GTNH (NotEnoughIDs does not change the header; 0 bytes left over).
+      const columnCount = r.i16();
+      const dataLength = r.i32();
+      r.bool(); // sky light sent
+      r.bytes(dataLength);
+      const columns: Array<{ chunkX: number; chunkZ: number }> = [];
+      for (let i = 0; i < columnCount; i++) {
+        columns.push({ chunkX: r.i32(), chunkZ: r.i32() });
+        r.u16(); // primary bit mask
+        r.u16(); // add bit mask
+      }
+      return { type: 'chunk-bulk', columns };
+    }
     default:
       return { type: 'unhandled', id: packetId };
   }

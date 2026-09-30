@@ -4,7 +4,18 @@ import {
   type GameState,
 } from '../../domain/game-state.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
-import { PLAYER_EYE_HEIGHT, type ItemStackData, type PlayPacket } from './packets.ts';
+import {
+  classifyModded,
+  classifyVanillaMob,
+  classifyVanillaObject,
+  type Classification,
+} from './entity-types.ts';
+import {
+  PLAYER_EYE_HEIGHT,
+  type FmlRuntimeMessage,
+  type ItemStackData,
+  type PlayPacket,
+} from './packets.ts';
 import { nameItemStack, type Registry } from './registry.ts';
 
 /**
@@ -17,8 +28,37 @@ const STORAGE_LAST = 44;
 const HOTBAR_FIRST = 36;
 const MIN_PLAYER_WINDOW_SLOTS = 45;
 
-const THREATS_UNKNOWN =
-  'entity tracking not implemented yet (GTNH modded mobs arrive via FML spawn messages)';
+/** Entities within this many blocks count as "nearby" (the danger radius is config, <= this). */
+export const ENTITY_SCAN_RADIUS = 16;
+
+/**
+ * The server sends a chunk's entities in the same tick as the chunk itself. After the last
+ * chunk covering the scan radius arrives, wait this long (5 ticks) before trusting the
+ * entity list. Verified live: before this rule the client reported "0 threats" 85 ms
+ * before the first chunk had even arrived.
+ */
+export const ENTITY_SETTLE_MS = 250;
+
+const HAZARDS_UNKNOWN = 'lava/void detection needs chunk data, which is not decoded yet';
+
+/** Packet ids whose loss would leave the entity picture incomplete. */
+const ENTITY_PACKETS: ReadonlySet<number> = new Set([0x0c, 0x0e, 0x0f, 0x13, 0x15, 0x17, 0x18]);
+
+export interface TrackedEntity {
+  kind: 'player' | 'mob' | 'object' | 'modded';
+  classification: Classification;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface NearbyEntity {
+  entityId: number;
+  kind: TrackedEntity['kind'];
+  name: string;
+  category: Classification['category'];
+  distance: number;
+}
 
 export function dimensionName(id: number): string {
   switch (id) {
@@ -55,6 +95,12 @@ export class WorldModel {
   /** Set when an inventory packet could not be decoded; cleared by the next full window refresh. */
   #inventoryProblem: string | null = null;
   readonly #chat: string[] = [];
+  readonly #entities = new Map<number, TrackedEntity>();
+  #selfEntityId: number | null = null;
+  /** Set when an entity packet could not be decoded: the entity picture may be incomplete. */
+  #entityProblem: string | null = null;
+  /** Loaded chunk columns ("cx,cz") and when each arrived (ms since epoch). */
+  readonly #chunks = new Map<string, number>();
 
   setRegistry(registry: Registry): void {
     this.#registry = registry;
@@ -113,8 +159,107 @@ export class WorldModel {
         this.#position = null;
         return;
       default:
-        return; // not used for observation
+        if (ENTITY_PACKETS.has(packetId)) {
+          this.markEntityProblem(`undecodable entity packet 0x${packetId.toString(16)}: ${reason}`);
+        }
+        return; // otherwise not used for observation
     }
+  }
+
+  /**
+   * An entity update was lost, so some entity may be missing or misplaced. Threats stay
+   * unknown for the rest of the connection (reconnecting rebuilds the picture).
+   */
+  markEntityProblem(reason: string): void {
+    this.#entityProblem ??= reason;
+  }
+
+  /** Forge "FML" channel messages: spawning and repositioning of mod entities. */
+  applyFml(message: FmlRuntimeMessage, at: Date): void {
+    this.touch(at);
+    switch (message.type) {
+      case 'fml-entity-spawn':
+        this.#track(message.entityId, {
+          kind: 'modded',
+          classification: classifyModded(message.modId, message.typeId),
+          x: message.x,
+          y: message.y,
+          z: message.z,
+        });
+        return;
+      case 'fml-entity-adjust': {
+        const e = this.#entities.get(message.entityId);
+        if (e !== undefined) Object.assign(e, { x: message.x, y: message.y, z: message.z });
+        return;
+      }
+      case 'fml-other':
+        return;
+    }
+  }
+
+  /** Every tracked entity within `radius` of the player, nearest first (for diagnostics). */
+  nearbyEntities(radius = ENTITY_SCAN_RADIUS): NearbyEntity[] {
+    const pos = this.#position;
+    if (pos === null) return [];
+    const out: NearbyEntity[] = [];
+    for (const [entityId, e] of this.#entities) {
+      const distance = Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z);
+      if (distance <= radius) {
+        out.push({
+          entityId,
+          kind: e.kind,
+          name: e.classification.name,
+          category: e.classification.category,
+          distance: Number(distance.toFixed(2)),
+        });
+      }
+    }
+    return out.sort((a, b) => a.distance - b.distance);
+  }
+
+  get trackedEntityCount(): number {
+    return this.#entities.size;
+  }
+
+  get loadedChunkCount(): number {
+    return this.#chunks.size;
+  }
+
+  /**
+   * True once every chunk column overlapping the scan radius has arrived and settled, so
+   * the entity list around the player is complete. Returns false while the server is still
+   * streaming chunks after a join, respawn or teleport.
+   */
+  entitiesReady(now: Date): boolean {
+    return this.#entitiesNotReadyReason(now) === null;
+  }
+
+  #entitiesNotReadyReason(now: Date): string | null {
+    const pos = this.#position;
+    if (pos === null) return 'player position unknown';
+    const minX = Math.floor((pos.x - ENTITY_SCAN_RADIUS) / 16);
+    const maxX = Math.floor((pos.x + ENTITY_SCAN_RADIUS) / 16);
+    const minZ = Math.floor((pos.z - ENTITY_SCAN_RADIUS) / 16);
+    const maxZ = Math.floor((pos.z + ENTITY_SCAN_RADIUS) / 16);
+    let latest = 0;
+    let missing = 0;
+    for (let cx = minX; cx <= maxX; cx++) {
+      for (let cz = minZ; cz <= maxZ; cz++) {
+        const at = this.#chunks.get(`${cx},${cz}`);
+        if (at === undefined) missing += 1;
+        else latest = Math.max(latest, at);
+      }
+    }
+    if (missing > 0)
+      return `waiting for ${missing} nearby chunk(s) (and their entities) from the server`;
+    if (now.getTime() - latest < ENTITY_SETTLE_MS)
+      return 'nearby chunks just arrived; entities still settling';
+    return null;
+  }
+
+  #track(entityId: number, entity: TrackedEntity): void {
+    if (entityId === this.#selfEntityId) return;
+    this.#entities.set(entityId, entity);
   }
 
   apply(packet: PlayPacket, at: Date): void {
@@ -123,12 +268,68 @@ export class WorldModel {
       case 'join-game':
         this.#joined = true;
         this.#dimension = packet.dimension;
+        this.#selfEntityId = packet.entityId;
+        this.#entities.clear();
         return;
       case 'respawn':
-        // New dimension or death respawn: position is unknown until the server sends it.
+        // New dimension or death respawn: position is unknown until the server sends it,
+        // and the server re-sends every entity in range.
         this.#dimension = packet.dimension;
         this.#position = null;
+        this.#entities.clear();
+        this.#chunks.clear();
         return;
+      case 'chunk-data':
+        if (packet.unload) this.#chunks.delete(`${packet.chunkX},${packet.chunkZ}`);
+        else this.#chunks.set(`${packet.chunkX},${packet.chunkZ}`, at.getTime());
+        return;
+      case 'chunk-bulk':
+        for (const c of packet.columns) this.#chunks.set(`${c.chunkX},${c.chunkZ}`, at.getTime());
+        return;
+      case 'spawn-player':
+        this.#track(packet.entityId, {
+          kind: 'player',
+          classification: { name: `player:${packet.name}`, category: 'ignored' },
+          x: packet.x,
+          y: packet.y,
+          z: packet.z,
+        });
+        return;
+      case 'spawn-mob':
+        this.#track(packet.entityId, {
+          kind: 'mob',
+          classification: classifyVanillaMob(packet.mobType),
+          x: packet.x,
+          y: packet.y,
+          z: packet.z,
+        });
+        return;
+      case 'spawn-object':
+        this.#track(packet.entityId, {
+          kind: 'object',
+          classification: classifyVanillaObject(packet.objectType),
+          x: packet.x,
+          y: packet.y,
+          z: packet.z,
+        });
+        return;
+      case 'destroy-entities':
+        for (const id of packet.entityIds) this.#entities.delete(id);
+        return;
+      case 'entity-move': {
+        const e = this.#entities.get(packet.entityId);
+        if (e !== undefined) {
+          e.x += packet.dx;
+          e.y += packet.dy;
+          e.z += packet.dz;
+        }
+        return;
+      }
+      case 'entity-teleport': {
+        const e = this.#entities.get(packet.entityId);
+        if (e !== undefined) Object.assign(e, { x: packet.x, y: packet.y, z: packet.z });
+        return;
+      }
       case 'server-position':
         this.#position = { x: packet.x, feetY: packet.eyeY - PLAYER_EYE_HEIGHT, z: packet.z };
         return;
@@ -187,7 +388,8 @@ export class WorldModel {
         heldTool: this.#heldTool(),
       },
       inventory: this.#inventory(),
-      nearbyThreats: unknown(THREATS_UNKNOWN),
+      nearbyThreats: this.#threats(now),
+      environmentHazards: unknown(HAZARDS_UNKNOWN),
       power: {
         availableEUt: unknown('GTNH EU is not observable through the protocol'),
         generators: [],
@@ -200,6 +402,23 @@ export class WorldModel {
       lastAction: null,
     };
     return GameStateSchema.parse(state);
+  }
+
+  #threats(now: Date): GameState['nearbyThreats'] {
+    if (this.#entityProblem !== null) return unknown(this.#entityProblem);
+    if (!this.#joined) return unknown('not joined yet');
+    const notReady = this.#entitiesNotReadyReason(now);
+    if (notReady !== null) return unknown(notReady);
+    const nearby = this.nearbyEntities(ENTITY_SCAN_RADIUS);
+    const hostile = nearby.filter((e) => e.category === 'hostile');
+    const unclassified = nearby.filter((e) => e.category === 'unclassified');
+    return known({
+      scanRadius: ENTITY_SCAN_RADIUS,
+      hostileCount: hostile.length,
+      nearestHostileDistance: hostile[0]?.distance ?? null,
+      unclassifiedCount: unclassified.length,
+      nearestUnclassifiedDistance: unclassified[0]?.distance ?? null,
+    });
   }
 
   #armor(): GameState['player']['armor'] {

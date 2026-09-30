@@ -19,8 +19,9 @@ Usage:
       Run ONE observe/decide/validate/execute/verify cycle against the mock world.
   node src/app/cli.ts once --live [--db <path> | --memory] [--full] [--verbose]
       Run ONE cycle against the configured private GTNH test server (read-only).
-  node src/app/cli.ts observe --live [--verbose]
+  node src/app/cli.ts observe --live [--radius N] [--verbose]
       Connect read-only, print what the agent can observe, disconnect.
+      --radius widens the diagnostic entity list (threats are always counted within 16 m).
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -80,6 +81,7 @@ async function main(argv: string[]): Promise<number> {
       limit: { type: 'string', default: '10' },
       task: { type: 'string' },
       live: { type: 'boolean', default: false },
+      radius: { type: 'string', default: '16' },
       verbose: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -112,7 +114,12 @@ async function main(argv: string[]): Promise<number> {
       }
       const summary = await withLiveClient(
         config,
-        async (client) => summarizeObservation(await client.observe(), client.info()),
+        async (client) =>
+          summarizeObservation(
+            await client.observe(),
+            client.info(),
+            client.world.nearbyEntities(Math.max(1, Math.min(128, Number(values.radius) || 16))),
+          ),
         log,
       );
       print(summary);

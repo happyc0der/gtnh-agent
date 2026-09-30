@@ -8,9 +8,10 @@ simulated world or, **read-only**, against a private GTNH 2.8.4 test server. No 
 model and no GPU use.
 
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
-the test server and observes position, dimension, health, food and a named inventory. It cannot
-change the world: every world-changing action returns `NOT_IMPLEMENTED`. Threats are not observable
-yet, so live cycles always pause (fail closed). Mineflayer cannot connect to GTNH (it rejects
+the test server and observes position, dimension, health, food, a named inventory and nearby
+entities (vanilla and modded mobs; unidentified modded types count as hostile). It cannot change the
+world: every world-changing action returns `NOT_IMPLEMENTED`. Lava/void is not observable yet, so
+live cycles always pause (fail closed). Mineflayer cannot connect to GTNH (it rejects
 1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
 ## Requirements
@@ -57,6 +58,7 @@ cp agent.config.example.json agent.config.json
 | **Observe the live test server (read-only)** | `pnpm cli observe --live`                       |
 | One agent cycle against the live server      | `pnpm cli once --live`                          |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                            |
+| Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`    |
 
 `agent:once` persists to `./data/agent.sqlite` by default (`AGENT_DB_PATH` or `--db` override).
 Try `pnpm agent:once --scenario action-fails` three times: two failures, then the third attempt is

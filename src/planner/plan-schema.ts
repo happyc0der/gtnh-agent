@@ -84,9 +84,8 @@ export const CompactStateSchema = z.strictObject({
   hunger: z.number().nullable(),
   inventoryTop: z.array(z.strictObject({ item: z.string(), quantity: z.int() })).max(20),
   inventoryFill: z.number().nullable(),
-  threats: z
-    .strictObject({ hostileCount: z.int(), lavaNearby: z.boolean(), voidNearby: z.boolean() })
-    .nullable(),
+  threats: z.strictObject({ hostileCount: z.int(), unclassifiedCount: z.int() }).nullable(),
+  hazards: z.strictObject({ lavaNearby: z.boolean(), voidNearby: z.boolean() }).nullable(),
   machines: z
     .array(
       z.strictObject({

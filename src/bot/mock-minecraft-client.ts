@@ -16,7 +16,10 @@ import type { Clock, ManualClock } from '../util/clock.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from './minecraft-client.ts';
 
 const STACK_SIZE = 64;
+/** Entity scan radius, like the real client. */
 const SCAN_RADIUS = 16;
+/** Hazards come from chunk data, which covers much more than the entity scan. */
+const HAZARD_SCAN_RADIUS = 48;
 const ACTION_OVERHEAD_MS = 250;
 
 export interface MockContainer {
@@ -45,13 +48,15 @@ export interface MockMachine {
 
 /** Fields the mock can pretend it cannot observe, to exercise fail-closed paths. */
 export type MockUnobservable =
-  'position' | 'dimension' | 'health' | 'hunger' | 'inventory' | 'threats';
+  'position' | 'dimension' | 'health' | 'hunger' | 'inventory' | 'threats' | 'hazards';
 
 /** The whole simulated world. Tests may read and mutate it directly. */
 export interface MockWorld {
   player: { position: Position; dimension: string; health: number; hunger: number };
   inventory: { items: Record<string, number>; capacitySlots: number };
   hostiles: Position[];
+  /** Entities the agent cannot identify (e.g. unclassified modded mobs). */
+  unclassified: Position[];
   hazards: Hazard[];
   containers: MockContainer[];
   generators: MockGenerator[];
@@ -134,7 +139,10 @@ export class MockMinecraftClient implements MinecraftClient {
     const hostileDistances = w.hostiles
       .map((h) => distance(pos, h))
       .filter((d) => d <= SCAN_RADIUS);
-    const nearbyHazards = w.hazards.filter((h) => distance(pos, h.position) <= SCAN_RADIUS);
+    const unclassifiedDistances = w.unclassified
+      .map((u) => distance(pos, u))
+      .filter((d) => d <= SCAN_RADIUS);
+    const nearbyHazards = w.hazards.filter((h) => distance(pos, h.position) <= HAZARD_SCAN_RADIUS);
 
     const state: GameState = {
       schemaVersion: GAME_STATE_SCHEMA_VERSION,
@@ -160,9 +168,18 @@ export class MockMinecraftClient implements MinecraftClient {
       nearbyThreats: hidden.has('threats')
         ? unknown('mock: threats hidden')
         : known({
+            scanRadius: SCAN_RADIUS,
             hostileCount: hostileDistances.length,
             nearestHostileDistance:
               hostileDistances.length > 0 ? Math.min(...hostileDistances) : null,
+            unclassifiedCount: unclassifiedDistances.length,
+            nearestUnclassifiedDistance:
+              unclassifiedDistances.length > 0 ? Math.min(...unclassifiedDistances) : null,
+          }),
+      environmentHazards: hidden.has('hazards')
+        ? unknown('mock: hazards hidden')
+        : known({
+            scanRadius: HAZARD_SCAN_RADIUS,
             lavaNearby: nearbyHazards.some((h) => h.kind === 'lava'),
             voidNearby: nearbyHazards.some((h) => h.kind === 'void'),
             hazards: nearbyHazards.map((h) => ({ kind: h.kind, position: { ...h.position } })),

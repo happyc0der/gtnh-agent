@@ -46,6 +46,10 @@ export interface FakeServerOptions {
   keepAliveEveryMs?: number;
   /** Send a truncated inventory packet (the client must degrade, not disconnect). */
   corruptInventory?: boolean;
+  /** Entities present when the client joins. */
+  entities?: FakeEntity[];
+  /** Stream the chunk columns around spawn after joining, as the real server does (default true). */
+  sendChunks?: boolean;
 }
 
 export interface ReceivedPacket {
@@ -87,6 +91,83 @@ function slot(item: FakeItem | undefined, modularUi: boolean): Buffer {
   return modularUi ? Buffer.concat([b, encodeVarInt(item.count)]) : b;
 }
 
+/** Entities the fake server can announce, in the wire formats observed on the real server. */
+export type FakeEntity =
+  | { kind: 'mob'; entityId: number; mobType: number; x: number; y: number; z: number }
+  | { kind: 'object'; entityId: number; objectType: number; x: number; y: number; z: number }
+  | { kind: 'player'; entityId: number; name: string; x: number; y: number; z: number }
+  | {
+      kind: 'modded';
+      entityId: number;
+      modId: string;
+      typeId: number;
+      x: number;
+      y: number;
+      z: number;
+    };
+
+const fixed = (x: number, y: number, z: number): Buffer =>
+  Buffer.concat([i32(Math.floor(x * 32)), i32(Math.floor(y * 32)), i32(Math.floor(z * 32))]);
+
+/** Encodes an entity spawn exactly as a 1.7.10 Forge server would. */
+export function spawnFrame(e: FakeEntity): Buffer {
+  switch (e.kind) {
+    case 'mob':
+      return encodeFrame(
+        0x0f,
+        Buffer.concat([
+          encodeVarInt(e.entityId),
+          Buffer.from([e.mobType]),
+          fixed(e.x, e.y, e.z),
+          Buffer.from([0, 0, 0]), // yaw, pitch, head pitch
+          Buffer.alloc(6), // velocity
+          Buffer.from([0x7f]), // empty metadata
+        ]),
+      );
+    case 'object':
+      return encodeFrame(
+        0x0e,
+        Buffer.concat([
+          encodeVarInt(e.entityId),
+          Buffer.from([e.objectType]),
+          fixed(e.x, e.y, e.z),
+          Buffer.from([0, 0]),
+          i32(0), // object data (0: no velocity follows)
+        ]),
+      );
+    case 'player':
+      return encodeFrame(
+        0x0c,
+        Buffer.concat([
+          encodeVarInt(e.entityId),
+          encodeString('61cb1b75-ae88-3692-8d0c-e959380993c6'),
+          encodeString(e.name),
+          encodeVarInt(1), // one property, as online-mode skins would add
+          encodeString('textures'),
+          encodeString('eyJ0ZXh0dXJlcyI6e319'),
+          encodeString(''),
+          fixed(e.x, e.y, e.z),
+          Buffer.from([0, 0, 0, 0]), // yaw, pitch, current item
+          Buffer.from([0x7f]),
+        ]),
+      );
+    case 'modded':
+      return plugin(
+        'FML',
+        Buffer.concat([
+          Buffer.from([2]),
+          i32(e.entityId),
+          encodeString(e.modId),
+          i32(e.typeId),
+          fixed(e.x, e.y, e.z),
+          Buffer.from([0, 0, 0]), // yaw, pitch, head yaw
+          Buffer.from([0x66, 0, 0, 0, 0, 0x7f]), // some DataWatcher bytes the client must not need
+          i32(0), // no thrower
+        ]),
+      );
+  }
+}
+
 export class FakeGtnhServer {
   readonly received: ReceivedPacket[] = [];
   readonly confirmedPositions: ConfirmedPosition[] = [];
@@ -99,6 +180,7 @@ export class FakeGtnhServer {
   readonly #server: Server;
   readonly #sockets = new Set<Socket>();
   readonly #timers = new Set<NodeJS.Timeout>();
+  readonly #playSockets = new Set<Socket>();
 
   constructor(options: FakeServerOptions = {}) {
     this.#opts = {
@@ -131,6 +213,8 @@ export class FakeGtnhServer {
       health: options.health ?? { health: 20, food: 18, saturation: 5 },
       keepAliveEveryMs: options.keepAliveEveryMs ?? 100,
       corruptInventory: options.corruptInventory ?? false,
+      entities: options.entities ?? [],
+      sendChunks: options.sendChunks ?? true,
     };
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
@@ -151,6 +235,41 @@ export class FakeGtnhServer {
   }
 
   /** Drop every client connection (simulates a server crash / network loss). */
+  /** Send a frame to every client in the play state (entity updates during a test). */
+  broadcast(frame: Buffer): void {
+    for (const s of this.#playSockets) if (!s.destroyed) s.write(frame);
+  }
+
+  moveEntity(entityId: number, dx: number, dy: number, dz: number): void {
+    const b = Buffer.alloc(3);
+    b.writeInt8(Math.round(dx * 32), 0);
+    b.writeInt8(Math.round(dy * 32), 1);
+    b.writeInt8(Math.round(dz * 32), 2);
+    this.broadcast(encodeFrame(0x15, Buffer.concat([i32(entityId), b])));
+  }
+
+  teleportEntity(entityId: number, x: number, y: number, z: number): void {
+    this.broadcast(
+      encodeFrame(0x18, Buffer.concat([i32(entityId), fixed(x, y, z), Buffer.from([0, 0])])),
+    );
+  }
+
+  /** 1.7.10 chunk unload: Chunk Data, ground-up continuous, no sections, empty data. */
+  unloadChunk(chunkX: number, chunkZ: number): void {
+    this.broadcast(
+      encodeFrame(
+        0x21,
+        Buffer.concat([i32(chunkX), i32(chunkZ), Buffer.from([1, 0, 0, 0, 0]), i32(0)]),
+      ),
+    );
+  }
+
+  destroyEntities(ids: number[]): void {
+    this.broadcast(
+      encodeFrame(0x13, Buffer.concat([Buffer.from([ids.length]), ...ids.map((id) => i32(id))])),
+    );
+  }
+
   dropAll(): void {
     for (const s of this.#sockets) s.destroy();
   }
@@ -169,7 +288,10 @@ export class FakeGtnhServer {
 
   #onConnection(socket: Socket): void {
     this.#sockets.add(socket);
-    socket.on('close', () => this.#sockets.delete(socket));
+    socket.on('close', () => {
+      this.#sockets.delete(socket);
+      this.#playSockets.delete(socket);
+    });
     socket.on('error', () => undefined);
     let state: ReceivedPacket['state'] = 'handshaking';
     let healthSent = false;
@@ -233,6 +355,7 @@ export class FakeGtnhServer {
             ),
           );
           state = 'play';
+          this.#playSockets.add(socket);
           send(
             plugin(
               'REGISTER',
@@ -360,6 +483,28 @@ export class FakeGtnhServer {
     send(encodeFrame(0x30, o.corruptInventory ? window.subarray(0, window.length - 3) : window));
     // An unknown packet id the client must skip without desynchronizing.
     send(encodeFrame(0x35, Buffer.from('opaque tile entity data')));
+    if (o.sendChunks) {
+      // Nearest-first, 5 columns per Map Chunk Bulk, like the real server. Block data is
+      // omitted (length 0): the client only reads the column headers so far.
+      const cx0 = Math.floor(o.spawn.x / 16);
+      const cz0 = Math.floor(o.spawn.z / 16);
+      const columns: Array<[number, number]> = [];
+      for (let dx = -3; dx <= 3; dx++)
+        for (let dz = -3; dz <= 3; dz++) columns.push([cx0 + dx, cz0 + dz]);
+      columns.sort(
+        (a, b) => Math.hypot(a[0] - cx0, a[1] - cz0) - Math.hypot(b[0] - cx0, b[1] - cz0),
+      );
+      for (let i = 0; i < columns.length; i += 5) {
+        const batch = columns.slice(i, i + 5);
+        const count = Buffer.alloc(2);
+        count.writeInt16BE(batch.length);
+        const meta = batch.map(([cx, cz]) =>
+          Buffer.concat([i32(cx), i32(cz), Buffer.from([0, 0x7f, 0, 0])]),
+        );
+        send(encodeFrame(0x26, Buffer.concat([count, i32(0), Buffer.from([1]), ...meta])));
+      }
+    }
+    for (const entity of o.entities) send(spawnFrame(entity));
     const timer = setInterval(
       () => send(encodeFrame(0x00, i32(Math.floor(Math.random() * 1e6)))),
       o.keepAliveEveryMs,

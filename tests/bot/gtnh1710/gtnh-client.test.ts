@@ -11,6 +11,7 @@ import { DeterministicDecisionProvider } from '../../../src/system1/decision-pro
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import { memoryRepos } from '../../fixtures/index.ts';
+import { encodeFrame } from '../../../src/bot/gtnh1710/wire.ts';
 import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
 
 const servers: FakeGtnhServer[] = [];
@@ -83,7 +84,18 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
       },
     });
     // Not observable yet: the agent must fail closed on these.
-    expect(state.nearbyThreats.known).toBe(false);
+    // No entities announced: threats are known and zero. Lava/void still needs chunk data.
+    expect(state.nearbyThreats).toEqual({
+      known: true,
+      value: {
+        scanRadius: 16,
+        hostileCount: 0,
+        nearestHostileDistance: null,
+        unclassifiedCount: 0,
+        nearestUnclassifiedDistance: null,
+      },
+    });
+    expect(state.environmentHazards.known).toBe(false);
     expect(state.power.availableEUt.known).toBe(false);
 
     const info = client.info();
@@ -234,8 +246,107 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     });
     expect(result.decision?.decision).toBe('PAUSE_AND_ASK_USER');
     expect(result.stateViolations.map((v) => v.code)).toEqual(['STATE_UNKNOWN']);
+    expect(result.stateViolations[0]?.message).toBe(
+      'Critical state is unknown: environmentHazards',
+    );
     expect(result.status).toBe('paused');
     expect(server.playPacketIds().every((id) => ALLOWED_PLAY_IDS.has(id))).toBe(true);
+  });
+});
+
+describe('Gtnh1710Client entity tracking', () => {
+  // The fake server spawns the player at (-4.5, 106, -7.5).
+  const at = (dx: number, dz: number) => ({ x: -4.5 + dx, y: 106, z: -7.5 + dz });
+  const entities: FakeServerOptions['entities'] = [
+    { kind: 'mob', entityId: 101, mobType: 54, ...at(5, 0) }, // vanilla zombie, 5 m
+    { kind: 'mob', entityId: 102, mobType: 92, ...at(0, 3) }, // cow, passive
+    { kind: 'modded', entityId: 103, modId: 'etfuturum', typeId: 3, ...at(4, 0) }, // unclassified
+    { kind: 'modded', entityId: 104, modId: 'SpecialMobs', typeId: 21, ...at(0, 8) }, // hostile mod
+    { kind: 'mob', entityId: 105, mobType: 54, ...at(30, 0) }, // zombie beyond scan radius
+    { kind: 'player', entityId: 106, name: 'DankAxon', ...at(2, 0) }, // other player, ignored
+    { kind: 'object', entityId: 107, objectType: 50, ...at(0, -6) }, // primed TNT
+    { kind: 'object', entityId: 108, objectType: 2, ...at(1, 1) }, // dropped item, ignored
+  ];
+
+  const threats = async (client: Gtnh1710Client) => {
+    const s = await client.observe();
+    if (!s.nearbyThreats.known) throw new Error(`threats unknown: ${s.nearbyThreats.reason}`);
+    return s.nearbyThreats.value;
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 150));
+
+  it('classifies vanilla mobs, objects, players and Forge modded entities', async () => {
+    const { client } = await start({ entities });
+    await client.connect();
+    await settle();
+    expect(await threats(client)).toEqual({
+      scanRadius: 16,
+      hostileCount: 3, // zombie, SpecialMobs#21, primed TNT
+      nearestHostileDistance: 5,
+      unclassifiedCount: 1, // etfuturum#3 (not yet identified)
+      nearestUnclassifiedDistance: 4,
+    });
+    const nearby = client.world.nearbyEntities().map((e) => [e.name, e.category]);
+    expect(nearby).toContainEqual(['etfuturum#3', 'unclassified']);
+    expect(nearby).toContainEqual(['minecraft:Cow', 'passive']);
+    expect(nearby).toContainEqual(['player:DankAxon', 'ignored']);
+    // The zombie 30 m away is tracked but outside the scan radius.
+    expect(client.world.nearbyEntities().map((e) => e.entityId)).not.toContain(105);
+    expect(client.world.trackedEntityCount).toBe(8);
+  });
+
+  it('follows relative moves, teleports and removals', async () => {
+    const { server, client } = await start({ entities });
+    await client.connect();
+    server.moveEntity(101, 3.5, 0, 0); // zombie 5 m -> 8.5 m
+    server.moveEntity(101, 3.5, 0, 0); // -> 12 m
+    await settle();
+    expect((await threats(client)).nearestHostileDistance).toBe(6); // TNT is now nearest
+    server.teleportEntity(101, -4.5, 106, -5.5); // zombie right next to us (2 m)
+    await settle();
+    expect((await threats(client)).nearestHostileDistance).toBe(2);
+    server.destroyEntities([101, 104, 107, 103]);
+    await settle();
+    expect(await threats(client)).toEqual({
+      scanRadius: 16,
+      hostileCount: 0,
+      nearestHostileDistance: null,
+      unclassifiedCount: 0,
+      nearestUnclassifiedDistance: null,
+    });
+  });
+
+  it('threats stay unknown until the chunks around the player (and their entities) have arrived', async () => {
+    const { client } = await start({ entities, sendChunks: false }, { initialStateGraceMs: 400 });
+    await client.connect();
+    const s = await client.observe();
+    expect(s.nearbyThreats).toMatchObject({ known: false, reason: /waiting for 9 nearby chunk/ });
+    expect(s.player.health.known && s.inventory.known).toBe(true);
+  });
+
+  it('unloading a nearby chunk makes threats unknown again', async () => {
+    const { server, client } = await start({ entities });
+    await client.connect();
+    expect((await client.observe()).nearbyThreats.known).toBe(true);
+    server.unloadChunk(-1, -1);
+    await settle();
+    expect((await client.observe()).nearbyThreats).toMatchObject({
+      known: false,
+      reason: /waiting for 1 nearby chunk/,
+    });
+  });
+
+  it('a corrupt entity packet makes threats unknown for the rest of the session', async () => {
+    const { server, client } = await start({ entities });
+    await client.connect();
+    server.broadcast(encodeFrame(0x0f, Buffer.from([0x05]))); // truncated spawn-mob
+    await settle();
+    const s = await client.observe();
+    expect(s.nearbyThreats).toMatchObject({
+      known: false,
+      reason: /undecodable entity packet 0xf/,
+    });
+    expect(s.player.position.known).toBe(true); // everything else keeps working
   });
 });
 

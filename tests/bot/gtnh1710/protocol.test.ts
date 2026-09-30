@@ -1,7 +1,13 @@
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { FmlClientHandshake, MultipartAssembler } from '../../../src/bot/gtnh1710/fml-handshake.ts';
-import { decodePlay, outbound, PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
+import { classifyModded, classifyVanillaMob } from '../../../src/bot/gtnh1710/entity-types.ts';
+import {
+  decodeFmlRuntimeMessage,
+  decodePlay,
+  outbound,
+  PLAYER_EYE_HEIGHT,
+} from '../../../src/bot/gtnh1710/packets.ts';
 import {
   nameItemStack,
   parseModIdData,
@@ -13,6 +19,7 @@ import {
   encodeVarInt,
   encodeVarShort,
   FrameDecoder,
+  i32,
   ProtocolError,
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
@@ -123,6 +130,95 @@ describe('inbound packets', () => {
     const packet = decodePlay(0x3f, new Reader(body));
     expect(packet).toMatchObject({ type: 'plugin-message', channel: 'FML|HS' });
     expect(packet.type === 'plugin-message' && packet.data.length).toBe(40_000);
+  });
+});
+
+describe('entity packets', () => {
+  const fixed = (x: number, y: number, z: number) =>
+    Buffer.concat([i32(Math.floor(x * 32)), i32(Math.floor(y * 32)), i32(Math.floor(z * 32))]);
+
+  it('decodes vanilla spawn mob, destroy, relative move and teleport', () => {
+    const spawn = Buffer.concat([
+      encodeVarInt(300),
+      Buffer.from([54]),
+      fixed(10.5, 64, -3.25),
+      Buffer.alloc(9),
+    ]);
+    expect(decodePlay(0x0f, new Reader(spawn))).toEqual({
+      type: 'spawn-mob',
+      entityId: 300,
+      mobType: 54,
+      x: 10.5,
+      y: 64,
+      z: -3.25,
+    });
+    const destroy = Buffer.concat([Buffer.from([2]), i32(300), i32(301)]);
+    expect(decodePlay(0x13, new Reader(destroy))).toEqual({
+      type: 'destroy-entities',
+      entityIds: [300, 301],
+    });
+    const move = Buffer.concat([i32(300), Buffer.from([32, 0xf0, 0])]); // +1, -0.5, 0 blocks
+    expect(decodePlay(0x15, new Reader(move))).toEqual({
+      type: 'entity-move',
+      entityId: 300,
+      dx: 1,
+      dy: -0.5,
+      dz: 0,
+    });
+    const lookMove = Buffer.concat([move, Buffer.from([10, 20])]);
+    expect(decodePlay(0x17, new Reader(lookMove))).toMatchObject({ type: 'entity-move', dx: 1 });
+    const teleport = Buffer.concat([i32(300), fixed(1, 2, 3), Buffer.from([0, 0])]);
+    expect(decodePlay(0x18, new Reader(teleport))).toEqual({
+      type: 'entity-teleport',
+      entityId: 300,
+      x: 1,
+      y: 2,
+      z: 3,
+    });
+  });
+
+  it('decodes Forge FML entity spawn and adjust messages, ignoring trailing spawn data', () => {
+    const spawn = Buffer.concat([
+      Buffer.from([2]),
+      i32(77),
+      encodeString('SpecialMobs'),
+      i32(21),
+      fixed(-40, 70, 12.5),
+      Buffer.from([1, 2, 3, 0x66, 0x7f]), // rotation + DataWatcher, not needed
+    ]);
+    expect(decodeFmlRuntimeMessage(spawn)).toEqual({
+      type: 'fml-entity-spawn',
+      entityId: 77,
+      modId: 'SpecialMobs',
+      typeId: 21,
+      x: -40,
+      y: 70,
+      z: 12.5,
+    });
+    const adjust = Buffer.concat([Buffer.from([3]), i32(77), fixed(1, 2, 3)]);
+    expect(decodeFmlRuntimeMessage(adjust)).toEqual({
+      type: 'fml-entity-adjust',
+      entityId: 77,
+      x: 1,
+      y: 2,
+      z: 3,
+    });
+    expect(decodeFmlRuntimeMessage(Buffer.from([1, 9, 9]))).toEqual({
+      type: 'fml-other',
+      discriminator: 1,
+    });
+    expect(() => decodeFmlRuntimeMessage(Buffer.from([2, 0, 0]))).toThrow(ProtocolError);
+  });
+
+  it('classifies fail-closed: unknown vanilla ids and unlisted mods are unclassified', () => {
+    expect(classifyVanillaMob(54).category).toBe('hostile');
+    expect(classifyVanillaMob(92).category).toBe('passive');
+    expect(classifyVanillaMob(200)).toEqual({ name: 'mob#200', category: 'unclassified' });
+    expect(classifyModded('SpecialMobs', 999).category).toBe('hostile');
+    expect(classifyModded('etfuturum', 3)).toEqual({
+      name: 'etfuturum#3',
+      category: 'unclassified',
+    });
   });
 });
 
@@ -304,6 +400,85 @@ describe('world model', () => {
     expect(w.toGameState(at).inventory).toMatchObject({
       known: false,
       reason: /not in the registry/,
+    });
+  });
+
+  it('tracks entities, ignores its own entity id and clears everything on respawn', () => {
+    const w = new WorldModel();
+    w.apply(
+      {
+        type: 'join-game',
+        entityId: 7,
+        gamemode: 0,
+        dimension: 0,
+        difficulty: 3,
+        maxPlayers: 4,
+        levelType: 'RWG',
+      },
+      at,
+    );
+    w.apply(
+      {
+        type: 'server-position',
+        x: 0,
+        eyeY: 64 + PLAYER_EYE_HEIGHT,
+        z: 0,
+        yaw: 0,
+        pitch: 0,
+        onGround: false,
+      },
+      at,
+    );
+    w.apply({ type: 'spawn-mob', entityId: 7, mobType: 54, x: 1, y: 64, z: 0 }, at); // our own id: ignored
+    w.apply({ type: 'spawn-mob', entityId: 8, mobType: 54, x: 3, y: 64, z: 4 }, at);
+    w.applyFml(
+      { type: 'fml-entity-spawn', entityId: 9, modId: 'etfuturum', typeId: 3, x: 0, y: 64, z: 2 },
+      at,
+    );
+    w.applyFml({ type: 'fml-entity-adjust', entityId: 9, x: 0, y: 64, z: 1 }, at);
+    // Not trusted until the chunks covering the scan radius have arrived and settled.
+    expect(w.toGameState(at).nearbyThreats).toMatchObject({
+      known: false,
+      reason: /waiting for 9 nearby chunk/,
+    });
+    const columns = [-1, 0, 1].flatMap((cx) =>
+      [-1, 0, 1].map((cz) => ({ chunkX: cx, chunkZ: cz })),
+    );
+    w.apply({ type: 'chunk-bulk', columns }, at);
+    expect(w.toGameState(at).nearbyThreats).toMatchObject({ known: false, reason: /settling/ });
+    const later = new Date(at.getTime() + 300);
+    let s = w.toGameState(later);
+    expect(s.nearbyThreats).toEqual({
+      known: true,
+      value: {
+        scanRadius: 16,
+        hostileCount: 1,
+        nearestHostileDistance: 5,
+        unclassifiedCount: 1,
+        nearestUnclassifiedDistance: 1,
+      },
+    });
+    w.apply({ type: 'respawn', dimension: -1, difficulty: 3, gamemode: 0, levelType: 'RWG' }, at);
+    w.apply(
+      {
+        type: 'server-position',
+        x: 0,
+        eyeY: 64 + PLAYER_EYE_HEIGHT,
+        z: 0,
+        yaw: 0,
+        pitch: 0,
+        onGround: false,
+      },
+      at,
+    );
+    expect(w.trackedEntityCount).toBe(0);
+    expect(w.loadedChunkCount).toBe(0); // the new dimension's chunks have not arrived yet
+    expect(w.toGameState(later).nearbyThreats.known).toBe(false);
+    w.apply({ type: 'chunk-bulk', columns }, at);
+    s = w.toGameState(later);
+    expect(s.nearbyThreats).toMatchObject({
+      known: true,
+      value: { hostileCount: 0, unclassifiedCount: 0 },
     });
   });
 

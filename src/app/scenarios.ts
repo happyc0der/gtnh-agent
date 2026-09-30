@@ -47,6 +47,7 @@ export function baseWorld(taskId: string): MockWorld {
       capacitySlots: 36,
     },
     hostiles: [],
+    unclassified: [],
     hazards: [],
     containers: [
       {

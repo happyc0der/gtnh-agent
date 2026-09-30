@@ -51,15 +51,31 @@ export const HazardSchema = z.strictObject({
 });
 export type Hazard = z.infer<typeof HazardSchema>;
 
+/**
+ * Entities near the player (within the adapter's scan radius).
+ * `unclassified` counts entities whose type the agent cannot identify (e.g. a modded mob
+ * type not in the classification table). The safety policy treats them like hostiles.
+ */
 export const ThreatsSchema = z.strictObject({
+  /** How far (blocks) the adapter looked. The safety policy fails closed if this is too small. */
+  scanRadius: z.number().min(0).max(256),
   hostileCount: z.int().min(0).max(1000),
   nearestHostileDistance: z.number().min(0).nullable(),
+  unclassifiedCount: z.int().min(0).max(1000),
+  nearestUnclassifiedDistance: z.number().min(0).nullable(),
+});
+export type Threats = z.infer<typeof ThreatsSchema>;
+
+/** Lava/void near the player. Observed separately from entities (it needs chunk data). */
+export const EnvironmentHazardsSchema = z.strictObject({
+  /** How far (blocks) the adapter looked for lava/void around the player. */
+  scanRadius: z.number().min(0).max(256),
   lavaNearby: z.boolean(),
   voidNearby: z.boolean(),
   /** Known hazard positions within the adapter scan radius. */
   hazards: z.array(HazardSchema).max(256),
 });
-export type Threats = z.infer<typeof ThreatsSchema>;
+export type EnvironmentHazards = z.infer<typeof EnvironmentHazardsSchema>;
 
 export const GENERATOR_STATUSES = ['running', 'idle', 'out_of_fuel', 'unknown', 'error'] as const;
 export const GeneratorSchema = z.strictObject({
@@ -135,6 +151,7 @@ export const GameStateSchema = z.strictObject({
   player: PlayerSchema,
   inventory: knownSchema(InventorySchema),
   nearbyThreats: knownSchema(ThreatsSchema),
+  environmentHazards: knownSchema(EnvironmentHazardsSchema),
   power: PowerSchema,
   machines: z.array(MachineSchema).max(512),
   storage: z.array(StorageContainerSchema).max(512),

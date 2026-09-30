@@ -2,10 +2,11 @@
 
 **Status (2026-09-30): read-only observation works on a private GTNH 2.8.4 test server.**
 The agent's own client (`src/bot/gtnh1710/`, `Gtnh1710Client`) joins via the Forge handshake and
-reports position, dimension, health, food and a fully named inventory. Threats, machines and
-power are not observable yet, so the agent always fails closed (pauses) against the live server.
-Mineflayer cannot connect at all. Every claim below is labelled as _verified_ (observed or checked
-in installed code) or _assumption_ (to be tested).
+reports position, dimension, health, food, a fully named inventory and **nearby entities
+(vanilla and modded mobs)**. Lava/void, machines and power are not observable yet, so the agent
+still fails closed (pauses) against the live server. Mineflayer cannot connect at all. Every
+claim below is labelled as _verified_ (observed or checked in installed code) or _assumption_
+(to be tested).
 
 ## Test server results (2026-09-30)
 
@@ -41,15 +42,15 @@ raw spike results are written to `data/spike/` (gitignored).
 
 Live `pnpm cli observe --live` on the test server (verified):
 
-| Field          | Result                                                                                                                                           |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Position       | (-4.5, 106, -7.5), identical to the server log's login position.                                                                                 |
-| Dimension      | `overworld` (1.7.10 numeric IDs are mapped; unknown IDs become `dim_<id>`).                                                                      |
-| Health / food  | 20 / 20, but only once the client acknowledges the server's placement (see presence below).                                                      |
-| Inventory      | `1 x questbook:ItemQuestBook`: the starter quest book GTNH gives new players, named through the per-world registry.                              |
-| Held item      | Unknown: the durability of modded items is not known yet.                                                                                        |
-| Threats        | Unknown by design: vanilla mobs arrive as normal spawn packets, **modded mobs via FML spawn messages**; hostility classification is still to do. |
-| Machines/power | Unknown/empty.                                                                                                                                   |
+| Field          | Result                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Position       | (-4.5, 106, -7.5), identical to the server log's login position.                                                    |
+| Dimension      | `overworld` (1.7.10 numeric IDs are mapped; unknown IDs become `dim_<id>`).                                         |
+| Health / food  | 20 / 20, but only once the client acknowledges the server's placement (see presence below).                         |
+| Inventory      | `1 x questbook:ItemQuestBook`: the starter quest book GTNH gives new players, named through the per-world registry. |
+| Held item      | Unknown: the durability of modded items is not known yet.                                                           |
+| Threats        | Tracked (see "Entity tracking" below); lava/void still unknown.                                                     |
+| Machines/power | Unknown/empty.                                                                                                      |
 
 Findings while building it (verified):
 
@@ -73,6 +74,42 @@ What the client can send is fixed in `packets.ts` (`outbound`): handshake, statu
 start, keep-alive, plugin messages on `REGISTER`/`FML|HS` only, idle ticks, and echoes of
 server-assigned positions. `perform()` supports only `OBSERVE_STATE`, `WAIT` and `PAUSE_AND_ASK_USER`;
 every other action returns `NOT_IMPLEMENTED` without sending anything (tested).
+
+## Entity tracking (2026-09-30)
+
+Verified with `scripts/entity-survey.ts` (20 s of live traffic) and `pnpm cli observe --live --radius 64`:
+
+- **Most hostile mobs in GTNH are modded.** _Special Mobs_ replaces vanilla monsters with variants
+  (24 type IDs seen in 20 s); EnderZoo and Et Futurum add more. They are announced on Forge's
+  `FML` channel, not with the vanilla Spawn Mob packet. Vanilla packets still carry vanilla mobs
+  (creepers, skeletons, spiders, zombies, bats, cows, squid) and objects (dropped items).
+- **FML entity messages** (channel `FML`, verified layout): discriminator 2 = spawn
+  (`int entityId, string modId, int modEntityTypeId, int x/y/z` in 1/32 blocks, then rotation,
+  DataWatcher and spawn data, which the agent does not need); 3 = position adjust
+  (`int entityId, int x/y/z`). Afterwards modded entities move with the vanilla move/teleport
+  packets. 43 spawns and 17 adjusts in 20 s, zero parse errors.
+- **Forge sends only a mod and a number for modded entities** (e.g. `etfuturum#3`), never the
+  entity's name. Numbers are fixed by each mod's code (not per world), but mods assign them
+  through wrappers and loops, so there is no simple table. The server's TRACE log lists
+  registrations by name and order, without the numbers.
+- **Classification (fail closed):** vanilla mob IDs use an exact table; `SpecialMobs` is hostile
+  as a whole mod; every other modded type is **unclassified and treated like a hostile** until
+  it is identified. Only exact, verified entries may mark a modded type passive
+  (`MODDED_ENTITIES` in `src/bot/gtnh1710/entity-types.ts`, empty for now). Example today:
+  `etfuturum#3` (11 of them, probably rabbits) counts as unidentified.
+- **Entities arrive after their chunks.** The server sends a chunk's entities in the same tick as
+  the chunk, streaming chunks nearest-first (5 per tick; all 9 chunks under a 16 m radius within
+  ~0.2 s, all 252 within ~2.5 s). Before this was handled the client reported "0 threats" 85 ms
+  before the first chunk arrived. Threats are now reported only once every chunk overlapping the
+  scan radius has arrived plus 250 ms; `connect()` waits for that (bounded by
+  `initialStateGraceMs`), and an unloaded nearby chunk makes threats unknown again.
+- **NotEnoughIDs** did not change the Map Chunk Bulk header (column count, data length,
+  sky light, per-column metadata; parsed with 0 bytes left over). Block data is not decoded yet.
+- **Coverage is declared:** the entity scan radius is 16 m; if `hostileThreatRadius` is
+  configured larger, the state is treated as unknown rather than "no hostiles".
+
+Still to do: identify modded entity types (so passive animals stop counting as threats), and
+lava/void detection from chunk block data (NotEnoughIDs changes the block data format).
 
 ## What was verified (from installed packages, 2026-09-26)
 
@@ -127,7 +164,8 @@ with backups, never on a public server.
    FML handshake joins; mineflayer does not. See "Test server results" above.
 2. **Observation only. STARTED 2026-09-30:** position, dimension, health, food and inventory work
    (see "Read-only live client"). Still to do: compare against the in-game F3/NEI view in at least 10
-   situations (including GT meta-items and big stacks), then nearby hostiles and lava/void.
+   situations (including GT meta-items and big stacks). Nearby entities: done (see "Entity
+   tracking"); modded entity identification and lava/void are next.
 3. **Registry mapping. DONE for inventory names** (per-world registry). Still to test: protected-item
    matching with real GT items.
 4. **Movement in a fenced area.** Enable `MOVE_TO` with a pathfinder configured to never dig,

@@ -1,4 +1,5 @@
 import { Gtnh1710Client, type ConnectionInfo } from '../bot/gtnh1710/gtnh-client.ts';
+import type { NearbyEntity } from '../bot/gtnh1710/world-model.ts';
 import type { AgentConfig } from '../config/env.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { openDatabase } from '../persistence/database.ts';
@@ -46,6 +47,7 @@ export function unknownFields(state: GameState): Record<string, string> {
   check('player.heldTool', state.player.heldTool);
   check('inventory', state.inventory);
   check('nearbyThreats', state.nearbyThreats);
+  check('environmentHazards', state.environmentHazards);
   check('power.availableEUt', state.power.availableEUt);
   return out;
 }
@@ -53,6 +55,7 @@ export function unknownFields(state: GameState): Record<string, string> {
 export function summarizeObservation(
   state: GameState,
   info: ConnectionInfo,
+  nearby: readonly NearbyEntity[] = [],
 ): Record<string, unknown> {
   const inv = state.inventory.known ? state.inventory.value : null;
   return {
@@ -70,6 +73,10 @@ export function summarizeObservation(
         .slice(0, 15)
         .map(([item, count]) => `${count} x ${item}`),
     },
+    threats: state.nearbyThreats.known ? state.nearbyThreats.value : null,
+    nearbyEntities: nearby.map(
+      (e) => `${e.distance.toFixed(1).padStart(5)} m  ${e.category.padEnd(12)} ${e.name}`,
+    ),
     unknown: unknownFields(state),
     registry: info.registry,
     sentPackets: info.outboundCounts,

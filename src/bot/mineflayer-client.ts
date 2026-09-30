@@ -120,7 +120,8 @@ export class MineflayerClient implements MinecraftClient {
       inventory: unnamed
         ? unknown('inventory contains items without a known registry name (modded?)')
         : known({ items: counts, usedSlots: items.length, capacitySlots: 36 }),
-      nearbyThreats: unknown('TODO: hostile/lava/void scan not implemented or verified for GTNH'),
+      nearbyThreats: unknown('TODO: entity scan not implemented or verified for GTNH'),
+      environmentHazards: unknown('TODO: lava/void scan not implemented or verified for GTNH'),
       power: {
         availableEUt: unknown('GTNH EU is not observable via the vanilla protocol'),
         generators: [],

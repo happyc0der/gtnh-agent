@@ -8,6 +8,7 @@ import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import {
+  decodeFmlRuntimeMessage,
   decodeLogin,
   decodePlay,
   outbound,
@@ -40,6 +41,11 @@ export interface Gtnh1710ClientOptions {
   resolveHost?: (host: string) => Promise<string[]>;
   /** Delay between retries while Forge reports "Server is still starting!". */
   retryDelayMs?: number;
+  /**
+   * Diagnostic tap: sees every incoming frame (read-only copy) before it is decoded.
+   * Used by research scripts; must never be used to send anything.
+   */
+  onFrame?: (phase: 'login' | 'play', packetId: number, body: Buffer) => void;
 }
 
 export interface ConnectionInfo {
@@ -137,8 +143,12 @@ export class Gtnh1710Client implements MinecraftClient {
       `item stack format: ${this.#decoding.itemStackSizeVarInt ? 'ModularUI (VarInt stack size)' : 'vanilla'}`,
     );
     await this.#join(deadline);
+    // Wait (bounded) until health, inventory and a complete entity picture have arrived.
     await this.#waitFor(
-      () => this.#world.hasHealth && this.#world.hasInventory,
+      () =>
+        this.#world.hasHealth &&
+        this.#world.hasInventory &&
+        this.#world.entitiesReady(this.#opts.clock.now()),
       cfg.initialStateGraceMs,
     );
   }
@@ -307,6 +317,13 @@ export class Gtnh1710Client implements MinecraftClient {
 
   #handleFrame(frame: Frame): void {
     const at = this.#opts.clock.now();
+    if (this.#opts.onFrame !== undefined && (this.#phase === 'login' || this.#phase === 'play')) {
+      this.#opts.onFrame(
+        this.#phase,
+        frame.packetId,
+        Buffer.from(frame.body.buf.subarray(frame.body.offset)),
+      );
+    }
     if (this.#phase === 'login') {
       const packet = decodeLogin(frame.packetId, frame.body);
       switch (packet.type) {
@@ -365,6 +382,14 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'held-item':
       case 'set-slot':
       case 'window-items':
+      case 'spawn-player':
+      case 'spawn-object':
+      case 'spawn-mob':
+      case 'destroy-entities':
+      case 'entity-move':
+      case 'entity-teleport':
+      case 'chunk-data':
+      case 'chunk-bulk':
       case 'unhandled':
         break; // observation only: already folded into the world model above
     }
@@ -375,6 +400,17 @@ export class Gtnh1710Client implements MinecraftClient {
     if (channel === 'FML|MP') {
       const assembled = this.#multipart.push(data);
       if (assembled !== null) this.#onPluginMessage(assembled.channel, assembled.data);
+      return;
+    }
+    if (channel === 'FML') {
+      // Forge runtime messages: this is how GTNH's modded mobs are spawned and moved.
+      try {
+        this.#world.applyFml(decodeFmlRuntimeMessage(data), this.#opts.clock.now());
+      } catch (error) {
+        if (!(error instanceof ProtocolError)) throw error;
+        this.#log(`could not decode FML message: ${error.message}`);
+        this.#world.markEntityProblem(`undecodable FML entity message: ${error.message}`);
+      }
       return;
     }
     if (channel !== 'FML|HS' || this.#handshake === null) return;
@@ -446,16 +482,23 @@ export class Gtnh1710Client implements MinecraftClient {
   /** Resolves when `condition` holds, the connection closes, or `timeoutMs` passes. */
   #waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
     return new Promise((resolve) => {
+      let done = false;
+      const check = (): void => {
+        if (!done && (condition() || this.#phase === 'closed')) finish();
+      };
       const finish = (): void => {
+        done = true;
         clearTimeout(timer);
+        clearInterval(poll);
         unsubscribe();
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
-      const unsubscribe = this.#subscribe(() => {
-        if (condition() || this.#phase === 'closed') finish();
-      });
-      if (condition()) finish();
+      // Re-check on every packet, and on a timer: some conditions (e.g. "entities have
+      // settled") become true through elapsed time rather than a new packet.
+      const poll = setInterval(check, 50);
+      const unsubscribe = this.#subscribe(check);
+      check();
     });
   }
 

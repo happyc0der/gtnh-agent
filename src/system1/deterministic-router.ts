@@ -37,6 +37,7 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
   'DIMENSION_NOT_ALLOWED',
   'HAZARD_NEARBY',
   'HOSTILES_NEARBY',
+  'UNCLASSIFIED_ENTITY_NEARBY',
   'LOW_HEALTH',
   'HUNGRY',
   'NO_APPROVED_FOOD',
@@ -116,10 +117,15 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     if (dangerCodes.has('DIMENSION_NOT_ALLOWED')) codes.push('DIMENSION_NOT_ALLOWED');
     return decide('PAUSE_AND_ASK_USER', CONFIDENCE.failClosed, codes);
   }
-  if (dangerCodes.has('HAZARD_PROXIMITY') || dangerCodes.has('HOSTILES_NEARBY')) {
+  if (
+    dangerCodes.has('HAZARD_PROXIMITY') ||
+    dangerCodes.has('HOSTILES_NEARBY') ||
+    dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')
+  ) {
     const codes: ReasonCode[] = [];
     if (dangerCodes.has('HAZARD_PROXIMITY')) codes.push('HAZARD_NEARBY');
     if (dangerCodes.has('HOSTILES_NEARBY')) codes.push('HOSTILES_NEARBY');
+    if (dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) codes.push('UNCLASSIFIED_ENTITY_NEARBY');
     return retreatOrPause(codes, CONFIDENCE.safety);
   }
 

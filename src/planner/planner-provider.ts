@@ -54,6 +54,7 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
   const hunger = val('player.hunger', state.player.hunger);
   const inventory = val('inventory', state.inventory);
   const threats = val('nearbyThreats', state.nearbyThreats);
+  const hazards = val('environmentHazards', state.environmentHazards);
   val('power.availableEUt', state.power.availableEUt);
 
   const inventoryTop = inventory
@@ -75,12 +76,9 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       ? Number((inventory.usedSlots / inventory.capacitySlots).toFixed(3))
       : null,
     threats: threats
-      ? {
-          hostileCount: threats.hostileCount,
-          lavaNearby: threats.lavaNearby,
-          voidNearby: threats.voidNearby,
-        }
+      ? { hostileCount: threats.hostileCount, unclassifiedCount: threats.unclassifiedCount }
       : null,
+    hazards: hazards ? { lavaNearby: hazards.lavaNearby, voidNearby: hazards.voidNearby } : null,
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
       name: m.name,

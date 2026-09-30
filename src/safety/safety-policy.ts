@@ -92,6 +92,7 @@ export function assessStateReliability(state: GameState, ctx: SafetyContext): Sa
     ['player.hunger', state.player.hunger],
     ['inventory', state.inventory],
     ['nearbyThreats', state.nearbyThreats],
+    ['environmentHazards', state.environmentHazards],
   ];
   const unknownFields = critical.filter(([, k]) => !k.known).map(([name]) => name);
   if (unknownFields.length > 0) {
@@ -100,6 +101,36 @@ export function assessStateReliability(state: GameState, ctx: SafetyContext): Sa
       severity: 'pause',
       message: `Critical state is unknown: ${unknownFields.join(', ')}`,
       details: { fields: unknownFields.join(',') },
+    });
+  }
+
+  // Coverage: an observation that did not look far enough cannot answer the question.
+  if (
+    state.nearbyThreats.known &&
+    state.nearbyThreats.value.scanRadius < config.hostileThreatRadius
+  ) {
+    v.push({
+      code: 'STATE_UNKNOWN',
+      severity: 'pause',
+      message: `Entity scan covers ${state.nearbyThreats.value.scanRadius} blocks, less than the threat radius ${config.hostileThreatRadius}`,
+      details: {
+        scanRadius: state.nearbyThreats.value.scanRadius,
+        required: config.hostileThreatRadius,
+      },
+    });
+  }
+  if (
+    state.environmentHazards.known &&
+    state.environmentHazards.value.scanRadius < config.hazardAvoidanceRadius
+  ) {
+    v.push({
+      code: 'STATE_UNKNOWN',
+      severity: 'pause',
+      message: `Hazard scan covers ${state.environmentHazards.value.scanRadius} blocks, less than the hazard radius ${config.hazardAvoidanceRadius}`,
+      details: {
+        scanRadius: state.environmentHazards.value.scanRadius,
+        required: config.hazardAvoidanceRadius,
+      },
     });
   }
 
@@ -126,10 +157,16 @@ function findInconsistencies(state: GameState): string[] {
     if ((t.hostileCount === 0) !== (t.nearestHostileDistance === null)) {
       problems.push('nearbyThreats.hostileCount and nearestHostileDistance disagree');
     }
-    if (t.hazards.some((h) => h.kind === 'lava') && !t.lavaNearby) {
+    if ((t.unclassifiedCount === 0) !== (t.nearestUnclassifiedDistance === null)) {
+      problems.push('nearbyThreats.unclassifiedCount and nearestUnclassifiedDistance disagree');
+    }
+  }
+  if (state.environmentHazards.known) {
+    const h = state.environmentHazards.value;
+    if (h.hazards.some((x) => x.kind === 'lava') && !h.lavaNearby) {
       problems.push('lava hazard listed but lavaNearby is false');
     }
-    if (t.hazards.some((h) => h.kind === 'void') && !t.voidNearby) {
+    if (h.hazards.some((x) => x.kind === 'void') && !h.voidNearby) {
       problems.push('void hazard listed but voidNearby is false');
     }
   }
@@ -166,24 +203,27 @@ export function assessDangers(state: GameState, ctx: SafetyContext): SafetyViola
   if (position.known && dimension.known) {
     v.push(...checkWithinBoundary(position.value, dimension.value, config.boundary, 'Player'));
   }
-  if (state.nearbyThreats.known) {
-    const t = state.nearbyThreats.value;
+  if (state.environmentHazards.known) {
+    const h = state.environmentHazards.value;
     if (position.known) {
       v.push(
-        ...checkHazardClearance(position.value, t.hazards, config.hazardAvoidanceRadius, 'Player'),
+        ...checkHazardClearance(position.value, h.hazards, config.hazardAvoidanceRadius, 'Player'),
       );
     }
     const unlocatedHazard =
-      (t.lavaNearby && !t.hazards.some((h) => h.kind === 'lava')) ||
-      (t.voidNearby && !t.hazards.some((h) => h.kind === 'void'));
+      (h.lavaNearby && !h.hazards.some((x) => x.kind === 'lava')) ||
+      (h.voidNearby && !h.hazards.some((x) => x.kind === 'void'));
     if (unlocatedHazard) {
       v.push({
         code: 'HAZARD_PROXIMITY',
         severity: 'block',
         message: 'Lava or void reported nearby at an unknown position',
-        details: { lavaNearby: t.lavaNearby, voidNearby: t.voidNearby },
+        details: { lavaNearby: h.lavaNearby, voidNearby: h.voidNearby },
       });
     }
+  }
+  if (state.nearbyThreats.known) {
+    const t = state.nearbyThreats.value;
     if (
       t.nearestHostileDistance !== null &&
       t.nearestHostileDistance <= config.hostileThreatRadius
@@ -193,6 +233,18 @@ export function assessDangers(state: GameState, ctx: SafetyContext): SafetyViola
         severity: 'block',
         message: `${t.hostileCount} hostile(s), nearest at ${t.nearestHostileDistance.toFixed(1)} blocks`,
         details: { hostileCount: t.hostileCount, nearest: t.nearestHostileDistance },
+      });
+    }
+    // Fail closed: an entity the agent cannot identify is treated like a hostile one.
+    if (
+      t.nearestUnclassifiedDistance !== null &&
+      t.nearestUnclassifiedDistance <= config.hostileThreatRadius
+    ) {
+      v.push({
+        code: 'UNCLASSIFIED_ENTITY_NEARBY',
+        severity: 'block',
+        message: `${t.unclassifiedCount} unidentified entit(y/ies), nearest at ${t.nearestUnclassifiedDistance.toFixed(1)} blocks`,
+        details: { unclassifiedCount: t.unclassifiedCount, nearest: t.nearestUnclassifiedDistance },
       });
     }
   }
@@ -318,7 +370,7 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
   const v: SafetyViolation[] = [];
   const position = state.player.position.known ? state.player.position.value : null;
   const dimension = state.player.dimension.known ? state.player.dimension.value : null;
-  const hazards = state.nearbyThreats.known ? state.nearbyThreats.value.hazards : [];
+  const hazards = state.environmentHazards.known ? state.environmentHazards.value.hazards : [];
 
   const unknownTarget = (kind: string, id: string): SafetyViolation => ({
     code: 'UNKNOWN_TARGET',
@@ -331,6 +383,20 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
     case 'MOVE_TO': {
       // The boundary box is checked in evaluateStaticSpec; the player's dimension in assessDangers.
       const target = action.args.target;
+      // Hazards are only known within the scan radius around the player. A target whose
+      // surroundings were not scanned cannot be shown to be clear, so it is refused.
+      if (position !== null && state.environmentHazards.known) {
+        const coverage = state.environmentHazards.value.scanRadius;
+        const needed = distance(position, target) + config.hazardAvoidanceRadius;
+        if (needed > coverage) {
+          v.push({
+            code: 'MOVE_TOO_FAR',
+            severity: 'block',
+            message: `MOVE_TO target's surroundings are outside the hazard scan (${needed.toFixed(1)} > ${coverage} blocks)`,
+            details: { needed: Number(needed.toFixed(2)), coverage },
+          });
+        }
+      }
       v.push(
         ...checkHazardClearance(target, hazards, config.hazardAvoidanceRadius, 'MOVE_TO target'),
       );

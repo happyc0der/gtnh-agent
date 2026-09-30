@@ -92,14 +92,81 @@ describe('rule 2: lava/void hazards', () => {
 
   it('treats a lava/void flag without a position as a hazard', () => {
     const state = { ...makeState() };
-    state.nearbyThreats = known({
-      hostileCount: 0,
-      nearestHostileDistance: null,
+    state.environmentHazards = known({
+      scanRadius: 48,
       lavaNearby: false,
       voidNearby: true,
       hazards: [],
     });
     expect(assessDangers(state, safetyCtx()).map((v) => v.code)).toContain('HAZARD_PROXIMITY');
+  });
+
+  it('refuses a MOVE_TO whose destination was not covered by the hazard scan', () => {
+    // The mock scans hazards 48 blocks around the player; with a 6-block avoidance radius a
+    // 45-block move cannot be shown to be clear.
+    expect(
+      codes({ type: 'MOVE_TO', args: { target: { x: 46, y: 64, z: 1 }, tolerance: 1 } }),
+    ).toContain('MOVE_TOO_FAR');
+    expect(
+      codes({ type: 'MOVE_TO', args: { target: { x: 30, y: 64, z: 1 }, tolerance: 1 } }),
+    ).toEqual([]);
+  });
+});
+
+describe('observation coverage', () => {
+  it('fails closed when the entity or hazard scan is smaller than the configured radius', () => {
+    const base = makeState();
+    const narrowThreats: GameState = {
+      ...base,
+      nearbyThreats: known({
+        scanRadius: 8,
+        hostileCount: 0,
+        nearestHostileDistance: null,
+        unclassifiedCount: 0,
+        nearestUnclassifiedDistance: null,
+      }),
+    };
+    expect(assessStateReliability(narrowThreats, safetyCtx()).map((v) => v.message)).toContain(
+      'Entity scan covers 8 blocks, less than the threat radius 10',
+    );
+    const narrowHazards: GameState = {
+      ...base,
+      environmentHazards: known({
+        scanRadius: 4,
+        lavaNearby: false,
+        voidNearby: false,
+        hazards: [],
+      }),
+    };
+    expect(assessStateReliability(narrowHazards, safetyCtx()).map((v) => v.code)).toEqual([
+      'STATE_UNKNOWN',
+    ]);
+  });
+});
+
+describe('hostile and unidentified entities', () => {
+  it('an unidentified entity inside the threat radius is a danger, like a hostile', () => {
+    const state = makeState((w) => {
+      w.player.position = { x: 20, y: 64, z: 20 };
+      w.unclassified = [{ x: 24, y: 64, z: 20 }];
+    });
+    expect(assessDangers(state, safetyCtx()).map((v) => v.code)).toEqual([
+      'UNCLASSIFIED_ENTITY_NEARBY',
+    ]);
+    expect(
+      codes({ type: 'INSPECT_MACHINE', args: { machineId: 'machine.macerator.1' } }, state),
+    ).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+    expect(
+      codes({ type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } }, state),
+    ).toEqual([]);
+  });
+
+  it('entities beyond the threat radius are not a danger', () => {
+    const state = makeState((w) => {
+      w.hostiles = [{ x: 14, y: 64, z: 1 }];
+      w.unclassified = [{ x: 1, y: 64, z: 14 }];
+    });
+    expect(assessDangers(state, safetyCtx())).toEqual([]);
   });
 });
 
@@ -282,15 +349,20 @@ describe('rule 9: unknown, stale or inconsistent state fails closed', () => {
     ]);
   });
 
-  it.each(['position', 'dimension', 'health', 'hunger', 'inventory', 'threats'] as const)(
-    'unknown %s',
-    (field) => {
-      const state = makeState((w) => {
-        w.unobservable = [field];
-      });
-      expect(codes(work, state)).toEqual(['STATE_UNKNOWN']);
-    },
-  );
+  it.each([
+    'position',
+    'dimension',
+    'health',
+    'hunger',
+    'inventory',
+    'threats',
+    'hazards',
+  ] as const)('unknown %s', (field) => {
+    const state = makeState((w) => {
+      w.unobservable = [field];
+    });
+    expect(codes(work, state)).toEqual(['STATE_UNKNOWN']);
+  });
 
   it('inconsistent inventory / threats / ids', () => {
     const base = makeState();
@@ -305,11 +377,11 @@ describe('rule 9: unknown, stale or inconsistent state fails closed', () => {
     const badThreats: GameState = {
       ...base,
       nearbyThreats: known({
+        scanRadius: 16,
         hostileCount: 2,
         nearestHostileDistance: null,
-        lavaNearby: false,
-        voidNearby: false,
-        hazards: [],
+        unclassifiedCount: 0,
+        nearestUnclassifiedDistance: null,
       }),
     };
     expect(assessStateReliability(badThreats, safetyCtx()).map((v) => v.code)).toContain(

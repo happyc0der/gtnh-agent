@@ -74,6 +74,15 @@ describe('System1 deterministic router', () => {
       expect(d.reasonCodes).toEqual(['HAZARD_NEARBY']);
     });
 
+    it('an unidentified entity nearby, away from home -> RETREAT_HOME', () => {
+      const d = route((w) => {
+        w.player.position = { x: 30, y: 64, z: 30 };
+        w.unclassified = [{ x: 33, y: 64, z: 30 }];
+      });
+      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.reasonCodes).toEqual(['UNCLASSIFIED_ENTITY_NEARBY']);
+    });
+
     it('hostiles nearby while already home -> PAUSE', () => {
       const d = route((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
       expect(d.decision).toBe('PAUSE_AND_ASK_USER');
