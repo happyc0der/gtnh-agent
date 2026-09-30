@@ -195,6 +195,20 @@ export class SnapshotRepository {
     return row === undefined ? null : GameStateSchema.parse(parseJson(row.state_json));
   }
 
+  /** The most recent snapshot (optionally from one source, e.g. 'gtnh1710'), or null. */
+  latest(source?: string): GameState | null {
+    const row = (
+      source === undefined
+        ? this.#db.prepare('SELECT state_json FROM state_snapshots ORDER BY id DESC LIMIT 1').get()
+        : this.#db
+            .prepare(
+              'SELECT state_json FROM state_snapshots WHERE source = ? ORDER BY id DESC LIMIT 1',
+            )
+            .get(source)
+    ) as { state_json: string } | undefined;
+    return row === undefined ? null : GameStateSchema.parse(parseJson(row.state_json));
+  }
+
   count(): number {
     return (this.#db.prepare('SELECT COUNT(*) AS n FROM state_snapshots').get() as { n: number }).n;
   }

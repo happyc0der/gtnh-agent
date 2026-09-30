@@ -23,6 +23,7 @@ import {
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
+import { describeQuests, updateQuests } from './quest-commands.ts';
 import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
@@ -52,6 +53,10 @@ Usage:
       stopping when the task is done or anything needs you (a pause, rejection, failure,
       approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
       stop file (pnpm cli halt) or Ctrl+C.
+  node src/app/cli.ts quests [--live] [--db <path>]
+      The agent's Age 0 quest book (GTNH "Tier 0 Stone Age"): progress, completed quests
+      and the next goal. --live reads the inventory first and records the quests it now
+      satisfies (the agent's own bookkeeping; the server's quest book is not touched).
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
       Create / remove the stop file (nothing walks while it exists) / show movement settings.
   node src/app/cli.ts scenarios            List mock scenarios.
@@ -376,6 +381,34 @@ async function main(argv: string[]): Promise<number> {
       print({ task: task.id, previousStatus: task.status, status: 'active' });
       db.close();
       return 0;
+    }
+    case 'quests': {
+      const db = openDatabase(dbPath);
+      try {
+        const repos = createRepositories(db, systemClock);
+        if (!values.live) {
+          const latest = repos.snapshots.latest('gtnh1710');
+          print(
+            describeQuests(repos, latest?.inventory.known ? latest.inventory.value.items : null),
+          );
+          return 0;
+        }
+        const state = await withLiveClient(config, (client) => client.observe(), log);
+        if (!state.inventory.known) {
+          process.stderr.write(`the inventory is unknown: ${state.inventory.reason}
+`);
+          return 1;
+        }
+        const inventory = state.inventory.value.items;
+        const update = updateQuests(repos, inventory);
+        print({
+          ...describeQuests(repos, inventory),
+          newlyCompleted: update.added.map((q) => q.name),
+        });
+        return 0;
+      } finally {
+        db.close();
+      }
     }
     case 'task-add':
     case 'task-complete':

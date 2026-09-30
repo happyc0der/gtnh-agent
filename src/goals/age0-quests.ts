@@ -1,0 +1,3991 @@
+/**
+ * GTNH 2.8.4 quest line "Tier0StoneAge" (92 quests), extracted from the test
+ * server's Better Questing files by scripts/extract-quests.ts. Generated; do not edit by hand.
+ */
+import type { Quest } from './quest-goals.ts';
+
+export const QUESTS_GTNH_VERSION = '2.8.4';
+
+export const AGE0_QUESTS: readonly Quest[] = [
+  {
+    id: '0:1852',
+    name: 'Around and Around She Goes...',
+    description:
+      "...But she'll never stop because you'll always have something to grind. You can use a hopper to keep the windmill full of items to process. Just remember to retrieve them from the dispensers.",
+    prerequisites: ['0:1851'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'bartworks:BW_CombinedRotor',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 0,
+    },
+  },
+  {
+    id: '0:498',
+    name: 'XP Usage?!',
+    description:
+      "Exploring some dungeons or fighting mobs probably gave you a lot of XP. Better use it to get iron, copper, tin, or other useful dusts before you die. Place your tank on the ground and a drain on top. Now you can fill it with XP. By the way, you discovered that while the seared tank doesn't hold much",
+    prerequisites: ['0:36', '0:74'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:LavaTank',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'OpenBlocks:xpdrain',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:bucket',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 36,
+      y: 0,
+    },
+  },
+  {
+    id: '0:2720',
+    name: 'Too Many Leaves',
+    description:
+      "Want to clear out shrubbery but don't want to pull out leaves by hand? Need to find that last log hidden in the middle of a bunch of leaves? Try an Iron Scythe! When used, it clears out a 5x5x5 area of leaves, crops, flowers, or grass. Excellent for tearing through Sacred Oak leaves or dense shrubbe",
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'BiomesOPlenty:scytheIron',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 72,
+      y: 0,
+    },
+  },
+  {
+    id: '0:489',
+    name: 'A Better Lunch Bag',
+    description:
+      "Your lunch bag is now abused and rather old so it's time to get something better. Let's craft a lunch box which can hold way more food.",
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'SpiceOfLife:lunchbox',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 108,
+      y: 0,
+    },
+  },
+  {
+    id: '0:718',
+    name: "Moron's Manual to Fecund Farms",
+    description:
+      'If you ever wanted to know how crop breeding works, you are in the right place! Get some Crops - the sticks, that is - and some seeds from farming with a hoe or mattock. You can also place some plants and berries directly on crop sticks. Good plants to start with are flowers, wheat, cactus and sugar',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'IC2:blockCrop',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:wheat_seeds',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:reeds',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:carrot',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:potato',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 144,
+      y: 0,
+    },
+  },
+  {
+    id: '0:945',
+    name: 'Chad - A Better Way to Make Paper',
+    description:
+      'Making paper out of wood pulp and water can be tedious and difficult. Why not use a mortar to grind the sugar cane into chad and press it with two stone slabs to paper? Later on you can use the chemical bath for an even better ratio.',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@24',
+            count: 1,
+            oreDict: 'craftingToolMortar',
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:reeds',
+            count: 45,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:stone_slab',
+            count: 20,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@2879',
+            count: 30,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:paper',
+            count: 20,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 180,
+      y: 0,
+    },
+  },
+  {
+    id: '0:39',
+    name: 'Better Storage',
+    description:
+      'While standard chests are good for your basic items and goods, they are not ideal for storing a large amount of ore. You should build yourself some barrels in order to keep things organized.',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'JABBA:barrel',
+            count: 5,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 216,
+      y: 0,
+    },
+  },
+  {
+    id: '0:1926',
+    name: 'A Quicker Way to Get Around',
+    description:
+      "Are you ready for a longer trip? With your new lunch box, saddle, lead and of course a horse, we can start a small journey. Be sure to make paths over water, horses don't like going through deep water. If you get unseated in deep water, you can try getting on repeatedly and moving a small distance e",
+    prerequisites: ['0:486'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:saddle',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:lead',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:fence',
+            count: 1,
+            oreDict: 'fenceWood',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 252,
+      y: 0,
+    },
+  },
+  {
+    id: '0:487',
+    name: 'Need More Space?',
+    description:
+      "As you might know: tanned leather is more resistant and good enough for a backpack. Let's get a digger's backpack and a miner's backpack. Each pack holds different items. So use both for your first true back-packed mining experience.",
+    prerequisites: ['0:486'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:leather',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'Backpack:tannedLeather',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'harvestcraft:wovencottonItem',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:stone',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Forestry:diggerBag',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:leather',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'Backpack:tannedLeather',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'harvestcraft:wovencottonItem',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:iron_ingot',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Forestry:minerBag',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 288,
+      y: 0,
+    },
+  },
+  {
+    id: '0:488',
+    name: 'You Need Them All!',
+    description: 'There are many more backpacks: Hunter, builder, forester...',
+    prerequisites: ['0:487'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Forestry:foresterBag',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Forestry:hunterBag',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Forestry:builderBag',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 324,
+      y: 0,
+    },
+  },
+  {
+    id: '-2157870659866113684:-8191827436027574183',
+    name: 'Do You Really Need Them All?',
+    description:
+      'There are many more backpacks: Coiners, thaumaturges, trackmanns... [note]Hint: Scroll to the Bottom[/note]',
+    prerequisites: ['0:488'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Forestry:coinBag',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'MagicBees:backpack.thaumaturgeT1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Railcraft:backpack.trackman.t1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Railcraft:backpack.iceman.t1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Railcraft:backpack.apothecary.t1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 360,
+      y: 0,
+    },
+  },
+  {
+    id: '-8762838053115180989:-5617553811869142035',
+    name: 'NEI Next Level Recipe Search',
+    description:
+      'NEI recipe search has been improved even further! As you might already know, recipe search works ONLY inside the recipe search field just like in other search modes. This is the small field that replaces the recipe page number, when you click on the magnifying glass on the left from that number when',
+    prerequisites: ['-7990133041073338491:-8810216742118145435'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 600,
+      y: 0,
+    },
+  },
+  {
+    id: '-7990133041073338491:-8810216742118145435',
+    name: 'NEI Next Level Search',
+    description:
+      "NEI search got improved even further! Select a search mode extended+ to try it out! Extended+ works pretty much like extended, but it doesn't support * and ? expanding in the names. Also the following symbols have to be escaped with a `\\`: `-` (dash) `<` and `>` (less-than and more-than) `^` (caret)",
+    prerequisites: ['-6458462290926483945:-5030660532125308103'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 648,
+      y: 0,
+    },
+  },
+  {
+    id: '-6458462290926483945:-5030660532125308103',
+    name: 'NEI is EVEN MORE POWERFUL NOW?',
+    description:
+      'NEI now automatically collapses similar items into one slot making browsing much faster! To collapse/uncollapse a group use ALT+LMB. You can also create your own presets with custom groups! [note]You can disable this functionality in NEI settings[/note] Also now NEI has JEI-like Advanced Search: @ -',
+    prerequisites: ['0:1506'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 696,
+      y: 0,
+    },
+  },
+  {
+    id: '0:1851',
+    name: 'Stick a Finger in the Air',
+    description:
+      "But you really do care. Trying to find a good place to locate a windmill? You could just build one and see, or try this fancy windsock. Paper rotors are great in low winds. Wool rotors are cheap. Leather rotors are durable. Don't leave the rotors in the windmill when you aren't using it, it will use",
+    prerequisites: ['0:1831'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'bartworks:BW_SimpleWindMeter',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 36,
+    },
+  },
+  {
+    id: '0:1831',
+    name: 'Circle Shapes Give Me Comfort',
+    description:
+      'To build a Windmill you will need a Dispenser, but that item is locked behind the next Tier. Go and find one in a Witchery Circle. They look like small versions of Stonehenge. Look for the main quest in Multiblock Goals.',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:dispenser',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 36,
+      y: 36,
+    },
+  },
+  {
+    id: '0:486',
+    name: 'Tanned Leather',
+    description:
+      'You have found a way to make leather more durable and resistant by further processing it. Make some bound leather from four pieces of leather, some strings and woven cotton. Now you only have to hang it on a drying rack and wait about 10 minutes to get some tanned leather. Stockpile some for later.',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:leather',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:string',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'harvestcraft:wovencottonItem',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:Armor.DryingRack',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'Backpack:boundLeather',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'Backpack:tannedLeather',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 252,
+      y: 36,
+    },
+  },
+  {
+    id: '0:491',
+    name: 'Sleeping Outside',
+    description:
+      "Carrying the bed with you all the time looks very funny. Why don't you craft a sleeping bag to stay outside without placing a bed and changing your spawn point? This way if you die, you'll be right at home!",
+    prerequisites: ['0:486'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:wool',
+            count: 3,
+            oreDict: 'blockWool',
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:carpet',
+            count: 3,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'Backpack:tannedLeather',
+            count: 3,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'sleepingbag:sleepingBag',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 288,
+      y: 36,
+    },
+  },
+  {
+    id: '0:2876',
+    name: 'Loot Games',
+    description:
+      "It looks like you've found a secret room hidden...not so deep within the earth. Pretty close to the surface, actually. You can find these all over the place, and have a chance at sweet sweet loot if you're good at simon says. It counts the highest level you completed, so you can fail the other round",
+    prerequisites: ['0:2875'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 324,
+      y: 36,
+    },
+  },
+  {
+    id: '0:1505',
+    name: 'Not Enough Items - Now with Bookmarks and Recent History!',
+    description:
+      "More like too many items! Here are some tips for using NEI. When you have your inventory open, you can type the search terms in the text bar at the bottom. Make sure your GUI size is set correctly, or you won't be able to see it. Double-click the bar to highlight any matching items in your inventory",
+    prerequisites: ['0:15'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 624,
+      y: 36,
+    },
+  },
+  {
+    id: '0:1506',
+    name: 'NEI is More Powerful Than You Imagine',
+    description:
+      'NEI has some really nice advanced features too. Clicking LMB or pressing R on an item shows the recipes to create it. RMB or U show recipes that use the item. Backspace moves you back to the previously browsed recipe. Hold Shift to stop the oredict cycling through items, and to show the oredict entr',
+    prerequisites: ['0:1505'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 672,
+      y: 36,
+    },
+  },
+  {
+    id: '0:2737',
+    name: 'More Food, More Hearts',
+    description:
+      "So, food is great, right? But what's even greater is eating tons of it! Too boring and pointless you say? Well, what if I told you, that you can get extra hearts just by expanding your palate. You get 1 point for every half shank of hunger from a food eaten, and after 50 points, you get 1 extra hear",
+    prerequisites: ['0:15'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 588,
+      y: 48,
+    },
+  },
+  {
+    id: '0:20',
+    name: 'Gravel: The Gathering',
+    description:
+      'You think it would be a good idea to collect more gravel in order to provide yourself with flint for the journey ahead. Try searching near water.',
+    prerequisites: ['0:15'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:gravel',
+            count: 128,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 708,
+      y: 48,
+    },
+  },
+  {
+    id: '0:1476',
+    name: 'All the Finest Cuts of Meat',
+    description:
+      'This knife is not going to work for slaughtering the hundreds of animals you will need for food and materials. Make yourself a GregTech Butchery Knife. It stops the explosions, and kills the cows much faster, not to mention has Looting on it. Later when you get Stainless Steel, you can make a new on',
+    prerequisites: ['0:492'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@36',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 72,
+    },
+  },
+  {
+    id: '0:492',
+    name: 'Sheep Hairdresser',
+    description:
+      'Killing sheep to get the wool is so inefficient. Making some shears would make sense if you need more wool.',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@17032',
+            count: 2,
+            oreDict: 'plateIron',
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@28032',
+            count: 1,
+            oreDict: 'ringIron',
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@27032',
+            count: 1,
+            oreDict: 'screwIron',
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:stick',
+            count: 2,
+            oreDict: 'stickWood',
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:shears',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 36,
+      y: 72,
+    },
+  },
+  {
+    id: '0:2402',
+    name: 'Got a Flat Tire?',
+    description:
+      "The crowbar is the GT tool used to remove a cover off of a machine, pipe, or wire. Covers can be decorative, functional like pumps and conveyors, or for safety, like putting a wooden plank over your steam pipes so they don't burn you. Sorry, it only comes in blue! Yes, we know there are also red cro",
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@20',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 252,
+      y: 72,
+    },
+  },
+  {
+    id: '0:40',
+    name: 'You Shall Proceed',
+    description:
+      "As you've gathered and crafted all materials and tools you need for your basic steam machinery, you may now proceed to the next tier. Keep in mind that you'll need mountains of resources in order to craft even the simplest things, so you probably should stock up on all ores in this tier. But that's ",
+    prerequisites: ['0:35', '0:36', '0:1738'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@17300',
+            count: 5,
+            oreDict: 'plateBronze',
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'dreamcraft:item.WoodenBrickForm',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'dreamcraft:item.UnfiredClayBrick',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:brick',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:brick_block',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@17032',
+            count: 7,
+            oreDict: 'plateIron',
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:furnace',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'etfuturum:blast_furnace',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.blockmachines@100',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 288,
+      y: 72,
+    },
+  },
+  {
+    id: '0:15',
+    name: 'Ready, Set, Go!',
+    description:
+      "You probably should have a home by now. A steady supply of food is a fundamental requirement at all times. Take this journal to keep track of the things you've eaten. You will have to travel far in this tier, better be prepared!",
+    prerequisites: ['0:13'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 624,
+      y: 72,
+    },
+  },
+  {
+    id: '0:36',
+    name: 'Important Tools',
+    description:
+      "In order to craft even basic machines, you'll need new tools. Most of them can be replaced by machines later. For now, you should become familiar with each of their recipes, as you will need a lot of these tools, starting today. Your new tools can also be used to make Railcraft water tanks, a very u",
+    prerequisites: ['0:37'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@12',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@16',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@18',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@22',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@10',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 168,
+      y: 84,
+    },
+  },
+  {
+    id: '0:1146',
+    name: 'GT6-Styled Pipes',
+    description:
+      "Wondering why new pipes don't always auto-connect? This was changed to make the pipes smarter. You can now use a wrench to connect only the pipes you want. You don't need a plate or a foil to prevent pipes from connecting anymore. The pipes will still autoconnect if you build one onto the other. Pip",
+    prerequisites: ['0:35'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@17300',
+            count: 6,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.blockmachines@5123',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 384,
+      y: 84,
+    },
+  },
+  {
+    id: '0:41',
+    name: "Don't Burn Your Fingers!",
+    description:
+      "You have decided it's time to make some tasty pizza, but your fingers got burned badly. Reading an ancient cookbook you discovered a pair of magical items that would allow you to carry anything hot, even lava in a bucket. The gloves have to be placed in the Baubles ring slots. Order does not matter.",
+    prerequisites: ['0:43'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:leather',
+            count: 6,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:string',
+            count: 6,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'harvestcraft:wovencottonItem',
+            count: 6,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'dreamcraft:item.OvenGlove',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'dreamcraft:item.OvenGlove@1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 480,
+      y: 84,
+    },
+  },
+  {
+    id: '0:18',
+    name: 'Basic Processing',
+    description:
+      "Most things are unavailable at the moment, so let's begin with something simple. Take some of your cobblestone and smelt it into regular stone. Since this modpack is evil, you'll need to use wood for that. How much fun is that?!",
+    prerequisites: ['0:15'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:stone',
+            count: 25,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 552,
+      y: 84,
+    },
+  },
+  {
+    id: '0:17',
+    name: 'Sand: The Gathering',
+    description:
+      'In a strange vision you saw a big structure which would allow you to make charcoal. Finally some torches! According to your calculations, you will need a lot of sand for that.',
+    prerequisites: ['0:15'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:sand',
+            count: 128,
+            oreDict: 'sand',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 720,
+      y: 84,
+    },
+  },
+  {
+    id: '0:482',
+    name: 'Animal Farms',
+    description:
+      "Trying to get some leather or wool? You'd probably need to spend a lot of time hunting animals and traveling around, or you could simply make a farm to get a decent amount of leather, wool, and meat close to home. Make sure you don't put too many animals in the pen or they will overcrowd and kill ea",
+    prerequisites: ['0:483', '0:1476'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:leather',
+            count: 100,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:beef',
+            count: 100,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:wool',
+            count: 100,
+            oreDict: 'blockWool',
+            anyDamage: false,
+          },
+          {
+            item: 'harvestcraft:muttonrawItem',
+            count: 100,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:porkchop',
+            count: 100,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:chicken',
+            count: 100,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:feather',
+            count: 100,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 108,
+    },
+  },
+  {
+    id: '0:483',
+    name: 'Gardener',
+    description:
+      'If you were wondering: Why do I never get seeds when destroying grass? Because. Use your new mattock on the grass blocks that do not have water anywhere nearby to find some seeds.',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:metalPattern@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:metalPattern@4',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:metalPattern@1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:mattock',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 36,
+      y: 108,
+    },
+  },
+  {
+    id: '0:1738',
+    name: 'When All You Have is a Hammer...',
+    description:
+      '...the whole world looks like a nail. When looking for good tool materials, see "GregTech Material Tools" tab in NEI. Remember that NEI bookmarks are your friends. The GT tools each have special uses. Screwdriver - Used on covers to change their behavior or on machines to change their input mode. Wr',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 252,
+      y: 120,
+    },
+  },
+  {
+    id: '0:1508',
+    name: 'A Better Crafting Table',
+    description:
+      "Tired of your stuff falling out of your crafting table every time you walk away? This fancy table from Tinker's Construct has slots to hold the items in your recipe. You can also use it to upgrade tools with 8 modifiers at a time. Very handy for Redstone additional speed and Lapis looting! When it's",
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:CraftingStation',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 144,
+    },
+  },
+  {
+    id: '0:19',
+    name: 'Macerator v0.1 Alpha',
+    description:
+      "This fancy little device works (almost...) like a macerator. Some people say it's even better, since it does not require power, yay! You only need to craft one for this quest, but you probably should make some more if you can... [note]The mortar lets you make flint much, much more efficiently - you ",
+    prerequisites: ['0:18'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@24',
+            count: 1,
+            oreDict: 'craftingToolMortar',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 564,
+      y: 156,
+    },
+  },
+  {
+    id: '0:21',
+    name: 'Clay: The Gathering',
+    description:
+      'While bored, you thought that it might be a good idea to take up pottery. You should go and find some clay, the riverbanks should have some.',
+    prerequisites: ['0:15'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:clay_ball',
+            count: 128,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 648,
+      y: 156,
+    },
+  },
+  {
+    id: '0:863',
+    name: 'Bronze Javelin',
+    description:
+      'The bronze javelin is a bit expensive and has only 7 throws, yet it is a good mid-range weapon. With one bronze ingot you can replenish your stack of javelins.',
+    prerequisites: ['0:38', '0:74'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:metalPattern@25',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:metalPattern@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:arrowhead@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:toughRod@14',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:Javelin',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 264,
+      y: 168,
+    },
+  },
+  {
+    id: '0:473',
+    name: 'Making a Better Sword',
+    description:
+      "Now it's time to make your first quality tinkers sword. First you have to make a blade, a type of guard, and tool rod cast forms. Melt some bronze in the smeltery and cast your tool parts. Tadaa... your first tinkers sword. There are 4 types of guard, changing them gets you a different sword type, s",
+    prerequisites: ['0:38', '0:74'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:metalPattern@5',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:metalPattern@1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:swordBlade@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:toolRod@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 300,
+      y: 168,
+    },
+  },
+  {
+    id: '0:2897',
+    name: 'Making a Rapier',
+    description:
+      "Problems killing armored enemies? Just use a Rapier that ignores armor, but doesn't do a lot of damage.",
+    prerequisites: ['0:38', '0:74'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:metalPattern@5',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:metalPattern@1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:metalPattern@8',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:swordBlade@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:toolRod@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:crossbar@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 336,
+      y: 168,
+    },
+  },
+  {
+    id: '4673371915106402541:-6848797731239430532',
+    name: 'Compact Storage',
+    description:
+      "Now that you are starting to find more and more copper, you feel your wood chests are too small to hold all the stuff. [note]It's time to upgrade your wooden chests to copper chests! Higher tiers of chests can be upgraded cheaply by using upgrade items, but not all tier chests can be upgraded direct",
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'IronChest:BlockIronChest@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 180,
+    },
+  },
+  {
+    id: '0:35',
+    name: 'Making Bronze',
+    description:
+      "Now that you've found copper and tin, you should make yourself some bronze. Use your macer... mortar to grind up some copper and tin ingots, and mix them together!",
+    prerequisites: ['0:30', '0:31'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@2300',
+            count: 32,
+            oreDict: 'dustBronze',
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@11300',
+            count: 32,
+            oreDict: 'ingotBronze',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 384,
+      y: 192,
+    },
+  },
+  {
+    id: '0:947',
+    name: 'Punji Sticks',
+    description:
+      'An early game protection moat can be made out of punji sticks. It hurts all mobs/players and additionally gives a slowness II potion effect. Make a trench around your base and put the punji sticks inside.',
+    prerequisites: ['0:43'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:string',
+            count: 20,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:stick',
+            count: 20,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:reeds',
+            count: 50,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:trap.punji',
+            count: 20,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 456,
+      y: 192,
+    },
+  },
+  {
+    id: '0:43',
+    name: 'Cotton, Cotton and More Cotton',
+    description:
+      "You've found out that cotton is very useful, it can be used to make string, wool, and some other useful items too. Make a small cotton plantation to get tons of it.",
+    prerequisites: ['0:42'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'Natura:barleyFood@3',
+            count: 5,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:string',
+            count: 3,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 492,
+      y: 192,
+    },
+  },
+  {
+    id: '0:22',
+    name: 'Finite Water!?',
+    description:
+      "Finite water is a problem, that's for sure. Last night, you had an idea. If you can drink cacti, you should also be able to make water out of 8 cacti and use that for most recipes that require water. How cool is that? So what about another trade? 10 wood for... 3 cacti so you can set up a farm. Deal",
+    prerequisites: ['0:23'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: true,
+        items: [
+          {
+            item: 'minecraft:log',
+            count: 10,
+            oreDict: 'logWood',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 564,
+      y: 192,
+    },
+  },
+  {
+    id: '0:23',
+    name: 'Something to Carry Liquids',
+    description:
+      "You tried to move water with your bare hands, which didn't work at all. Luckily, you remember how to make a bucket out of clay dust. Put it in a mortar to get small clay dust which can be crafted to clay dust.",
+    prerequisites: ['0:19', '0:21'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'IguanaTweaksTConstruct:clayBucketUnfired',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'IguanaTweaksTConstruct:clayBucketFired',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 600,
+      y: 192,
+    },
+  },
+  {
+    id: '0:1864',
+    name: 'No Self-Healing Tools Here...Yet',
+    description:
+      "In this pack you have to first gain expertise in Thaumcraft to craft the Tinker's Construct Ball of Moss. Go and become a dangerous wizard, and you'll gain the power needed to craft the Ball of Moss and make your tools heal themselves. Of course, you need to get to the Twilight Forest and get some a",
+    prerequisites: ['0:38'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 264,
+      y: 204,
+    },
+  },
+  {
+    id: '0:38',
+    name: 'Making Better Tools',
+    description:
+      "With zinc and copper, you can create a material with a higher melting temperature - Brass - which can be used to cast better tools. For that, you need a smeltery. See the Multiblock Goals tab for details. You can also grab some extra blocks from some villages, but they don't count towards the quest.",
+    prerequisites: ['0:35', '0:1866', '0:30'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:metalPattern@2',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:metalPattern@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:pickaxeHead@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:shovelHead@14',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 300,
+      y: 204,
+    },
+  },
+  {
+    id: '0:1085',
+    name: 'More Compact Storage',
+    description:
+      'Now that you are starting to find more and more iron, you feel your copper chests are too small to hold all the stuff. [note]Do you have copper chests that are too small? You can also upgrade with a fitting upgrade item.[/note]',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@18032',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@27032',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:chest',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'IronChest:BlockIronChest',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 216,
+    },
+  },
+  {
+    id: '7905693324829737052:-6697627242772387263',
+    name: 'Sustainable Paper',
+    description:
+      "Now that you got your first paper, it's time for a better way to get more. With paperbark you can do just that. Once grown you can obtain paper by right-clicking the logs of the tree. The bark regrows in due time.",
+    prerequisites: ['0:32'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'harvestcraft:pampaperbarkSapling',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 564,
+      y: 228,
+    },
+  },
+  {
+    id: '0:32',
+    name: 'Book Parts',
+    description:
+      "After you found a way to move water around, you had another brilliant idea: Paper! Paper is no longer made with sugarcane, you'll need wood pulp instead. You'll need a lot of wood to craft wood pulp, so better grab your axe and go chop some trees.",
+    prerequisites: ['0:23'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@2809',
+            count: 64,
+            oreDict: 'dustWood',
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:paper',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 600,
+      y: 228,
+    },
+  },
+  {
+    id: '0:862',
+    name: 'Your First Bow',
+    description:
+      "Since vanilla bows are only craftable in the assembling machine and mobs don't drop them very often you should make a Tinkers bow. Wood would be the best material for now. Craft the bow limbs out of wood and the bow string out of strings. The arrow that has the most durability is bone, so craft the ",
+    prerequisites: ['0:33'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:string',
+            count: 3,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:flint',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:feather',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:planks',
+            count: 3,
+            oreDict: 'plankWood',
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:bone',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:arrowhead@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:toolRod@5',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:fletching',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:BowLimbPart',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:bowstring',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:ShortBow',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:ArrowAmmo',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 648,
+      y: 228,
+    },
+  },
+  {
+    id: '0:693',
+    name: 'Fallen From the Sky',
+    description:
+      "You may have noticed big meteors everywhere, and maybe wondered if they're useful somehow? Well, they are, but not just yet. I'll give you a reward for collecting some now. Inside the meteor you can find a skystone chest containing some processor press plates. Save them for later, you can't do AE2 w",
+    prerequisites: ['0:38'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'appliedenergistics2:tile.BlockSkyStone',
+            count: 256,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'appliedenergistics2:tile.BlockSkyChest',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 264,
+      y: 240,
+    },
+  },
+  {
+    id: '0:1095',
+    name: 'Even More Compact Storage',
+    description:
+      'If you found enough gold, you can upgrade your chest to make it an even bigger inventory of 9x9. [note]Do you have iron chests that are too small? You can also upgrade with a fitting upgrade item.[/note]',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@18086',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@27086',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:chest',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'IronChest:BlockIronChest@1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 252,
+    },
+  },
+  {
+    id: '0:727',
+    name: 'Better Than Barrels',
+    description:
+      "While barrels offer a slot for a single item, drawers can have up to 4 slots each, holding 16 stacks per slot. However, they do come with some downsides. You won't be able to make them point up or down, and you can only access the contents from the front. The automation can use any side.",
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'StorageDrawers:fullDrawers1',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'StorageDrawers:fullDrawers2',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'StorageDrawers:fullDrawers4',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 36,
+      y: 252,
+    },
+  },
+  {
+    id: '0:1504',
+    name: 'Divine Rod of the Gods?',
+    description:
+      "The Ore Finder Wand reduces the tedium of locating needed veins. If you're not sure how to craft Magnetic Iron Rod for it, check its Shapeless Crafting tab in NEI. Once you put an ore sample into the wand, it will tell you if this ore is nearby. When you get close to the target, you will hear the so",
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:stick',
+            count: 2,
+            oreDict: 'woodStick',
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@23354',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@23032',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:redstone',
+            count: 2,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@28086',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'ifu:ifu_buildingKit',
+            count: 1,
+            oreDict: null,
+            anyDamage: true,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 72,
+      y: 252,
+    },
+  },
+  {
+    id: '0:2333',
+    name: 'How to Open Your Wooden Doors?',
+    description:
+      "Wooden doors make your House safer. Let's craft some wooden Pressure plates and Buttons to open these Doors. Doors will open when they receive a redstone signal, and close again after it stops. If you place the plates on either side of a door, it will open when you step on it. Or a monster does. Dou",
+    prerequisites: ['0:36', '0:1790'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:wooden_slab',
+            count: 5,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@27809',
+            count: 20,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.02@24032',
+            count: 5,
+            oreDict: 'springAnyIron',
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:wooden_pressure_plate',
+            count: 10,
+            oreDict: 'pressurePlateWood',
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:wooden_button',
+            count: 10,
+            oreDict: 'buttonWood',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 108,
+      y: 252,
+    },
+  },
+  {
+    id: '-1997546526317785722:-4916213553338882423',
+    name: 'A Better Furnace!',
+    description:
+      'Build a Blast Furnace! Enjoy faster smelting for your metals! [warn]Will not process all items that a regular furnace will. Check NEI for more detail.[/warn]',
+    prerequisites: ['0:36'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'etfuturum:blast_furnace',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 144,
+      y: 252,
+    },
+  },
+  {
+    id: '0:485',
+    name: 'You Need MOOOOOOORE Wood',
+    description:
+      "It's time to feed your new coke oven with some wood to get more charcoal. You're looking for the most efficient way to plant trees. Try to find some spruce saplings and some jungle saplings. Both can be planted in a 2x2 grid to get bigger trees. The Rainforest Oak is also a great source of wood, and",
+    prerequisites: ['0:24'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:sapling@1',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:sapling@3',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'miscutils:blockRainforestOakSapling',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 780,
+      y: 252,
+    },
+  },
+  {
+    id: '0:30',
+    name: 'Copper',
+    description: 'Copper ingots can be created by smelting copper, chalcopyrite, or malachite ore.',
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@11035',
+            count: 48,
+            oreDict: 'ingotAnyCopper',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 348,
+      y: 264,
+    },
+  },
+  {
+    id: '0:31',
+    name: 'Tin',
+    description:
+      'Tin ingots can be created by smelting Tin, Cassiterite, or Cassiterite Sand ore. Tin and Cassiterite ores are only found at high altitudes, but Cassiterite Sand ore is plentiful near the surface. If you get lucky and find a high altitude Tin/Cassiterite vein, save one of the Cassiterite ore to find ',
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@11057',
+            count: 16,
+            oreDict: 'ingotTin',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 420,
+      y: 264,
+    },
+  },
+  {
+    id: '0:42',
+    name: 'Cow Tipper',
+    description:
+      "Before you had to kill some pigs and sheep to complete quests. Now it's time to kill some cows and hopefully get some leather. If you are lucky and get a cow trophy you may never need to kill another cow in the future.",
+    prerequisites: ['0:33'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:hunt',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 480,
+      y: 264,
+    },
+  },
+  {
+    id: '0:33',
+    name: 'Tinker-Time',
+    description:
+      "While using your wooden tools is fun in terms of killing pigs and cows, they are not long-lasting and can't be repaired. Plus Infernals laugh at your attempts to kill them. You discovered how to craft tools that can be repaired and upgraded, but for that you definitely need a more advanced crafting ",
+    prerequisites: ['0:32'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:ToolStationBlock@1',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:ToolStationBlock@10',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:ToolStationBlock',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:ToolStationBlock@5',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 588,
+      y: 264,
+    },
+  },
+  {
+    id: '0:24',
+    name: 'Getting (Char)coal',
+    description:
+      "Now you can make the bricks for your first multiblock structure. 104 bricks to be exact. Good that you just collected a lot of resources! What a coincidence... The bricks you'll need are somewhat special. Make sure to craft the correct ones. With that done, let's build a coke oven to get some charco",
+    prerequisites: ['0:17', '0:26'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'dreamcraft:item.UnfiredCokeOvenBrick',
+            count: 104,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'dreamcraft:item.CokeOvenBrick',
+            count: 104,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'Railcraft:machine.alpha@7',
+            count: 26,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 720,
+      y: 264,
+    },
+  },
+  {
+    id: '0:535',
+    name: 'Redstone, Early Game Processing',
+    description:
+      'Are you wondering how to process raw redstone ore without a macerator? Use the hammer in the crafting table to get some crushed redstone ore from your raw redstone ore. After that, use the hammer in the crafting table again to get some impure redstone dust. Lastly, fill a cauldron with water and dro',
+    prerequisites: ['0:36', '0:494'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:cauldron',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:water_bucket',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@5810',
+            count: 64,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@3810',
+            count: 64,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:redstone',
+            count: 64,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 228,
+      y: 276,
+    },
+  },
+  {
+    id: '0:1129',
+    name: 'Redstone? Haste!',
+    description:
+      'Mining and digging can be soooo slow. Get some redstone on your pick, shovel or axe to make it faster. You can use the Crafting Station to upgrade your tool 8 dust at a time. Later when you get a compressor you can use blocks to do 9 per block.',
+    prerequisites: ['0:535'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:redstone',
+            count: 128,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 264,
+      y: 276,
+    },
+  },
+  {
+    id: '0:1866',
+    name: 'Options For Finding Zinc',
+    description:
+      'It can be hard to find Zinc Gravel Ore on old servers or unlucky world seeds. The alternatives are: - Buy the Zinc Gravel Ore in the Coins, Coins, Coins tab, - Search for Small Zinc Ore in the overworld, - Use the recipe with XP buckets in a crafting table. Once you reach LV, you can get zinc from p',
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 300,
+      y: 276,
+    },
+  },
+  {
+    id: '0:26',
+    name: 'Forming Press v0.1',
+    description:
+      "As you may have noticed, you cannot turn clay into bricks directly. Well, to be fair, it wasn't a good recipe anyway. You'll probably end up with something bread-shaped. In order to make bricks, you need a form. Get yourself a knife by putting flint above a stick on the crafting grid. With a knife, ",
+    prerequisites: ['0:33'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metatool.01@34',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'dreamcraft:item.WoodenBrickForm',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 648,
+      y: 276,
+    },
+  },
+  {
+    id: '0:729',
+    name: 'Framing Drawers',
+    description:
+      'Now you can really make some swaggy and even fancier drawers by using this table, all you have to do is place some decorative blocks and it will take their texture, the TOP left is the outer square, bottom left is for the front face, and top right is for the borders. This table works with almost all',
+    prerequisites: ['0:727', '0:728'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'StorageDrawers:framingTable',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 0,
+      y: 288,
+    },
+  },
+  {
+    id: '0:728',
+    name: 'Compact Drawers',
+    description: 'They are very compact and add some fanciness to your glorious dirt base.',
+    prerequisites: ['0:727'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:crafting',
+        consume: false,
+        items: [
+          {
+            item: 'StorageDrawers:halfDrawers2',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'StorageDrawers:halfDrawers4',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 36,
+      y: 288,
+    },
+  },
+  {
+    id: '0:1546',
+    name: 'Rare Ores',
+    description:
+      'Did you look for days to find Diamonds, Redstone, Tantalite, Certus Quartz, or Mica? Well for a few mixes you can use different ores like Coal for Diamond Vein or Quartzite Ore for Certus Quartz Vein. Mica ore mix can be found if you have Cassiterite Ore, but not the Cassiterite Sand. Tetrahedrite i',
+    prerequisites: ['0:1504'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 72,
+      y: 288,
+    },
+  },
+  {
+    id: '0:481',
+    name: 'Creosote',
+    description:
+      'I guess you already turned some wood into charcoal and wonder what to do with all this creosote? Well, you can burn it in a normal Furnace to cook your food or anything else, or you can make some torches with it. You can save up on the Coal variants, while at the same time keeping the Coke Oven runn',
+    prerequisites: ['0:24'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'Railcraft:fluid.creosote.bucket',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'IguanaTweaksTConstruct:clayBucketCreosote',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 780,
+      y: 300,
+    },
+  },
+  {
+    id: '0:494',
+    name: 'Redstone',
+    description:
+      "If you didn't find any Redstone veins yet, it is quite important to look for one now. Try your luck at Y 5-40.",
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.03@5810',
+            count: 64,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5502',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5826',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.blockores@810',
+            count: 64,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@502',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@826',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 228,
+      y: 312,
+    },
+  },
+  {
+    id: '-8650347315666466864:-9128088765873917748',
+    name: 'Your First Flint Sword',
+    description:
+      "It's time to upgrade your wooden sword a little. You only need one stick, one bone, and one flint to create the new weapon. However, it's recommended that you gather extra flint since it can be used to repair the sword. You won't be able to kill a Wither with it now, but you can upgrade and improve ",
+    prerequisites: ['0:33'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:flint',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:bone',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:stick',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:swordBlade@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:wideGuard@5',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:broadsword',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 552,
+      y: 324,
+    },
+  },
+  {
+    id: '0:864',
+    name: 'Your First Flint Throwing Knife',
+    description:
+      'Is the bone bow too expensive for your taste? Then make a flint throwing knife instead. You need flint and a stick to get 12 knives. The durability and the attack damage are very low but it still helps with killing mobs from a safe distance. The knives should be in your inventory if you want to pick',
+    prerequisites: ['0:33'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:flint',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:stick',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:knifeBlade@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:ThrowingKnife',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 648,
+      y: 324,
+    },
+  },
+  {
+    id: '0:37',
+    name: 'Getting Iron',
+    description:
+      'Iron can be found in multiple veins, and there are many types of ores that will smelt down into iron ingots such as magnetite, brown / yellow limonite, banded iron, roasted iron, and granitic / basaltic mineral sand. Iron-Rich Veins: Magnetite veins (Y 60-180) Chalcopyrite veins (Y 5-60) Gold veins ',
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:iron_ingot',
+            count: 72,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 168,
+      y: 336,
+    },
+  },
+  {
+    id: '0:474',
+    name: 'Upgrade 2.0',
+    description:
+      'Find iron, copper and tin ore. Very funny... How can you mine these with just a flint pickaxe? I have an idea; bring me some of the stone you mined with your flint pickaxe and I will give you a better tool head in exchange. Remember to level it up again either with monster heads or by mining.',
+    prerequisites: ['0:472', '0:28'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: true,
+        items: [
+          {
+            item: 'minecraft:cobblestone',
+            count: 256,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 384,
+      y: 336,
+    },
+  },
+  {
+    id: '0:472',
+    name: 'Your First Tool',
+    description:
+      "When your tinkers tables are ready, you can craft your first real tool. If you didn't find a village yet to grab some parts from the chest, you can only craft flint tools. Let's start with a pickaxe, an axe, and a shovel. Keep in mind that most of the original tool parts from Tinker's Construct are ",
+    prerequisites: ['0:33'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:blankPattern',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:woodPattern@2',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:woodPattern@4',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:woodPattern@9',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:woodPattern@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:flint',
+            count: 3,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:planks',
+            count: 1,
+            oreDict: 'plankWood',
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:pickaxeHead@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:shovelHead@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:hatchetHead@3',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:binding',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:stick',
+            count: 3,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'TConstruct:pickaxe',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:hatchet',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'TConstruct:shovel',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 588,
+      y: 336,
+    },
+  },
+  {
+    id: '0:1790',
+    name: 'Wooden Door',
+    description:
+      'For your new House you need some wooden doors. Well, the recipe is really hard and needs iron/copper and a lot of wood. You can choose two more doors as a reward if you like.',
+    prerequisites: ['0:37'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:planks',
+            count: 4,
+            oreDict: 'plankWood',
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:trapdoor',
+            count: 1,
+            oreDict: 'trapdoorWood',
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@27032',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.01@28032',
+            count: 1,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:wooden_door',
+            count: 1,
+            oreDict: 'doorWood',
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 108,
+      y: 348,
+    },
+  },
+  {
+    id: '0:34',
+    name: 'Zinc Gravel',
+    description:
+      "You can find it in chunks of gravel on the surface. Use as little as possible and save the rest for when you get a macerator in Steam age, you'll get twice as much. If you can't find any, you can buy them in the Coins tab. If you get enough and fully process it, you can also get Gallium for Gallium ",
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'dreamcraft:ZincGravelOre',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 264,
+      y: 372,
+    },
+  },
+  {
+    id: '0:1497',
+    name: 'Digging Deeper',
+    description:
+      'Now that you know what an Ore Chunk is, dig all the way down to bedrock to find if there is a vein located in it. Check out an ore in NEI to see where you can find a vein that contains it. Search for it and click on it to get this info, among other things. There are many types of ores, even just for',
+    prerequisites: ['0:1496'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 444,
+      y: 372,
+    },
+  },
+  {
+    id: '0:29',
+    name: 'Another Fuel Source',
+    description:
+      "Lignite and regular coal are the fuel sources you'll definitely need. The latter can be turned into coal coke, which is a superior fuel source to smelt your first large batch of ore. Lignite you can toss in a boiler once you have one.",
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.01@8538',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 264,
+      y: 408,
+    },
+  },
+  {
+    id: '0:1496',
+    name: 'How the Heck Do I Find Ores?',
+    description:
+      'GregTech ore generation is based on veins. Veins have a fixed height and a rectangular base. There is a vein every 3 chunks in x and z direction. The veins typically extend into the neighboring chunks and have varying forms. The center point however is very regular. It is based on the chunk number. ',
+    prerequisites: ['0:28'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 444,
+      y: 408,
+    },
+  },
+  {
+    id: '7836976352036995675:-7957069611279940583',
+    name: 'The power of prospecting!',
+    description:
+      "At the top of your map screen (J by default) there are multiple tabs, some of them will be very useful and will save you a ton of searching! GT Oreveins - this tab will keep track of the veins for you, to save a vein to map right-click a naturally generated ore (some tools can't right-click) GT Unde",
+    prerequisites: ['0:1496'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 480,
+      y: 408,
+    },
+  },
+  {
+    id: '0:27',
+    name: 'Finally, Some Powerful Fuel',
+    description:
+      "Now that you have a coke oven, you can start producing charcoal. The more, the better. Creosote is produced at the same time, and the Coke Oven will stop when it's full of either one, which means you can't just leave the Creosote there. Refer to the Creosote quest from before to learn what to do wit",
+    prerequisites: ['0:24'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: true,
+        items: [
+          {
+            item: 'minecraft:coal@1',
+            count: 4,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 720,
+      y: 432,
+    },
+  },
+  {
+    id: '0:825',
+    name: 'Copper Ore',
+    description:
+      'Can be found between Y 5-60 either as "Copper Ore" or "Chalcopyrite". Most of the time you\'ll find it together with "Iron" and "Pyrite". To see where an ore can be found, click the raw ore in NEI, and it will show you more details. Works with small ores too.',
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.03@5855',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5032',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5834',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5035',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.blockores@855',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@32',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@834',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@35',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 264,
+      y: 444,
+    },
+  },
+  {
+    id: '0:480',
+    name: 'Malachite',
+    description:
+      'Another copper source is "malachite" which can be found between Y 10-40. This vein contains more iron ore variants like "brown limonite", "yellow limonite" and "banded iron ore". To see where an ore can be found, click the raw ore in NEI, and it will show you more details. Works with small ores too.',
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.03@5930',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5931',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5917',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5871',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.blockores@930',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@931',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@917',
+            count: 32,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@871',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 300,
+      y: 444,
+    },
+  },
+  {
+    id: '0:826',
+    name: 'Iron Ore',
+    description:
+      "With iron tools, you are able to mine most of the Overworld ores. You've probably already found iron or magnetite, given how common it is. So bring me some ores and make some iron ingots out of them. To see where an ore can be found, click the raw ore in NEI, and it will show you more details. Works",
+    prerequisites: ['0:474'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.metaitem.03@5917',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5032',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5870',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5931',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.metaitem.03@5930',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'gregtech:gt.blockores@917',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@32',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@870',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@931',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'gregtech:gt.blockores@930',
+            count: 16,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 336,
+      y: 444,
+    },
+  },
+  {
+    id: '0:28',
+    name: 'Copper Sky, Iron Curtain',
+    description:
+      "With your newly acquired fuel source, you are now ready to process more advanced materials than stone or clay; Iron or Copper, for example. Just in case you don't know, they spawn in rather large veins. Use the following quests to locate the most important veins.",
+    prerequisites: ['0:27'],
+    prerequisiteLogic: 'AND',
+    main: true,
+    tasks: [
+      {
+        type: 'bq_standard:checkbox',
+        consume: false,
+        items: [],
+      },
+    ],
+    layout: {
+      x: 396,
+      y: 444,
+    },
+  },
+  {
+    id: '0:2721',
+    name: 'Personally, I Prefer Pepsi™',
+    description:
+      'You may have noticed that you can make more than just Charcoal in a Coke Oven, you can also make Coke. You want to save all of your Coke for making Steel in your Bricked Blast Furnace (BBF) later on. As for everything else, check NEI for the uses of each Coal variant, since there are many. [note]Onc',
+    prerequisites: ['0:27'],
+    prerequisiteLogic: 'AND',
+    main: false,
+    tasks: [
+      {
+        type: 'bq_standard:optional_retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'minecraft:coal',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:log',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:cactus',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:reeds',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'Railcraft:fuel.coke',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'minecraft:coal@1',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'miscutils:itemCactusCharcoal',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'miscutils:itemSugarCharcoal',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+      {
+        type: 'bq_standard:retrieval',
+        consume: false,
+        items: [
+          {
+            item: 'miscutils:itemCactusCoke',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+          {
+            item: 'miscutils:itemSugarCoke',
+            count: 8,
+            oreDict: null,
+            anyDamage: false,
+          },
+        ],
+      },
+    ],
+    layout: {
+      x: 780,
+      y: 444,
+    },
+  },
+];
