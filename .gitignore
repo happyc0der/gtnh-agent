@@ -10,3 +10,6 @@ data/
 agent.config.json
 # Mineflayer / prismarine-auth token caches must never be committed.
 .auth-cache/
+
+# Claude Code worktrees of background agents (separate checkouts)
+.claude/
