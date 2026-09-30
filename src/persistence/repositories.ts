@@ -311,12 +311,17 @@ export class ActionLogRepository implements FailureHistory {
     return rows.map(toRecord);
   }
 
-  /** Executed-and-failed attempts (execution or verification) of this exact action for this task. */
+  /**
+   * Executed-and-failed attempts (execution or verification) of this exact action for this
+   * task, by the agent itself: failures of actions a human requested directly (origin
+   * 'user', e.g. a stopped test walk) do not count against the agent's own attempts.
+   */
   countFailures(taskId: string | null, fingerprint: string): number {
     const row = this.#db
       .prepare(
         `SELECT COUNT(*) AS n FROM action_logs
-          WHERE task_id IS ? AND fingerprint = ? AND status IN ('failed','verification_failed')`,
+          WHERE task_id IS ? AND fingerprint = ? AND status IN ('failed','verification_failed')
+            AND origin <> 'user'`,
       )
       .get(taskId, fingerprint) as { n: number };
     return row.n;

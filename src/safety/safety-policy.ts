@@ -532,7 +532,11 @@ export function evaluateAction(
   violations.push(...evaluateStaticSpec(spec, ctx));
   violations.push(...dynamicChecks(action, state, ctx));
 
-  const failures = history.countFailures(action.taskId, actionFingerprint(spec));
+  // The rule stops the AGENT from retrying its own failing choices. An action a human
+  // requested directly (origin 'user') is that human's decision each time; every other
+  // rule above still applies to it.
+  const failures =
+    action.origin === 'user' ? 0 : history.countFailures(action.taskId, actionFingerprint(spec));
   if (failures >= ctx.config.maxFailuresPerActionPerTask) {
     violations.push({
       code: 'REPEATED_FAILURE',

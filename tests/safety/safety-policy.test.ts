@@ -341,6 +341,22 @@ describe('rule 6: repeated failures', () => {
     expect(r.requiresUserPause).toBe(true);
   });
 
+  it('does not stop an action a human requested directly (every other rule still applies)', () => {
+    const byUser = { ...action(spec), origin: 'user' as const };
+    expect(evaluateAction(byUser, makeState(), safetyCtx(), failingHistory(5)).violations).toEqual(
+      [],
+    );
+    const unsafe = {
+      ...action({ type: 'MOVE_TO', args: { target: { x: 9999, y: 64, z: 0 }, tolerance: 1 } }),
+      origin: 'user' as const,
+    };
+    expect(
+      evaluateAction(unsafe, makeState(), safetyCtx(), failingHistory(5)).violations.map(
+        (v) => v.code,
+      ),
+    ).toContain('OUT_OF_BOUNDS');
+  });
+
   it('fingerprints are independent of argument key order', () => {
     const a = actionFingerprint({
       type: 'DEPOSIT_ITEM',

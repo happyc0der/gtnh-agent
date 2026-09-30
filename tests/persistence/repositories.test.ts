@@ -121,9 +121,20 @@ describe('repositories', () => {
       fingerprint: 'fp',
       status: 'proposed',
     });
+    // An operator's own failed request does not count against the agent's attempts.
+    repos.actions.insert({
+      ...base,
+      origin: 'user',
+      actionId: 'a4',
+      taskId: 't1',
+      actionType: 'WAIT',
+      fingerprint: 'fp',
+      status: 'proposed',
+    });
     repos.actions.update('a1', { status: 'failed', execution: { ok: false } });
     repos.actions.update('a2', { status: 'verification_failed' });
     repos.actions.update('a3', { status: 'failed' });
+    repos.actions.update('a4', { status: 'failed' });
 
     expect(repos.actions.countFailures('t1', 'fp')).toBe(2);
     expect(repos.actions.countFailures('t2', 'fp')).toBe(1);
@@ -133,8 +144,9 @@ describe('repositories', () => {
       execution: { ok: false },
       verification: null,
     });
+    // The planner's failure summary is information, so it includes the operator's failure.
     expect(repos.actions.failureSummary('t1', 5)).toEqual([
-      { actionType: 'WAIT', fingerprint: 'fp', failures: 2 },
+      { actionType: 'WAIT', fingerprint: 'fp', failures: 3 },
     ]);
     expect(() => repos.actions.update('nope', { status: 'failed' })).toThrow();
   });

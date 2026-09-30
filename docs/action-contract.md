@@ -52,6 +52,14 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 **Not in the allowlist, by design:** lava interaction, dropping items, combat, placing or breaking
 blocks, wrenching, cable/energy-network changes, multiblock changes, and rare-item consumption.
 
+**On the live GTNH client**, `MOVE_TO` and `RETURN_TO_SAFE_LOCATION` are walks. They need
+`MC_ENABLE_MOVEMENT=true` and a fence; without them they return `NOT_IMPLEMENTED`. A walk is
+refused (`REFUSED`, nothing sent) when the target is off the fence's level, outside the fence or
+unreachable over walkable blocks. It stops (`FAILED`) on a server correction, a health drop, a
+hostile or unidentified entity within `threatRadius` (`MOVE_TO` only), a blocked or dangerous way
+ahead, the stop file, `halt()` or a lost connection. The other world-changing actions return
+`NOT_IMPLEMENTED`. See [architecture: walking](architecture.md#walking).
+
 ## Global rules applied to every action
 
 1. **Unsupported/malformed** (not a schema-valid allowlisted action) → `UNSUPPORTED_ACTION`, pause.
@@ -68,10 +76,12 @@ blocks, wrenching, cable/energy-network changes, multiblock changes, and rare-it
    the hazard scan smaller than `hazardAvoidanceRadius`, the state is treated as unknown (pause).
 5. **Protected items** can never be eaten, deposited, withdrawn or burned. `ns:item` also protects
    every `ns:item@meta` variant. Config items are copied into the database and never silently removed.
-6. **Repeated failures.** Once an identical action (type + canonical args) has failed
-   `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is refused with
-   `REPEATED_FAILURE` (pause) and the task is blocked until a human resumes it
-   (`node src/app/cli.ts task-resume --task <id>`).
+6. **Repeated failures.** Once an identical action (type + canonical args) chosen by the agent
+   has failed `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is
+   refused with `REPEATED_FAILURE` (pause) and the task is blocked until a human resumes it
+   (`node src/app/cli.ts task-resume --task <id>`). An action a human requested directly (origin
+   `user`, e.g. `cli move`) is the human's decision each time: this rule does not apply to it, and
+   its failures do not count against the agent's own attempts. Every other rule still applies.
 
 ## How unsupported actions fail closed
 

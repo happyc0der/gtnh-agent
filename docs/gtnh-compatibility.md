@@ -1,12 +1,13 @@
 # GTNH compatibility
 
-**Status (2026-09-30): read-only observation of every safety-critical field works on a
-private GTNH 2.8.4 test server.** The agent's own client (`src/bot/gtnh1710/`, `Gtnh1710Client`)
-joins via the Forge handshake and reports position, dimension, health, food, a fully named
-inventory, nearby entities (vanilla and modded) and lava/void/damaging blocks. A live agent cycle
-now has no state violations; it pauses only because it has no task. Machines, power and held-item
-durability are not observable yet. Mineflayer cannot connect at all. Every claim below is labelled
-as _verified_ (observed or checked in installed code) or _assumption_ (to be tested).
+**Status (2026-09-30): observation of every safety-critical field, and walking inside a fence,
+work on a private GTNH 2.8.4 test server.** The agent's own client (`src/bot/gtnh1710/`,
+`Gtnh1710Client`) joins via the Forge handshake and reports position, dimension, health, food, a
+fully named inventory, nearby entities (vanilla and modded) and lava/void/damaging blocks. A live
+agent cycle has no state violations; it pauses only because it has no task. With movement enabled
+it walks on one level inside a fence (see "Walking"). Machines, power and held-item durability are
+not observable yet. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
+(observed or checked in installed code) or _assumption_ (to be tested).
 
 ## Test server results (2026-09-30)
 
@@ -71,9 +72,52 @@ Findings while building it (verified):
   `Connection reset`.
 
 What the client can send is fixed in `packets.ts` (`outbound`): handshake, status request, login
-start, keep-alive, plugin messages on `REGISTER`/`FML|HS` only, idle ticks, and echoes of
-server-assigned positions. `perform()` supports only `OBSERVE_STATE`, `WAIT` and `PAUSE_AND_ASK_USER`;
-every other action returns `NOT_IMPLEMENTED` without sending anything (tested).
+start, keep-alive, plugin messages on `REGISTER`/`FML|HS` only, idle ticks, echoes of
+server-assigned positions, and (since walking) walking steps. `perform()` supports `OBSERVE_STATE`,
+`WAIT` and `PAUSE_AND_ASK_USER`, plus walks when movement is enabled; every other action returns
+`NOT_IMPLEMENTED` without sending anything (tested).
+
+## Walking (2026-09-30)
+
+The first world-changing ability, tested in a glass pen at y=200 in the throwaway world (9 x 9
+interior; see README "Walking in the test pen").
+
+How 1.7.10 movement works, and what the walker does about it:
+
+- **The client reports positions; the server checks them.** All of these checks are in this
+  server's player network handler (`nh.class` in `minecraft_server.1.7.10.jar`; its messages were
+  found in the jar, _verified_). The thresholds are vanilla 1.7.10's (_assumption_: a GTNH mod could
+  patch them at run time).
+  - It resets ("moved too quickly") any packet more than 10 blocks from the last position.
+  - It moves its own copy of the player with block collisions. If the result differs from the
+    reported position by more than 0.25 blocks horizontally, it resets the player ("moved
+    wrongly") with an S08 placement.
+  - It kicks for a stance (head minus feet) outside 0.1–1.65 and, with `allow-flight=false`, for
+    floating more than 80 ticks.
+  - The walker sends one C06 (position + look) per tick. Each step is at most 0.2 blocks, the
+    stance is exactly 1.62 and the player is always on the ground. Any S08 during a walk stops it.
+- **After an S08, the server ignores movement until the client echoes the exact position.** The
+  client echoes every placement at once.
+- **`/tp` in 1.7.10 adds 0.5 to any coordinate written without a decimal point**, so
+  `tp player -4.5 200 -7.5` put the feet at y=200.5, floating (_verified_). The operator tool
+  always sends decimals. The walker refuses to start unless the feet are exactly on a block top.
+- **RCON:** vanilla 1.7.10 runs RCON commands on the RCON thread. GTNH's Hodgepodge moves them to the
+  main thread (`fixRconThreading=true`; the server log shows `[Server thread/INFO]: [Rcon: ...]`).
+  RCON binds to `server-ip`, here 127.0.0.1 (_verified_ with `Get-NetTCPConnection`).
+
+Live results (_verified_, 2026-09-30):
+
+| Test                                                    | Result                                                                                                        |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Diagonal walk, centre to corner (5.66 blocks, 29 steps) | Succeeded and verified 0.00 blocks from the target; the next login was at the walk's end, per the server log. |
+| Around an inner wall through its only gap               | Planned around it; 10.12 blocks in 51 steps, verified.                                                        |
+| RCON teleport during a walk (a server correction)       | Stopped at once ("the server corrected the position"); the echo was accepted.                                 |
+| `cli halt` from another process during a walk           | Stopped after 49 of 72 steps; new walks refused until `unhalt`.                                               |
+| Target outside the pen                                  | Rejected by the safety policy (`OUT_OF_BOUNDS`); nothing sent.                                                |
+| Target one level up                                     | Refused by the walker ("walking stays on level y=200").                                                       |
+| Lava in a sealed glass box in the pen                   | Seen by the hazard scan; the walker routed around every block touching it; home refused (`HAZARD_PROXIMITY`). |
+
+No test produced a server warning (moved wrongly, moved too quickly, floating, illegal stance).
 
 ## Entity tracking (2026-09-30)
 
@@ -188,7 +232,9 @@ Minecraft. GTNH adds hundreds of mods. None of the following is guaranteed to wo
    server-side help, which is why unknown statuses route to the planner or a pause and never to action.
 5. Food level and health semantics match vanilla (GTNH includes Spice of Life / hunger changes).
    Thresholds are configurable for this reason.
-6. `RETURN_TO_SAFE_LOCATION` works by walking. No teleport commands are used.
+6. ~~`RETURN_TO_SAFE_LOCATION` works by walking~~ **Verified** inside a fence on one level (see
+   "Walking"); no teleport commands are used. Longer routes (steps, slopes, doors) are not
+   supported yet.
 
 ## Future testing protocol (private GTNH test world only)
 
@@ -203,9 +249,9 @@ with backups, never on a public server.
    tracking"); modded entity identification and lava/void are next.
 3. **Registry mapping. DONE for inventory names** (per-world registry). Still to test: protected-item
    matching with real GT items.
-4. **Movement in a fenced area.** Enable `MOVE_TO` with a pathfinder configured to never dig,
-   place, parkour or enter fluids, inside a small walled test area with a lava pit outside the
-   boundary. Verify that boundary and hazard checks stop it.
+4. **Movement in a fenced area. DONE 2026-09-30** (see "Walking"): our own walker (never digs,
+   places, jumps or enters fluids) inside a glass pen. Boundary, lava, server-correction and stop
+   checks all verified live.
 5. **One container type at a time.** Vanilla chest first, then each modded container. Verify
    exact inventory deltas; keep a container on the allowlist only after it passes.
 6. **Machines (read-only).** Determine whether machine status is observable at all; if not,

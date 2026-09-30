@@ -4,16 +4,20 @@ A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTN
 **private** server you control.
 
 **Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
-simulated world or, **read-only**, against a private GTNH 2.8.4 test server. No autonomous loop, no
-model and no GPU use.
+simulated world or a private GTNH 2.8.4 test server, where the agent observes and can **walk inside
+a fenced pen** (its only world-changing ability). No autonomous loop, no model and no GPU use.
 
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
 the test server and observes position, dimension, health, food, a named inventory, nearby
 entities (vanilla and modded mobs; unidentified modded types count as hostile) and lava, fire,
-harmful fluids, damaging blocks and void within 32 m. It cannot change the world: every
-world-changing action returns `NOT_IMPLEMENTED`. With everything critical observable, a live cycle
-now pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
+harmful fluids, damaging blocks and void within 32 m. With everything critical observable, a
+live cycle pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
 1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
+
+**Walking (2026-09-30):** with movement explicitly enabled and a fence configured, `MOVE_TO` and
+`RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence: no jumping, climbing,
+falling or block changes. Every other world-changing action still returns `NOT_IMPLEMENTED`. See
+[Walking in the test pen](#walking-in-the-test-pen).
 
 ## Requirements
 
@@ -61,6 +65,10 @@ cp agent.config.example.json agent.config.json
 | Show validated config                        | `pnpm cli config`                               |
 | **Observe the live test server (read-only)** | `pnpm cli observe --live`                       |
 | One agent cycle against the live server      | `pnpm cli once --live`                          |
+| Plan a walk and draw it (no movement)        | `pnpm cli move --live --to home --dry-run`      |
+| **Walk** (to `x,y,z` or a named location)    | `pnpm cli move --live --to=-0.5,200,-11.5`      |
+| Stop all walking / allow it again            | `pnpm cli halt` / `pnpm cli unhalt`             |
+| Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`    |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                            |
 | Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`    |
 
@@ -119,6 +127,8 @@ and [docs/action-contract.md](docs/action-contract.md).
   eat below 14 food; at most 2 failures per action per task.
 - Only 11 non-destructive action types exist. No block placing/breaking, dropping, combat, lava,
   network/multiblock changes or rare-item use.
+- Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
+  inside the fence and stops at the first sign of trouble (see below).
 - Protected items are never consumed or moved.
 
 ## Project notes
@@ -147,3 +157,37 @@ MC_SERVER_MARKER=gtnh-agent-test
 
 The client refuses to log in unless the host is private and the server's status ping shows that
 MOTD marker, Forge, GregTech and 1.7.10. Add `--verbose` to see the connection trace.
+
+### Walking in the test pen
+
+The first world-changing ability is walking, tested in a glass **pen** built in the throwaway
+world: a 9 x 9 glass floor at y=199 with 3-high glass walls, 200 blocks up (nothing on the
+ground is within range, and mobs cannot spawn on glass).
+
+1. The test server has RCON on `127.0.0.1:25571` (`server.properties`: `enable-rcon=true`,
+   `rcon.port`, `rcon.password`). GTNH's Hodgepodge runs RCON commands on the main server thread
+   (`fixRconThreading`), so they are as safe as console commands. `allow-flight=false`, so the
+   server itself would kick a player that floats.
+2. Settings in `.env`: `TEST_SERVER_DIR` (the server folder; the RCON password is read from its
+   `server.properties` and is not stored here), `TEST_PEN_CENTER=-5,200,-8` and `TEST_PEN_RADIUS=4`.
+3. `node scripts/test-server-admin.ts pen build` builds (or resets) the pen, and
+   `pen tp --wait 60` teleports the agent's player into it while it is online (for example during
+   `pnpm cli observe --live`). `pen show` prints the matching agent settings: the fence and safety
+   boundary for `.env`, and a `home` safe location for `agent.config.json`.
+4. With `MC_ENABLE_MOVEMENT=true` and the fence set, `pnpm cli move --live --to home` walks.
+   Coordinates starting with `-` need the `=` form: `--to=-0.5,200,-11.5`.
+
+A walk is ONE user-requested action through the same executor as the agent's own: validated
+(schema, safety policy, preconditions), executed, re-observed and verified. The walker plans with
+A* inside the fence and re-checks every 0.2-block step just before sending it. A walk stops on:
+
+- a server correction (the server moved the player back);
+- a health drop;
+- a hostile or unidentified entity within 10 blocks (for `MOVE_TO`; a retreat keeps going);
+- anything blocked, unloaded, floorless or dangerous touching the way ahead;
+- the stop file (`pnpm cli halt`, which also works from another terminal or over SSH);
+- Ctrl+C;
+- a lost connection.
+
+`pnpm cli observe --live` and `move` draw a top-down map of the fence. To watch in-game, join
+`127.0.0.1:25570` with a GTNH 2.8.4 client as a whitelisted player.

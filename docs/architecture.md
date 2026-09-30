@@ -12,7 +12,7 @@ flowchart TD
         MC["MinecraftClient interface"]
         MOCK["MockMinecraftClient<br/>(full simulation)"]
         MF["MineflayerClient<br/>(skeleton; cannot join GTNH)"]
-        G17["Gtnh1710Client<br/>(1.7.10 + Forge, read-only)"]
+        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes, walks in a fence)"]
         MC --- G17
         MC --- MOCK
         MC --- MF
@@ -98,6 +98,29 @@ cycle that runs it, and the repeated-failure rule still applies across plans (a 
 the same failing action is refused with `REPEATED_FAILURE`). Dangers, vitals and upkeep are routed
 before the planner, so a plan simply waits while System 1 handles them.
 
+## Walking
+
+Walking is the live client's only world-changing ability (`src/bot/gtnh1710/walking.ts` plans and
+checks; `Gtnh1710Client` sends). It needs `MC_ENABLE_MOVEMENT=true` **and** a fence: whole blocks
+at the player's feet level, all on one level. Defence in depth:
+
+1. The executor validates `MOVE_TO` / `RETURN_TO_SAFE_LOCATION` as usual: the target is inside the
+   safety boundary, the target's surroundings were scanned, it keeps clear of known hazards, and
+   the state is reliable.
+2. The walker plans on the blocks the server sent: A* inside the fence (no corner cutting), then
+   straight stretches where clear. A position is walkable only if every block the player's body
+   touches is air, every block under it is a known full block, and nothing dangerous (or unloaded,
+   or unnamed) touches those blocks. Stretches are checked exactly: the swept body, not samples.
+3. Every 0.2-block step is re-checked just before it is sent (the world may have changed). The walk
+   stops on a server correction, a health drop, a hostile/unidentified entity within
+   `threatRadius` (not for a retreat, which is how the agent escapes one), the stop file, `halt()`
+   (Ctrl+C) or a lost connection. After the last step it waits 5 ticks for a server correction
+   before reporting success, and the executor then verifies the position.
+
+The `move` command runs one such action for a human (origin `user`). The repeated-failure rule does
+not apply to it (it is the human's decision each time), and its failures do not count against the
+agent's own attempts.
+
 ## Why code, not AI, enforces safety
 
 - **Determinism and auditability.** A rule like "never deposit a protected item" must hold every
@@ -112,15 +135,16 @@ before the planner, so a plan simply waits while System 1 handles them.
 
 ## Enforced boundaries
 
-| Boundary                           | Enforcement                                                                                                                                                                                                                 |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                             |
-| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) outside `src/bot/`.                                                                                                                 |
-| Read-only live client              | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions); world-changing actions return `NOT_IMPLEMENTED`. |
-| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                   |
-| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.          |
-| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true.                                                          |
-| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                               |
+| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                             |
+| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) outside `src/bot/`.                                                                                                                                                                                                 |
+| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; every other world-changing action returns `NOT_IMPLEMENTED`. |
+| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                      |
+| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                   |
+| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                          |
+| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true.                                                                                                                                          |
+| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                               |
 
 ## Directory map
 
@@ -130,7 +154,7 @@ src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Kn
 src/safety       safety policy, boundaries, protected items, forbidden-action classifier
 src/system1      router, decision providers, action proposer
 src/planner      plan schema, validator, planner interface, mock planner
-src/bot          MinecraftClient interface, mock client, gtnh1710/ read-only live client, Mineflayer skeleton
+src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk in a fence), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/app          agent loop, mock scenarios, CLI
