@@ -17,6 +17,14 @@ import {
   type PlayPacket,
 } from './packets.ts';
 import { BLOCK_CODE, buildBlockCodeTable } from './block-hazards.ts';
+import {
+  GT_EVENT_CHANGE_COMMON_DATA,
+  machineFlags,
+  machineNamesFor,
+  machineStatus,
+  type GregTechMessage,
+  type MachineFlags,
+} from './gregtech.ts';
 import { ChunkStore, decodeChunkBulk, decodeChunkColumn, type ChunkFormat } from './chunk-data.ts';
 import { scanHazards, type HazardScan } from './hazard-scan.ts';
 import { nameItemStack, type Registry } from './registry.ts';
@@ -81,6 +89,23 @@ export function dimensionName(id: number): string {
   }
 }
 
+/** GregTech machines farther than this are left out of the state (their packets still arrive). */
+export const MACHINE_SCAN_RADIUS = 32;
+const MAX_REPORTED_MACHINES = 64;
+/** The block every GregTech machine (and pipe) is. */
+const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
+
+export interface TrackedMachine {
+  x: number;
+  y: number;
+  z: number;
+  metaTileId: number;
+  /** Name from GregTech's MetaTileEntityIDs (e.g. MACERATOR_LV). */
+  name: string;
+  /** BaseMetaTileEntity texture data (see gregtech.ts). */
+  common: number;
+}
+
 interface PlayerPosition {
   x: number;
   feetY: number;
@@ -111,6 +136,12 @@ export class WorldModel {
   readonly #store = new ChunkStore();
   #chunkFormat: ChunkFormat = { neid: false };
   #modVersions: ReadonlyMap<string, string> = new Map();
+  /** GregTech machine names for the server's version; null = GregTech blocks are not tracked. */
+  #gtNames: ReadonlyMap<number, string> | null = null;
+  /** GregTech machines by "x,y,z", from the GregTech channel. */
+  readonly #machines = new Map<string, TrackedMachine>();
+  /** Set when a GregTech message could not be decoded: machine states may be wrong. */
+  #machineProblem: string | null = null;
   /** Registry id -> hazard code; rebuilt when the registry arrives (ids are per world). */
   #blockCodes: Uint8Array | null = null;
   /** Set when block data was lost: the hazard scan cannot be trusted for this session. */
@@ -124,6 +155,53 @@ export class WorldModel {
   /** Mod versions the server reports (modid -> version); entity identifications are version-bound. */
   setServerMods(mods: ReadonlyArray<{ modid: string; version: string }>): void {
     this.#modVersions = new Map(mods.map((m) => [m.modid, m.version]));
+    this.#gtNames = machineNamesFor(this.#modVersions.get('gregtech_nh'));
+  }
+
+  /** GregTech channel messages: machine placements (tile entities) and state changes. */
+  applyGregTech(message: GregTechMessage): void {
+    const names = this.#gtNames;
+    if (names === null || this.#machineProblem !== null) return;
+    switch (message.type) {
+      case 'gt-tile-entity': {
+        const key = `${message.x},${message.y},${message.z}`;
+        const name = names.get(message.metaTileId);
+        // Pipes, cables and unknown ids send the same packet with another meaning.
+        if (name === undefined) this.#machines.delete(key);
+        else {
+          this.#machines.set(key, {
+            x: message.x,
+            y: message.y,
+            z: message.z,
+            metaTileId: message.metaTileId,
+            name,
+            common: message.common,
+          });
+        }
+        return;
+      }
+      case 'gt-block-events':
+        if (message.dimension !== this.#dimension) return;
+        for (const e of message.events) {
+          if (e.eventId !== GT_EVENT_CHANGE_COMMON_DATA) continue;
+          const m = this.#machines.get(`${e.x},${e.y},${e.z}`);
+          if (m !== undefined) m.common = e.value;
+        }
+        return;
+      case 'gt-other':
+        return;
+    }
+  }
+
+  /** A GregTech message could not be decoded: stop reporting machines for this session. */
+  markMachineProblem(reason: string): void {
+    this.#machineProblem ??= reason;
+    this.#machines.clear();
+  }
+
+  /** Every tracked GregTech machine with its flags (diagnostics). */
+  trackedMachines(): Array<TrackedMachine & MachineFlags> {
+    return [...this.#machines.values()].map((m) => ({ ...m, ...machineFlags(m.common) }));
   }
 
   /** Chunk data layout, chosen from the server's mod list (NotEnoughIDs or vanilla). */
@@ -295,6 +373,13 @@ export class WorldModel {
     return null;
   }
 
+  /** A machine's block became something else (broken or replaced): it is no longer a machine. */
+  #forgetReplacedMachine(x: number, y: number, z: number, blockId: number): void {
+    const key = `${x},${y},${z}`;
+    if (!this.#machines.has(key)) return;
+    if (this.#registry?.blocks.get(blockId) !== GT_MACHINE_BLOCK) this.#machines.delete(key);
+  }
+
   #track(entityId: number, entity: TrackedEntity): void {
     if (entityId === this.#selfEntityId) return;
     this.#entities.set(entityId, entity);
@@ -308,19 +393,26 @@ export class WorldModel {
         this.#dimension = packet.dimension;
         this.#selfEntityId = packet.entityId;
         this.#entities.clear();
+        this.#machines.clear();
         return;
       case 'respawn':
         // New dimension or death respawn: position is unknown until the server sends it,
-        // and the server re-sends every entity in range.
+        // and the server re-sends every entity (and machine) in range.
         this.#dimension = packet.dimension;
         this.#position = null;
         this.#entities.clear();
+        this.#machines.clear();
         this.#store.clear();
         return;
       case 'chunk-data': {
         const { chunkX, chunkZ } = packet.header;
         if (packet.unload) {
           this.#store.unload(chunkX, chunkZ);
+          for (const [key, m] of this.#machines) {
+            if (Math.floor(m.x / 16) === chunkX && Math.floor(m.z / 16) === chunkZ) {
+              this.#machines.delete(key);
+            }
+          }
           return;
         }
         try {
@@ -365,9 +457,13 @@ export class WorldModel {
         return;
       case 'block-change':
         this.#store.setBlock(packet.x, packet.y, packet.z, packet.blockId);
+        this.#forgetReplacedMachine(packet.x, packet.y, packet.z, packet.blockId);
         return;
       case 'multi-block-change':
-        for (const r of packet.records) this.#store.setBlock(r.x, r.y, r.z, r.blockId);
+        for (const r of packet.records) {
+          this.#store.setBlock(r.x, r.y, r.z, r.blockId);
+          this.#forgetReplacedMachine(r.x, r.y, r.z, r.blockId);
+        }
         return;
       case 'spawn-player':
         this.#track(packet.entityId, {
@@ -480,7 +576,7 @@ export class WorldModel {
         availableEUt: unknown('GTNH EU is not observable through the protocol'),
         generators: [],
       },
-      machines: [],
+      machines: this.#machinesState(),
       storage: [],
       openContainerId: null,
       currentTask: null,
@@ -488,6 +584,28 @@ export class WorldModel {
       lastAction: null,
     };
     return GameStateSchema.parse(state);
+  }
+
+  /** GregTech machines within MACHINE_SCAN_RADIUS, nearest first. Stored energy is never sent. */
+  #machinesState(): GameState['machines'] {
+    const pos = this.#position;
+    if (pos === null || this.#machineProblem !== null) return [];
+    return [...this.#machines.values()]
+      .map((m) => ({
+        m,
+        d: Math.hypot(m.x + 0.5 - pos.x, m.y + 0.5 - pos.feetY, m.z + 0.5 - pos.z),
+      }))
+      .filter(({ d }) => d <= MACHINE_SCAN_RADIUS)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, MAX_REPORTED_MACHINES)
+      .map(({ m }) => ({
+        id: `gt:${m.x}.${m.y}.${m.z}`,
+        name: m.name,
+        position: known({ x: m.x, y: m.y, z: m.z }),
+        status: machineStatus(m.common),
+        powered: unknown('GregTech does not send stored energy to clients'),
+        lastInspectedAt: null,
+      }));
   }
 
   #threats(now: Date): GameState['nearbyThreats'] {

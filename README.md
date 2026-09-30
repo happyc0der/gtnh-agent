@@ -10,8 +10,9 @@ a fenced pen** (its only world-changing ability). No autonomous loop, no model a
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
 the test server and observes position, dimension, health, food, a named inventory, nearby
 entities (vanilla and modded mobs; unidentified modded types count as hostile) and lava, fire,
-harmful fluids, damaging blocks and void within 32 m. With everything critical observable, a
-live cycle pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
+harmful fluids, damaging blocks and void within 32 m, plus nearby GregTech machines (type, and
+whether each is enabled and running, from GregTech's own network channel; stored power is not sent).
+With everything critical observable, a live cycle pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
 1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
 **Walking (2026-09-30):** with movement explicitly enabled and a fence configured, `MOVE_TO` and
@@ -43,34 +44,35 @@ cp agent.config.example.json agent.config.json
 
 ## Commands
 
-| Task                                         | Command                                         |
-| -------------------------------------------- | ----------------------------------------------- |
-| Unit + integration tests                     | `pnpm test`                                     |
-| Lint (incl. architectural boundaries)        | `pnpm lint`                                     |
-| Type check (strict)                          | `pnpm typecheck`                                |
-| Format check / fix                           | `pnpm format:check` / `pnpm format`             |
-| Build to `dist/`                             | `pnpm build`                                    |
-| Everything                                   | `pnpm check`                                    |
-| **One mock agent cycle**                     | `pnpm agent:once`                               |
-| One cycle of a named scenario                | `pnpm agent:once --scenario hungry`             |
-| Scenario list                                | `pnpm cli scenarios`                            |
-| Throwaway in-memory DB                       | `pnpm agent:once --memory`                      |
-| Full cycle result                            | `pnpm agent:once --full`                        |
-| Recent action log                            | `pnpm cli history --limit 20`                   |
-| Resume a paused/blocked task                 | `pnpm cli task-resume --task task-action-fails` |
-| Planner output JSON Schema                   | `pnpm cli plan-schema`                          |
-| Open plans / one task's latest plan          | `pnpm cli plan-show [--task <id>]`              |
-| Approve a plan waiting for approval          | `pnpm cli plan-approve --task <id> --plan <n>`  |
-| Reject a task's open plan                    | `pnpm cli plan-reject --task <id> --reason ...` |
-| Show validated config                        | `pnpm cli config`                               |
-| **Observe the live test server (read-only)** | `pnpm cli observe --live`                       |
-| One agent cycle against the live server      | `pnpm cli once --live`                          |
-| Plan a walk and draw it (no movement)        | `pnpm cli move --live --to home --dry-run`      |
-| **Walk** (to `x,y,z` or a named location)    | `pnpm cli move --live --to=-0.5,200,-11.5`      |
-| Stop all walking / allow it again            | `pnpm cli halt` / `pnpm cli unhalt`             |
-| Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`    |
-| Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                            |
-| Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`    |
+| Task                                         | Command                                          |
+| -------------------------------------------- | ------------------------------------------------ |
+| Unit + integration tests                     | `pnpm test`                                      |
+| Lint (incl. architectural boundaries)        | `pnpm lint`                                      |
+| Type check (strict)                          | `pnpm typecheck`                                 |
+| Format check / fix                           | `pnpm format:check` / `pnpm format`              |
+| Build to `dist/`                             | `pnpm build`                                     |
+| Everything                                   | `pnpm check`                                     |
+| **One mock agent cycle**                     | `pnpm agent:once`                                |
+| One cycle of a named scenario                | `pnpm agent:once --scenario hungry`              |
+| Scenario list                                | `pnpm cli scenarios`                             |
+| Throwaway in-memory DB                       | `pnpm agent:once --memory`                       |
+| Full cycle result                            | `pnpm agent:once --full`                         |
+| Recent action log                            | `pnpm cli history --limit 20`                    |
+| Resume a paused/blocked task                 | `pnpm cli task-resume --task task-action-fails`  |
+| Planner output JSON Schema                   | `pnpm cli plan-schema`                           |
+| Open plans / one task's latest plan          | `pnpm cli plan-show [--task <id>]`               |
+| Approve a plan waiting for approval          | `pnpm cli plan-approve --task <id> --plan <n>`   |
+| Reject a task's open plan                    | `pnpm cli plan-reject --task <id> --reason ...`  |
+| Show validated config                        | `pnpm cli config`                                |
+| **Observe the live test server (read-only)** | `pnpm cli observe --live`                        |
+| One agent cycle against the live server      | `pnpm cli once --live`                           |
+| Plan a walk and draw it (no movement)        | `pnpm cli move --live --to home --dry-run`       |
+| **Walk** (to `x,y,z` or a named location)    | `pnpm cli move --live --to=-0.5,200,-11.5`       |
+| Stop all walking / allow it again            | `pnpm cli halt` / `pnpm cli unhalt`              |
+| Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`     |
+| Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                             |
+| Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`     |
+| GregTech machine survey (channel + states)   | `node scripts/gt-machine-survey.ts --seconds 10` |
 
 `agent:once` persists to `./data/agent.sqlite` by default (`AGENT_DB_PATH` or `--db` override).
 Try `pnpm agent:once --scenario action-fails` three times: two failures, then the third attempt is
@@ -188,6 +190,9 @@ A* inside the fence and re-checks every 0.2-block step just before sending it. A
 - the stop file (`pnpm cli halt`, which also works from another terminal or over SSH);
 - Ctrl+C;
 - a lost connection.
+
+Four GregTech test machines float just east of the pen at x=3, y=200, z=-9..-3: two LV macerators,
+a steam macerator, and a macerator that is switched off. `observe` lists them with their state.
 
 `pnpm cli observe --live` and `move` draw a top-down map of the fence. To watch in-game, join
 `127.0.0.1:25570` with a GTNH 2.8.4 client as a whitelisted player.

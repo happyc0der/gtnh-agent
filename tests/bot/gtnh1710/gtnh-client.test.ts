@@ -105,11 +105,11 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     expect(state.power.availableEUt.known).toBe(false);
 
     const info = client.info();
-    expect(info.registry).toEqual({ items: 2005, blocks: 8 });
+    expect(info.registry).toEqual({ items: 2005, blocks: 9 });
     expect(info.identity).toEqual({
       motd: 'gtnh-agent-test (localhost only)',
       version: '1.7.10',
-      mods: 7,
+      mods: 8,
     });
     expect(info.handshakeStep).toBe('DONE');
     expect(server.handshakeHosts[1]).toBe('127.0.0.1\0FML\0');

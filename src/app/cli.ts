@@ -150,6 +150,7 @@ async function main(argv: string[]): Promise<number> {
               client.info(),
               client.world.nearbyEntities(radius),
               radius > 32 ? client.world.diagnosticHazardScan(radius) : null,
+              client.world.trackedMachines(),
             ),
             movement: movementStatus(config),
           },

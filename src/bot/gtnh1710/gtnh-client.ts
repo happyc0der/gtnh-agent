@@ -10,6 +10,7 @@ import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
+import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
 import {
   decodeFmlRuntimeMessage,
   decodeLogin,
@@ -613,6 +614,17 @@ export class Gtnh1710Client implements MinecraftClient {
     if (channel === 'FML|MP') {
       const assembled = this.#multipart.push(data);
       if (assembled !== null) this.#onPluginMessage(assembled.channel, assembled.data);
+      return;
+    }
+    if (channel === GT_CHANNEL) {
+      // GregTech's own channel: machine placements and state changes (read-only).
+      try {
+        this.#world.applyGregTech(decodeGregTechMessage(data));
+      } catch (error) {
+        if (!(error instanceof ProtocolError)) throw error;
+        this.#log(`could not decode GregTech message: ${error.message}`);
+        this.#world.markMachineProblem(`undecodable GregTech message: ${error.message}`);
+      }
       return;
     }
     if (channel === 'FML') {

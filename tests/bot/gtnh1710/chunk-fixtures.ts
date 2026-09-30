@@ -13,6 +13,8 @@ export const BLOCK = {
   lava: 11,
   fire: 51,
   cactus: 81,
+  /** GregTech's machine block (every machine and pipe); 2693 in the real test world. */
+  gtMachines: 2693,
 } as const;
 
 export const TEST_BLOCK_REGISTRY: Array<[number, string]> = [
@@ -24,6 +26,7 @@ export const TEST_BLOCK_REGISTRY: Array<[number, string]> = [
   [BLOCK.lava, 'minecraft:lava'],
   [BLOCK.fire, 'minecraft:fire'],
   [BLOCK.cactus, 'minecraft:cactus'],
+  [BLOCK.gtMachines, 'gregtech:gt.blockmachines'],
 ];
 
 export type BlockFn = (x: number, y: number, z: number) => number;

@@ -5,8 +5,9 @@ work on a private GTNH 2.8.4 test server.** The agent's own client (`src/bot/gtn
 `Gtnh1710Client`) joins via the Forge handshake and reports position, dimension, health, food, a
 fully named inventory, nearby entities (vanilla and modded) and lava/void/damaging blocks. A live
 agent cycle has no state violations; it pauses only because it has no task. With movement enabled
-it walks on one level inside a fence (see "Walking"). Machines, power and held-item durability are
-not observable yet. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
+it walks on one level inside a fence (see "Walking"). GregTech machines are observed through
+GregTech's own channel: type, position, enabled and running (see "Machines"); stored energy and
+held-item durability are not observable. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
 (observed or checked in installed code) or _assumption_ (to be tested).
 
 ## Test server results (2026-09-30)
@@ -51,7 +52,7 @@ Live `pnpm cli observe --live` on the test server (verified):
 | Inventory      | `1 x questbook:ItemQuestBook`: the starter quest book GTNH gives new players, named through the per-world registry. |
 | Held item      | Unknown: the durability of modded items is not known yet.                                                           |
 | Threats        | Tracked (see "Entity tracking" below); lava/void still unknown.                                                     |
-| Machines/power | Unknown/empty.                                                                                                      |
+| Machines/power | GregTech machines: type, enabled, running (see "Machines"). Power (EU) unknown.                                     |
 
 Findings while building it (verified):
 
@@ -118,6 +119,52 @@ Live results (_verified_, 2026-09-30):
 | Lava in a sealed glass box in the pen                   | Seen by the hazard scan; the walker routed around every block touching it; home refused (`HAZARD_PROXIMITY`). |
 
 No test produced a server warning (moved wrongly, moved too quickly, floating, illegal stance).
+
+## Machines (2026-09-30)
+
+GregTech sends machine state to clients on its own plugin channel, `GregTech`. Each message is a
+packet type byte, then the packet. _Verified_ with `javap` against `gregtech-5.09.51.482.jar`
+(`GTNetwork`, `GTPacketTypes`, `GTPacketTileEntity`, `GTPacketBlockEvent`, `BaseMetaTileEntity`)
+and GTNHLib 0.7.10 (`CoordinatePacker`):
+
+- **TILE_ENTITY (type 0):** x:i32, y:i16, z:i32, mID:i16, six cover ids (i32), then common, update,
+  redstone and colour bytes. It is sent for every machine (and pipe) when its chunk is sent.
+- **The common byte** is `BaseMetaTileEntity`'s texture data: facing (bits 0–2) | active 8 |
+  redstone 16 | upgrade lock 32 | works 64 | muffler 128.
+  - "Active" means processing a recipe. "Works" means enabled, not switched off with a mallet.
+  - For basic machines the facing is the output side (the opposite of the front).
+- **BLOCK_EVENT (type 2):** dimension:i32, count:i32, then `count` coordinates as i64 and `count`
+  shorts of (eventId << 8 | value).
+  - Coordinates are packed x (26 bits) << 38 | z (26 bits) << 12 | y (12 bits), all signed.
+  - When the common byte changes, the server sends event 0 (`CHANGE_COMMON_DATA`) with the new
+    byte.
+- **Pipes and cables send the same TILE_ENTITY packet**, but their common byte means connections.
+  Only ids in GregTech's `MetaTileEntityIDs` enum are machines. `src/bot/gtnh1710/gt-machine-ids.ts`
+  holds its 1,905 entries, extracted from the jar. It applies only when the server reports
+  `gregtech_nh` 5.09.51.482; otherwise no GregTech block is treated as a machine (fail closed).
+- **Stored energy, progress, recipe and inventory are not sent.** Power stays unknown.
+
+The agent reports machines within 32 blocks as `gt:<x>.<y>.<z>` with the enum name:
+
+| GregTech flags           | Status                                   |
+| ------------------------ | ---------------------------------------- |
+| works and active         | `busy`                                   |
+| works, not active        | `idle`                                   |
+| not works (switched off) | `error` (a human must switch it back on) |
+
+Live test (_verified_, `node scripts/gt-machine-survey.ts`). Machines were placed over RCON with
+`setblock x y z gregtech:gt.blockmachines 0 replace {mID:301,...}`. Note that `mWorks` is saved
+inverted, so `mWorks:1b` means switched off.
+
+| Placed                                                     | Seen                                                                       |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| LV macerator, `mFacing:4s`                                 | common 69: works, facing 5 (the output side); `idle`                       |
+| Steam macerator                                            | common 64; `idle`                                                          |
+| LV macerator, `mWorks:1b`                                  | common 0; `error`                                                          |
+| LV macerator mid-"recipe" (`mMaxProgresstime:400`, 0 EU/t) | common 72 (`busy`) at placement; 20 s later block event 0 with 64 → `idle` |
+
+GregTech also sends one ORES packet (type 3) per GT ore block in range: 2,597 in 8 s on the test
+world. These are not decoded yet.
 
 ## Entity tracking (2026-09-30)
 
@@ -228,8 +275,9 @@ Minecraft. GTNH adds hundreds of mods. None of the following is guaranteed to wo
    for many GTNH containers.
 3. A generator's accepted fuels and fuel level are knowable. In reality this may need GUI scraping,
    a server-side helper mod, or manual configuration.
-4. Machine `status` (idle/busy/unpowered/error) can be observed. It probably cannot be without
-   server-side help, which is why unknown statuses route to the planner or a pause and never to action.
+4. ~~Machine `status` can be observed~~ **Partly verified** (see "Machines"): GregTech machines
+   report enabled and running through GregTech's own channel. Power, progress and inventories are
+   not sent, so `powered` stays unknown, and "enabled but not running" (`idle`) does not say why.
 5. Food level and health semantics match vanilla (GTNH includes Spice of Life / hunger changes).
    Thresholds are configurable for this reason.
 6. ~~`RETURN_TO_SAFE_LOCATION` works by walking~~ **Verified** inside a fence on one level (see
@@ -254,8 +302,9 @@ with backups, never on a public server.
    checks all verified live.
 5. **One container type at a time.** Vanilla chest first, then each modded container. Verify
    exact inventory deltas; keep a container on the allowlist only after it passes.
-6. **Machines (read-only).** Determine whether machine status is observable at all; if not,
-   document the chosen mechanism (helper mod, GUI read, manual) before implementing `INSPECT_MACHINE`.
+6. **Machines (read-only). DONE 2026-09-30** for GregTech machines' enabled/running state (see
+   "Machines"). Still open: power and machine contents (GUI read or a helper mod) before
+   `INSPECT_MACHINE` can do more than look.
 7. **Soak test.** Run single cycles repeatedly (still human-triggered) and review `agent_events`
    and `safety_violations` for false positives/negatives before any continuous loop is considered.
 

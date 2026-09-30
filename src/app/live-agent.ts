@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { Gtnh1710Client, type ConnectionInfo } from '../bot/gtnh1710/gtnh-client.ts';
 import type { HazardScan } from '../bot/gtnh1710/hazard-scan.ts';
-import type { NearbyEntity } from '../bot/gtnh1710/world-model.ts';
+import type { MachineFlags } from '../bot/gtnh1710/gregtech.ts';
+import type { NearbyEntity, TrackedMachine } from '../bot/gtnh1710/world-model.ts';
 import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
 import type { AgentConfig } from '../config/env.ts';
 import type { ActionSpec } from '../domain/actions.ts';
@@ -69,8 +70,10 @@ export function summarizeObservation(
   info: ConnectionInfo,
   nearby: readonly NearbyEntity[] = [],
   wideHazardScan: HazardScan | null = null,
+  machines: ReadonlyArray<TrackedMachine & MachineFlags> = [],
 ): Record<string, unknown> {
   const inv = state.inventory.known ? state.inventory.value : null;
+  const at = state.player.position.known ? state.player.position.value : null;
   return {
     server: info.identity,
     observedAt: state.timestamp,
@@ -114,6 +117,17 @@ export function summarizeObservation(
                 ),
             }
           : { unavailable: wideHazardScan.reason },
+    machines: machines
+      .map((m) => ({
+        m,
+        d: at === null ? NaN : Math.hypot(m.x + 0.5 - at.x, m.y + 0.5 - at.y, m.z + 0.5 - at.z),
+      }))
+      .sort((a, b) => a.d - b.d)
+      .map(
+        ({ m, d }) =>
+          `${d.toFixed(1).padStart(5)} m  ${(m.works ? (m.active ? 'busy' : 'idle') : 'OFF').padEnd(4)}  ` +
+          `${m.name} (${m.metaTileId}) at (${m.x}, ${m.y}, ${m.z}) facing ${m.facing}`,
+      ),
     unknown: unknownFields(state),
     registry: info.registry,
     sentPackets: info.outboundCounts,

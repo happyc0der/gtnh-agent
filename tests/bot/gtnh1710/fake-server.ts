@@ -87,6 +87,7 @@ export const DEFAULT_MODS = [
   { modid: 'FML', version: '7.10.99.99' },
   { modid: 'Forge', version: '10.13.4.1614' },
   { modid: 'gregtech', version: 'MC1710' },
+  { modid: 'gregtech_nh', version: '5.09.51.482' },
   { modid: 'dreamcraft', version: '2.7.268' },
   { modid: 'modularui', version: '1.2.20' },
   { modid: 'neid', version: '2.1.10' },
@@ -104,6 +105,49 @@ function slot(item: FakeItem | undefined, modularUi: boolean): Buffer {
   b.writeInt16BE(-1, 5); // no NBT
   // GTNH ModularUI: full stack size as a VarInt after every non-empty stack.
   return modularUi ? Buffer.concat([b, encodeVarInt(item.count)]) : b;
+}
+
+/** GregTech TILE_ENTITY (type 0): a machine (or pipe) and its common data byte. */
+export function gtTileEntityMessage(
+  x: number,
+  y: number,
+  z: number,
+  metaTileId: number,
+  common: number,
+): Buffer {
+  const b = Buffer.alloc(1 + 4 + 2 + 4 + 2 + 6 * 4 + 4);
+  b.writeUInt8(0, 0);
+  b.writeInt32BE(x, 1);
+  b.writeInt16BE(y, 5);
+  b.writeInt32BE(z, 7);
+  b.writeInt16BE(metaTileId, 11);
+  b.writeUInt8(common, 37); // after six zero cover ids
+  return b;
+}
+
+/** GregTech BLOCK_EVENT (type 2), coordinates packed like GTNHLib's CoordinatePacker. */
+export function gtBlockEventsMessage(
+  dimension: number,
+  events: Array<{ x: number; y: number; z: number; eventId: number; value: number }>,
+): Buffer {
+  const b = Buffer.alloc(1 + 4 + 4 + events.length * 10);
+  b.writeUInt8(2, 0);
+  b.writeInt32BE(dimension, 1);
+  b.writeInt32BE(events.length, 5);
+  events.forEach((e, i) => {
+    const packed =
+      ((BigInt(e.x) & 0x3ffffffn) << 38n) |
+      (BigInt(e.y) & 0xfffn) |
+      ((BigInt(e.z) & 0x3ffffffn) << 12n);
+    b.writeBigInt64BE(BigInt.asIntN(64, packed), 9 + i * 8);
+  });
+  events.forEach((e, i) => {
+    b.writeInt16BE(
+      ((((e.eventId & 0xff) << 8) | (e.value & 0xff)) << 16) >> 16,
+      9 + events.length * 8 + i * 2,
+    );
+  });
+  return b;
 }
 
 /** Entities the fake server can announce, in the wire formats observed on the real server. */
@@ -273,6 +317,11 @@ export class FakeGtnhServer {
     this.broadcast(
       encodeFrame(0x18, Buffer.concat([i32(entityId), fixed(x, y, z), Buffer.from([0, 0])])),
     );
+  }
+
+  /** A message on GregTech's own plugin channel. */
+  sendGregTech(data: Buffer): void {
+    this.broadcast(plugin('GregTech', data));
   }
 
   /** S08: the server places the player, as after a teleport or a move it rejected. */
