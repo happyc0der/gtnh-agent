@@ -45,6 +45,7 @@ import {
   type Vec3,
   type WalkPlan,
 } from './walking.ts';
+import { bodyProblem, planTerrainWalk, terrainSteps, type TerrainStep } from './terrain.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
 import { WorldModel } from './world-model.ts';
 
@@ -133,6 +134,7 @@ export class Gtnh1710Client implements MinecraftClient {
   #confirmedPositions = 0;
   #listeners: Array<() => void> = [];
   #walking = false;
+  #lastYaw = 0;
   #haltReason: string | null = null;
   /** Server verdicts on our clicks (S32), by action number. */
   readonly #clickVerdicts = new Map<number, boolean>();
@@ -542,6 +544,20 @@ export class Gtnh1710Client implements MinecraftClient {
     if (world === null || from === null) {
       return { plan: { ok: false, reason: 'block data or position unknown' }, map: [] };
     }
+    if (fence.min.y !== fence.max.y) {
+      // Terrain fences: plan only (the text map shows a single level).
+      const t =
+        target === null ? null : planTerrainWalk(world, fence, from, target, m.maxPathLength);
+      return {
+        plan:
+          t === null
+            ? null
+            : t.ok
+              ? { ok: true, waypoints: [from, ...t.moves.map((x) => x.to)], length: t.length }
+              : t,
+        map: [],
+      };
+    }
     const plan = target === null ? null : planWalk(world, fence, from, target, m.maxPathLength);
     const entities = this.#world.nearbyEntities(64).map((e) => ({
       id: e.entityId,
@@ -589,13 +605,29 @@ export class Gtnh1710Client implements MinecraftClient {
     if (world === null || from === null) {
       return failed('not walking: block data or position unknown', 'REFUSED');
     }
-    const plan = planWalk(world, fence, from, target, m.maxPathLength);
-    if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
-
-    const steps = stepsAlong(plan.waypoints);
-    this.#log(
-      `walking ${plan.length.toFixed(2)} blocks in ${steps.length} steps (${plan.waypoints.length - 1} stretch(es))`,
-    );
+    // A fence on one level walks the flat pen way; a fence with a height range walks terrain.
+    const terrain = fence.min.y !== fence.max.y;
+    let steps: TerrainStep[];
+    let length: number;
+    if (terrain) {
+      const plan = planTerrainWalk(world, fence, from, target, m.maxPathLength);
+      if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
+      steps = terrainSteps(from, plan.moves);
+      length = plan.length;
+      const kinds = plan.moves.map((x) => x.kind);
+      this.#log(
+        `walking ${length.toFixed(2)} blocks over terrain in ${steps.length} steps ` +
+          `(${kinds.filter((k) => k === 'step-up').length} up, ${kinds.filter((k) => k === 'drop').length} down)`,
+      );
+    } else {
+      const plan = planWalk(world, fence, from, target, m.maxPathLength);
+      if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
+      steps = stepsAlong(plan.waypoints).map((pos) => ({ pos, onGround: true }));
+      length = plan.length;
+      this.#log(
+        `walking ${length.toFixed(2)} blocks in ${steps.length} steps (${plan.waypoints.length - 1} stretch(es))`,
+      );
+    }
     const placementsAtStart = this.#confirmedPositions;
     const healthAtStart = this.#world.health;
     let at: Vec3 = from;
@@ -615,17 +647,22 @@ export class Gtnh1710Client implements MinecraftClient {
     this.#walking = true;
     this.#stopIdle();
     try {
-      for (const next of steps) {
+      for (const step of steps) {
+        const next = step.pos;
         const reason = this.#stepProblem(world, fence, at, next, {
           placementsAtStart,
           healthAtStart,
           stopForThreats: options.stopForThreats,
+          terrain,
         });
         if (reason !== null) return stopped(reason);
+        const facing =
+          Math.hypot(next.x - at.x, next.z - at.z) > 1e-9 ? yawTowards(at, next) : this.#lastYaw;
+        this.#lastYaw = facing;
         this.#send(
           outbound.playerMove(
-            { x: next.x, feetY: next.y, z: next.z, yaw: yawTowards(at, next), pitch: 0 },
-            ON_GROUND,
+            { x: next.x, feetY: next.y, z: next.z, yaw: facing, pitch: 0 },
+            step.onGround,
           ),
         );
         this.#world.setOwnPosition(next);
@@ -646,9 +683,9 @@ export class Gtnh1710Client implements MinecraftClient {
       if (this.#confirmedPositions !== placementsAtStart) {
         return stopped('the server corrected the final position');
       }
-      return ok(`walked ${plan.length.toFixed(2)} blocks in ${steps.length} steps`, {
+      return ok(`walked ${length.toFixed(2)} blocks in ${steps.length} steps`, {
         steps: steps.length,
-        distance: Number(plan.length.toFixed(3)),
+        distance: Number(length.toFixed(3)),
         x: at.x,
         y: at.y,
         z: at.z,
@@ -665,7 +702,12 @@ export class Gtnh1710Client implements MinecraftClient {
     fence: Fence,
     from: Vec3,
     to: Vec3,
-    guard: { placementsAtStart: number; healthAtStart: number | null; stopForThreats: boolean },
+    guard: {
+      placementsAtStart: number;
+      healthAtStart: number | null;
+      stopForThreats: boolean;
+      terrain: boolean;
+    },
   ): string | null {
     if (this.#phase !== 'play') return 'the connection closed';
     const blocker = this.#movementBlocker();
@@ -689,7 +731,11 @@ export class Gtnh1710Client implements MinecraftClient {
         return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
       }
     }
-    const problem = segmentProblem(world, fence, from, to);
+    // Terrain steps change height (steps up, drops), so check the body where it will be,
+    // at that height; the flat walker checks the whole swept stretch.
+    const problem = guard.terrain
+      ? bodyProblem(world, fence, to)
+      : segmentProblem(world, fence, from, to);
     return problem === null ? null : `the way ahead is not clear: ${problem}`;
   }
 

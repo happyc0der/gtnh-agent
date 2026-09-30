@@ -14,6 +14,8 @@ const BlockPositionSchema = z.strictObject({
 
 /** Largest fence the walker searches (blocks per side). */
 export const MAX_FENCE_SIDE = 64;
+/** Largest height range of a terrain fence (feet levels). A single level walks the flat way. */
+export const MAX_FENCE_HEIGHT = 32;
 
 /**
  * Walking (the only world-changing ability of the live client). Off by default: the
@@ -23,7 +25,8 @@ export const MovementConfigSchema = z
   .strictObject({
     enabled: z.boolean().default(false),
     /**
-     * Blocks the player's feet may be in (inclusive), all on one level (min.y === max.y).
+     * Blocks the player's feet may be in (inclusive). One level (min.y === max.y) walks the
+     * flat pen way; a height range walks terrain (steps up, drops of up to 2).
      * The player's whole body must stay inside. Null refuses all movement.
      */
     fence: z
@@ -43,8 +46,10 @@ export const MovementConfigSchema = z
     const issue = (message: string): void => {
       ctx.addIssue({ code: 'custom', path: ['fence'], message });
     };
-    if (min.y !== max.y) issue('fence min.y and max.y must be equal: walking stays on one level');
-    if (min.x > max.x || min.z > max.z) issue('fence min must be <= max');
+    if (max.y - min.y > MAX_FENCE_HEIGHT) {
+      issue(`fence height range must be at most ${MAX_FENCE_HEIGHT} blocks`);
+    }
+    if (min.x > max.x || min.y > max.y || min.z > max.z) issue('fence min must be <= max');
     if (max.x - min.x + 1 > MAX_FENCE_SIDE || max.z - min.z + 1 > MAX_FENCE_SIDE) {
       issue(`fence sides must be at most ${MAX_FENCE_SIDE} blocks`);
     }

@@ -240,3 +240,23 @@ describe('Gtnh1710Client walking', () => {
     expect(outcome.verification?.verified).toBe(true);
   });
 });
+
+describe('Gtnh1710Client walking over terrain', () => {
+  it('steps up onto a block: rises first, crosses above it, lands on top', async () => {
+    const { server, client } = await start(
+      { blockOverrides: new Map([['-3,106,-8', BLOCK.stone]]) },
+      { fence: { min: { x: -9, y: 106, z: -12 }, max: { x: -1, y: 108, z: -4 } } },
+    );
+    const result = await perform(client, moveTo(-2.5, -7.5, FEET_Y + 1));
+    expect(result).toMatchObject({ ok: true, code: 'OK' });
+    const steps = server.walkSteps();
+    const crossing = steps.findIndex((s) => s.x > -3 + 0.3); // the body starts over the raised block
+    expect(steps[crossing]?.feetY).toBeGreaterThan(FEET_Y + 1);
+    expect(steps.slice(0, -1).some((s) => !s.onGround)).toBe(true);
+    expect(steps.at(-1)).toMatchObject({ x: -2.5, feetY: FEET_Y + 1, z: -7.5, onGround: true });
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -2.5, y: FEET_Y + 1, z: -7.5 },
+    });
+  });
+});
