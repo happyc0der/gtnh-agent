@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import { loadConfig } from '../config/env.ts';
@@ -7,7 +8,7 @@ import { createRepositories } from '../persistence/repositories.ts';
 import { plannerResponseJsonSchema } from '../planner/plan-schema.ts';
 import { systemClock } from '../util/clock.ts';
 import { errorMessage } from '../util/json.ts';
-import type { CycleResult } from './agent-loop.ts';
+import { syncConfigToDatabase, type CycleResult } from './agent-loop.ts';
 import {
   movementStatus,
   runLiveChest,
@@ -19,6 +20,7 @@ import {
 } from './live-agent.ts';
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
+import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
 const USAGE = `gtnh-agent (single cycle, no autonomy; the live client is read-only)
@@ -46,6 +48,11 @@ Usage:
                                            Show recent logged actions.
   node src/app/cli.ts task-resume --task <id> [--db <path>]
                                            Mark a paused/blocked task active again.
+  node src/app/cli.ts task-add --task <id> --goal <text> [--plan <plan.json>] [--db <path>]
+                                           Add a task and make it the live agent's current task,
+                                           with an optional plan you wrote (validated like a
+                                           planner's). Each once --live then runs one step.
+  node src/app/cli.ts task-complete --task <id> / task-list [--db <path>]
   node src/app/cli.ts plan-show [--task <id>] [--db <path>]
                                            Show a task's latest plan, or every open plan.
   node src/app/cli.ts plan-approve --task <id> [--plan <n>] [--db <path>]
@@ -108,6 +115,7 @@ async function main(argv: string[]): Promise<number> {
       limit: { type: 'string', default: '10' },
       task: { type: 'string' },
       plan: { type: 'string' },
+      goal: { type: 'string' },
       reason: { type: 'string' },
       to: { type: 'string' },
       container: { type: 'string' },
@@ -308,6 +316,53 @@ async function main(argv: string[]): Promise<number> {
       print({ task: task.id, previousStatus: task.status, status: 'active' });
       db.close();
       return 0;
+    }
+    case 'task-add':
+    case 'task-complete':
+    case 'task-list': {
+      if (command !== 'task-list' && values.task === undefined) {
+        process.stderr.write(`${command} requires --task <id>\n`);
+        return 1;
+      }
+      if (command === 'task-add' && values.goal === undefined) {
+        process.stderr.write('task-add requires --goal <text>\n');
+        return 1;
+      }
+      let planJson: unknown = undefined;
+      if (command === 'task-add' && values.plan !== undefined) {
+        try {
+          planJson = JSON.parse(readFileSync(values.plan, 'utf8'));
+        } catch (error) {
+          process.stderr.write(`cannot read plan ${values.plan}: ${errorMessage(error)}\n`);
+          return 1;
+        }
+      }
+      const db = openDatabase(dbPath);
+      try {
+        const repos = createRepositories(db, systemClock);
+        syncConfigToDatabase(config, repos);
+        const taskId = values.task ?? '';
+        const result =
+          command === 'task-add'
+            ? addTask(repos, config, {
+                taskId,
+                goal: values.goal ?? '',
+                plan: planJson,
+                now: new Date(),
+              })
+            : command === 'task-complete'
+              ? completeTask(repos, taskId)
+              : listTasks(repos);
+        if (!result.ok) {
+          process.stderr.write(`${result.error}
+`);
+          return 1;
+        }
+        print(result.value);
+        return 0;
+      } finally {
+        db.close();
+      }
     }
     case 'plan-show':
     case 'plan-approve':

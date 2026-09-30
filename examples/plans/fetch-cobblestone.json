@@ -1,0 +1,33 @@
+{
+  "goal": "Fetch 10 cobblestone from the pen chest",
+  "steps": [
+    {
+      "step": 1,
+      "action": {
+        "type": "MOVE_TO",
+        "args": { "target": { "x": -4.5, "y": 200, "z": -6.5 }, "tolerance": 0.5 }
+      },
+      "rationale": "Stand next to the pen chest at (-5, 200, -5)."
+    },
+    {
+      "step": 2,
+      "action": { "type": "OPEN_CONTAINER", "args": { "containerId": "chest.pen" } },
+      "rationale": "Look inside, so the agent knows how much cobblestone is there."
+    },
+    {
+      "step": 3,
+      "action": {
+        "type": "WITHDRAW_ITEM",
+        "args": { "containerId": "chest.pen", "item": "minecraft:cobblestone", "quantity": 10 }
+      },
+      "rationale": "Take exactly 10 cobblestone."
+    }
+  ],
+  "requiresUserApproval": false,
+  "explanation": "Written by the operator for the glass test pen; each step runs in its own cycle.",
+  "failureHandling": {
+    "onStepFailure": "PAUSE_AND_ASK_USER",
+    "maxRetriesPerStep": 1,
+    "escalationMessage": "Could not fetch cobblestone from the pen chest."
+  }
+}

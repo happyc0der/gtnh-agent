@@ -21,6 +21,10 @@ one validated step per cycle; a plan with `requiresUserApproval` runs nothing un
 it with `node src/app/cli.ts plan-approve --task <id> --plan <n>` (see
 [architecture: plans across cycles](architecture.md#plans-across-cycles)).
 
+Plans a human writes for live tasks (`cli task-add --plan`) already take this path: the same
+schema, the same `validatePlan`, stored and executed one verified step per cycle. They are a
+stand-in for a model's plans that runs today.
+
 ## Adapter requirements (must all hold before merging a real adapter)
 
 1. **Strict JSON schema.** Request structured output constrained to the planner schema. Print it with:

@@ -18,6 +18,7 @@ import type { FailureHistory } from '../safety/safety-policy.ts';
 import type { Clock } from '../util/clock.ts';
 import type { Db } from './database.ts';
 import { PlanRepository } from './plan-repository.ts';
+import { MemoryRepository } from './memory-repository.ts';
 
 /*
  * Repositories are thin, synchronous and typed. Rows are re-validated with Zod on
@@ -599,6 +600,7 @@ export interface Repositories {
   locations: LocationRepository;
   protectedItems: ProtectedItemRepository;
   plans: PlanRepository;
+  memory: MemoryRepository;
   /** Runs `fn` in a single SQLite transaction (nested calls become savepoints). */
   transaction<T>(fn: () => T): T;
 }
@@ -614,6 +616,7 @@ export function createRepositories(db: Db, clock: Clock): Repositories {
     locations: new LocationRepository(db, clock),
     protectedItems: new ProtectedItemRepository(db, clock),
     plans: new PlanRepository(db, clock),
+    memory: new MemoryRepository(db, clock),
     transaction: <T>(fn: () => T): T => db.transaction(fn)(),
   };
 }

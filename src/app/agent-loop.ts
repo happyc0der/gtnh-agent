@@ -12,6 +12,7 @@ import { GameStateSchema, LastActionSchema, type GameState } from '../domain/gam
 import type { SafetyViolation } from '../domain/safety.ts';
 import { ActionExecutor, type ExecutionOutcome } from '../executor/action-executor.ts';
 import { SqliteActionLog } from '../executor/action-log.ts';
+import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { PlannerResponseSchema, type Plan, type PlannerResponse } from '../planner/plan-schema.ts';
@@ -95,16 +96,56 @@ export function buildSafetyContext(
 }
 
 const HALTED_TASK_STATUSES = new Set(['paused', 'blocked', 'completed', 'failed']);
+const FINISHED_TASK_STATUSES = new Set(['completed', 'failed']);
+
+/** The planner name for plans a human wrote (`cli task-add --plan`). */
+export const OPERATOR_PLANNER = 'operator';
 
 /**
- * Merges agent memory into the observation: the persisted task status wins if the
- * task was halted (so a paused task stays paused until a human resumes it), and the
- * last logged action is filled in.
+ * Merges agent memory into the observation:
+ *  - on the live server (which knows nothing of tasks) the operator's current task is filled
+ *    in, unless it is finished;
+ *  - the persisted task status wins if the task was halted (so a paused task stays paused
+ *    until a human resumes it);
+ *  - containers whose contents are not visible now get the contents last seen, if recent
+ *    (planning checks only; the live client re-reads the real contents before clicking);
+ *  - the last logged action is filled in.
  */
-function overlayAgentMemory(state: GameState, repos: Repositories): GameState {
+function overlayAgentMemory(state: GameState, repos: Repositories, config: AgentConfig): GameState {
   let next = state;
-  if (state.currentTask !== null) {
-    const t = state.currentTask;
+  if (state.currentTask === null && state.source === 'gtnh1710') {
+    const id = repos.memory.getValue(CURRENT_TASK_KEY);
+    const task = id === null ? null : repos.tasks.get(id);
+    if (task !== null && !FINISHED_TASK_STATUSES.has(task.status)) {
+      next = {
+        ...next,
+        currentTask: {
+          taskId: task.id,
+          goal: task.goal,
+          subgoal: task.subgoal,
+          status: task.status,
+        },
+      };
+    }
+  }
+  const maxAge = config.memory.containerContentsMaxAgeMs;
+  const observedAt = Date.parse(state.timestamp);
+  if (state.storage.some((s) => !s.items.known)) {
+    next = {
+      ...next,
+      storage: next.storage.map((s) => {
+        if (s.items.known) return s;
+        const seen = repos.memory.recallContainer(s.id);
+        if (seen === null) return s;
+        const age = observedAt - Date.parse(seen.observedAt);
+        return age >= 0 && age <= maxAge
+          ? { ...s, items: { known: true as const, value: seen.items } }
+          : s;
+      }),
+    };
+  }
+  if (next.currentTask !== null) {
+    const t = next.currentTask;
     const stored = repos.tasks.ensure({
       id: t.taskId,
       goal: t.goal,
@@ -211,10 +252,19 @@ async function observeState(
       error: `Observed state failed schema validation: ${parsedState.error.issues[0]?.message ?? 'unknown'}`,
     };
   }
-  const state = overlayAgentMemory(parsedState.data, repos);
+  rememberContainers(repos, parsedState.data);
+  const state = overlayAgentMemory(parsedState.data, repos, deps.config);
   const stateSnapshotId = repos.snapshots.insert(cycleId, state);
   repos.events.append(cycleId, 'STATE', { stateSnapshotId, observedAt: state.timestamp });
   return { state, stateSnapshotId };
+}
+
+/** Records every container whose contents are visible in this (raw) observation. */
+function rememberContainers(repos: Repositories, state: GameState | null): void {
+  if (state === null) return;
+  for (const s of state.storage) {
+    if (s.items.known) repos.memory.rememberContainer(s.id, s.items.value, state.timestamp);
+  }
 }
 
 function newExecutor(deps: AgentDeps): ActionExecutor {
@@ -296,6 +346,7 @@ export async function runSingleCycle(
 
   // 6-10. Validate, persist, execute, verify, persist: all inside the executor.
   const outcome = await newExecutor(deps).execute(action, state, ctx, cycleId);
+  rememberContainers(repos, outcome.stateAfter);
 
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
   const planHalted = planStep === null ? false : updatePlanProgress(repos, planStep, outcome);
@@ -370,6 +421,7 @@ export async function runUserAction(
     { newId, now: () => clock.now() },
   );
   const outcome = await newExecutor(deps).execute(action, state, ctx, cycleId);
+  rememberContainers(repos, outcome.stateAfter);
   return finish({
     status: outcome.status,
     needsUserAttention: outcome.status !== 'succeeded',
@@ -445,9 +497,14 @@ function updatePlanProgress(
   outcome: ExecutionOutcome,
 ): boolean {
   switch (outcome.status) {
-    case 'succeeded':
-      repos.plans.advance(ref.planId);
+    case 'succeeded': {
+      const plan = repos.plans.advance(ref.planId);
+      // A plan a human wrote for the task IS the task: finishing it finishes the task.
+      if (plan.status === 'completed' && plan.planner === OPERATOR_PLANNER) {
+        repos.tasks.setStatus(plan.taskId, 'completed');
+      }
       return false;
+    }
     case 'rejected':
       repos.plans.setStatus(
         ref.planId,

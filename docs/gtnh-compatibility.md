@@ -152,8 +152,17 @@ Live results (_verified_, 2026-09-30):
 | Withdraw 500 (more than there is)       | Refused as a precondition; nothing clicked.                                          |
 
 No item entity appeared near the pen afterwards (nothing was dropped), and the server logged no
-warnings. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
-click simulation (tests), not live.
+warnings.
+
+**Live task** (_verified_, 2026-09-30): `task-add fetch-cobble` with
+`examples/plans/fetch-cobblestone.json`, then four `once --live` cycles, each its own connection:
+
+1. The walk to the chest (1 block).
+2. `OPEN_CONTAINER`.
+3. `WITHDRAW_ITEM` 10, validated from remembered contents while the chest was closed, then 11
+   clicks against the live chest; verified 0→10 and 128→118.
+4. `NO_ACTIVE_TASK`: the task was completed with its plan. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
+   click simulation (tests), not live.
 
 ## Machines (2026-09-30)
 

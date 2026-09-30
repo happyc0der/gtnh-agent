@@ -53,7 +53,9 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 blocks, wrenching, cable/energy-network changes, multiblock changes, and rare-item consumption.
 
 **On the live GTNH client**, `OPEN_CONTAINER`, `DEPOSIT_ITEM` and `WITHDRAW_ITEM` work on
-configured vanilla chests when `MC_ENABLE_CONTAINERS=true` (otherwise `NOT_IMPLEMENTED`). They are
+configured vanilla chests when `MC_ENABLE_CONTAINERS=true` (otherwise `NOT_IMPLEMENTED`). A
+withdrawal's "container contents known" precondition may use contents the agent saw within
+`memory.containerContentsMaxAgeMs`. The client re-reads the live contents before any click. They are
 refused (`REFUSED`, before any click) for an unconfigured chest, a block that is not a plain
 `minecraft:chest`, no empty hotbar slot, or an amount that cannot be moved exactly. A rejected click
 fails the action (`FAILED`) after the cursor has been emptied back into the window. See

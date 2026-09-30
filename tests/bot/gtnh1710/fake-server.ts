@@ -238,8 +238,8 @@ export class FakeGtnhServer {
   readonly confirmedPositions: ConfirmedPosition[] = [];
   /** Every placement (S08) the server sent: the join spawn and placePlayer() calls. */
   readonly placements: Array<{ x: number; eyeY: number; z: number }> = [];
-  /** Chest state of the most recent connection. */
-  chestSim: FakeChestSim | null = null;
+  /** Chests and the player's inventory: one world, kept across connections like a real server. */
+  readonly chestSim: FakeChestSim;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -290,6 +290,13 @@ export class FakeGtnhServer {
       chests: options.chests ?? [],
       rejectClicks: options.rejectClicks ?? [],
     };
+    this.chestSim = new FakeChestSim({
+      chests: this.#opts.chests,
+      playerInventory: this.#opts.inventory,
+      modularUi: this.#opts.mods.some((m) => m.modid === 'modularui'),
+      rejectClicks: new Set(this.#opts.rejectClicks),
+      send: () => undefined,
+    });
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
@@ -468,14 +475,9 @@ export class FakeGtnhServer {
           );
           state = 'play';
           this.#playSockets.add(socket);
-          sim = new FakeChestSim({
-            chests: this.#opts.chests,
-            playerInventory: this.#opts.inventory,
-            modularUi: this.#opts.mods.some((m) => m.modid === 'modularui'),
-            rejectClicks: new Set(this.#opts.rejectClicks),
-            send,
-          });
-          this.chestSim = sim;
+          sim = this.chestSim;
+          sim.setSender(send);
+          sim.onJoin();
           send(
             plugin(
               'REGISTER',
@@ -596,7 +598,13 @@ export class FakeGtnhServer {
       ),
     );
     send(encodeFrame(0x09, Buffer.from([0])));
-    const bySlot = new Map(o.inventory.map((i) => [i.slot, i]));
+    const bySlot = new Map(
+      this.chestSim
+        .playerSlots()
+        .flatMap((s, i) =>
+          s === null ? [] : [[i, { slot: i, id: s.id, count: s.count, damage: s.damage }] as const],
+        ),
+    );
     const modularUi = o.mods.some((m) => m.modid === 'modularui');
     const slots = Array.from({ length: o.windowSlots }, (_, s) => slot(bySlot.get(s), modularUi));
     const count = Buffer.alloc(2);

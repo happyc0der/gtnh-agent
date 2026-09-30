@@ -81,7 +81,7 @@ export class FakeChestSim {
   #nextWindowId = 1;
   #clickCount = 0;
   #ignoringUntilAck: number | null = null;
-  readonly #send: (frame: Buffer) => void;
+  #send: (frame: Buffer) => void;
   readonly #modularUi: boolean;
   readonly #rejectClicks: ReadonlySet<number>;
 
@@ -106,6 +106,11 @@ export class FakeChestSim {
     this.#send = opts.send;
     this.#modularUi = opts.modularUi;
     this.#rejectClicks = opts.rejectClicks;
+  }
+
+  /** Frames go to the current connection. */
+  setSender(send: (frame: Buffer) => void): void {
+    this.#send = send;
   }
 
   chestContents(x: number, y: number, z: number): Array<FakeStack | null> {
@@ -198,6 +203,15 @@ export class FakeChestSim {
     if (this.#cursor !== null) this.dropped.push(this.#cursor);
     this.#cursor = null;
     this.#open = null;
+    this.#ignoringUntilAck = null;
+  }
+
+  /** A new connection: the client is sent the whole player inventory at join. */
+  onJoin(): void {
+    this.#open = null;
+    this.#cursor = null;
+    this.#ignoringUntilAck = null;
+    this.#lastSentPlayer = this.#player.map((s) => (s === null ? null : { ...s }));
   }
 
   #openChest(key: string, size: number): void {

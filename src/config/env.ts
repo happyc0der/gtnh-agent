@@ -128,12 +128,23 @@ export const PlannerConfigSchema = z.strictObject({
 });
 export type PlannerConfig = z.infer<typeof PlannerConfigSchema>;
 
+export const MemoryConfigSchema = z.strictObject({
+  /**
+   * How long remembered container contents stay usable for planning checks (a withdrawal's
+   * "enough in the container" precondition). The live client re-reads the real contents
+   * before moving anything, so memory never decides what is clicked.
+   */
+  containerContentsMaxAgeMs: z.int().min(0).max(86_400_000).default(600_000),
+});
+export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
+
 export const AgentConfigSchema = z.strictObject({
   minecraft: MinecraftConfigSchema.prefault({}),
   database: z.strictObject({ path: z.string().min(1).default('./data/agent.sqlite') }).prefault({}),
   safety: SafetyConfigSchema.prefault({}),
   routing: RoutingConfigSchema.prefault({}),
   planner: PlannerConfigSchema.prefault({}),
+  memory: MemoryConfigSchema.prefault({}),
   locations: z.record(LocationNameSchema, NamedLocationSchema).default({}),
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;

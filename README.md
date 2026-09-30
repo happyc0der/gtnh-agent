@@ -4,8 +4,10 @@ A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTN
 **private** server you control.
 
 **Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
-simulated world or a private GTNH 2.8.4 test server, where the agent observes and can **walk inside
-a fenced pen** (its only world-changing ability). No autonomous loop, no model and no GPU use.
+simulated world or a private GTNH 2.8.4 test server. On the test server the agent observes,
+**walks inside a fenced pen** and **moves exact amounts to and from configured chests**. It works on
+**live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`.
+No autonomous loop, no model and no GPU use.
 
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
 the test server and observes position, dimension, health, food, a named inventory, nearby
@@ -71,6 +73,7 @@ cp agent.config.example.json agent.config.json
 | Plan a walk and draw it (no movement)        | `pnpm cli move --live --to home --dry-run`                                                |
 | **Walk** (to `x,y,z` or a named location)    | `pnpm cli move --live --to=-0.5,200,-11.5`                                                |
 | Stop all walking and chest use / allow again | `pnpm cli halt` / `pnpm cli unhalt`                                                       |
+| Add a live task with your plan / list tasks  | `pnpm cli task-add --task <id> --goal <text> --plan <file>` / `pnpm cli task-list`        |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
@@ -228,3 +231,36 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#chests)):
 - The cursor is never left holding items. A rejected click is re-synced, and the cursor is put
   back into an empty slot.
 - Protected items never move, and neither do stacks with NBT data.
+
+### Live tasks
+
+A task you add becomes the live agent's current task. Each `pnpm cli once --live` is then one
+normal cycle: its own decision logic first (dangers, food, upkeep), then the next step of the
+task's plan, validated, executed and verified.
+
+```bash
+pnpm cli task-add --task fetch-cobble --goal "Fetch 10 cobblestone from the pen chest" --plan examples/plans/fetch-cobblestone.json
+pnpm cli once --live
+pnpm cli task-list
+```
+
+- **The plan is yours.** `examples/plans/fetch-cobblestone.json` walks next to the pen chest, opens
+  it and withdraws 10. It is validated exactly like a planner's plan (schema, step limit, every
+  step's static safety), so a plan that would, for example, take a protected item is refused and
+  nothing is stored. Set `requiresUserApproval` to review it with `plan-approve` first.
+- **Finishing the plan finishes the task**; the next cycle pauses with `NO_ACTIVE_TASK`. Use
+  `pnpm cli task-complete --task <id>` to close a task early.
+- **Chest memory.** Each cycle is a new connection, so a chest opened in one cycle is closed in the
+  next. The agent remembers what it saw for `memory.containerContentsMaxAgeMs` (10 minutes), for
+  the "enough in the chest" check. The client still re-reads the live chest before clicking
+  anything.
+- **Only the live server gets the current task.** Mock scenario runs share the database and never
+  see it.
+
+Verified live on 2026-09-30:
+
+1. The walk (1 block).
+2. Opening the chest.
+3. The withdrawal in the next connection, from memory (verified 0→10 for the player, 128→118 for
+   the chest).
+4. A pause once the task was complete.

@@ -78,6 +78,23 @@ flowchart TD
 8. Observe again and verify the action's postcondition.
 9. Persist the outcome; pause or block the task if needed. **Stop.**
 
+## Live tasks
+
+The live server knows nothing about the agent's tasks, so they come from agent memory
+(`src/persistence/memory-repository.ts`, migration 003):
+
+- `cli task-add` stores a task and makes it the **current task** (`agent_state.current_task`).
+  Only live observations (`source: gtnh1710`) get it filled in. Mock scenarios share the database
+  and never see it. A completed or failed task is never filled in.
+- A plan the human wrote (`--plan`) goes through `validatePlan` exactly like a planner's plan. It
+  is stored with planner `operator`, and when it completes it completes the task.
+- **Container memory:** the loop records every container whose contents it sees (before and after
+  each action). A later cycle, in a new connection with the chest closed, gets those contents back
+  for `memory.containerContentsMaxAgeMs`, but only for the executor's feasibility checks. The live
+  client re-reads the real contents before it clicks anything, and verification compares the
+  remembered "before" with the live "after", so a chest changed by someone else shows up as a
+  verification failure.
+
 ## Plans across cycles
 
 A validated plan is stored in the `plans` table with its progress, so a multi-step plan advances one
