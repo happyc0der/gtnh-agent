@@ -1522,7 +1522,7 @@ walking steps (C06), with digging and walking enabled and a fence with a height 
 ```
 src/config       env + JSON config loading (Zod), private-network guard
 src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Known<T>, interaction profiles
-src/safety       safety policy, boundaries, protected items, forbidden-action classifier
+src/safety       safety policy (evaluateAction) and its per-action checks (dig, place, interact, explore, combat, quest book), boundaries, protected items, forbidden-action classifier
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider and the model's cadence: decision points), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner (opt-in)

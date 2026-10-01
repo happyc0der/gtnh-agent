@@ -1,7 +1,8 @@
-import type { Position } from '../domain/common.ts';
+import type { ActionType } from '../domain/actions.ts';
+import type { BlockPosition, Position } from '../domain/common.ts';
 import type { Hazard } from '../domain/game-state.ts';
-import { distance, formatPosition, isInsideBox } from '../domain/geometry.ts';
-import type { Boundary, SafetyViolation } from '../domain/safety.ts';
+import { distance, formatPosition, isBlockInsideBox, isInsideBox } from '../domain/geometry.ts';
+import type { Boundary, SafetyConfig, SafetyViolation } from '../domain/safety.ts';
 
 /** Violations for a position/dimension pair that falls outside the configured work area. */
 export function checkWithinBoundary(
@@ -91,6 +92,29 @@ export function checkHazardClearance(
         hazardPosition: formatPosition(nearest.hazard.position),
         distance: Number(nearest.distance.toFixed(2)),
         radius: needed,
+      },
+    },
+  ];
+}
+
+/** OUT_OF_BOUNDS when the whole target block is not inside the configured boundary. */
+export function blockOutsideBoundary(
+  type: ActionType,
+  b: BlockPosition,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  if (isBlockInsideBox(b, config.boundary)) return [];
+  return [
+    {
+      code: 'OUT_OF_BOUNDS',
+      severity: 'block',
+      message: `${type} target block ${formatPosition(b)} is not inside the configured boundary`,
+      details: {
+        x: b.x,
+        y: b.y,
+        z: b.z,
+        min: formatPosition(config.boundary.min),
+        max: formatPosition(config.boundary.max),
       },
     },
   ];
