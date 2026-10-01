@@ -19,6 +19,8 @@ import {
   multiBlockChangeFrame,
   neidColumn,
   TEST_BLOCK_REGISTRY,
+  type BiomeFn,
+  type BlockFn,
 } from './chunk-fixtures.ts';
 
 /**
@@ -78,6 +80,19 @@ export interface FakeServerOptions {
   rejectClicks?: number[];
   /** How the server treats digging (C07); vanilla by default. */
   dig?: FakeDigOptions;
+  /** The world's blocks (blockOverrides still win); default: the flat test world. */
+  world?: BlockFn;
+  /** Each column's biome id; default 0 everywhere. */
+  biomeAt?: BiomeFn;
+  /** Columns sent around the player: this many chunks each way (default 3, a 7 x 7 square). */
+  viewDistance?: number;
+  /**
+   * Send the columns that come into view as the player walks, and unload those that leave it,
+   * like the real server (default false: only the columns around the spawn, once).
+   */
+  streamChunks?: boolean;
+  /** The world's time of day (S03 at join and every second); default: no time updates. */
+  dayTicks?: number;
 }
 
 export interface ReceivedPacket {
@@ -245,7 +260,17 @@ export class FakeGtnhServer {
   statusPings = 0;
   logins = 0;
   handshakeHosts: string[] = [];
-  readonly #opts: Required<Omit<FakeServerOptions, 'kickOnLogin'>> & { kickOnLogin: string | null };
+  readonly #opts: Required<
+    Omit<FakeServerOptions, 'kickOnLogin' | 'world' | 'biomeAt' | 'dayTicks'>
+  > & {
+    kickOnLogin: string | null;
+    world: BlockFn | null;
+    biomeAt: BiomeFn | null;
+  };
+  /** The time of day the server reports (null: it sends no time updates). */
+  #dayTicks: number | null;
+  /** Columns sent to each play connection ("cx,cz"), and the chunk it was centred on. */
+  readonly #views = new Map<Socket, { sent: Set<string>; centre: string }>();
   readonly #server: Server;
   readonly #sockets = new Set<Socket>();
   readonly #timers = new Set<NodeJS.Timeout>();
@@ -294,7 +319,12 @@ export class FakeGtnhServer {
       recipes: options.recipes ?? [],
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
+      world: options.world ?? null,
+      biomeAt: options.biomeAt ?? null,
+      viewDistance: options.viewDistance ?? 3,
+      streamChunks: options.streamChunks ?? false,
     };
+    this.#dayTicks = options.dayTicks ?? null;
     this.chestSim = new FakeChestSim({
       chests: this.#opts.chests,
       tables: this.#opts.tables,
@@ -305,7 +335,7 @@ export class FakeGtnhServer {
       send: () => undefined,
     });
     this.#blocks = new Map(this.#opts.blockOverrides);
-    const world = flatWorld(this.#blocks, this.#opts.voidColumns);
+    const world = this.#worldNow();
     const blockNames = new Map(this.#opts.blocks);
     this.digSim = new FakeDigSim(
       {
@@ -386,6 +416,65 @@ export class FakeGtnhServer {
     );
   }
 
+  /** The world's blocks now: the overrides (and the blocks changed since) over the base world. */
+  #worldNow(): BlockFn {
+    const base = this.#opts.world;
+    if (base === null) return flatWorld(this.#blocks, this.#opts.voidColumns);
+    return (x, y, z) => this.#blocks.get(`${x},${y},${z}`) ?? base(x, y, z);
+  }
+
+  /** S03 at the server's time of day (the daylight cycle running). */
+  #timeFrame(dayTicks: number): Buffer {
+    const b = Buffer.alloc(16);
+    b.writeBigInt64BE(BigInt(dayTicks), 0); // world age: any value
+    b.writeBigInt64BE(BigInt(dayTicks), 8);
+    return encodeFrame(0x03, b);
+  }
+
+  /** Sets the time of day and tells every client at once (S03). */
+  setTime(dayTicks: number): void {
+    this.#dayTicks = dayTicks;
+    this.broadcast(this.#timeFrame(dayTicks));
+  }
+
+  /** Columns not yet sent within the view distance of chunk (cx, cz), nearest first. */
+  #sendView(socket: Socket, send: (frame: Buffer) => void, cx: number, cz: number): void {
+    const view = this.#views.get(socket) ?? { sent: new Set<string>(), centre: '' };
+    this.#views.set(socket, view);
+    view.centre = `${cx},${cz}`;
+    const r = this.#opts.viewDistance;
+    const wanted: Array<[number, number]> = [];
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        if (!view.sent.has(`${cx + dx},${cz + dz}`)) wanted.push([cx + dx, cz + dz]);
+      }
+    }
+    wanted.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cz) - Math.hypot(b[0] - cx, b[1] - cz));
+    // Nearest first, 5 columns per Map Chunk Bulk, like the real server.
+    const world = this.#worldNow();
+    const biomeAt = this.#opts.biomeAt ?? undefined;
+    for (let i = 0; i < wanted.length; i += 5) {
+      const batch = wanted.slice(i, i + 5);
+      send(
+        chunkBulkFrame(
+          batch.map(([x, z]) => neidColumn(x, z, world, true, true, biomeAt)),
+          true,
+          this.#opts.corruptChunks,
+        ),
+      );
+      for (const [x, z] of batch) view.sent.add(`${x},${z}`);
+    }
+    // Columns that left the view are unloaded (one beyond it is kept, like the real server).
+    for (const key of [...view.sent]) {
+      const [x, z] = key.split(',').map(Number) as [number, number];
+      if (Math.max(Math.abs(x - cx), Math.abs(z - cz)) <= r + 1) continue;
+      send(
+        encodeFrame(0x21, Buffer.concat([i32(x), i32(z), Buffer.from([1, 0, 0, 0, 0]), i32(0)])),
+      );
+      view.sent.delete(key);
+    }
+  }
+
   /** A single block change (NEID format), e.g. lava appearing next to the player. */
   setBlock(x: number, y: number, z: number, id: number): void {
     this.#blocks.set(`${x},${y},${z}`, id);
@@ -439,6 +528,7 @@ export class FakeGtnhServer {
     socket.on('close', () => {
       this.#sockets.delete(socket);
       this.#playSockets.delete(socket);
+      this.#views.delete(socket);
       sim?.onDisconnect();
     });
     socket.on('error', () => undefined);
@@ -538,8 +628,8 @@ export class FakeGtnhServer {
               );
             }
             break;
-          case 0x06:
-            this.confirmedPositions.push({
+          case 0x06: {
+            const p = {
               x: r.f64(),
               feetY: r.f64(),
               headY: r.f64(),
@@ -547,13 +637,19 @@ export class FakeGtnhServer {
               yaw: r.f32(),
               pitch: r.f32(),
               onGround: r.bool(),
-            });
+            };
+            this.confirmedPositions.push(p);
             this.digSim.onPlayerTick();
+            const centre = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`;
+            if (this.#opts.streamChunks && this.#views.get(socket)?.centre !== centre) {
+              this.#sendView(socket, send, Math.floor(p.x / 16), Math.floor(p.z / 16));
+            }
             break;
+          }
           case 0x17: {
             const channel = r.string();
             const data = r.bytes(r.i16());
-            if (channel === 'FML|HS') this.#onHandshake(data, send);
+            if (channel === 'FML|HS') this.#onHandshake(data, send, socket);
             break;
           }
           case 0x07:
@@ -567,7 +663,7 @@ export class FakeGtnhServer {
     });
   }
 
-  #onHandshake(data: Buffer, send: (frame: Buffer) => void): void {
+  #onHandshake(data: Buffer, send: (frame: Buffer) => void, socket: Socket): void {
     const discriminator = data.readInt8(0);
     if (discriminator === 2) {
       const mods = this.#opts.mods;
@@ -606,11 +702,11 @@ export class FakeGtnhServer {
     } else if (phase === 3) {
       send(plugin('FML|HS', Buffer.from([0xff, 3])));
     } else if (phase === 4) {
-      this.#sendJoin(send);
+      this.#sendJoin(send, socket);
     }
   }
 
-  #sendJoin(send: (frame: Buffer) => void): void {
+  #sendJoin(send: (frame: Buffer) => void, socket: Socket): void {
     const o = this.#opts;
     send(
       encodeFrame(
@@ -647,28 +743,11 @@ export class FakeGtnhServer {
     send(encodeFrame(0x2f, Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff])));
     // An unknown packet id the client must skip without desynchronizing.
     send(encodeFrame(0x35, Buffer.from('opaque tile entity data')));
+    if (this.#dayTicks !== null) send(this.#timeFrame(this.#dayTicks));
     if (o.sendChunks) {
       // Nearest-first, 5 columns per Map Chunk Bulk, like the real server, with real
-      // NotEnoughIDs-format block data for a flat world (plus test overrides).
-      const cx0 = Math.floor(o.spawn.x / 16);
-      const cz0 = Math.floor(o.spawn.z / 16);
-      const columns: Array<[number, number]> = [];
-      for (let dx = -3; dx <= 3; dx++)
-        for (let dz = -3; dz <= 3; dz++) columns.push([cx0 + dx, cz0 + dz]);
-      columns.sort(
-        (a, b) => Math.hypot(a[0] - cx0, a[1] - cz0) - Math.hypot(b[0] - cx0, b[1] - cz0),
-      );
-      for (let i = 0; i < columns.length; i += 5) {
-        const batch = columns.slice(i, i + 5);
-        const world = flatWorld(this.#blocks, o.voidColumns);
-        send(
-          chunkBulkFrame(
-            batch.map(([cx, cz]) => neidColumn(cx, cz, world)),
-            true,
-            o.corruptChunks,
-          ),
-        );
-      }
+      // NotEnoughIDs-format block data for the world (plus test overrides).
+      this.#sendView(socket, send, Math.floor(o.spawn.x / 16), Math.floor(o.spawn.z / 16));
     }
     for (const entity of o.entities) send(spawnFrame(entity));
     const timer = setInterval(
@@ -676,5 +755,12 @@ export class FakeGtnhServer {
       o.keepAliveEveryMs,
     );
     this.#timers.add(timer);
+    if (this.#dayTicks !== null) {
+      // The real server sends the time every second.
+      const clock = setInterval(() => {
+        if (this.#dayTicks !== null) send(this.#timeFrame(this.#dayTicks));
+      }, 1_000);
+      this.#timers.add(clock);
+    }
   }
 }

@@ -87,13 +87,20 @@ export interface ColumnBytes {
   data: Buffer;
 }
 
-/** One column in NotEnoughIDs layout (u16 ids, u16 metadata, block light, sky light, biomes). */
+/** Biome id of a column (world x, z). */
+export type BiomeFn = (x: number, z: number) => number;
+
+/**
+ * One column in NotEnoughIDs layout (u16 ids, u16 metadata, block light, sky light, biomes:
+ * one byte per column, index z << 4 | x, from `biomeAt`, or all 0).
+ */
 export function neidColumn(
   cx: number,
   cz: number,
   block: BlockFn,
   skyLight = true,
   biomes = true,
+  biomeAt?: BiomeFn,
 ): ColumnBytes {
   let mask = 0;
   const idArrays: Buffer[] = [];
@@ -113,12 +120,16 @@ export function neidColumn(
     }
   }
   const n = idArrays.length;
+  const biomeBytes = Buffer.alloc(biomes ? 256 : 0);
+  if (biomes && biomeAt !== undefined) {
+    for (let i = 0; i < 256; i++) biomeBytes[i] = biomeAt(cx * 16 + (i & 15), cz * 16 + (i >> 4));
+  }
   const data = Buffer.concat([
     ...idArrays,
     Buffer.alloc(8192 * n), // metadata
     Buffer.alloc(2048 * n), // block light
     Buffer.alloc(skyLight ? 2048 * n : 0),
-    Buffer.alloc(biomes ? 256 : 0),
+    biomeBytes,
   ]);
   return { header: { chunkX: cx, chunkZ: cz, primaryBitMask: mask, addBitMask: 0 }, data };
 }

@@ -14,6 +14,7 @@ import {
   DAY_PHASES,
   GENERATOR_STATUSES,
 } from '../domain/game-state.ts';
+import { ExplorationSummarySchema } from '../domain/world-memory.ts';
 
 /** Hard ceiling on plan length. Config may lower it (planner.maxPlanSteps), never raise it. */
 export const MAX_PLAN_STEPS = 16;
@@ -192,6 +193,11 @@ export const PlannerRequestSchema = z.strictObject({
     )
     .max(50),
   maxPlanSteps: z.int().min(1).max(MAX_PLAN_STEPS),
+  /**
+   * Present only when the agent can explore (EXPLORE is then in allowedActions): what world
+   * memory knows (places per resource, biomes) and how far each direction has been seen.
+   */
+  exploration: ExplorationSummarySchema.optional(),
 });
 export type PlannerRequest = z.infer<typeof PlannerRequestSchema>;
 

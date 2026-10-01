@@ -12,6 +12,8 @@ import {
   type RecipeId,
 } from '../../domain/recipes.ts';
 import { assertValidatedAction, type ValidatedAction } from '../../domain/validated-action.ts';
+import type { ExploreToward } from '../../domain/actions.ts';
+import { mergeSeen, type SeenChunk } from '../../domain/world-memory.ts';
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
@@ -44,6 +46,7 @@ import {
   type PlacedRecipe,
 } from './crafting.ts';
 import { checkDig, digWaitTicks, eyesOf, standSpotFor, TICK_MS, type DigArea } from './digging.ts';
+import { ARRIVED, chooseHop, exploreGoal } from './explore.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
 import {
@@ -60,6 +63,7 @@ import {
   type ServerPosition,
   VANILLA_DECODING,
 } from './packets.ts';
+import { playArea, type PlayArea, type PointBox } from './play-area.ts';
 import { nameItemStack, resolveItemName } from './registry.ts';
 import { parseIdentity, statusPing, type ServerIdentity } from './status-ping.ts';
 import {
@@ -81,6 +85,7 @@ import {
 } from './terrain.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
 import { WORKBENCH_WINDOW_TYPE, WorldModel, type BlockWatch } from './world-model.ts';
+import { describeSightings, SurveyTracker } from './world-survey.ts';
 
 /** Vanilla clients send one "player" packet per tick (20 per second). */
 const IDLE_TICK_MS = 50;
@@ -151,7 +156,19 @@ export interface Gtnh1710ClientOptions {
    * Used by research scripts; must never be used to send anything.
    */
   onFrame?: (phase: 'login' | 'play', packetId: number, body: Buffer) => void;
+  /**
+   * The exploration boundary (the config's safety.boundary): with movement mode 'follow' the
+   * play area never leaves it. Without it, 'follow' refuses all movement.
+   */
+  explorationBoundary?: PointBox | null;
 }
+
+/** EXPLORE's own limits, on top of maxDistance: hops, time, and the wait for chunks per hop. */
+const MAX_EXPLORE_HOPS = 12;
+const MAX_EXPLORE_MS = 180_000;
+const EXPLORE_ENTITIES_WAIT_MS = 5_000;
+/** A hop shorter than this is not worth walking (blocks). */
+const MIN_HOP_LENGTH = 2;
 
 export interface ConnectionInfo {
   identity: { motd: string; version: string | null; mods: number } | null;
@@ -180,14 +197,16 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    hotbar selection, predictable clicks, confirmations, closing a window), digging
  *    start/cancel/finish, and the cosmetic head look and arm swing;
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
- *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, OPEN_CONTAINER /
+ *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
+ *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
  *    DEPOSIT_ITEM / WITHDRAW_ITEM when containers are enabled, CRAFT_ITEM when crafting is
  *    enabled and DIG_BLOCK when digging is enabled (NOT_IMPLEMENTED otherwise); every other
  *    world-changing action returns NOT_IMPLEMENTED without sending anything;
  *  - a walk stays inside the fence (one level, or terrain when the fence has a height
- *    range), and every step is re-checked just before it is sent; it stops on a server
- *    correction, a health drop, a nearby threat (MOVE_TO), a blocked or dangerous way
- *    ahead, the stop file, halt(), or a lost connection;
+ *    range; in mode 'follow' the play area around the player, inside the exploration
+ *    boundary: #fence()), and every step is re-checked just before it is sent; it stops on
+ *    a server correction, a health drop, a nearby threat (MOVE_TO, EXPLORE), a blocked or
+ *    dangerous way ahead, the stop file, halt(), or a lost connection;
  *  - window work never leaves items on the cursor or in a crafting grid when it can help it
  *    (the server drops both when a window closes or the player leaves);
  *  - a dig uses an empty hand on one allowlisted block that digging.ts has checked, and
@@ -220,6 +239,10 @@ export class Gtnh1710Client implements MinecraftClient {
   #digging = false;
   /** Sync clicks sent while crafting (diagnostics). */
   #craftSyncs = 0;
+  /** An EXPLORE is running (its hops are walks; no second EXPLORE starts meanwhile). */
+  #exploring = false;
+  /** What the player has seen around it, for world memory (world-survey.ts). */
+  readonly #surveys = new SurveyTracker();
 
   constructor(opts: Gtnh1710ClientOptions) {
     this.#opts = opts;
@@ -326,7 +349,42 @@ export class Gtnh1710Client implements MinecraftClient {
     // While packets keep arriving the model is current; if the server goes quiet the
     // timestamp stops advancing, so the safety policy's staleness check fires.
     const asOf = last !== null && now.getTime() - last.getTime() > FRESHNESS_WINDOW_MS ? last : now;
+    this.#survey(false);
     return Promise.resolve(this.#withStandSpots(this.#world.toGameState(asOf)));
+  }
+
+  /**
+   * Surveys what the player sees around it, when due (world-survey.ts: on entering another
+   * chunk, every 30 s, or `force`). A survey problem is logged, never thrown: observing and
+   * walking go on without it.
+   */
+  #survey(force: boolean): SeenChunk[] {
+    const feet = this.#world.ownPosition;
+    if (feet === null) return [];
+    try {
+      return this.#surveys.update(this.#world, feet, this.#opts.clock.now(), force);
+    } catch (error) {
+      this.#log(`world survey failed: ${errorMessage(error)}`);
+      return [];
+    }
+  }
+
+  /** What the player has seen since the last call, per chunk (for world memory). */
+  takeSeenChunks(): SeenChunk[] {
+    return this.#surveys.drain();
+  }
+
+  /**
+   * The fence every walk, dig and stand-spot check uses NOW: the configured fence (movement
+   * mode 'fixed'), or the play area around the player clipped to the exploration boundary
+   * (mode 'follow'). Each walk or dig takes it once when it starts (play-area.ts).
+   */
+  #fence(): PlayArea {
+    return playArea(
+      this.#opts.config.movement,
+      this.#opts.explorationBoundary ?? null,
+      this.#world.ownPosition,
+    );
   }
 
   /**
@@ -336,13 +394,13 @@ export class Gtnh1710Client implements MinecraftClient {
    */
   #withStandSpots(state: GameState): GameState {
     const cfg = this.#opts.config;
-    const fence = cfg.movement.fence;
+    const fence = this.#fence().fence;
     const world = this.#world.walkWorld();
     const feet = this.#world.ownPosition;
     if (!cfg.digging.enabled || fence === null || world === null || feet === null) return state;
     if (!state.nearbyBlocks.known) return state;
     const area: DigArea = {
-      fence: fenceOf(fence),
+      fence,
       maxHeightAboveFence: cfg.digging.maxHeightAboveFence,
     };
     const blocks = state.nearbyBlocks.value;
@@ -375,6 +433,8 @@ export class Gtnh1710Client implements MinecraftClient {
         return Promise.resolve(ok('pause recorded (not sent in-game)', { acknowledged: true }));
       case 'MOVE_TO':
         return this.#walkTo(action.args.target, { stopForThreats: true });
+      case 'EXPLORE':
+        return this.#explore(action.args);
       case 'RETURN_TO_SAFE_LOCATION':
         // A retreat is how the agent gets away from a threat, so threats do not stop it.
         return this.#walkTo(validated.resolvedTarget, { stopForThreats: false });
@@ -1103,9 +1163,8 @@ export class Gtnh1710Client implements MinecraftClient {
       return { reason: 'digging is disabled (MC_ENABLE_DIGGING)', code: 'NOT_IMPLEMENTED' };
     }
     const refused = (reason: string) => ({ reason, code: 'REFUSED' as const });
-    if (cfg.movement.fence === null) {
-      return refused('no movement fence is configured (digging stays inside the fence)');
-    }
+    const area = this.#fence();
+    if (area.fence === null) return refused(`${area.problem}: digging stays inside the fence`);
     if (!cfg.presenceTicks) return refused('digging needs presence ticks (MC_PRESENCE_TICKS)');
     if (this.#haltReason !== null) return refused(`halted: ${this.#haltReason}`);
     if (existsSync(resolvePath(cfg.movement.stopFile))) {
@@ -1175,14 +1234,14 @@ export class Gtnh1710Client implements MinecraftClient {
       drop: null,
     });
     const blocker = this.#digBlocker();
-    const fence = this.#opts.config.movement.fence;
+    const fence = this.#fence().fence;
     if (blocker !== null || fence === null) {
       return done(
         failed(`not digging: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED'),
       );
     }
     const area: DigArea = {
-      fence: fenceOf(fence),
+      fence,
       maxHeightAboveFence: this.#opts.config.digging.maxHeightAboveFence,
     };
     const where = `(${target.x}, ${target.y}, ${target.z})`;
@@ -1432,8 +1491,8 @@ export class Gtnh1710Client implements MinecraftClient {
    */
   previewWalk(target: Position | null): { plan: WalkPlan | null; map: string[] } | null {
     const m = this.#opts.config.movement;
-    if (m.fence === null) return null;
-    const fence = fenceOf(m.fence);
+    const fence = this.#fence().fence;
+    if (fence === null) return null;
     const world = this.#world.walkWorld();
     const from = this.#world.ownPosition;
     if (world === null || from === null) {
@@ -1475,7 +1534,8 @@ export class Gtnh1710Client implements MinecraftClient {
   #movementBlocker(): string | null {
     const m = this.#opts.config.movement;
     if (!m.enabled) return 'movement is disabled (MC_ENABLE_MOVEMENT)';
-    if (m.fence === null) return 'no movement fence is configured (MC_MOVEMENT_FENCE_MIN/MAX)';
+    const area = this.#fence();
+    if (area.fence === null) return area.problem;
     if (!this.#opts.config.presenceTicks) return 'walking needs presence ticks (MC_PRESENCE_TICKS)';
     if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
     if (existsSync(resolvePath(m.stopFile))) return `the stop file ${m.stopFile} exists`;
@@ -1494,12 +1554,12 @@ export class Gtnh1710Client implements MinecraftClient {
   ): Promise<ClientActionResult> {
     const m = this.#opts.config.movement;
     const blocker = this.#movementBlocker();
-    if (blocker !== null || m.fence === null) {
+    const fence = this.#fence().fence;
+    if (blocker !== null || fence === null) {
       return failed(`not walking: ${blocker}`, m.enabled ? 'REFUSED' : 'NOT_IMPLEMENTED');
     }
     if (target === null) return failed('not walking: no resolved target', 'ERROR');
     if (this.#walking) return failed('not walking: a walk is already in progress', 'REFUSED');
-    const fence = fenceOf(m.fence);
     const world = this.#world.walkWorld();
     const from = this.#world.ownPosition;
     if (world === null || from === null) {
@@ -1637,6 +1697,198 @@ export class Gtnh1710Client implements MinecraftClient {
       ? bodyProblem(world, fence, to)
       : segmentProblem(world, fence, from, to);
     return problem === null ? null : `the way ahead is not clear: ${problem}`;
+  }
+
+  // -------------------------------------------------------------------------
+  // Exploring: explore.ts picks each hop; every hop is an ordinary checked walk (#walkTo)
+
+  /** Why it is too dark to be out exploring (evening, night, or the time unknown), or null. */
+  #darkness(): string | null {
+    const t = this.#world.worldTimeAt(this.#opts.clock.now());
+    if (t === null) return 'the time of day is unknown (no time update from the server yet)';
+    return t.phase === 'evening' || t.phase === 'night'
+      ? `it is ${t.phase}: the agent explores only in daylight`
+      : null;
+  }
+
+  /**
+   * EXPLORE: walk toward a compass direction or a point, over terrain, in hops, at most
+   * `maxDistance` blocks walked. Each hop goes to the spot inside the current play area that
+   * a walk reaches and that is closest to the goal (explore.ts), as a MOVE_TO-like walk:
+   * every step re-checked, threats stop it. Between hops it waits until the chunks and
+   * entities around the new spot have arrived, and surveys what it sees (world memory).
+   * It stops at the goal (pulled in to the exploration boundary), after maxDistance, when no
+   * hop gets closer (water, cliffs), when two hops in a row gain less than a block, when it
+   * gets dark, at its hop and time limits, or on anything that stops a walk (FAILED).
+   */
+  async #explore(args: {
+    toward: ExploreToward;
+    maxDistance: number;
+  }): Promise<ClientActionResult> {
+    const m = this.#opts.config.movement;
+    const refuse = (reason: string, code: 'REFUSED' | 'NOT_IMPLEMENTED' = 'REFUSED') =>
+      failed(`not exploring: ${reason}`.slice(0, 500), code);
+    const blocker = this.#movementBlocker();
+    if (blocker !== null) return refuse(blocker, m.enabled ? 'REFUSED' : 'NOT_IMPLEMENTED');
+    if (m.mode !== 'follow') {
+      return refuse(
+        "the play area does not follow the player (EXPLORE needs movement mode 'follow', MC_MOVEMENT_MODE=follow)",
+      );
+    }
+    if (this.#walking || this.#exploring) return refuse('a walk is already in progress');
+    const dark = this.#darkness();
+    if (dark !== null) return refuse(dark);
+    const start = this.#world.ownPosition;
+    const boundary = this.#opts.explorationBoundary ?? null;
+    if (start === null || boundary === null) return refuse('position or boundary unknown');
+
+    const clock = this.#opts.clock;
+    const goal = exploreGoal(start, args.toward, args.maxDistance, boundary);
+    const startedAt = clock.now().getTime();
+    const seen = new Map<string, SeenChunk>();
+    const look = (): void => {
+      for (const s of this.#survey(true)) {
+        const key = `${s.chunkX},${s.chunkZ}`;
+        const before = seen.get(key);
+        seen.set(key, before === undefined ? s : mergeSeen(before, s));
+      }
+    };
+    const tried = new Set<string>();
+    let walked = 0;
+    let hops = 0;
+    let stalls = 0;
+    let stop: { why: string; safe: boolean } | null = null;
+    this.#exploring = true;
+    try {
+      look();
+      while (stop === null) {
+        const here = this.#world.ownPosition;
+        if (here === null) {
+          stop = { why: 'the player position became unknown', safe: false };
+          break;
+        }
+        const left = Math.hypot(goal.x - here.x, goal.z - here.z);
+        const budget = args.maxDistance - walked;
+        if (left < ARRIVED) {
+          stop = {
+            why: goal.clipped
+              ? 'reached the edge of the exploration boundary'
+              : typeof args.toward === 'string'
+                ? `went ${args.maxDistance} blocks ${args.toward}`
+                : 'reached the target',
+            safe: true,
+          };
+        } else if (budget < MIN_HOP_LENGTH) {
+          stop = { why: `walked the whole maxDistance (${args.maxDistance} blocks)`, safe: true };
+        } else if (hops >= MAX_EXPLORE_HOPS) {
+          stop = { why: `made the most hops one EXPLORE makes (${MAX_EXPLORE_HOPS})`, safe: true };
+        } else if (clock.now().getTime() - startedAt >= MAX_EXPLORE_MS) {
+          stop = {
+            why: `took the longest one EXPLORE takes (${MAX_EXPLORE_MS / 1000} s)`,
+            safe: true,
+          };
+        }
+        if (stop !== null) break;
+        const blocked = this.#movementBlocker();
+        if (blocked !== null) {
+          stop = { why: blocked, safe: false };
+          break;
+        }
+        const darkNow = this.#darkness();
+        if (darkNow !== null) {
+          stop = { why: darkNow, safe: true };
+          break;
+        }
+        // A new spot: its chunks and the entities in them must have arrived before a hop.
+        await this.#waitFor(() => this.#world.entitiesReady(clock.now()), EXPLORE_ENTITIES_WAIT_MS);
+        if (!this.#world.entitiesReady(clock.now())) {
+          stop = { why: 'the entities around the player are not fully known', safe: false };
+          break;
+        }
+        const fence = this.#fence().fence;
+        const world = this.#world.walkWorld();
+        if (fence === null || world === null) {
+          stop = { why: 'the play area or the block data is unknown', safe: false };
+          break;
+        }
+        const choice = chooseHop(
+          world,
+          fence,
+          here,
+          goal,
+          Math.min(m.maxPathLength, budget),
+          tried,
+        );
+        if (!choice.ok) {
+          stop = { why: `no way further: ${choice.reason}`, safe: true };
+          break;
+        }
+        let walk: ClientActionResult | null = null;
+        for (const c of choice.candidates) {
+          const r = await this.#walkTo(c.target, { stopForThreats: true });
+          // REFUSED with no blocker: the walker would not plan this one (nothing was sent).
+          if (r.ok || r.code !== 'REFUSED' || this.#movementBlocker() !== null) {
+            walk = r;
+            break;
+          }
+          tried.add(`${Math.floor(c.target.x)},${c.target.y},${Math.floor(c.target.z)}`);
+        }
+        if (walk === null) {
+          stop = { why: 'the walker planned none of the next hops', safe: true };
+          break;
+        }
+        if (walk.code === 'REFUSED') {
+          stop = { why: walk.message, safe: false };
+          break;
+        }
+        hops += 1;
+        const after = this.#world.ownPosition ?? here;
+        walked += walk.ok
+          ? Number(walk.data['distance'])
+          : Math.hypot(after.x - here.x, after.z - here.z) + Math.abs(after.y - here.y);
+        look();
+        if (!walk.ok) {
+          stop = { why: walk.message, safe: false };
+          break;
+        }
+        stalls = left - Math.hypot(goal.x - after.x, goal.z - after.z) < 1 ? stalls + 1 : 0;
+        if (stalls >= 2) {
+          stop = { why: 'stuck: two hops in a row got less than 1 block closer', safe: true };
+        }
+      }
+    } finally {
+      this.#exploring = false;
+    }
+
+    const end = this.#world.ownPosition ?? start;
+    const progress =
+      Math.hypot(goal.x - start.x, goal.z - start.z) - Math.hypot(goal.x - end.x, goal.z - end.z);
+    const heading =
+      typeof args.toward === 'string'
+        ? args.toward.replace('_', '-')
+        : `(${args.toward.x}, ${args.toward.z})`;
+    const why = stop?.why ?? 'stopped';
+    const data = {
+      walked: Number(walked.toFixed(2)),
+      hops,
+      progress: Number(progress.toFixed(2)),
+      x: end.x,
+      y: end.y,
+      z: end.z,
+      stoppedBecause: why.slice(0, 200),
+      chunksSeen: seen.size,
+    };
+    if (hops === 0) return failed(`not exploring: ${why}`.slice(0, 500), 'REFUSED', data);
+    const message =
+      `explored ${walked.toFixed(1)} blocks toward ${heading} in ${hops} hop(s), ` +
+      `${progress.toFixed(1)} closer, now at (${end.x.toFixed(1)}, ${end.y.toFixed(1)}, ${end.z.toFixed(1)}); ` +
+      `stopped: ${why}. Saw ${describeSightings([...seen.values()])}`;
+    this.#log(message);
+    if (stop?.safe !== true) return failed(message.slice(0, 500), 'FAILED', data);
+    if (progress < 1) {
+      return failed(`less than 1 block closer: ${message}`.slice(0, 500), 'FAILED', data);
+    }
+    return ok(message.slice(0, 500), data);
   }
 
   #startIdle(): void {
@@ -1981,10 +2233,6 @@ function craftFailed(
   data: ClientActionResult['data'],
 ): ClientActionResult {
   return failed(message.length > 500 ? `${message.slice(0, 497)}...` : message, code, data);
-}
-
-function fenceOf(f: { min: Position; max: Position }): Fence {
-  return { min: { ...f.min }, max: { ...f.max } };
 }
 
 /** Plain text of a chat-component JSON string (best effort, for error messages). */

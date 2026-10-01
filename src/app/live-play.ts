@@ -52,11 +52,15 @@ export async function runLivePlay(
             : existsSync(stopFile)
               ? `the stop file ${stopFile} exists`
               : null;
+        // When the agent can explore, play first scouts the area while little of it is known.
+        const movement = config.minecraft.movement;
+        const canExplore = movement.enabled && movement.mode === 'follow';
         try {
           const result = await runPlay(
             {
               repos,
               ...(input.abilities ? { abilities: input.abilities } : {}),
+              ...(canExplore ? { scouting: { chunksSeen: () => repos.worldMemory.count() } } : {}),
               inventory: async () => {
                 const state = await client.observe();
                 return state.inventory.known ? state.inventory.value.items : null;

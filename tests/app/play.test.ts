@@ -10,6 +10,7 @@ import {
   type PlayEvent,
 } from '../../src/app/play.ts';
 import { completedQuests, questTaskId } from '../../src/app/quest-commands.ts';
+import { SCOUT_TASK_ID } from '../../src/app/scouting.ts';
 import { worldTime } from '../../src/domain/game-state.ts';
 import { TASK, type Quest } from '../../src/goals/quest-goals.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
@@ -174,6 +175,112 @@ describe('autonomous play', () => {
     expect(result.stopReason).toMatch(/^it is evening \(9\.7 min until sunrise\)/);
     expect(result.night).toMatchObject({ phase: 'evening' });
     expect(world.calls).toBe(0);
+  });
+
+  it('scouts once first when it can explore and little is seen, then plays the quests', async () => {
+    const repos = open();
+    let chunks = 10;
+    const world: World = {
+      inventory: {},
+      sessions: [
+        {}, // scouting
+        { gain: { 'minecraft:sand': 100 } },
+        { gain: { 'minecraft:gravel': 50 } },
+      ],
+      calls: 0,
+    };
+    const base = deps(repos, world);
+    const events: PlayEvent[] = [];
+    const result = await runPlay(
+      {
+        ...base,
+        scouting: { chunksSeen: () => chunks },
+        session: (limits, hooks) => {
+          if (world.calls === 0) {
+            // The scouting session's task is scouting; play's quests come after it.
+            expect(repos.memory.getValue(CURRENT_TASK_KEY)).toBe(SCOUT_TASK_ID);
+            chunks = 80;
+          }
+          return base.session(limits, hooks);
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(events[0]).toEqual({
+      kind: 'scout',
+      taskId: SCOUT_TASK_ID,
+      created: true,
+      chunksSeen: 10,
+    });
+    expect(describePlayEvent(events[0] as PlayEvent)).toBe(
+      'goal: scout the area before settling (10 chunk(s) seen so far) (new task)',
+    );
+    expect(result).toMatchObject({ sessions: 3, questsCompleted: ['Q1', 'Q2', 'Q3'] });
+    expect(repos.tasks.get(SCOUT_TASK_ID)?.status).toBe('completed');
+    // Once is enough: a completed scouting task is never redone.
+    chunks = 10;
+    const again = await runPlay(
+      {
+        ...deps(repos, { inventory: {}, sessions: [], calls: 0 }),
+        scouting: { chunksSeen: () => chunks },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 1 },
+      noStop,
+    );
+    expect(again.stopReason).toBe('no quest the agent can do is left');
+  });
+
+  it('does not scout when enough is seen, and stops if the scouting task needs a human', async () => {
+    const seen = { inventory: {}, sessions: [], calls: 0 };
+    const events: PlayEvent[] = [];
+    await runPlay(
+      { ...deps(open(), seen), scouting: { chunksSeen: () => 60 } },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 1 },
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(events.some((e) => e.kind === 'scout')).toBe(false);
+
+    const repos = open();
+    repos.tasks.ensure({ id: SCOUT_TASK_ID, goal: 'scout', subgoal: null, status: 'paused' });
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const r = await runPlay(
+      { ...deps(repos, world), scouting: { chunksSeen: () => 0 } },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(r.stopReason).toMatch(/^the scouting task scout-area is paused; it needs you/);
+    expect(world.calls).toBe(0);
+  });
+
+  it('stops scouting when it gets dark, and goes on with it the next day', async () => {
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const evening = (_l: unknown, hooks: Parameters<PlayDeps['session']>[1]) => {
+      world.calls += 1;
+      hooks.onCycle(
+        {
+          summary: 'REQUEST_PLANNER -> EXPLORE -> succeeded',
+          outcome: { stateAfter: { time: { known: true, value: worldTime(12_400, true) } } },
+        } as unknown as CycleResult,
+        1,
+      );
+      return Promise.resolve({
+        cycles: [{ cycleId: 'c1', summary: 'x' }],
+        stopReason: 'stop: it is evening',
+        stopKind: 'stop-requested' as const,
+        taskId: SCOUT_TASK_ID,
+        taskStatus: 'active',
+        elapsedMs: 1,
+      });
+    };
+    const r = await runPlay(
+      { ...deps(repos, world), scouting: { chunksSeen: () => 30 }, session: evening },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(r.night).toMatchObject({ phase: 'evening' });
+    expect(repos.tasks.get(SCOUT_TASK_ID)?.status).toBe('active'); // resumed at sunrise
   });
 
   it('checks its limits', () => {

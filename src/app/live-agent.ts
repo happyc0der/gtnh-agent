@@ -37,6 +37,8 @@ export async function withLiveClient<T>(
   const client = new Gtnh1710Client({
     config: config.minecraft,
     clock: systemClock,
+    // Movement mode 'follow': the play area never leaves the safety boundary.
+    explorationBoundary: config.safety.boundary,
     ...(log ? { log } : {}),
   });
   try {
@@ -192,7 +194,19 @@ export function movementStatus(config: AgentConfig): Record<string, unknown> {
   const d = config.minecraft.digging;
   return {
     enabled: m.enabled,
+    mode: m.mode,
     fence: m.fence,
+    playArea:
+      m.mode === 'follow'
+        ? {
+            ...m.area,
+            note: 'centred on the player, inside the exploration boundary (safety.boundary)',
+            explorationBoundary: {
+              min: config.safety.boundary.min,
+              max: config.safety.boundary.max,
+            },
+          }
+        : null,
     stopFile: resolve(m.stopFile),
     halted: existsSync(resolve(m.stopFile)),
     digging: {

@@ -10,6 +10,7 @@ import {
 import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.ts';
 import { GameStateSchema, LastActionSchema, type GameState } from '../domain/game-state.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
+import { summarizeExploration, type ExplorationSummary } from '../domain/world-memory.ts';
 import { ActionExecutor, type ExecutionOutcome } from '../executor/action-executor.ts';
 import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
@@ -272,6 +273,7 @@ async function observeState(
     };
   }
   rememberContainers(repos, parsedState.data);
+  rememberSeen(deps, cycleId);
   const state = overlayAgentMemory(parsedState.data, repos, deps.config);
   const stateSnapshotId = repos.snapshots.insert(cycleId, state);
   repos.events.append(cycleId, 'STATE', {
@@ -288,6 +290,41 @@ function rememberContainers(repos: Repositories, state: GameState | null): void 
   for (const s of state.storage) {
     if (s.items.known) repos.memory.rememberContainer(s.id, s.items.value, state.timestamp);
   }
+}
+
+/**
+ * World memory: stores what the client has seen since it was last asked (per chunk; only what
+ * a player could see). A problem here is logged and never stops the cycle.
+ */
+function rememberSeen(deps: AgentDeps, cycleId: string): void {
+  try {
+    const seen = deps.client.takeSeenChunks?.() ?? [];
+    if (seen.length > 0) deps.repos.worldMemory.remember(seen);
+  } catch (error) {
+    deps.repos.events.append(cycleId, 'ERROR', { worldMemory: errorMessage(error) });
+  }
+}
+
+/**
+ * What the planner gets from world memory, when the agent can explore (movement enabled, in
+ * mode 'follow'); undefined otherwise, and then EXPLORE is not offered to the planner either.
+ */
+export function explorationFor(
+  config: AgentConfig,
+  repos: Repositories,
+  state: GameState,
+  now: Date,
+): ExplorationSummary | undefined {
+  const m = config.minecraft.movement;
+  if (!m.enabled || m.mode !== 'follow') return undefined;
+  const { position, dimension } = state.player;
+  if (!position.known || !dimension.known) return undefined;
+  return summarizeExploration({
+    chunks: repos.worldMemory.chunks(dimension.value),
+    from: position.value,
+    boundary: config.safety.boundary,
+    now,
+  });
 }
 
 /**
@@ -411,6 +448,7 @@ export async function runSingleCycle(
   // 6-10. Validate, persist, execute, verify, persist: all inside the executor.
   const outcome = await newExecutor(deps).execute(action, execution.state, execution.ctx, cycleId);
   rememberContainers(repos, outcome.stateAfter);
+  rememberSeen(deps, cycleId);
 
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
   const planHalted = planStep === null ? false : updatePlanProgress(repos, planStep, outcome);
@@ -488,6 +526,7 @@ export async function runUserAction(
   );
   const outcome = await newExecutor(deps).execute(action, state, ctx, cycleId);
   rememberContainers(repos, outcome.stateAfter);
+  rememberSeen(deps, cycleId);
   return finish({
     status: outcome.status,
     needsUserAttention: outcome.status !== 'succeeded',
@@ -678,10 +717,12 @@ async function consultPlanner(
   }
 
   const limit = config.planner.recentHistoryLimit;
+  const exploration = explorationFor(config, repos, state, ctx.now);
   const request = buildPlannerRequest({
     state,
     safety: ctx,
     maxPlanSteps: config.planner.maxPlanSteps,
+    ...(exploration === undefined ? {} : { exploration }),
     recentActions: repos.actions
       .recent(limit, taskId)
       .flatMap((a) =>

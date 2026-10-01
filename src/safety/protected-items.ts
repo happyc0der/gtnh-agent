@@ -21,6 +21,7 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
     // DIG_BLOCK uses an empty hand and only adds the block's drop to the inventory.
     case 'OBSERVE_STATE':
     case 'MOVE_TO':
+    case 'EXPLORE':
     case 'WAIT':
     case 'RETURN_TO_SAFE_LOCATION':
     case 'OPEN_CONTAINER':

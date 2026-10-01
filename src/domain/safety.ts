@@ -91,6 +91,8 @@ export const VIOLATION_CODES = [
   'NOT_DIGGABLE',
   /** DIG_BLOCK on a block whose removal could hurt the player (support, falling blocks). */
   'UNSAFE_DIG',
+  /** EXPLORE in the evening or at night (hostile mobs; the agent has no shelter yet). */
+  'NOT_DAYTIME',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

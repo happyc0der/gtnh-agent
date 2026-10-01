@@ -4,6 +4,7 @@ import {
   MAX_REPORTED_REMOVED,
   worldTime,
   type GameState,
+  type WorldTime,
 } from '../../domain/game-state.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
 import {
@@ -33,7 +34,13 @@ import {
   type GregTechMessage,
   type MachineFlags,
 } from './gregtech.ts';
-import { ChunkStore, decodeChunkBulk, decodeChunkColumn, type ChunkFormat } from './chunk-data.ts';
+import {
+  ChunkStore,
+  decodeChunkBulk,
+  decodeChunkColumnWithBiomes,
+  type ChunkFormat,
+  type ColumnView,
+} from './chunk-data.ts';
 import { scanHazards, type HazardScan } from './hazard-scan.ts';
 import type { WindowSnapshot } from './container.ts';
 import { nameItemStack, type Registry } from './registry.ts';
@@ -656,14 +663,15 @@ export class WorldModel {
           return;
         }
         try {
-          const sections = decodeChunkColumn(
+          const { sections, biomes } = decodeChunkColumnWithBiomes(
             packet.header,
             packet.groundUp,
             packet.compressed,
             this.#chunkFormat,
           );
-          if (packet.groundUp) this.#store.setColumn(chunkX, chunkZ, sections, at.getTime());
-          else
+          if (packet.groundUp) {
+            this.#store.setColumn(chunkX, chunkZ, sections, at.getTime(), biomes);
+          } else {
             this.#store.updateSections(
               chunkX,
               chunkZ,
@@ -671,6 +679,7 @@ export class WorldModel {
               packet.header.primaryBitMask,
               at.getTime(),
             );
+          }
         } catch (error) {
           if (!(error instanceof ProtocolError)) throw error;
           if (packet.groundUp) this.#store.markBad(chunkX, chunkZ, error.message, at.getTime());
@@ -688,7 +697,13 @@ export class WorldModel {
             packet.compressed,
             this.#chunkFormat,
           )) {
-            this.#store.setColumn(c.header.chunkX, c.header.chunkZ, c.sections, at.getTime());
+            this.#store.setColumn(
+              c.header.chunkX,
+              c.header.chunkZ,
+              c.sections,
+              at.getTime(),
+              c.biomes,
+            );
           }
         } catch (error) {
           if (!(error instanceof ProtocolError)) throw error;
@@ -1048,6 +1063,22 @@ export class WorldModel {
   /** Block id at a position (diagnostics/tests); undefined if its chunk is not loaded. */
   blockAt(x: number, y: number, z: number): number | undefined {
     return this.#store.blockAt(x, y, z);
+  }
+
+  /** One loaded column with its biomes, for world surveys; undefined while unknown. */
+  chunkColumn(cx: number, cz: number): ColumnView | undefined {
+    return this.#hazardProblem === null ? this.#store.column(cx, cz) : undefined;
+  }
+
+  /** The dimension's name, or null before joining. */
+  get dimension(): string | null {
+    return this.#dimension === null ? null : dimensionName(this.#dimension);
+  }
+
+  /** The world's clock now (as in the GameState), or null before the first time update. */
+  worldTimeAt(now: Date): WorldTime | null {
+    const t = this.#worldTime(now);
+    return t.known ? t.value : null;
   }
 
   #armor(): GameState['player']['armor'] {

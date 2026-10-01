@@ -3,6 +3,7 @@ import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
+import type { ExplorationSummary } from '../domain/world-memory.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
@@ -149,12 +150,16 @@ export function buildPlannerRequest(input: {
   maxPlanSteps: number;
   recentActions: RecentActionSummary[];
   recentFailures: RecentFailureSummary[];
+  /** World memory's summary, only when the agent can explore; EXPLORE is offered only then. */
+  exploration?: ExplorationSummary;
 }): PlannerRequest {
   const { config } = input.safety;
+  const { exploration } = input;
   return PlannerRequestSchema.parse({
     state: sanitizeStateForPlanner(input.state),
     task: input.state.currentTask,
-    allowedActions: [...ACTION_TYPES],
+    allowedActions: ACTION_TYPES.filter((t) => t !== 'EXPLORE' || exploration !== undefined),
+    ...(exploration === undefined ? {} : { exploration }),
     safetyConstraints: {
       boundaryMin: config.boundary.min,
       boundaryMax: config.boundary.max,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   BlockPositionSchema,
+  COORDINATE_LIMIT,
   EntityIdSchema,
   ItemNameSchema,
   LocationNameSchema,
@@ -21,6 +22,7 @@ import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from
 export const ACTION_TYPES = [
   'OBSERVE_STATE',
   'MOVE_TO',
+  'EXPLORE',
   'WAIT',
   'EAT_FOOD',
   'RETURN_TO_SAFE_LOCATION',
@@ -61,6 +63,41 @@ export const MoveToSpec = z.strictObject({
     /** Arrival radius in blocks. */
     tolerance: z.number().min(0.5).max(5),
   }),
+});
+/** Longest EXPLORE: blocks walked (path length) in one action. */
+export const MAX_EXPLORE_DISTANCE = 96;
+/** Shortest EXPLORE worth asking for. */
+export const MIN_EXPLORE_DISTANCE = 8;
+/** Compass directions EXPLORE takes: north is -z, east is +x (Minecraft's own convention). */
+export const EXPLORE_DIRECTIONS = [
+  'north',
+  'north_east',
+  'east',
+  'south_east',
+  'south',
+  'south_west',
+  'west',
+  'north_west',
+] as const;
+export const ExploreDirectionSchema = z.enum(EXPLORE_DIRECTIONS);
+export type ExploreDirection = z.infer<typeof ExploreDirectionSchema>;
+/** Where EXPLORE heads: a compass direction, or a point (x, z) of the world. */
+export const ExploreTowardSchema = z.union([
+  ExploreDirectionSchema,
+  z.strictObject({
+    x: z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT),
+    z: z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT),
+  }),
+]);
+export type ExploreToward = z.infer<typeof ExploreTowardSchema>;
+const exploreDistance = z.int().min(MIN_EXPLORE_DISTANCE).max(MAX_EXPLORE_DISTANCE);
+/**
+ * Walk over land toward a direction or a point, in hops, at most `maxDistance` blocks, and
+ * remember what was seen on the way. See docs/action-contract.md.
+ */
+export const ExploreSpec = z.strictObject({
+  type: z.literal('EXPLORE'),
+  args: z.strictObject({ toward: ExploreTowardSchema, maxDistance: exploreDistance }),
 });
 export const WaitSpec = z.strictObject({
   type: z.literal('WAIT'),
@@ -126,6 +163,7 @@ export const PauseAndAskUserSpec = z.strictObject({
 export const ActionSpecSchema = z.discriminatedUnion('type', [
   ObserveStateSpec,
   MoveToSpec,
+  ExploreSpec,
   WaitSpec,
   EatFoodSpec,
   ReturnToSafeLocationSpec,
@@ -151,6 +189,15 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
     kind: z.literal('PLAYER_NEAR'),
     target: PositionSchema,
     tolerance: z.number().min(0.5).max(5),
+  }),
+  /**
+   * The player is observably farther along the heading (toward the point, or in the
+   * direction) by at least 1 block, and moved no more than maxDistance blocks.
+   */
+  z.strictObject({
+    kind: z.literal('EXPLORED'),
+    toward: ExploreTowardSchema,
+    maxDistance: exploreDistance,
   }),
   z.strictObject({ kind: z.literal('TIME_ELAPSED'), minMs: z.int().min(0).max(MAX_WAIT_MS) }),
   z.strictObject({ kind: z.literal('FOOD_CONSUMED'), item: ItemNameSchema }),
@@ -210,6 +257,8 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
       return { kind: 'STATE_OBSERVED' };
     case 'MOVE_TO':
       return { kind: 'PLAYER_NEAR', target: spec.args.target, tolerance: spec.args.tolerance };
+    case 'EXPLORE':
+      return { kind: 'EXPLORED', toward: spec.args.toward, maxDistance: spec.args.maxDistance };
     case 'WAIT':
       return { kind: 'TIME_ELAPSED', minMs: spec.args.durationMs };
     case 'EAT_FOOD':
@@ -282,6 +331,7 @@ const actionMetadata = {
 export const ActionSchema = z.discriminatedUnion('type', [
   ObserveStateSpec.extend(actionMetadata),
   MoveToSpec.extend(actionMetadata),
+  ExploreSpec.extend(actionMetadata),
   WaitSpec.extend(actionMetadata),
   EatFoodSpec.extend(actionMetadata),
   ReturnToSafeLocationSpec.extend(actionMetadata),

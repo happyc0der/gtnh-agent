@@ -18,6 +18,13 @@ import {
   type SessionStopKind,
 } from './live-session.ts';
 import { adoptGoal, updateQuests } from './quest-commands.ts';
+import {
+  adoptScoutTask,
+  finishScoutTask,
+  runScoutSession,
+  scoutingDue,
+  type Scouting,
+} from './scouting.ts';
 
 /**
  * Autonomous play: the agent works through the Age 0 quest book by itself. Each round it
@@ -91,10 +98,16 @@ export interface PlayDeps {
   quests?: readonly Quest[];
   /** Milliseconds since the epoch (injectable for tests). */
   now?: () => number;
+  /**
+   * Given when the agent can explore: play then begins by scouting the area once, while world
+   * memory has seen little (src/app/scouting.ts).
+   */
+  scouting?: Scouting;
 }
 
 export type PlayEvent =
   | { kind: 'quest-completed'; quest: string; completed: number; total: number }
+  | { kind: 'scout'; taskId: string; chunksSeen: number; created: boolean }
   | {
       kind: 'goal';
       quest: string;
@@ -150,6 +163,32 @@ const CONTINUE_AFTER: ReadonlySet<SessionStopKind> = new Set([
   'non-task-decision',
   'stop-requested', // only when the quest itself was met: see below
 ]);
+
+/** A cycle of a play session, for narration. */
+function cycleEvent(
+  repos: Repositories,
+  session: number,
+  r: CycleResult,
+  index: number,
+): PlayEvent {
+  return {
+    kind: 'cycle',
+    session,
+    index,
+    summary: r.summary,
+    decision:
+      r.decision === null || r.decision === undefined
+        ? null
+        : {
+            provider: r.decision.provider,
+            decision: r.decision.decision,
+            reasons: r.decision.reasonCodes,
+            confidence: r.decision.confidence,
+          },
+    newPlan: r.planner?.kind === 'plan-accepted' ? planOf(repos, r.planner.planId) : null,
+    detail: r.outcome?.execution?.message ?? null,
+  };
+}
 
 /** A stored plan as one line per step, for narration. */
 function planOf(
@@ -224,6 +263,41 @@ export async function runPlay(
     elapsedMs: now() - started,
   });
 
+  // GTNH start: look around once before settling (scouting.ts), when the agent can explore.
+  if (deps.scouting !== undefined) {
+    const due = scoutingDue(deps.repos, deps.scouting);
+    if (due.kind === 'stop') return done(due.reason);
+    if (due.kind === 'scout') {
+      const stop = hooks.stopRequested();
+      if (stop !== null) return done(stop);
+      const clock = (await deps.time?.()) ?? null;
+      if (clock !== null && isDark(clock)) return done(nightReason(clock), clock);
+      const scout = adoptScoutTask(deps.repos);
+      emit({ kind: 'scout', ...scout, chunksSeen: deps.scouting.chunksSeen() });
+      const session = sessions + 1;
+      const r = await runScoutSession({
+        scouting: deps.scouting,
+        limits: limits.session,
+        session: deps.session,
+        stopRequested: hooks.stopRequested,
+        onCycle: (c, index) => emit(cycleEvent(deps.repos, session, c, index)),
+      });
+      sessions = session;
+      lastStop = r.session.stopReason;
+      emit({
+        kind: 'session-end',
+        session,
+        stopKind: r.session.stopKind,
+        stopReason: r.session.stopReason,
+        cycles: r.session.cycles.length,
+      });
+      if (r.dark !== null) return done(nightReason(r.dark), r.dark);
+      if (r.session.stopKind === 'stop-requested' && !r.scouted) return done(r.session.stopReason);
+      if (!CONTINUE_AFTER.has(r.session.stopKind)) return done(r.session.stopReason);
+      finishScoutTask(deps.repos);
+    }
+  }
+
   for (;;) {
     const stop = hooks.stopRequested();
     if (stop !== null) return done(stop);
@@ -297,24 +371,7 @@ export async function runPlay(
             ? nightReason(dark)
             : hooks.stopRequested(),
       onCycle: (r, index) => {
-        emit({
-          kind: 'cycle',
-          session,
-          index,
-          summary: r.summary,
-          decision:
-            r.decision === null || r.decision === undefined
-              ? null
-              : {
-                  provider: r.decision.provider,
-                  decision: r.decision.decision,
-                  reasons: r.decision.reasonCodes,
-                  confidence: r.decision.confidence,
-                },
-          newPlan:
-            r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
-          detail: r.outcome?.execution?.message ?? null,
-        });
+        emit(cycleEvent(deps.repos, session, r, index));
         const after = r.outcome?.stateAfter;
         if (after?.inventory.known === true) {
           met = total(missingItems(goal.quest, after.inventory.value.items)) === 0;
@@ -343,6 +400,8 @@ export function describePlayEvent(e: PlayEvent): string {
   switch (e.kind) {
     case 'quest-completed':
       return `QUEST DONE: "${e.quest}" (${e.completed}/${e.total})`;
+    case 'scout':
+      return `goal: scout the area before settling (${e.chunksSeen} chunk(s) seen so far)${e.created ? ' (new task)' : ''}`;
     case 'goal': {
       const missing = Object.entries(e.missing)
         .map(([item, n]) => `${n} ${item}`)
