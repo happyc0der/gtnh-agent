@@ -6,6 +6,7 @@ import {
   questTaskId,
   updateQuests,
 } from '../../src/app/quest-commands.ts';
+import { ItemNameSchema } from '../../src/domain/common.ts';
 import type { GameState } from '../../src/domain/game-state.ts';
 import type { QuestBook, QuestBookQuest, QuestBookReward } from '../../src/domain/quest-book.ts';
 import { AGE0_CHAPTER, AGE0_QUESTS } from '../../src/goals/age0-quests.ts';
@@ -318,6 +319,12 @@ describe('the Age 0 quest book (GTNH 2.8.4, the world database)', () => {
     for (const q of AGE0_QUESTS) for (const p of q.prerequisites) expect(ids.has(p)).toBe(true);
     for (const q of AGE0_QUESTS) expect(goalText(q).length).toBeLessThanOrEqual(300);
     expect(Math.max(...questDepths(AGE0_QUESTS).values())).toBeGreaterThan(10);
+    // Every item is a valid inventory name: task requirements and routes are stored by it.
+    const items = AGE0_QUESTS.flatMap((q) => [
+      ...q.tasks.flatMap((t) => t.items),
+      ...q.rewards.flatMap((r) => r.items),
+    ]);
+    expect(items.filter((i) => !ItemNameSchema.safeParse(i.item).success)).toEqual([]);
   });
 
   it('lists the outside prerequisites: the first-night chain, the smeltery choice, a trigger', () => {
