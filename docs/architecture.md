@@ -1290,9 +1290,9 @@ ores (a speck in a cliff). It counts as seen by the face a player sees: its top 
 eyes are above it, else an open side face turned toward the eyes (from below, a slope shows its
 risers: in the test world's saved chunks, the only gravel within reach of the agent's plateau at
 y 92 lay on a slope at y 104, 103 m south), on a clear line of sight by the same rules. 112
-blocks: the server's view distance is 8 chunks, so the client holds at least 128 blocks each
-way, and 112 leaves a chunk's margin for chunks still arriving (an unloaded block blocks the
-line). A chunk wholly beyond 40 blocks is recorded only when far sight saw something in it (a
+blocks: with a server view distance of at least 8 chunks (the test server's was 8, and is 12
+since 2026-10-01), the client holds at least 128 blocks each way, and 112 leaves a chunk's margin
+for chunks still arriving (an unloaded block blocks the line). A chunk wholly beyond 40 blocks is recorded only when far sight saw something in it (a
 player cannot tell the biome of ground hidden behind a hill), and marked `near: false` until the
 agent sees it from near. Sand and stone come in sheets, so far sight looks at every second column
 of them each way: their counts from afar are lower bounds. Gravel, clay, water and lava are looked

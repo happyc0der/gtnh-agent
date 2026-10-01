@@ -1,101 +1,55 @@
 # gtnh-agent
 
-A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTNH) on a
-**private** server you control.
+An agent that plays GregTech: New Horizons 2.8.4 (Minecraft 1.7.10) by itself on a **private**
+server you control, the way a person plays: local models decide and plan, and code checks every
+action for safety before it runs and verifies it against the server afterwards.
 
-**Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
-simulated world or a private GTNH 2.8.4 test server. On the test server the agent observes,
-**walks inside a fenced pen**, **moves exact amounts to and from configured chests**, can **dig
-allowlisted natural blocks** (logs, leaves, dirt, sand, gravel, clay) and **place allowlisted
-plain blocks** (dirt, cobblestone, sand, gravel, sandstone, planks, logs) inside the pen. It works on
-**live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`,
-or back to back in a **bounded auto-run** (`run --live`) that stops as soon as anything needs you.
-No open-ended loop. **Local models are opt-in** (off by default, no GPU use unless enabled).
+**Status (2026-10-01):** `pnpm cli play --live` plays the quest book's "Finish Age 0" line on a
+private test server, or works toward a goal you give it (`--needs minecraft:diamond=100`). It
+explores, gathers, digs, shelters for the night, eats, crafts, and submits quests and claims
+their rewards in the quest book. It has finished the first three quests ("Your First Night",
+"Sticks 'n Stones", "Where's the Flint?") and is working on "Crafting Time". The benchmark is
+the 92 quests of the "Tier 0 - Stone Age" chapter, plus the 14 it needs from other chapters,
+counted only as the server records them.
 
-**Local models (2026-09-30):** a local Ollama model can make the System 1 decisions
-(`AGENT_DECISIONS=ollama`) and write plans (`AGENT_PLANNER=ollama`). Models only propose: a
-decision passes the safety-first wrapper (the router's safety decisions and pauses win; invalid
-output pauses), and every plan step is validated and executed by code like any other. On the mock
-scenarios, qwen3:14b agrees with the rule router on every decision and its plans pass validation;
-qwen2.5:0.5b does not. See [docs/local-llm-integration.md](docs/local-llm-integration.md).
+**How it decides.** Each cycle observes the world through the agent's own 1.7.10 + Forge client
+(`src/bot/gtnh1710/`; Mineflayer cannot join GTNH). System 1, a local model (qwen3:14b on
+Ollama), decides at decision points: when a session starts, a plan ends or fails, or something
+new comes up (a mob, low health or food, nightfall); in between, the open plan goes on at once.
+The planner, the same model, plans from a route that code calculates (what the goal needs, what
+is held, where it was seen). Code expands each step into checked actions (one `GATHER` step
+becomes many digs), enforces the safety policy, executes, and verifies each result against the
+server's own updates. The models only propose; they never act. See
+[docs/architecture.md](docs/architecture.md).
 
-**System 1 at decision points (2026-10-01):** the System 1 model (about 2 s a decision) decides
-only where something changed: a session's first cycle, after a failed action, when a plan ended
-or none is open, or on a new condition (the router's reasons, a mob or hazard, low health or
-food, the task, the time of day, a nearly full inventory). In between, the router's decision
-continues the open plan at once: a 54-sand GATHER (61 cycles) asks the model once.
-`AGENT_DECISION_CADENCE=every-cycle` asks it every cycle. Each cycle's System 1 line shows who
-decided, and each session ends with a count. See
-[docs/architecture.md](docs/architecture.md#system-1-who-decides-each-cycle).
+### What it can do
 
-**Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
-the test server and observes position, dimension, health, food, a named inventory, nearby
-entities (vanilla and modded mobs; unidentified modded types count as hostile) and lava, fire,
-harmful fluids, damaging blocks and void within 32 m, plus nearby GregTech machines (type, and
-whether each is enabled and running, from GregTech's own network channel; stored power is not sent).
-With everything critical observable, a live cycle pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
-1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
+Every world-changing ability is off until you switch it on, and works only inside the fence (or
+the play area that moves with the player) and within the safety boundary.
 
-**Interacting with blocks (2026-09-30, fake server only so far):** with interacting enabled,
-`INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT` open blocks the agent has an interaction profile for
-(furnaces, crafting tables, chests, Iron Chests chests, Thaumcraft hungry chests, Tinkers' crafting
-stations), smelt in furnaces and take their output. Each profile is data checked in the server's
-jars; blocks without one are only looked at, and only if you list them. Found chests and crafting
-tables also work with the chest and crafting actions. See
-[Interacting with blocks](#interacting-with-blocks).
+| Ability                                                                                    | Switch                                          | Run live                          |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------- | --------------------------------- |
+| Observe position, health, food, inventory, mobs, hazards, light, GregTech machines, quests | `MC_ENABLE_LIVE_CONNECTION`                     | yes                               |
+| Walk over terrain, retreat or flee from threats, explore and remember what it saw          | `MC_ENABLE_MOVEMENT`, `MC_MOVEMENT_MODE=follow` | yes                               |
+| Dig allowlisted natural blocks with the best verified tool; dig a pit for the night        | `MC_ENABLE_DIGGING`                             | yes                               |
+| Place allowlisted plain blocks (night shelters)                                            | `MC_ENABLE_PLACING`                             | yes                               |
+| Eat approved food; go and get food when it has none                                        | `MC_ENABLE_EATING`                              | yes                               |
+| Craft in the 2x2 grid; at a crafting table                                                 | `MC_ENABLE_CRAFTING`                            | 2x2 yes; table on the fake server |
+| Move exact amounts to and from configured vanilla chests                                   | `MC_ENABLE_CONTAINERS`                          | yes (test pen)                    |
+| Quest book: submit quests, tick checkboxes, claim rewards                                  | `MC_ENABLE_QUEST_BOOK`                          | yes                               |
+| Open blocks it has a profile for (furnaces, crafting stations, modded chests) and smelt    | `MC_ENABLE_INTERACT`                            | fake server only                  |
+| Fight: strike a listed hostile or a farm animal, defend                                    | `MC_ENABLE_COMBAT`                              | fake server only                  |
 
-**Walking and chests (2026-09-30):** with movement explicitly enabled and a fence configured,
-`MOVE_TO` and `RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence (no jumping,
-climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, `WITHDRAW_ITEM` and
-`DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. With crafting enabled,
-`CRAFT_ITEM` crafts early-game recipes in the 2x2 grid or at a configured crafting table (fake
-server only so far). With digging enabled, `DIG_BLOCK` breaks one allowlisted block inside the
-fence, holding the best verified tool the player carries (a wooden shovel for sand, dirt, gravel,
-grass and clay; a vanilla axe for logs) or an empty hand. With placing enabled, `PLACE_BLOCK` puts
-one allowlisted plain block the player carries into an empty cell inside the fence (fake server
-only so far). With combat enabled, `ATTACK_ENTITY` strikes one listed hostile (or a farm animal,
-for a task) in a short burst, and System 1 decides `DEFEND` when retreating is impossible or worse
-(fake server only so far). The remaining world-changing actions return `NOT_IMPLEMENTED`. See
-[Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting),
-[Digging](#digging), [Placing](#placing) and [Combat](#combat).
+"Fake server" is the repository's fake GTNH server (`tests/bot/gtnh1710/fake-server.ts`), which
+the tests run against.
 
-**Walking through leaves (2026-10-01, fake server only so far):** with digging enabled too, a
-`MOVE_TO` over terrain breaks up to 4 leaves in its way, as a person punches through a bush (seen
-live: logs walled in by leaf bushes in a Hot Forest were out of every walk's reach, and the agent
-gave up on the forest). Each break is checked and dug like `DIG_BLOCK` and costs the walker its
-dig time, so it still walks round a bush when that is only a little longer. See
-[Digging](#digging).
+**Local models are opt-in:** `AGENT_DECISIONS=ollama` and `AGENT_PLANNER=ollama` (see
+[docs/local-llm-integration.md](docs/local-llm-integration.md)). Without them, a rule-based router
+decides, and plans come from you (`task-add --plan`) or the mock planner.
 
-**Spiders in daylight (2026-10-01, fake server only so far):** a vanilla spider looks for a
-player only in the dark (light 11 or less), so a person ignores one in daylight (seen live:
-one sent the agent 108 blocks back to its spawn). The client now keeps the light the chunk data
-carries and the weather, and computes the light at a spider as the server does: in light 12 or
-more, farther than its 6-block leap, with the player not hurt in the last 15 s, and never seen
-in the dark near the player (or hurt) on this connection, a spider is **calm**: listed, but no
-threat, and never attacked. Special Mobs' spiders never are (some are rolled always hostile).
-See [Combat](docs/architecture.md#combat).
-
-**Night pit (2026-10-01, fake server only so far):** at dusk, play digs a pit three blocks
-straight down under the player (`DIG_DOWN`, the only dig of the ground underfoot, allowed only
-as code's own night-shelter step) and roofs it in the ground layer it dug through; in the
-morning it digs the roof and a staircase out before the day's goal. Code plans and runs both as
-known safe steps; the planner is not asked. See [The night pit](#the-night-pit).
-
-**Exploring (2026-09-30, fake server only so far):** with `MC_MOVEMENT_MODE=follow` the walk/dig
-fence becomes a play area that moves with the player, inside the safety boundary. `EXPLORE` walks
-toward a direction or a point in checked hops, in daylight only, and the agent remembers what it
-has seen per chunk (biome, logs, dirt, sand, gravel, clay, water, stone, ores; only what a player could
-see). The planner gets the known places, and play scouts the area once before the quests. See
-[Exploring and world memory](#exploring-and-world-memory).
-
-**Quest book (2026-09-30, fake server only so far):** the agent reads GTNH's quest book (Better
-Questing) over the mod's own channel, so the "Finish Age 0" benchmark (the 92-quest
-"Tier 0 - Stone Age" chapter) counts only what the SERVER records as completed, exactly as for a
-player using the quest book. Goals cover the chapter and the 14 quests it needs from other
-chapters, and follow Better Questing's rules (prerequisite logic incl. XOR, task logic OR,
-crafting counted only while a quest is active). With `MC_ENABLE_QUEST_BOOK=true`, play also
-submits finished quests, ticks checkboxes and claims rewards itself, decided in code. See
-[Quest book](#quest-book).
+**Playing alongside it:** the [test server](#private-gtnh-test-server) is localhost-only and
+whitelisted; join it from your own client while the agent plays. `pnpm cli halt` stops the
+agent's actions at once, and `pnpm cli unhalt` allows them again.
 
 ## Requirements
 
@@ -205,12 +159,12 @@ Example output (abridged):
 
 ## Design in one paragraph
 
-A `MinecraftClient` (mock today) produces a Zod-validated `GameState` in which anything unobservable
-is explicitly `unknown`. A pure-code **safety policy** decides whether the state is trustworthy
+A `MinecraftClient` (the live 1.7.10 client, or a mock world for tests and scenarios) produces a
+Zod-validated `GameState` in which anything unobservable is explicitly `unknown`. A pure-code **safety policy** decides whether the state is trustworthy
 (unknown/stale/inconsistent → pause). A deterministic **System 1 router** picks one of nine bounded
 decisions (opt-in, a local model picks at decision points, and the router's safety decisions
-still win), which becomes exactly **one** allowlisted action (or a planner request answered by a
-fixture-driven mock planner). The single **ActionExecutor** validates the action (schema, safety,
+still win), which becomes exactly **one** allowlisted action (or a planner request, answered by the local
+model's planner or the mock planner). The single **ActionExecutor** validates the action (schema, safety,
 preconditions), persists it, executes it with a token only it can mint, re-observes, verifies the
 code-derived postcondition, and persists the outcome to SQLite. See [docs/architecture.md](docs/architecture.md)
 and [docs/action-contract.md](docs/action-contract.md).
@@ -306,9 +260,17 @@ and [docs/action-contract.md](docs/action-contract.md).
 
 The live commands target a local test server in `~/Projects/gtnh-test-server` (outside this repo):
 the official GTNH 2.8.4 Java 17-25 server pack on Temurin 21, bound to `127.0.0.1:25570`, offline
-mode, whitelist on, throwaway world `agent-test`. Start it with `start-test-server.bat` in that
-folder and stop it by typing `stop` in its window. The client retries while Forge still reports
-"Server is still starting!" (about 30 s after "Done").
+mode, whitelist on, world `agent-test`. Start it with `start-test-server.bat` in that folder and
+stop it by typing `stop` in its window. The client retries while Forge still reports "Server is
+still starting!" (about 30 s after "Done").
+
+Tuned on 2026-10-01 for a person playing alongside the agent: view distance 12 (a GTNH client's
+usual render distance; the agent's far sight needs at least 8), an 8 GB heap with generational
+ZGC (pauses under a millisecond) at above-normal priority, and the world pre-generated 1,024
+blocks around spawn (ServerUtilities' `/pregen`), so walking into new land does not stall on
+world generation. On Windows 11 with a hybrid CPU, exempt the server's `java.exe` and the agent's
+`node.exe` from power throttling (`powercfg /powerthrottling disable /path <exe>`, as Admin), or
+Windows may move the minimized server and the windowless agent onto the slow cores.
 
 Live commands need three settings (for example in a local `.env`, which is gitignored):
 
@@ -461,7 +423,9 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#interacting-w
 
 The third world-changing ability: breaking ONE block, for gathering. It only breaks
 `minecraft:log`, `log2`, `leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay`, inside the
-pen. It has been tested against the fake server only; the live test is next.
+pen. In play it digs anywhere inside the moving play area (see Exploring). Live since
+2026-10-01: logs, leaves, dirt, sand, gravel and garden plants, with the best verified tool or a
+bare hand.
 
 - `node scripts/test-server-admin.ts pen resources` places test blocks in the pen, each only where
   there is air:
@@ -516,8 +480,8 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
 The newest world-changing ability (approved 2026-09-30, so the agent can seal itself into a pit
 for the night, and later place a crafting table, furnace and coke oven): putting ONE block the
 player carries into an empty cell. Only `minecraft:dirt`, `cobblestone`, `sand`, `gravel`,
-`sandstone`, `planks` and `log`/`log2` are placed. It has been tested against the fake server
-only; the live test is next.
+`sandstone`, `planks` and `log`/`log2` are placed. Live since 2026-10-01: play builds its
+night shelters with it.
 
 - Settings: `MC_ENABLE_PLACING=true` (it also needs the movement fence), and optionally
   `minecraft.placing.maxHeightAboveFence` (default 4) in `agent.config.json`.
@@ -550,8 +514,8 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#placing)):
 
 Approved 2026-10-01: a raised box cannot be roofed from inside (the walls' tops are above the
 eyes, and nothing touches the roof cell; seen live), so the agent shelters the way a
-first-night player does on flat ground. Tested against the fake server only; the live test is
-next.
+first-night player does on flat ground. Live since 2026-10-01: dug, roofed and climbed out of
+on the test server.
 
 - **At dusk** (2 real minutes before night), standing at feet level y, play digs the block
   under the feet three times (`DIG_DOWN`), falling one block each time, to feet at y-3. Then it
@@ -575,8 +539,9 @@ next.
 
 The fourth ability: leaving the first spot. The test world spawns the agent in a desert, and
 GTNH's early quests want wood, gravel "near water", clay on "the riverbanks" and stone. It has
-been tested against the fake server only (a streamed world with a desert, a forest, a river and
-the boundary); the live test is next.
+been tested against the fake server (a streamed world with a desert, a forest, a river and
+the boundary), and live since 2026-10-01: play explores toward what it needs and remembers what
+it saw.
 
 - Settings:
   - `MC_ENABLE_MOVEMENT=true` and `MC_MOVEMENT_MODE=follow`: walks and digs then use a play area
@@ -656,7 +621,8 @@ GTNH's quest book is Better Questing 3.7.15-GTNH. The agent reads it like the ga
 does (its `BQ_NET_CHAN` channel), so `pnpm cli quests --live` shows the Age 0 quest book as the
 server records it: chapter progress, completed and active quests, unclaimed rewards, the clicks
 that are due and the next goal. It clicks nothing. Without `--live` it shows the last
-observation. Tested against the fake server only; the live test is next.
+observation. Live since 2026-10-01: play submitted "Sticks 'n Stones" and claimed the rewards
+of the first three quests.
 
 - Settings: `MC_ENABLE_QUEST_BOOK=true` lets `pnpm cli play --live` make the quest book's clicks
   itself (off by default): submit a quest whose items are held (handing in the items of a
