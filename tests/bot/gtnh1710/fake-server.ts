@@ -10,6 +10,7 @@ import {
   i32,
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
+import { FakeQuestBookSim, type FakeQuestBookOptions } from './fake-better-questing.ts';
 import { encodeStack, FakeChestSim, type FakeChest, type FakeRecipe } from './fake-chests.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
 import {
@@ -78,6 +79,8 @@ export interface FakeServerOptions {
   rejectClicks?: number[];
   /** How the server treats digging (C07); vanilla by default. */
   dig?: FakeDigOptions;
+  /** Better Questing on the server (adds the betterquesting mod to the mod list). */
+  questBook?: Omit<FakeQuestBookOptions, 'items'>;
 }
 
 export interface ReceivedPacket {
@@ -240,6 +243,8 @@ export class FakeGtnhServer {
   readonly chestSim: FakeChestSim;
   /** Digging (C07): what the client sent, what broke, what was picked up. */
   readonly digSim: FakeDigSim;
+  /** Better Questing, when the server runs it (questBook option). */
+  readonly questBookSim: FakeQuestBookSim | null;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -254,11 +259,15 @@ export class FakeGtnhServer {
   readonly #blocks: Map<string, number>;
 
   constructor(options: FakeServerOptions = {}) {
+    const mods = options.mods ?? DEFAULT_MODS;
     this.#opts = {
       motd: options.motd ?? 'gtnh-agent-test (localhost only)',
       versionName: options.versionName ?? '1.7.10',
       modinfoType: options.modinfoType ?? 'FML',
-      mods: options.mods ?? DEFAULT_MODS,
+      mods:
+        options.questBook !== undefined && !mods.some((m) => m.modid === 'betterquesting')
+          ? [...mods, { modid: 'betterquesting', version: '3.7.15-GTNH' }]
+          : mods,
       stillStartingPings: options.stillStartingPings ?? 0,
       onlineMode: options.onlineMode ?? false,
       kickOnLogin: options.kickOnLogin ?? null,
@@ -294,6 +303,7 @@ export class FakeGtnhServer {
       recipes: options.recipes ?? [],
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
+      questBook: options.questBook ?? { quests: [] },
     };
     this.chestSim = new FakeChestSim({
       chests: this.#opts.chests,
@@ -324,6 +334,10 @@ export class FakeGtnhServer {
       this.chestSim,
       this.#opts.dig,
     );
+    this.questBookSim =
+      options.questBook === undefined
+        ? null
+        : new FakeQuestBookSim({ ...options.questBook, items: this.#opts.items }, this.chestSim);
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
@@ -527,6 +541,7 @@ export class FakeGtnhServer {
           case 0x03:
             this.idleTicks += 1;
             this.digSim.onPlayerTick();
+            this.questBookSim?.onPlayerTick();
             if (!healthSent && this.confirmedPositions.length > 0) {
               healthSent = true;
               const h = this.#opts.health;
@@ -549,11 +564,13 @@ export class FakeGtnhServer {
               onGround: r.bool(),
             });
             this.digSim.onPlayerTick();
+            this.questBookSim?.onPlayerTick();
             break;
           case 0x17: {
             const channel = r.string();
             const data = r.bytes(r.i16());
             if (channel === 'FML|HS') this.#onHandshake(data, send);
+            if (channel === 'BQ_NET_CHAN') this.questBookSim?.handle(Buffer.from(data));
             break;
           }
           case 0x07:
@@ -671,6 +688,8 @@ export class FakeGtnhServer {
       }
     }
     for (const entity of o.entities) send(spawnFrame(entity));
+    // FML fires PlayerLoggedInEvent last: Better Questing's main_sync comes after the join.
+    this.questBookSim?.onJoin(send);
     const timer = setInterval(
       () => send(encodeFrame(0x00, i32(Math.floor(Math.random() * 1e6)))),
       o.keepAliveEveryMs,

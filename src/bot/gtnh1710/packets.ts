@@ -1,4 +1,5 @@
 import { gunzipSync } from 'node:zlib';
+import { BQ_CHANNEL, encodeBqOutbound, type BqOutbound } from './better-questing.ts';
 import type { ColumnHeader } from './chunk-data.ts';
 import {
   bool,
@@ -29,6 +30,9 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // start/cancel/finish only, for targets digging.ts has checked); see Gtnh1710Client.
 // 'player-look' and 'swing-arm' only change what other players see: where the head
 // points, and the arm swinging while digging.
+// 'quest-book' is Better Questing's own channel (BQ_NET_CHAN), and only its four typed
+// client messages (better-questing.ts BqOutbound): the answer to the server's main_sync,
+// quest_action claim/detect, task_checkbox and choice_reward.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -47,7 +51,8 @@ export type OutboundKind =
   | 'close-window'
   | 'dig-block'
   | 'player-look'
-  | 'swing-arm';
+  | 'swing-arm'
+  | 'quest-book';
 
 /**
  * C07 Player Digging statuses the client may send. 1.7.10 also uses this packet for 3 (drop
@@ -288,6 +293,21 @@ export const outbound = {
       kind: 'swing-arm',
       frame: encodeFrame(0x0a, Buffer.concat([i32(entityId), Buffer.from([1])])),
     };
+  },
+
+  /**
+   * C17 plugin messages on Better Questing's channel for ONE typed quest-book message (one
+   * frame per 20,480-byte slice; the agent's messages are a single slice). Nothing else can
+   * be written to BQ_NET_CHAN: the payload is built from the typed message, never raw NBT.
+   */
+  questBook(message: BqOutbound): OutboundPacket[] {
+    return encodeBqOutbound(message).map((data) => {
+      if (data.length > 32767) throw new ProtocolError('client plugin message too large');
+      return {
+        kind: 'quest-book',
+        frame: encodeFrame(0x17, Buffer.concat([encodeString(BQ_CHANNEL), u16(data.length), data])),
+      };
+    });
   },
 
   /**

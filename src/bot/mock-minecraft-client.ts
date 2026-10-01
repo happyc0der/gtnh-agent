@@ -254,6 +254,7 @@ export class MockMinecraftClient implements MinecraftClient {
             removed: removed.map((p) => ({ ...p })),
           }),
       time: known(worldTime(w.timeOfDay ?? 6000, true)),
+      questBook: unknown('mock: the quest book is not simulated'),
       power: {
         availableEUt: unknown('mock: EU/t is not simulated'),
         generators: w.generators.map((g) => ({

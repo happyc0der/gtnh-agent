@@ -124,6 +124,7 @@ export class MineflayerClient implements MinecraftClient {
       environmentHazards: unknown('TODO: lava/void scan not implemented or verified for GTNH'),
       time: unknown('the Mineflayer adapter does not read the world clock'),
       nearbyBlocks: unknown('block scan not implemented for Mineflayer'),
+      questBook: unknown('the Mineflayer adapter does not read the quest book'),
       power: {
         availableEUt: unknown('GTNH EU is not observable via the vanilla protocol'),
         generators: [],

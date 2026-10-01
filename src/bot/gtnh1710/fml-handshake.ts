@@ -1,3 +1,4 @@
+import { BQ_CHANNEL } from './better-questing.ts';
 import { parseModIdData, type Registry } from './registry.ts';
 import { encodeString, encodeVarInt, Reader } from './wire.ts';
 
@@ -30,6 +31,14 @@ export interface HandshakeOutput {
 }
 
 const CLIENT_CHANNELS = ['FML|HS', 'FML', 'FML|MP', 'FORGE'];
+
+/**
+ * Mod channels a stock client registers too, when the server runs the mod. Registering is
+ * only an announcement (Forge accepts a mod channel's messages either way).
+ */
+const MOD_CHANNELS: ReadonlyArray<{ modid: string; channel: string }> = [
+  { modid: 'betterquesting', channel: BQ_CHANNEL },
+];
 
 export class FmlClientHandshake {
   #step: HandshakeStep = 'HELLO';
@@ -68,10 +77,16 @@ export class FmlClientHandshake {
         if (discriminator !== 0) break;
         const protocolVersion = data.readUInt8(1);
         this.#step = 'WAITINGSERVERDATA';
+        const channels = [
+          ...CLIENT_CHANNELS,
+          ...MOD_CHANNELS.filter((c) => this.#mods.some((m) => m.modid === c.modid)).map(
+            (c) => c.channel,
+          ),
+        ];
         return {
           note: `ServerHello (FML protocol ${protocolVersion}); sent ClientHello + ${this.#mods.length} mods`,
           send: [
-            { channel: 'REGISTER', data: Buffer.from(CLIENT_CHANNELS.join('\0')) },
+            { channel: 'REGISTER', data: Buffer.from(channels.join('\0')) },
             { channel: 'FML|HS', data: Buffer.from([1, protocolVersion]) },
             { channel: 'FML|HS', data: this.#modListMessage() },
           ],

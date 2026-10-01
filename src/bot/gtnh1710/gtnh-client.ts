@@ -43,6 +43,7 @@ import {
   type CraftingLayout,
   type PlacedRecipe,
 } from './crafting.ts';
+import { BQ_CHANNEL, BqAssembler, decodeBqMessage } from './better-questing.ts';
 import { checkDig, digWaitTicks, eyesOf, standSpotFor, TICK_MS, type DigArea } from './digging.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
@@ -151,6 +152,11 @@ export interface Gtnh1710ClientOptions {
    * Used by research scripts; must never be used to send anything.
    */
   onFrame?: (phase: 'login' | 'play', packetId: number, body: Buffer) => void;
+  /**
+   * The quests GameState.questBook reports (the agent's Age 0 closure, in order). Quest-book
+   * actions are possible only for these. None when absent.
+   */
+  questScope?: readonly string[];
 }
 
 export interface ConnectionInfo {
@@ -198,6 +204,8 @@ export class Gtnh1710Client implements MinecraftClient {
   readonly #opts: Gtnh1710ClientOptions;
   readonly #world = new WorldModel();
   readonly #multipart = new MultipartAssembler();
+  /** Better Questing's sliced messages from the server, reassembled. */
+  readonly #questBookSlices = new BqAssembler();
   readonly #outboundCounts = new Map<OutboundKind, number>();
   #socket: Socket | null = null;
   #phase: Phase = 'idle';
@@ -274,6 +282,7 @@ export class Gtnh1710Client implements MinecraftClient {
     };
     this.#world.setChunkFormat({ neid: this.#decoding.neid });
     this.#world.setServerMods(this.#identity.mods);
+    this.#world.setQuestScope(this.#opts.questScope ?? []);
     this.#world.setContainers(
       Object.entries(cfg.containers.chests).map(([id, c]) => ({
         id,
@@ -1778,6 +1787,8 @@ export class Gtnh1710Client implements MinecraftClient {
           if (this.#identity === null) throw new Error('internal: identity missing at login');
           this.#phase = 'play';
           this.#handshake = new FmlClientHandshake(this.#identity.mods);
+          // Better Questing keys this player's progress by this UUID (GameProfile id).
+          this.#world.questBook.setPlayer(packet.uuid);
           this.#log(`logged in as ${packet.username}`);
           return;
         case 'unhandled':
@@ -1865,6 +1876,10 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       return;
     }
+    if (channel === BQ_CHANNEL) {
+      this.#onQuestBookMessage(data);
+      return;
+    }
     if (channel === 'FML') {
       // Forge runtime messages: this is how GTNH's modded mobs are spawned and moved.
       try {
@@ -1883,6 +1898,32 @@ export class Gtnh1710Client implements MinecraftClient {
       this.#send(outbound.pluginMessage(message.channel, message.data));
     if (this.#handshake.registry !== null && this.#world.registry === null) {
       this.#world.setRegistry(this.#handshake.registry);
+    }
+  }
+
+  /**
+   * Better Questing (BQ_NET_CHAN): reassemble the server's sliced message, fold it into the
+   * quest book, and answer main_sync {respond} exactly as the stock client does (an empty
+   * main_sync), which is what makes the server send the quest database. A message that
+   * cannot be decoded makes the quest book unknown for this connection.
+   */
+  #onQuestBookMessage(data: Buffer): void {
+    try {
+      const payload = this.#questBookSlices.push(data);
+      if (payload === null) return;
+      const message = decodeBqMessage(payload);
+      this.#world.applyQuestBook(message, this.#opts.clock.now());
+      if (message.type === 'main-sync' && message.respond) {
+        for (const p of outbound.questBook({ kind: 'main-sync-reply' })) this.#send(p);
+        this.#log('quest book: answered main_sync; waiting for the quest database');
+      }
+      if (message.type === 'quest-sync' && !message.merge) {
+        this.#log(`quest book: ${message.entries.length} quests from the server`);
+      }
+    } catch (error) {
+      if (!(error instanceof ProtocolError)) throw error;
+      this.#log(`could not decode a Better Questing message: ${error.message}`);
+      this.#world.markQuestBookProblem(`undecodable Better Questing message: ${error.message}`);
     }
   }
 

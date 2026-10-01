@@ -11,6 +11,7 @@ import {
   TimestampSchema,
 } from './common.ts';
 import { knownSchema } from './known.ts';
+import { QuestBookSchema } from './quest-book.ts';
 import { TaskStatusSchema } from './tasks.ts';
 
 export const GAME_STATE_SCHEMA_VERSION = 1;
@@ -262,6 +263,14 @@ export const GameStateSchema = z.strictObject({
   }),
   /** The world's clock. Snapshots stored before this field existed read back as unknown. */
   time: knownSchema(WorldTimeSchema).default({
+    known: false,
+    reason: 'not reported by this observation',
+  }),
+  /**
+   * The server's own quest book records for this player (Better Questing), for the quests the
+   * agent tracks. Snapshots stored before this field existed read back as unknown.
+   */
+  questBook: knownSchema(QuestBookSchema).default({
     known: false,
     reason: 'not reported by this observation',
   }),

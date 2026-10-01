@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { isCompound, readNbt } from '../../../src/bot/gtnh1710/nbt.ts';
+import {
+  decodeModifiedUtf8,
+  encodeModifiedUtf8,
+  isCompound,
+  nbtTag,
+  readNbt,
+  writeNbt,
+} from '../../../src/bot/gtnh1710/nbt.ts';
 import { ProtocolError } from '../../../src/bot/gtnh1710/wire.ts';
 
 // Tiny NBT writer for tests.
@@ -76,6 +83,79 @@ describe('NBT reader', () => {
     expect(() => readNbt(named(10, 'x', Buffer.from([99, 0, 0])))).toThrow(/unknown tag type 99/);
     expect(() => readNbt(named(10, 'x', named(3, 'n', Buffer.from([0, 1]))))).toThrow(
       ProtocolError,
+    );
+  });
+
+  it("reads strings as Java's modified UTF-8 (NUL as C0 80, astral characters as surrogates)", () => {
+    // "a", NUL, "é", U+1F600 as the two surrogates D83D DE00, three bytes each.
+    const java = Buffer.from([0x61, 0xc0, 0x80, 0xc3, 0xa9, 0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80]);
+    expect(decodeModifiedUtf8(java)).toBe('a\u0000é😀');
+    expect(encodeModifiedUtf8('a\u0000é😀')).toEqual(java);
+    expect(() => decodeModifiedUtf8(Buffer.from([0xc3]))).toThrow(ProtocolError);
+    expect(() => decodeModifiedUtf8(Buffer.from([0xff]))).toThrow(ProtocolError);
+  });
+});
+
+describe('NBT writer', () => {
+  it('writes the exact bytes of a named root compound, as CompressedStreamTools does', () => {
+    const bytes = writeNbt({ ID: nbtTag.string('x'), n: nbtTag.int(5) });
+    expect(bytes).toEqual(
+      Buffer.concat([
+        Buffer.from([10, 0, 0]), // TAG_Compound, name ""
+        Buffer.from([8, 0, 2]),
+        Buffer.from('ID'),
+        Buffer.from([0, 1]),
+        Buffer.from('x'),
+        Buffer.from([3, 0, 1]),
+        Buffer.from('n'),
+        Buffer.from([0, 0, 0, 5]),
+        Buffer.from([0]), // TAG_End
+      ]),
+    );
+  });
+
+  it('writes every tag type so the reader gets the same values back', () => {
+    const doc = writeNbt({
+      b: nbtTag.byte(-3),
+      flag: nbtTag.bool(true),
+      s: nbtTag.short(-300),
+      i: nbtTag.int(70_000),
+      l: nbtTag.long(-4782315901562449638n),
+      f: nbtTag.float(1.5),
+      d: nbtTag.double(-2.25),
+      bytes: nbtTag.byteArray(Buffer.from([1, 2, 3])),
+      text: nbtTag.string('§6§lSomething From Nothing'),
+      list: nbtTag.list('compound', [nbtTag.compound({ x: nbtTag.int(1) })]),
+      strings: nbtTag.list('string', [nbtTag.string('a'), nbtTag.string('b')]),
+      empty: nbtTag.list('compound', []),
+      ints: nbtTag.intArray([2, -1]),
+    });
+    const { name, value } = readNbt(doc);
+    expect(name).toBe('');
+    expect(value).toMatchObject({
+      b: -3,
+      flag: 1,
+      s: -300,
+      i: 70_000,
+      l: -4782315901562449638n,
+      f: 1.5,
+      d: -2.25,
+      text: '§6§lSomething From Nothing',
+      list: [{ x: 1 }],
+      strings: ['a', 'b'],
+      empty: [],
+    });
+    expect(value['bytes']).toEqual(Buffer.from([1, 2, 3]));
+    expect(Array.from(value['ints'] as Int32Array)).toEqual([2, -1]);
+  });
+
+  it('refuses values that do not fit their tag', () => {
+    expect(() => writeNbt({ b: nbtTag.byte(128) })).toThrow(ProtocolError);
+    expect(() => writeNbt({ s: nbtTag.short(40_000) })).toThrow(ProtocolError);
+    expect(() => writeNbt({ i: nbtTag.int(1.5) })).toThrow(ProtocolError);
+    expect(() => writeNbt({ l: nbtTag.long(1n << 63n) })).toThrow(ProtocolError);
+    expect(() => writeNbt({ x: nbtTag.list('int', [nbtTag.string('no')]) })).toThrow(
+      /string in a list of int/,
     );
   });
 });
