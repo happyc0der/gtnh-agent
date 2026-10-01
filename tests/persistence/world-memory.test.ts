@@ -25,6 +25,7 @@ const seen = (over: Partial<SeenChunk> = {}): SeenChunk => ({
   dimension: 'overworld',
   chunkX: 2,
   chunkZ: -3,
+  near: true,
   biome: { id: 229, name: 'Hot Forest', share: 0.8 },
   counts: { log: 12, leaves: 90 },
   examples: { log: [{ x: 35, y: 70, z: -40 }], leaves: [{ x: 36, y: 74, z: -40 }] },
@@ -67,6 +68,28 @@ describe('world memory repository', () => {
       .prepare('SELECT chunk_x, chunk_z FROM world_chunks WHERE chunk_x % 3 = 2')
       .all();
     expect(rows).toEqual([{ chunk_x: 2, chunk_z: -3 }]);
+  });
+
+  it('keeps whether a chunk was seen near, and counts those apart (scouting)', () => {
+    const afar = seen({ chunkX: 7, near: false, counts: { water: 9 }, examples: {} });
+    memory.remember([seen(), afar]);
+    expect(memory.get('overworld', 7, -3)?.near).toBe(false);
+    expect(memory.count()).toBe(2);
+    expect(memory.count(undefined, 'near')).toBe(1);
+    expect(memory.count('overworld', 'near')).toBe(1);
+    // Walked up to later: near from then on, whatever far sight sees after.
+    memory.remember([{ ...afar, near: true, seenAt: '2026-09-30T12:05:00.000Z' }]);
+    memory.remember([{ ...afar, seenAt: '2026-09-30T12:10:00.000Z' }]);
+    expect(memory.get('overworld', 7, -3)?.near).toBe(true);
+    expect(memory.count(undefined, 'near')).toBe(2);
+    // Rows stored before far sight (migration 007) were all seen near.
+    db.prepare(
+      `INSERT INTO world_chunks (dimension, chunk_x, chunk_z, biome_id, biome_name, biome_share,
+                                 counts_json, examples_json, seen_at)
+       VALUES ('overworld', 9, 9, NULL, NULL, NULL, '{}', '{}', '2026-09-30T11:00:00.000Z')`,
+    ).run();
+    expect(memory.get('overworld', 9, 9)?.near).toBe(true);
+    expect(() => db.prepare('UPDATE world_chunks SET near = 2 WHERE chunk_x = 9').run()).toThrow();
   });
 
   it('refuses invalid sightings, and surfaces corrupted rows as errors', () => {

@@ -1227,6 +1227,15 @@ _Assumptions, to check live:_
   Forest at (140, 64, 90), only leaves (BOP bamboo and BOP logs are not vanilla logs, so not
   counted). 17-52 ms per 25-chunk survey. Forest floors there are dense with leaf bushes and
   BOP foliage: the line of sight lets sight through plants and at most 2 leaf blocks.
+- **Far sight on the saved world (2026-10-01,** read-only developer analysis of the region
+  files, the 17 x 17 chunks the client would hold): the agent stood on desert sand at
+  (16.5, 92, 5.5). No surface water lies within about 150 blocks of spawn; the nearest gravel
+  open to the sky is on mountain slopes 107-148 blocks south (at y 104-135), and on a lake bed
+  some 200 blocks south-west. Only one patch lies within far sight's 112 blocks:
+  (28..30, 104..105, 107..108), 103 m away and above the eyes (y 93.6). Its top faces cannot be
+  seen from below, so far sight looks at the side a player sees: it saw 4 gravel there (a place:
+  3 is enough) and 55 stone on the slopes, in 8 ms per survey (the near look alone: 5 ms). By
+  top faces only, it saw no gravel at all.
 - **Limits:** the walker passes only the plants checked in their code (BOP foliage, flowers,
   plants and vines among them since 2026-10-01: [Walking through plants](#walking-through-plants-2026-10-01));
   every other modded block (BOP bamboo, say) is a wall. Ores count only when seen; GregTech

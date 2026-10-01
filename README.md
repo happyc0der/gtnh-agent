@@ -158,6 +158,7 @@ cp agent.config.example.json agent.config.json
 | **Place** one allowlisted block in the pen   | `pnpm cli place --live --at=-7,200,-11 --item minecraft:cobblestone`                      |
 | **Explore** toward a direction or a point    | `pnpm cli explore --live --toward south --distance 64`                                    |
 | What world memory knows (known places)       | `pnpm cli places [--at x,z]`                                                              |
+| How long a world survey takes (offline)      | `node scripts/survey-bench.ts`                                                            |
 | **Fight** one mob in the pen (by its id)     | `pnpm cli attack --live --entity 1234`                                                    |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
@@ -595,8 +596,12 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and
   beyond the play area travels in the same checked hops. Threats do not stop a retreat, at any
   time of day: it is the escape.
 - World memory records only what a player could see: blocks near the surface with a face
-  touching air, in a clear line of sight from the eyes, in daylight. Ores are recorded as "ore",
-  never by material.
+  touching air, in a clear line of sight from the eyes, within 40 blocks, in daylight; and out
+  to 112 blocks, by far sight, what stands out from afar on the top blocks (water, lava, sand,
+  gravel, clay, stone; the face a player sees of each). Ores are recorded as "ore", never by
+  material.
+- When a quest needs gravel, clay or sand and none has been seen, the route points the planner
+  at the shore of the nearest water seen: in 1.7.10 they generate around water.
 
 ### Combat
 

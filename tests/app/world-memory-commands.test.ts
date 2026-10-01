@@ -30,6 +30,7 @@ describe('the explore and places commands', () => {
         dimension: 'overworld',
         chunkX: 2,
         chunkZ: 0,
+        near: true,
         biome: { id: 211, name: 'River Oasis', share: 0.6 },
         counts: { clay: 4, water: 40 },
         examples: { clay: [{ x: 45, y: 63, z: 3 }], water: [{ x: 41, y: 63, z: 3 }] },

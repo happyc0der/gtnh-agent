@@ -5,6 +5,8 @@ interface WorldChunkRow {
   dimension: string;
   chunk_x: number;
   chunk_z: number;
+  /** 1: seen near at least once; 0: only from afar (migration 007). */
+  near: number;
   biome_id: number | null;
   biome_name: string | null;
   biome_share: number | null;
@@ -19,6 +21,7 @@ function toSeen(row: WorldChunkRow): SeenChunk {
     dimension: row.dimension,
     chunkX: row.chunk_x,
     chunkZ: row.chunk_z,
+    near: row.near === 1 ? true : row.near === 0 ? false : row.near,
     biome:
       row.biome_id === null
         ? null
@@ -30,9 +33,10 @@ function toSeen(row: WorldChunkRow): SeenChunk {
 }
 
 /**
- * World memory (migration 005): what the agent has seen, one row per chunk. A new sighting is
- * merged into the stored one (mergeSeen: the most seen of each kind, a few examples, the newer
- * biome and time), so a chunk seen from a poor spot never erases what was seen from a better one.
+ * World memory (migrations 005 and 007): what the agent has seen, one row per chunk. A new
+ * sighting is merged into the stored one (mergeSeen: the most seen of each kind, a few
+ * examples, the newer biome and time, near once seen near), so a chunk seen from a poor spot
+ * never erases what was seen from a better one.
  */
 export class WorldMemoryRepository {
   readonly #db: Db;
@@ -48,11 +52,12 @@ export class WorldMemoryRepository {
       'SELECT * FROM world_chunks WHERE dimension = ? AND chunk_x = ? AND chunk_z = ?',
     );
     const put = this.#db.prepare(
-      `INSERT INTO world_chunks (dimension, chunk_x, chunk_z, biome_id, biome_name, biome_share,
-                                 counts_json, examples_json, seen_at)
-       VALUES (@dimension, @chunkX, @chunkZ, @biomeId, @biomeName, @biomeShare, @counts, @examples, @seenAt)
+      `INSERT INTO world_chunks (dimension, chunk_x, chunk_z, near, biome_id, biome_name,
+                                 biome_share, counts_json, examples_json, seen_at)
+       VALUES (@dimension, @chunkX, @chunkZ, @near, @biomeId, @biomeName, @biomeShare, @counts,
+               @examples, @seenAt)
        ON CONFLICT(dimension, chunk_x, chunk_z) DO UPDATE SET
-         biome_id = excluded.biome_id, biome_name = excluded.biome_name,
+         near = excluded.near, biome_id = excluded.biome_id, biome_name = excluded.biome_name,
          biome_share = excluded.biome_share, counts_json = excluded.counts_json,
          examples_json = excluded.examples_json, seen_at = excluded.seen_at`,
     );
@@ -65,6 +70,7 @@ export class WorldMemoryRepository {
           dimension: merged.dimension,
           chunkX: merged.chunkX,
           chunkZ: merged.chunkZ,
+          near: merged.near ? 1 : 0,
           biomeId: merged.biome?.id ?? null,
           biomeName: merged.biome?.name ?? null,
           biomeShare: merged.biome?.share ?? null,
@@ -92,13 +98,17 @@ export class WorldMemoryRepository {
     return row === undefined ? null : toSeen(row);
   }
 
-  /** How many chunks have been seen (in one dimension, or in all). */
-  count(dimension?: string): number {
+  /**
+   * How many chunks have been seen (in one dimension, or in all); with 'near', only those seen
+   * near at least once (far sight's landmarks alone do not count).
+   */
+  count(dimension?: string, which: 'all' | 'near' = 'all'): number {
+    const near = which === 'near' ? ' AND near = 1' : '';
     const row = (
       dimension === undefined
-        ? this.#db.prepare('SELECT COUNT(*) AS n FROM world_chunks').get()
+        ? this.#db.prepare(`SELECT COUNT(*) AS n FROM world_chunks WHERE 1${near}`).get()
         : this.#db
-            .prepare('SELECT COUNT(*) AS n FROM world_chunks WHERE dimension = ?')
+            .prepare(`SELECT COUNT(*) AS n FROM world_chunks WHERE dimension = ?${near}`)
             .get(dimension)
     ) as { n: number };
     return row.n;

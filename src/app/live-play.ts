@@ -204,7 +204,9 @@ export async function runLivePlay(
           clock: systemClock,
           newId: randomIds,
         };
-        // When the agent can explore, play first scouts the area while little of it is known.
+        // When the agent can explore, play first scouts the area while little of it is known:
+        // chunks seen near, every kind looked for (one far look from spawn sees a hundred chunks
+        // of landmarks over open ground, and no trees: no look around).
         const movement = config.minecraft.movement;
         const canExplore = movement.enabled && movement.mode === 'follow';
         try {
@@ -213,7 +215,9 @@ export async function runLivePlay(
               repos,
               ...(input.abilities ? { abilities: input.abilities } : {}),
               ...(input.goal ? { goal: input.goal } : {}),
-              ...(canExplore ? { scouting: { chunksSeen: () => repos.worldMemory.count() } } : {}),
+              ...(canExplore
+                ? { scouting: { chunksSeen: () => repos.worldMemory.count(undefined, 'near') } }
+                : {}),
               questBook: async () => {
                 const state = await observeWithQuestBook(client);
                 return { questBook: state.questBook, inventory: state.inventory };

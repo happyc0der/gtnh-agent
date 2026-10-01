@@ -260,9 +260,10 @@ have vs need per item, the raw materials to gather in total, every gather and cr
 order (ingredients before what they make), the best known place for each material (the
 nearest with enough seen: blocks in view now, and places world memory remembers from
 exploring, marked "remembered"), where a player would look when no place is known (the
-nearest seen biome where it is common, e.g. grass in a forest, never in a desert), and a
-rough time. The planner gets the route in its request and plans along it; the model still makes
-every decision. The route is general: smelting, tools, mob drops and exported recipe data
+nearest seen biome where it is common, e.g. grass in a forest, never in a desert; for gravel,
+clay and sand, the shore of the nearest water seen), and a rough time. The planner gets the
+route in its request and plans along it; the model still makes every decision. The route is
+general: smelting, tools, mob drops and exported recipe data
 are new book entries, not new planner logic. The book holds GTNH's real recipes, ore veins
 and harvest levels (see [Knowledge base](#knowledge-base)).
 
@@ -1197,14 +1198,41 @@ counts as seen only when:
   at most 2 leaf blocks, within 40 blocks (unloaded and unknown blocks block it);
 - it is day: nothing is surveyed in the evening or at night.
 
-A survey covers the 5 x 5 chunks around the player, when it enters another chunk, every 30 s, and
-after every EXPLORE hop (17-52 ms on real chunks). Per chunk it keeps the dominant biome (decoded
-from the chunk data, named from `biomes.ts`), counts of logs, leaves, dirt (dirt and grass), sand, gravel, clay, water,
-lava, stone (and cobblestone) and ores (by block name; the material is never guessed), and up to
-3 seen positions of each. The agent loop stores the sightings at every observation and after
-every action (`world_chunks`, migration 005). A new sighting is merged with the stored one (the
-most seen of each kind), so a poor view never erases a good one. Chunk coordinates are plain
-integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
+**Far sight.** A player spots a river, a lake or a cliff much farther away than 40 blocks (seen
+live: the agent walked 94 chunks of desert and forest and never saw water, gravel or clay). So
+beyond 40 blocks, out to 112, the survey also looks at each column's top block (under any
+plants), for what stands out from afar: water, lava, sand, gravel, clay and stone; not logs
+(from afar only a canopy's, too high to dig), leaves or grass (the cover of nearly all land), nor
+ores (a speck in a cliff). It counts as seen by the face a player sees: its top face when the
+eyes are above it, else an open side face turned toward the eyes (from below, a slope shows its
+risers: in the test world's saved chunks, the only gravel within reach of the agent's plateau at
+y 92 lay on a slope at y 104, 103 m south), on a clear line of sight by the same rules. 112
+blocks: the server's view distance is 8 chunks, so the client holds at least 128 blocks each
+way, and 112 leaves a chunk's margin for chunks still arriving (an unloaded block blocks the
+line). A chunk wholly beyond 40 blocks is recorded only when far sight saw something in it (a
+player cannot tell the biome of ground hidden behind a hill), and marked `near: false` until the
+agent sees it from near. Sand and stone come in sheets, so far sight looks at every second column
+of them each way: their counts from afar are lower bounds. Gravel, clay, water and lava are looked
+at on every column.
+
+A survey covers every chunk within reach (40 blocks; with far sight, 112), when the player enters
+another chunk and after every EXPLORE hop; far sight is left out of the re-survey every 30 s in
+the same chunk (from there its view hardly changes). It runs in the client's event loop, between
+packets: 4-11 ms near only and 5-12 ms with far sight on the bench terrain
+(`node scripts/survey-bench.ts`: the 17 x 17 chunks a client holds, with hills, trees, a river
+and a lake), about 5 and 8 ms on the test world's saved chunks around the agent. It reads each chunk
+column once per survey (not a map lookup per block), and looks closely only at blocks with an
+open neighbour (the rest of the band is buried ground); the near rules decide exactly as before
+(checked block for block against the previous survey on the bench terrain, caves and all).
+
+Per chunk it keeps the dominant biome (decoded from the chunk data, named from `biomes.ts`),
+counts of logs, leaves, dirt (dirt and grass), sand, gravel, clay, water, lava, stone (and
+cobblestone) and ores (by block name; the material is never guessed), up to 3 seen positions of
+each, and whether it was seen near. The agent loop stores the sightings at every observation and
+after every action (`world_chunks`, migrations 005 and 007). A new sighting is merged with the
+stored one (the most seen of each kind; near once seen near), so a poor view, or a far one, never
+erases a good one. Chunk coordinates are plain integers, so chunk-grid rules (GregTech's ore-vein
+grid) can be applied later.
 
 ### The planner and play
 
@@ -1215,7 +1243,19 @@ integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
   clay on riverbanks and stone; when the task needs a block that is not listed nearby, EXPLORE
   toward a known place, or toward the least-seen direction with room; EXPLORE last in a plan
   (code drops any step after it, see [Accepting a plan](#accepting-a-plan)); never in the
-  evening or at night. (`pnpm cli places` prints the same summary.)
+  evening or at night. (`pnpm cli places` prints the same summary.) Chunks far sight saw count
+  like any other: their places are blocks that were seen, with a y, and a direction counts as
+  seen as far as a landmark was made out that way; since far sight records only chunks where
+  something stood out, a way a hill or a canopy hid stays little seen, which is where a player
+  would go to look.
+- A gather leg of the route with no known place gets where to look, the surest first: a seen
+  biome where the material is common, away from the player (a river or a beach for gravel); then,
+  for gravel, clay and sand, the nearest remembered water the player is not by ("the shore of the
+  water at x 97, z -60, 112 m north_east (seen 3.2 min ago): gravel, clay and sand lie on river
+  and lake shores and beds; EXPLORE toward that x and z": in 1.7.10 they generate as disks
+  around water, on the beds and up the banks); then the biome patch the player stands in,
+  explored on through; last, new ground in the direction with the most room left unseen. Water
+  is worth walking to for its shore: the agent does not wade or dig under water.
 - What the request offers is what the model plans toward, so code leaves out what would mislead
   it. A remembered place the current resource scan covers (its sphere, at or above the feet) is
   left out of the route and of `exploration.places`: it is in view already, with a stand spot a
@@ -1226,9 +1266,11 @@ integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
   explore on through it. Seen live: the model planned `EXPLORE` toward remembered logs it could
   not reach, again and again, even when told it would be refused.
 - Play (`src/app/scouting.ts`): when the agent can explore and world memory holds fewer than 50
-  chunks, play begins with ONE bounded session on a `scout-area` task ("explore two or three
-  directions..."), before the quests. It ends once 100 chunks are seen, at the session's limits,
-  or when anything needs a human, and it is done once: a completed scouting task is never redone.
+  chunks seen near, play begins with ONE bounded session on a `scout-area` task ("explore two or
+  three directions..."), before the quests. It ends once 100 chunks are seen near, at the
+  session's limits, or when anything needs a human, and it is done once: a completed scouting
+  task is never redone. Chunks seen only from afar do not count: one far look over open ground
+  records a hundred chunks of landmarks, and no trees.
 
 ## Combat
 
