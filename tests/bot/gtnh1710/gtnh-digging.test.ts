@@ -164,13 +164,54 @@ describe('Gtnh1710Client digging on terrain', () => {
         block: 'minecraft:sand',
         dropCollected: true,
         drops: '1 x minecraft:sand',
-        steppedIntoHole: true,
+        walkedToDrop: true,
       },
     });
-    expect(result.message).toMatch(/stepped into the hole and picked up 1 x minecraft:sand/);
+    expect(result.message).toMatch(
+      /walked to the drop at \(-5, 105, -9\) and picked up 1 x minecraft:sand/,
+    );
     // It looked down at the block before digging, and stands in the hole now.
     expect(fake.playPacketIds().indexOf(0x05)).toBeLessThan(fake.playPacketIds().indexOf(0x07));
     expect(fake.walkSteps().at(-1)).toMatchObject({ x: -4.5, feetY: 105, z: -8.5, onGround: true });
+    expect(fake.digSim.pickedUp).toEqual([{ item: 'minecraft:sand', count: 1 }]);
+  }, 15_000);
+});
+
+describe('Gtnh1710Client collects drops it can walk to', () => {
+  it('digs sand two blocks away and walks onto the spot to pick up the drop', async () => {
+    // Sand in the grass floor two columns east of the player's block, stone under it.
+    const sand = { x: -3, y: 105, z: -8 };
+    const terrain = { min: { x: -9, y: 100, z: -12 }, max: { x: -1, y: 110, z: -4 } };
+    const fake = new FakeGtnhServer({
+      blocks: DIG_TEST_BLOCK_REGISTRY,
+      blockOverrides: new Map([
+        [key(sand), BLOCK.sand],
+        [key({ ...sand, y: 104 }), BLOCK.stone],
+      ]),
+    });
+    servers.push(fake);
+    const config = defaultConfig({
+      minecraft: {
+        host: '127.0.0.1',
+        port: await fake.listen(),
+        enableLiveConnection: true,
+        serverIdentityMarker: 'gtnh-agent-test',
+        connectTimeoutMs: 5_000,
+        initialStateGraceMs: 2_000,
+        movement: { enabled: true, fence: terrain, stopFile },
+        digging: { enabled: true },
+      },
+    });
+    const client = new Gtnh1710Client({ config: config.minecraft, clock: systemClock });
+    clients.push(client);
+    await client.connect();
+
+    const result = await perform(client, dig(sand));
+    expect(result).toMatchObject({
+      ok: true,
+      data: { dropCollected: true, drops: '1 x minecraft:sand', walkedToDrop: true },
+    });
+    expect(fake.walkSteps().at(-1)).toMatchObject({ x: -2.5, feetY: 105, z: -7.5, onGround: true });
     expect(fake.digSim.pickedUp).toEqual([{ item: 'minecraft:sand', count: 1 }]);
   }, 15_000);
 });

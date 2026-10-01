@@ -72,7 +72,13 @@ import {
   type Vec3,
   type WalkPlan,
 } from './walking.ts';
-import { bodyProblem, planTerrainWalk, terrainSteps, type TerrainStep } from './terrain.ts';
+import {
+  bodyProblem,
+  planTerrainWalk,
+  standProblem,
+  terrainSteps,
+  type TerrainStep,
+} from './terrain.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
 import { WORKBENCH_WINDOW_TYPE, WorldModel, type BlockWatch } from './world-model.ts';
 
@@ -107,8 +113,6 @@ const DIG_OUTCOME_TIMEOUT_MS = 2_000;
 const DIG_SETTLE_MS = 5 * TICK_MS;
 /** How long the drop may take to reach the inventory: a 10-tick pickup delay, plus falling. */
 const DROP_WAIT_MS = 2_000;
-/** Listed diggable blocks (nearest first) that get a stand spot in each observation. */
-const STAND_SPOT_BLOCKS = 32;
 
 /** "2 x minecraft:sand, 1 x minecraft:flint" (at most 200 characters). */
 function describeGain(gained: ReadonlyArray<[string, number]>): string {
@@ -348,11 +352,10 @@ export class Gtnh1710Client implements MinecraftClient {
         known: true,
         value: {
           ...blocks,
-          resources: blocks.resources.map((r, i) =>
-            i < STAND_SPOT_BLOCKS
-              ? { ...r, standAt: standSpotFor(world, area, r.position, feet) }
-              : r,
-          ),
+          resources: blocks.resources.map((r) => ({
+            ...r,
+            standAt: standSpotFor(world, area, r.position, feet),
+          })),
         },
       },
     };
@@ -1119,32 +1122,33 @@ export class Gtnh1710Client implements MinecraftClient {
    * the arm, C07 start, the dig time (vanilla x 1.25 + 2 ticks, re-checking everything
    * every tick), C07 finish; a problem on the way sends C07 cancel. Success needs the
    * server's own block change to air, with no re-send after it. Reports whether the drop
-   * reached the inventory. A drop that fell into a one-block-deep hole right next to the
-   * player lies below its pickup reach, so the player steps down into the hole for it.
+   * reached the inventory. A drop that landed out of the player's pickup reach (in a hole
+   * next to it, or a few blocks away) is picked up as a player would: by walking onto it,
+   * when the spot it lies on is standable (an ordinary checked walk inside the fence).
    */
   async #dig(target: BlockPosition): Promise<ClientActionResult> {
     const dug = await this.#digOnce(target);
-    if (dug.hole === null) return dug.result;
-    const { x, y, z } = target;
-    const walked = await this.#walkTo({ x: x + 0.5, y, z: z + 0.5 }, { stopForThreats: true });
-    const gained = walked.ok ? await this.#dropGain(dug.hole.itemsBefore) : [];
+    if (dug.drop === null) return dug.result;
+    const spot = dug.drop.spot;
+    const walked = await this.#walkTo(spot, { stopForThreats: true });
+    const gained = walked.ok ? await this.#dropGain(dug.drop.itemsBefore) : [];
     const drops = describeGain(gained);
-    const where = `(${x}, ${y}, ${z})`;
+    const where = `(${Math.floor(spot.x)}, ${spot.y}, ${Math.floor(spot.z)})`;
     this.#log(
-      `stepped into the hole at ${where}: ${walked.ok ? (gained.length > 0 ? drops : 'no drop') : walked.message}`,
+      `walked to the drop at ${where}: ${walked.ok ? (gained.length > 0 ? drops : 'no drop') : walked.message}`,
     );
     return ok(
       `${dug.result.message.replace(/; no drop reached.*$/, '')}; ` +
         (walked.ok
           ? gained.length > 0
-            ? `stepped into the hole and picked up ${drops}`
-            : 'stepped into the hole, but no drop reached the inventory'
-          : `the drop is in the hole at ${where}, but stepping in failed: ${walked.message}`),
+            ? `walked to the drop at ${where} and picked up ${drops}`
+            : `walked to ${where}, but no drop reached the inventory`
+          : `the drop lies at ${where}, but walking there failed: ${walked.message}`),
       {
         ...dug.result.data,
         dropCollected: gained.length > 0,
         drops,
-        steppedIntoHole: walked.ok,
+        walkedToDrop: walked.ok,
       },
     );
   }
@@ -1163,12 +1167,12 @@ export class Gtnh1710Client implements MinecraftClient {
 
   async #digOnce(target: BlockPosition): Promise<{
     result: ClientActionResult;
-    /** Set when the drop lies in a one-block-deep hole next to the player. */
-    hole: { itemsBefore: Readonly<Record<string, number>> } | null;
+    /** Set when the drop was not picked up and lies on a spot the player can walk to. */
+    drop: { itemsBefore: Readonly<Record<string, number>>; spot: Vec3 } | null;
   }> {
-    const done = (result: ClientActionResult): { result: ClientActionResult; hole: null } => ({
+    const done = (result: ClientActionResult): { result: ClientActionResult; drop: null } => ({
       result,
-      hole: null,
+      drop: null,
     });
     const blocker = this.#digBlocker();
     const fence = this.#opts.config.movement.fence;
@@ -1278,16 +1282,19 @@ export class Gtnh1710Client implements MinecraftClient {
               : `no drop reached the inventory (none, or it lies at ${where} out of pickup reach: walk onto it)`),
         { x, y, z, block: check.block, ticks, dropCollected, drops },
       );
-      // A one-block-deep hole right next to the player (terrain digging below the feet).
-      const feetLevel = Math.floor(feet.y + 1e-6);
-      const nextTo =
-        Math.abs(x + 0.5 - feet.x) <= 1.5 &&
-        Math.abs(z + 0.5 - feet.z) <= 1.5 &&
-        y === feetLevel - 1;
+      // Not picked up: the drop fell to the floor of the dug cell (or below it). On terrain,
+      // if a player could stand there, walk onto it.
       const terrain = area.fence.min.y !== area.fence.max.y;
+      if (dropCollected || itemsBefore === null || !terrain) return { result, drop: null };
+      let floor = y;
+      while (floor > y - 3 && world.blockAt(x, floor - 1, z) === 0) floor -= 1;
+      const standable =
+        floor >= area.fence.min.y &&
+        floor <= area.fence.max.y &&
+        standProblem(world, x, floor, z) === null;
       return {
         result,
-        hole: !dropCollected && itemsBefore !== null && terrain && nextTo ? { itemsBefore } : null,
+        drop: standable ? { itemsBefore, spot: { x: x + 0.5, y: floor, z: z + 0.5 } } : null,
       };
     } finally {
       this.#digging = false;

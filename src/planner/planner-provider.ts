@@ -87,12 +87,18 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       ? { hostileCount: threats.hostileCount, unclassifiedCount: threats.unclassifiedCount }
       : null,
     hazards: hazards ? { lavaNearby: hazards.lavaNearby, voidNearby: hazards.voidNearby } : null,
-    diggableBlocks: (blocks?.resources ?? []).slice(0, MAX_COMPACT_RESOURCES).map((r) => ({
-      block: r.block,
-      position: { ...r.position },
-      reach: position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
-      standAt: r.standAt ?? null,
-    })),
+    // A block with no stand spot (standAt null, computed by the adapter) cannot be dug from
+    // anywhere now (e.g. sand on top would fall): it is not offered.
+    diggableBlocks: (blocks?.resources ?? [])
+      .filter((r) => r.standAt !== null)
+      .slice(0, MAX_COMPACT_RESOURCES)
+      .map((r) => ({
+        block: r.block,
+        position: { ...r.position },
+        reach:
+          position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
+        standAt: r.standAt ?? null,
+      })),
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
       name: m.name,
