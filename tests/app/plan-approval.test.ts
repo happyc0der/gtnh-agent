@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isStaleRejection,
+  OPERATOR_PLANNER,
   runSingleCycle,
   syncConfigToDatabase,
   type CycleResult,
@@ -373,5 +375,34 @@ describe('plans that need approval wait for a human', () => {
     });
     expect(rejectPlan(s.repos, 'task-nope', undefined, undefined)).toMatchObject({ ok: false });
     expect(showPlans(s.repos, 'task-nope')).toMatchObject({ ok: false });
+  });
+});
+
+describe('a planner step refused for a danger that came up after System 1 decided', () => {
+  const refused = (codes: string[]) =>
+    ({
+      status: 'rejected',
+      validation: {
+        ok: false,
+        violations: codes.map((code) => ({ code, severity: 'block', message: code })),
+        preconditionFailures: [],
+        requiresUserPause: false,
+      },
+    }) as never;
+  const ref = { planner: 'ollama:qwen3:14b' } as never;
+
+  it('does not block the task: System 1 meets the danger next cycle', () => {
+    // Seen live: a gatling skeleton came in range while the planner planned; the EXPLORE was
+    // refused and the task blocked for a human.
+    expect(isStaleRejection(ref, refused(['ACTION_NOT_ALLOWED_IN_DANGER']))).toBe(true);
+    expect(isStaleRejection(ref, refused(['ACTION_NOT_ALLOWED_IN_DANGER', 'OUT_OF_BOUNDS']))).toBe(
+      false,
+    );
+    expect(
+      isStaleRejection(
+        { planner: OPERATOR_PLANNER } as never,
+        refused(['ACTION_NOT_ALLOWED_IN_DANGER']),
+      ),
+    ).toBe(false);
   });
 });

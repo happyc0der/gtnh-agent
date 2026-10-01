@@ -983,8 +983,12 @@ const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set([
  * A planner's step rejected only because it no longer fits the world NOW: preconditions
  * (out of reach, too few items, the block gone) and/or a stale-observation refusal
  * (STALE_VIOLATION_CODES), and nothing else. The player moved or the world changed since
- * the plan was made: a stale plan, not an unsafe one. A human's plan is never treated this
- * way, and any other safety violation still halts the task.
+ * the plan was made: a stale plan, not an unsafe one. Or a danger came up after System 1
+ * decided (ACTION_NOT_ALLOWED_IN_DANGER alone): System 1 meets it next cycle (a retreat, a
+ * flight, a fight), and the planner is asked again after (seen live: a gatling skeleton came
+ * in range while the planner planned, the EXPLORE was refused, and the task was blocked for a
+ * human). A human's plan is never treated this way, and any other safety violation still
+ * halts the task.
  */
 export function isStaleRejection(ref: PlanStepRef | null, outcome: ExecutionOutcome): boolean {
   const v = outcome.validation;
@@ -992,7 +996,9 @@ export function isStaleRejection(ref: PlanStepRef | null, outcome: ExecutionOutc
     ref !== null &&
     ref.planner !== OPERATOR_PLANNER &&
     outcome.status === 'rejected' &&
-    v.violations.every((x) => STALE_VIOLATION_CODES.has(x.code)) &&
+    v.violations.every(
+      (x) => STALE_VIOLATION_CODES.has(x.code) || x.code === 'ACTION_NOT_ALLOWED_IN_DANGER',
+    ) &&
     (v.violations.length > 0 || v.preconditionFailures.length > 0)
   );
 }
