@@ -87,6 +87,37 @@ const moveTo = (x: number, z: number, y = FEET_Y): ActionSpec => ({
 });
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+describe('Gtnh1710Client gravity', () => {
+  it('falls onto the ground when it finds itself in the air (the server kicks a floating player)', async () => {
+    // Placed 0.83 above the floor, as a walk stopped in the middle of a step up leaves it.
+    const { server, client } = await start({
+      spawn: { x: -4.5, eyeY: FEET_Y + 0.83 + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
+    });
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline && server.confirmedPositions.at(-1)?.feetY !== FEET_Y) {
+      await delay(50);
+    }
+    const fall = server.confirmedPositions.filter((p) => p.feetY < FEET_Y + 0.83);
+    expect(fall.at(-1)).toMatchObject({ x: -4.5, feetY: FEET_Y, z: -7.5, onGround: true });
+    // Vanilla gravity: every step lower than the last, in the air until the landing.
+    expect(fall.every((p, i) => i === 0 || p.feetY < (fall[i - 1]?.feetY ?? Infinity))).toBe(true);
+    expect(fall.slice(0, -1).every((p) => !p.onGround)).toBe(true);
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -4.5, y: FEET_Y, z: -7.5 },
+    });
+  });
+
+  it('stays in the air rather than fall where it may not walk (the stop file)', async () => {
+    writeFileSync(stopFile, 'stop');
+    const { server } = await start({
+      spawn: { x: -4.5, eyeY: FEET_Y + 0.83 + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
+    });
+    await delay(1_000);
+    expect(server.confirmedPositions.every((p) => p.feetY > FEET_Y)).toBe(true);
+  });
+});
+
 describe('Gtnh1710Client walking', () => {
   it('walks to a target: one checked step per tick, on the ground, with a correct stance', async () => {
     const { server, client } = await start();

@@ -152,6 +152,10 @@ import {
 } from './walking.ts';
 import {
   bodyProblem,
+  checkSupport,
+  fallDistances,
+  landingHazard,
+  MAX_SAFE_FALL,
   planTerrainWalk,
   standProblem,
   terrainSteps,
@@ -172,6 +176,8 @@ const IDLE_TICK_MS = 50;
 const WALK_TICK_MS = 50;
 /** After the last step, ticks to wait for a server correction before calling a walk done. */
 const SETTLE_TICKS = 5;
+/** Idle ticks between two checks that something still holds the player up (gravity). */
+const SUPPORT_CHECK_TICKS = 10;
 /** How long to wait for a chest or crafting table window, and for the server's verdict on one click. */
 const WINDOW_OPEN_TIMEOUT_MS = 3_000;
 const CLICK_TIMEOUT_MS = 3_000;
@@ -386,6 +392,10 @@ export class Gtnh1710Client implements MinecraftClient {
   #identity: ServerIdentity | null = null;
   #decoding: PlayDecodeOptions = VANILLA_DECODING;
   #idleTimer: NodeJS.Timeout | null = null;
+  /** Idle ticks sent (for the support check every SUPPORT_CHECK_TICKS). */
+  #idleTicks = 0;
+  /** The last "in the air" problem logged, so it is logged once, not every check. */
+  #floatingNote: string | null = null;
   #closedReason: string | null = null;
   #connectedAt: Date | null = null;
   #confirmedPositions = 0;
@@ -3755,7 +3765,79 @@ export class Gtnh1710Client implements MinecraftClient {
 
   #startIdle(): void {
     if (this.#idleTimer !== null || this.#walking) return;
-    this.#idleTimer = setInterval(() => this.#send(outbound.playerIdle(ON_GROUND)), IDLE_TICK_MS);
+    this.#idleTimer = setInterval(() => {
+      this.#send(outbound.playerIdle(ON_GROUND));
+      this.#idleTicks += 1;
+      if (this.#idleTicks % SUPPORT_CHECK_TICKS === 0) void this.#keepSupported();
+    }, IDLE_TICK_MS);
+  }
+
+  /**
+   * Gravity, which this client does not otherwise simulate. When nothing holds the player up
+   * (a walk stopped between a jump's or a drop's steps, the ground fell away, or the server
+   * put it in the air at login), it falls onto the block below as a game client would: the
+   * server kicks a player that floats for 4 seconds ("Flying is not enabled on this server").
+   * Only when walking is allowed and nothing else runs, only within the fence, and only a fall
+   * of at most MAX_SAFE_FALL blocks (no damage) onto a spot with no hazard next to it;
+   * otherwise it logs why and stays (a kick is harmless, a bad fall is not).
+   */
+  async #keepSupported(): Promise<void> {
+    if (this.#phase !== 'play' || this.#walking || this.#exploring) return;
+    if (this.#digging || this.#placing || this.#fighting || this.#questBookBusy) return;
+    if (this.#movementBlocker() !== null) return;
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    const fence = this.#fence().fence;
+    if (world === null || feet === null || fence === null) return;
+    const support = checkSupport(world, feet);
+    if (support.kind !== 'floating') {
+      this.#floatingNote = null;
+      return;
+    }
+    const note = (why: string): void => {
+      if (this.#floatingNote === why) return;
+      this.#floatingNote = why;
+      this.#log(
+        `in the air at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}) and not falling: ${why}`,
+      );
+    };
+    const landY = support.landY;
+    if (landY === null || feet.y - landY > MAX_SAFE_FALL) {
+      note(`no floor within ${MAX_SAFE_FALL} blocks below`);
+      return;
+    }
+    const landing = { x: feet.x, y: landY, z: feet.z };
+    if (!fenceHolds(fence, landing)) {
+      note('the floor below is outside the fence');
+      return;
+    }
+    const hazard = landingHazard(world, Math.floor(feet.x), landY, Math.floor(feet.z));
+    if (hazard !== null) {
+      note(`the floor below is ${hazard}`);
+      return;
+    }
+    // Falling is a walk of its own: nothing else may start meanwhile.
+    this.#walking = true;
+    this.#stopIdle();
+    try {
+      const fallen = fallDistances(feet.y - landY);
+      for (const [i, d] of fallen.entries()) {
+        const pos = { x: feet.x, y: i === fallen.length - 1 ? landY : feet.y - d, z: feet.z };
+        this.#send(
+          outbound.playerMove(
+            { x: pos.x, feetY: pos.y, z: pos.z, yaw: this.#lastYaw, pitch: 0 },
+            i === fallen.length - 1,
+          ),
+        );
+        this.#world.setOwnPosition(pos);
+        await delay(WALK_TICK_MS);
+      }
+      this.#floatingNote = null;
+      this.#log(`fell ${(feet.y - landY).toFixed(2)} blocks onto the ground at y=${landY}`);
+    } finally {
+      this.#walking = false;
+      if (this.#phase === 'play') this.#startIdle();
+    }
   }
 
   #stopIdle(): void {

@@ -282,6 +282,13 @@ blocks at the player's feet level, all on one level (a fence with a height range
    (Ctrl+C) or a lost connection. After the last step it waits 5 ticks for a server correction
    before reporting success, and the executor then verifies the position.
 
+**Gravity.** The client does not otherwise simulate physics, and the server kicks a player that
+floats for 4 seconds ("Flying is not enabled on this server"; seen live when a walk stopped in the
+middle of a step up). So while nothing else runs, twice a second, it checks what the server checks
+(`checkSupport` in `terrain.ts`: any block that is not air in the player's box, reaching 0.55
+below the feet); in the air, it falls onto the block below with vanilla gravity, only when walking
+is allowed, within the fence, at most 3 blocks (no damage) and with no hazard next to the landing.
+
 The `move` command runs one such action for a human (origin `user`). The repeated-failure rule does
 not apply to it (it is the human's decision each time), and its failures do not count against the
 agent's own attempts.

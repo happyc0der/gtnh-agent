@@ -281,8 +281,8 @@ export interface TerrainStep {
   onGround: boolean;
 }
 
-/** Vanilla gravity per tick (motionY -= 0.08, then *= 0.98). */
-function fallDistances(height: number): number[] {
+/** Vanilla gravity per tick (motionY -= 0.08, then *= 0.98): the distance fallen after each tick. */
+export function fallDistances(height: number): number[] {
   const out: number[] = [];
   let v = 0;
   let fallen = 0;
@@ -311,6 +311,75 @@ function horizontal(a: Vec3, b: Vec3, y: number, onGround: boolean): TerrainStep
 }
 
 /** Per-tick positions (and on-ground flags) for a planned terrain walk. */
+/** The longest fall that does no damage (vanilla: damage = fall distance - 3). */
+export const MAX_SAFE_FALL = 3;
+/** The server's floating check: the player's box (0.3 each way) grown by 0.0625... */
+const FLOAT_CHECK_HALF_WIDTH = 0.3625;
+/** ...reaching 0.55 (+ 0.0625) below the feet... */
+const FLOAT_CHECK_BELOW = 0.6125;
+/** ...and up to its head (1.8 + 0.0625). */
+const FLOAT_CHECK_ABOVE = 1.8625;
+
+export type Support =
+  | { kind: 'supported' }
+  | { kind: 'unknown' }
+  /** Nothing holds the player up; landY is where its feet would land (null: no floor near). */
+  | { kind: 'floating'; landY: number | null };
+
+/** The block columns or levels a span from `lo` to `hi` touches. */
+function cellsAcross(lo: number, hi: number): number[] {
+  const out: number[] = [];
+  for (let c = Math.floor(lo); c <= Math.floor(hi); c++) out.push(c);
+  return out;
+}
+
+/**
+ * Whether the server sees the player held up, by its own floating check (1.7.10
+ * NetHandlerPlayServer.processPlayer: any block that is not air in the player's box, grown by
+ * 0.0625 and reaching 0.55 lower; a player floating for 80 position packets, 4 s, is kicked:
+ * "Flying is not enabled on this server"). If not, where its feet would land: on the highest
+ * block below that stops a fall (one the body cannot pass), looked for MAX_SAFE_FALL + 1
+ * levels down. 'unknown' when a block it needs is not loaded.
+ */
+export function checkSupport(world: WalkWorld, feet: Vec3): Support {
+  const xs = cellsAcross(feet.x - FLOAT_CHECK_HALF_WIDTH, feet.x + FLOAT_CHECK_HALF_WIDTH);
+  const zs = cellsAcross(feet.z - FLOAT_CHECK_HALF_WIDTH, feet.z + FLOAT_CHECK_HALF_WIDTH);
+  const bottom = Math.floor(feet.y - FLOAT_CHECK_BELOW);
+  for (let y = bottom; y <= Math.floor(feet.y + FLOAT_CHECK_ABOVE); y++) {
+    for (const x of xs) {
+      for (const z of zs) {
+        const id = world.blockAt(x, y, z);
+        if (id === undefined) return { kind: 'unknown' };
+        if (id !== 0) return { kind: 'supported' };
+      }
+    }
+  }
+  for (let y = bottom - 1; y >= Math.max(0, bottom - 1 - MAX_SAFE_FALL); y--) {
+    for (const x of xs) {
+      for (const z of zs) {
+        const problem = passProblem(world, x, y, z);
+        if (problem === 'chunk not loaded') return { kind: 'unknown' };
+        if (problem !== null) return { kind: 'floating', landY: y + 1 };
+      }
+    }
+  }
+  return { kind: 'floating', landY: null };
+}
+
+/** A hazard (lava, fire, harmful fluid, cactus...) next to where the feet would land, or null. */
+export function landingHazard(world: WalkWorld, x: number, y: number, z: number): string | null {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const id = world.blockAt(x + dx, y + dy, z + dz);
+        if (id === undefined) return 'next to an unloaded chunk';
+        if (world.hazardCode(id) !== BLOCK_CODE.safe) return `next to ${name(world, id)}`;
+      }
+    }
+  }
+  return null;
+}
+
 export function terrainSteps(from: Vec3, moves: readonly TerrainMove[]): TerrainStep[] {
   const out: TerrainStep[] = [];
   let at = from;
