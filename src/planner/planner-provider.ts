@@ -285,8 +285,8 @@ function likelyBiome(blocks: readonly string[], exploration: ExplorationSummary)
   const here = matching[0];
   if (here === undefined) return null;
   return (
-    `the player is in the ${here.biome} (seen, ${here.chunks} chunk(s)), but none in view can ` +
-    'be reached from here: EXPLORE on through it, toward a direction with little seen'
+    `the ${here.biome} the player stands in (seen, ${here.chunks} chunk(s)), beyond what it can ` +
+    'reach from here: EXPLORE on through it, toward a direction with little seen'
   );
 }
 
@@ -318,6 +318,27 @@ function knownPlaces(state: GameState, exploration?: ExplorationSummary): PlaceL
     );
     return [...inView(wanted), ...remembered];
   };
+}
+
+/** Room (blocks to the boundary) a direction needs to be worth an EXPLORE toward it. */
+const MIN_EXPLORE_ROOM = 64;
+
+/**
+ * Where to look when neither a place nor a likely biome is known: the direction with the most
+ * room past what has been seen that way (ties: the least seen), as a concrete EXPLORE. Seen
+ * live: with no gravel, water or clay in 94 chunks of desert and forest, the model went back
+ * and forth between two nearby points instead of into new ground.
+ */
+function unexploredDirection(exploration: ExplorationSummary): string | null {
+  const best = Object.entries(exploration.directions)
+    .map(([direction, d]) => ({ direction, ...d, beyond: d.room - d.seen }))
+    .filter((d) => d.room >= MIN_EXPLORE_ROOM && d.beyond > 0)
+    .sort((a, b) => b.beyond - a.beyond || a.seen - b.seen)[0];
+  if (best === undefined) return null;
+  return (
+    `new ground, none seen so far: EXPLORE ${best.direction} (seen only ${best.seen} blocks ` +
+    `that way, ${best.room} blocks of room)`
+  );
 }
 
 /**
@@ -409,9 +430,9 @@ export function routeAndChangesForPlanner(
   const route = planRoute(goal, inventory, ROUTE_BOOK, knownPlaces(state, exploration), storage);
   const legs = route.legs.map((leg) => {
     if (leg.kind !== 'gather' || leg.places.length > 0 || exploration === undefined) return leg;
-    const biome = likelyBiome(leg.blocks, exploration);
-    if (biome === null) return leg;
-    return { ...leg, hint: leg.hint === null ? biome : `${biome}; ${leg.hint}` };
+    const where = likelyBiome(leg.blocks, exploration) ?? unexploredDirection(exploration);
+    if (where === null) return leg;
+    return { ...leg, hint: leg.hint === null ? where : `${where}; ${leg.hint}` };
   });
   return {
     route: {
@@ -494,6 +515,9 @@ export function buildPlannerRequest(input: {
           places: input.exploration.places.filter(
             (p) => p.y === null || !covered({ x: p.x, y: p.y, z: p.z }),
           ),
+          // Nor the biome patch the player stands in, as a point (seen live: "EXPLORE toward
+          // x 24, z 40", the Hot Forest's nearest chunk, 0.7 blocks away, again and again).
+          biomes: input.exploration.biomes.filter((b) => b.distance > BIOME_HERE),
         };
   const { route, gtnhChanges } = routeAndChangesForPlanner(input.state, exploration);
   return PlannerRequestSchema.parse({

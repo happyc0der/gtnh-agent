@@ -92,6 +92,16 @@ describe('the route uses what exploring found', () => {
       exploration: { ...at(6, 65, 7), places: [...at(6, 65, 7).places, ...at(20, 65, 7).places] },
     });
     expect(request.exploration?.places.map((p) => [p.x, p.y, p.z])).toEqual([[20, 65, 7]]);
+    // The biome patch the player stands in is no point to explore toward either.
+    const here = buildPlannerRequest({
+      state: needing({ 'minecraft:log': 8 }),
+      safety: safetyCtx(),
+      maxPlanSteps: 8,
+      recentActions: [],
+      recentFailures: [],
+      exploration: WORLD,
+    });
+    expect(here.exploration?.biomes.map((b) => b.biome)).toEqual(['Hot Forest']);
     // With the nearby blocks unknown, nothing is covered.
     const blind = needing({ 'minecraft:log': 8 });
     expect(
@@ -110,9 +120,20 @@ describe('the route uses what exploring found', () => {
     const farther = { ...forest, biome: 'Bamboo Forest', x: 40, z: 1, distance: 39 };
     expect(gather([here, farther])).toContain('the Bamboo Forest at x 40, z 1, 39 m');
     expect(gather([here])).toContain(
-      'the player is in the Hot Forest (seen, 16 chunk(s)), but none in view can be reached from here: EXPLORE on through it',
+      'look in the Hot Forest the player stands in (seen, 16 chunk(s)), beyond what it can reach from here: EXPLORE on through it',
     );
     expect(gather([here])).not.toContain('x 2, z 1');
+  });
+
+  it('with no place and no likely biome known, names the direction with the most new ground', () => {
+    // Seen live: no gravel in 94 chunks of desert and forest; the model wandered between two
+    // nearby points. Clay is common by rivers, swamps and lakes, none of them seen here.
+    const gather = routeForPlanner(needing({ 'minecraft:clay': 4 }), WORLD)?.steps.find((s) =>
+      s.includes('gather 16 minecraft:clay_ball'),
+    );
+    expect(gather).toContain(
+      'look in new ground, none seen so far: EXPLORE north_east (seen only 43 blocks that way, 340 blocks of room)',
+    );
   });
 
   it('points at the nearest seen biome where a material is common when no place is known', () => {

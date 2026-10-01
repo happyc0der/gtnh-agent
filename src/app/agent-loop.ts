@@ -1100,7 +1100,7 @@ function refusedFirstStep(
     const room = MAX_JOURNAL_LINE - head.length - tail.length - 3;
     const lead = plan.steps[0]?.action as { type: string; args: unknown };
     return {
-      step: idle.map((l) => l.split(':')[0]).join(', '),
+      step: idle.map((l) => l.slice(0, l.indexOf(': '))).join(', '),
       why,
       note: `${head} (${why.slice(0, Math.max(0, room))})${tail}`,
       action: lead,
