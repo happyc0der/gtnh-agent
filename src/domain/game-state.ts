@@ -182,6 +182,11 @@ export const CurrentTaskSchema = z.strictObject({
   goal: z.string().min(1).max(300),
   subgoal: z.string().min(1).max(300).nullable(),
   status: TaskStatusSchema,
+  /**
+   * The items the goal needs in the inventory (item -> count), when it is a resource goal.
+   * The planner gets an exact route for them (src/goals/route.ts).
+   */
+  requirements: ItemCountsSchema.optional(),
 });
 export type CurrentTask = z.infer<typeof CurrentTaskSchema>;
 

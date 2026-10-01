@@ -17,7 +17,15 @@ export type TaskCommandResult =
 export function addTask(
   repos: Repositories,
   config: AgentConfig,
-  input: { taskId: string; goal: string; plan: unknown; now: Date; machines?: readonly string[] },
+  input: {
+    taskId: string;
+    goal: string;
+    plan: unknown;
+    now: Date;
+    machines?: readonly string[];
+    /** Items the goal needs in the inventory: the planner gets an exact route to them. */
+    requirements?: Readonly<Record<string, number>>;
+  },
 ): TaskCommandResult {
   const machines = input.machines ?? [];
   if (machines.length > 16) return { ok: false, error: 'at most 16 machines per task' };
@@ -55,6 +63,10 @@ export function addTask(
   const stored = repos.transaction(() => {
     repos.tasks.ensure({ id: input.taskId, goal, subgoal: null, status: 'active' });
     repos.tasks.setRequiredMachines(input.taskId, machines);
+    repos.memory.setTaskRequirements(
+      input.taskId,
+      input.requirements ? { ...input.requirements } : null,
+    );
     repos.memory.setValue(CURRENT_TASK_KEY, input.taskId);
     return plan === null
       ? null

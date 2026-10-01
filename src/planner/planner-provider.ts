@@ -3,6 +3,8 @@ import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
+import { ROUTE_BOOK } from '../goals/route-book.ts';
+import { describeRoute, planRoute, type PlaceLookup } from '../goals/route.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
@@ -143,6 +145,37 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
   };
 }
 
+/**
+ * Places where blocks were seen, for the route: today the blocks in the current
+ * observation (nearest first, with stand spots); exploration adds remembered places.
+ */
+function placesInView(state: GameState): PlaceLookup {
+  const blocks = state.nearbyBlocks.known ? state.nearbyBlocks.value.resources : [];
+  const at = state.player.position.known ? state.player.position.value : null;
+  return (wanted) => {
+    const seen = blocks.filter((b) => wanted.includes(b.block) && b.standAt !== null);
+    const nearest = seen[0];
+    if (nearest === undefined || at === null) return [];
+    return [
+      {
+        where: { ...nearest.position },
+        distance: Number(eyeDistanceToBlock(at, nearest.position).toFixed(1)),
+        amount: seen.length,
+        label: 'in view',
+      },
+    ];
+  };
+}
+
+/** The route for the current task's required items, as the planner reads it. */
+export function routeForPlanner(state: GameState): PlannerRequest['route'] {
+  const goal = state.currentTask?.requirements;
+  if (goal === undefined || Object.keys(goal).length === 0) return null;
+  const inventory = state.inventory.known ? state.inventory.value.items : {};
+  const route = planRoute(goal, inventory, ROUTE_BOOK, placesInView(state));
+  return { stock: route.stock.slice(0, 32), steps: describeRoute(route).slice(0, 40) };
+}
+
 export function buildPlannerRequest(input: {
   state: GameState;
   safety: SafetyContext;
@@ -174,5 +207,6 @@ export function buildPlannerRequest(input: {
     recentActions: input.recentActions,
     recentFailures: input.recentFailures,
     maxPlanSteps: input.maxPlanSteps,
+    route: routeForPlanner(input.state),
   });
 }

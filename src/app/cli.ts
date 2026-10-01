@@ -88,7 +88,7 @@ Usage:
                                            Show recent logged actions.
   node src/app/cli.ts task-resume --task <id> [--db <path>]
                                            Mark a paused/blocked task active again.
-  node src/app/cli.ts task-add --task <id> --goal <text> [--plan <plan.json>] [--machines <ids>] [--db <path>]
+  node src/app/cli.ts task-add --task <id> --goal <text> [--needs item=count,...] [--plan <plan.json>] [--machines <ids>] [--db <path>]
                                            Add a task and make it the live agent's current task,
                                            with an optional plan you wrote (validated like a
                                            planner's). Each once --live then runs one step.
@@ -106,6 +106,20 @@ Usage:
   node src/app/cli.ts plan-schema          Print the planner output JSON Schema.
   node src/app/cli.ts config               Print the validated configuration.
 `;
+
+/** "minecraft:chest=1,minecraft:torch=8" -> { 'minecraft:chest': 1, 'minecraft:torch': 8 }. */
+function parseNeeds(text: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const part of text.split(',')) {
+    const [item, count] = part.trim().split('=');
+    const n = Number(count);
+    if (item === undefined || item === '' || !Number.isInteger(n) || n < 1) {
+      throw new Error(`--needs takes item=count pairs, e.g. minecraft:chest=1 (got "${part}")`);
+    }
+    out[item] = (out[item] ?? 0) + n;
+  }
+  return out;
+}
 
 function compact(scenario: string, dbPath: string, r: CycleResult): Record<string, unknown> {
   const o = r.outcome;
@@ -159,6 +173,7 @@ async function main(argv: string[]): Promise<number> {
       plan: { type: 'string' },
       goal: { type: 'string' },
       machines: { type: 'string' },
+      needs: { type: 'string' },
       reason: { type: 'string' },
       to: { type: 'string' },
       at: { type: 'string' },
@@ -568,6 +583,7 @@ async function main(argv: string[]): Promise<number> {
                   .split(',')
                   .map((m) => m.trim())
                   .filter((m) => m.length > 0),
+                ...(values.needs === undefined ? {} : { requirements: parseNeeds(values.needs) }),
               })
             : command === 'task-complete'
               ? completeTask(repos, taskId)

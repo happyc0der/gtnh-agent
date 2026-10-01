@@ -192,6 +192,27 @@ export const PlannerRequestSchema = z.strictObject({
     )
     .max(50),
   maxPlanSteps: z.int().min(1).max(MAX_PLAN_STEPS),
+  /**
+   * The exact route to the task's required items, calculated in code from the agent's
+   * recipes, gathering sources and the places it has seen (null when the task names no
+   * items): have vs need, raw materials, the steps in order, where to find each material.
+   */
+  route: z
+    .strictObject({
+      stock: z
+        .array(
+          z.strictObject({
+            item: z.string(),
+            have: z.int().min(0),
+            need: z.int().min(0),
+            missing: z.int().min(0),
+          }),
+        )
+        .max(32),
+      steps: z.array(z.string().max(500)).max(40),
+    })
+    .nullable()
+    .default(null),
 });
 export type PlannerRequest = z.infer<typeof PlannerRequestSchema>;
 

@@ -5,6 +5,8 @@ import type { Db } from './database.ts';
 
 /** Keys in agent_state. */
 export const CURRENT_TASK_KEY = 'current_task';
+/** agent_state key prefix for a task's item requirements: `task_requirements:<taskId>`. */
+export const TASK_REQUIREMENTS_PREFIX = 'task_requirements:';
 
 /**
  * Small pieces of agent memory that the live server cannot tell the agent: which task it
@@ -36,6 +38,21 @@ export class MemoryRepository {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
       )
       .run(key, value, this.#clock.now().toISOString());
+  }
+
+  /** The items a task's goal needs (item -> count), or null. */
+  taskRequirements(taskId: string): Record<string, number> | null {
+    const raw = this.getValue(`${TASK_REQUIREMENTS_PREFIX}${taskId}`);
+    return raw === null ? null : ItemCountsSchema.parse(JSON.parse(raw));
+  }
+
+  setTaskRequirements(taskId: string, items: Record<string, number> | null): void {
+    this.setValue(
+      `${TASK_REQUIREMENTS_PREFIX}${taskId}`,
+      items === null || Object.keys(items).length === 0
+        ? null
+        : JSON.stringify(ItemCountsSchema.parse(items)),
+    );
   }
 
   /** Records what a container held at `observedAt` (a newer observation replaces an older one). */

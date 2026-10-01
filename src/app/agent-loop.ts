@@ -111,6 +111,14 @@ export const OPERATOR_PLANNER = 'operator';
  *    (planning checks only; the live client re-reads the real contents before clicking);
  *  - the last logged action is filled in.
  */
+function requirementsOf(
+  repos: Repositories,
+  taskId: string,
+): { requirements?: Record<string, number> } {
+  const r = repos.memory.taskRequirements(taskId);
+  return r === null ? {} : { requirements: r };
+}
+
 export function overlayAgentMemory(
   state: GameState,
   repos: Repositories,
@@ -128,6 +136,7 @@ export function overlayAgentMemory(
           goal: task.goal,
           subgoal: task.subgoal,
           status: task.status,
+          ...requirementsOf(repos, task.id),
         },
       };
       // Machines the task depends on: System 1 waits while one is busy and pauses if one is

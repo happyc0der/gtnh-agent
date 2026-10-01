@@ -143,6 +143,17 @@ The agent's goals come from GTNH's own quest book, like a new player's. The benc
 - The agent keeps its own completions in agent memory (`quests.age0.completed`). It never touches
   the server's quest book; claiming there is a GUI action for the player.
 
+**Routes: the planner takes stock before it plans.** A task can name the items its goal
+needs (quests do; `cli task-add --needs item=count,...` for any goal). For those,
+`src/goals/route.ts` calculates in code, from the agent's recipes and gathering sources
+(`src/goals/route-book.ts`) and the places it has seen, exactly what the goal still needs:
+have vs need per item, the raw materials to gather in total, every gather and craft step in
+order (ingredients before what they make), the best known place for each material (the
+nearest with enough seen), where a player would look when no place is known, and a rough
+time. The planner gets the route in its request and plans along it; the model still makes
+every decision. The route is general: smelting, tools, mob drops and exported recipe data
+are new book entries, not new planner logic.
+
 `src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the inventory, records the
 quests that are now satisfied, makes the next quest the current task (`quest-<id>`, its subgoal
 saying what is still missing) and runs one bounded session on it (`runSession`). In the session
