@@ -1,4 +1,4 @@
-import { ChunkStore, type ColumnSections } from '../../../src/bot/gtnh1710/chunk-data.ts';
+import { ChunkStore, type ColumnSections } from '../../../../src/bot/gtnh1710/chunk-data.ts';
 import { BLOCK } from './chunk-fixtures.ts';
 
 /**

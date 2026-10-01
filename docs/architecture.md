@@ -901,7 +901,7 @@ operator lists it in `MC_INTERACT_OBSERVE_ONLY`. Entries are exact names
 3. Add an entry to `INTERACTION_PROFILES` (and its id to `PROFILE_IDS`), with the evidence, and
    a row in the compatibility doc. `tests/domain/interactions.test.ts` checks that every layout
    covers each of its slots exactly once.
-4. Add its window to the fake server (`tests/bot/gtnh1710/fake-chests.ts`), with a test that
+4. Add its window to the fake server (`tests/bot/gtnh1710/fixtures/fake-chests.ts`), with a test that
    opens it.
 5. Try it live in the pen before relying on it.
 

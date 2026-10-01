@@ -1,4 +1,4 @@
-import { explosionDamage, KILL_EXPLOSION_POWER } from '../../../src/domain/combat.ts';
+import { explosionDamage, KILL_EXPLOSION_POWER } from '../../../../src/domain/combat.ts';
 import {
   encodeFrame,
   encodeString,
@@ -7,7 +7,7 @@ import {
   f32,
   i32,
   type Reader,
-} from '../../../src/bot/gtnh1710/wire.ts';
+} from '../../../../src/bot/gtnh1710/wire.ts';
 import type { FakeChestSim } from './fake-chests.ts';
 
 /**

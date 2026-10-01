@@ -1,4 +1,4 @@
-import type { Reader } from '../../../src/bot/gtnh1710/wire.ts';
+import type { Reader } from '../../../../src/bot/gtnh1710/wire.ts';
 import { blockChangeFrame } from './chunk-fixtures.ts';
 import type { FakeChestSim } from './fake-chests.ts';
 

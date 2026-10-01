@@ -19,7 +19,7 @@ import {
   openSkyLight,
   type BlockFn,
   type LightFn,
-} from './chunk-fixtures.ts';
+} from './fixtures/chunk-fixtures.ts';
 
 const GTNH = { itemStackSizeVarInt: true, neid: true };
 const T = new Date('2026-10-01T12:00:00.000Z');

@@ -7,7 +7,7 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK } from './chunk-fixtures.ts';
+import { BLOCK } from './fixtures/chunk-fixtures.ts';
 import {
   BOUNDARY,
   explore,
@@ -17,8 +17,8 @@ import {
   perform,
   positionOf,
   SPAWN,
-} from './explore-world.ts';
-import { spawnFrame } from './fake-server.ts';
+} from './fixtures/explore-world.ts';
+import { spawnFrame } from './fixtures/fake-server.ts';
 
 const harness = explorerHarness();
 beforeEach(harness.setup);

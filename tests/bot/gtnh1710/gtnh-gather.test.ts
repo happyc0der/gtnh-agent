@@ -13,8 +13,8 @@ import { MockPlannerProvider } from '../../../src/planner/mock-planner-provider.
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK, DIG_TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
-import { FakeGtnhServer } from './fake-server.ts';
+import { BLOCK, DIG_TEST_BLOCK_REGISTRY } from './fixtures/chunk-fixtures.ts';
+import { FakeGtnhServer } from './fixtures/fake-server.ts';
 
 // The fake player stands at (-4.5, 106, -7.5) on a grass floor at y=105, in a terrain fence.
 // Sand stands on the floor: two blocks within reach of the eyes, and one that is 5.1 blocks

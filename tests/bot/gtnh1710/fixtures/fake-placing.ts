@@ -1,5 +1,5 @@
-import { readItemStack, VANILLA_DECODING } from '../../../src/bot/gtnh1710/packets.ts';
-import type { Reader } from '../../../src/bot/gtnh1710/wire.ts';
+import { readItemStack, VANILLA_DECODING } from '../../../../src/bot/gtnh1710/packets.ts';
+import type { Reader } from '../../../../src/bot/gtnh1710/wire.ts';
 import { blockChangeFrame } from './chunk-fixtures.ts';
 import type { FakeChestSim, FakeStack } from './fake-chests.ts';
 

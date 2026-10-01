@@ -29,7 +29,7 @@ import {
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
 import { dimensionName, WorldModel } from '../../../src/bot/gtnh1710/world-model.ts';
-import { chunkBulkFrame, flatWorld, neidColumn } from './chunk-fixtures.ts';
+import { chunkBulkFrame, flatWorld, neidColumn } from './fixtures/chunk-fixtures.ts';
 
 /** Decode one frame the way the client does on a GTNH (ModularUI + NEID) server. */
 function decodeFrame(frame: Buffer) {

@@ -19,7 +19,7 @@ import {
   type ToolStack,
 } from '../../src/domain/tools.ts';
 import { mintValidatedAction } from '../../src/domain/validated-action.ts';
-import { SERVER_TOOLS } from '../bot/gtnh1710/fake-digging.ts';
+import { SERVER_TOOLS } from '../bot/gtnh1710/fixtures/fake-digging.ts';
 import { action, makeWorld } from '../fixtures/index.ts';
 
 const SHOVEL_BLOCKS: DiggableBlock[] = [

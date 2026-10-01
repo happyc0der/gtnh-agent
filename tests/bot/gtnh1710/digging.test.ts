@@ -40,7 +40,12 @@ import {
   serverMinimumTicks,
   vanillaDigTicks,
 } from '../../../src/domain/dig-time.ts';
-import { BLOCK, DIG_TEST_BLOCK_REGISTRY, flatWorld, neidColumn } from './chunk-fixtures.ts';
+import {
+  BLOCK,
+  DIG_TEST_BLOCK_REGISTRY,
+  flatWorld,
+  neidColumn,
+} from './fixtures/chunk-fixtures.ts';
 
 describe('the dig allowlist', () => {
   it('is exactly the domain allowlist: natural blocks a bare hand harvests, and gardens', () => {

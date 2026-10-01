@@ -40,7 +40,7 @@ the play area that moves with the player) and within the safety boundary.
 | Open blocks it has a profile for (furnaces, crafting stations, modded chests) and smelt    | `MC_ENABLE_INTERACT`                            | fake server only                  |
 | Fight: strike a listed hostile or a farm animal, defend                                    | `MC_ENABLE_COMBAT`                              | fake server only                  |
 
-"Fake server" is the repository's fake GTNH server (`tests/bot/gtnh1710/fake-server.ts`), which
+"Fake server" is the repository's fake GTNH server (`tests/bot/gtnh1710/fixtures/fake-server.ts`), which
 the tests run against.
 
 **Local models are opt-in:** `AGENT_DECISIONS=ollama` and `AGENT_PLANNER=ollama` (see

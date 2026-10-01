@@ -554,7 +554,7 @@ for logs), so a server running at little more than half speed still accepts it.
 includes the start (spawn protection, a cancelled interact event), after the finish (too early,
 or a cancelled BreakEvent) and air followed by the block. If the cause was "too early", vanilla
 still breaks the block itself shortly afterwards. The fake server simulates exactly this
-(`tests/bot/gtnh1710/fake-digging.ts`).
+(`tests/bot/gtnh1710/fixtures/fake-digging.ts`).
 
 _Assumptions, to check live:_
 
@@ -797,7 +797,7 @@ That acknowledgement and clicking the centre of the face follow mineflayer's `pl
 `_genericPlace` (MIT, © 2015 Andrew Kelley; mineflayer 4.39.0 is a dependency).
 mineflayer-pathfinder (MIT, © 2020 Karang) sneaks when it must click an interactable block;
 the agent never clicks one instead. No code was copied, and no LGPL code (Baritone) was used.
-The fake server simulates all of the above (`tests/bot/gtnh1710/fake-placing.ts`).
+The fake server simulates all of the above (`tests/bot/gtnh1710/fixtures/fake-placing.ts`).
 
 _Assumptions, to check live:_
 
@@ -1064,7 +1064,7 @@ A `passive` entry needs at least 10 votes, all agreeing (enforced by a test).
 built on the server's own code, checked with `javap` in the test server's jars the same way as
 digging: vanilla `minecraft_server.1.7.10.jar` with Forge 10.13.4.1614's binary patches applied,
 and the mod jars below. They are tested against the fake server's combat simulation
-(`tests/bot/gtnh1710/fake-combat.ts`); **they have not been run live yet.** Classes: `nh`
+(`tests/bot/gtnh1710/fixtures/fake-combat.ts`); **they have not been run live yet.** Classes: `nh`
 (NetHandlerPlayServer), `ja`/`jb` (C02 and its action), `yz` (EntityPlayer), `mw`
 (EntityPlayerMP), `sv` (EntityLivingBase), `te` (DataWatcher), `gt` (S19), `hw` (S1C), `fz`
 (S0F), `mn`/`my` (EntityTracker and its entries), `agw` (Explosion), `aeh` (ItemSword), `acg`
@@ -1512,7 +1512,7 @@ through the GUI. The agent reads those records over Better Questing's own channe
 GUI's clicks (submit, checkbox, reward choice, claim) as typed actions. Everything below is
 _verified_ with `javap` in the test server's `mods/BetterQuesting-3.7.15-GTNH.jar` (it holds
 `bq_standard` too) and in the test world's quest database. It is tested against the fake server
-(`tests/bot/gtnh1710/fake-better-questing.ts`) and has **not** been run live yet.
+(`tests/bot/gtnh1710/fixtures/fake-better-questing.ts`) and has **not** been run live yet.
 
 | Fact                                                                                                                                                                                                                                                                                                                  | Evidence (class, method)                                                                                                                                                                                                                                                                                       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -15,8 +15,8 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK, PLACE_TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
-import { FakeGtnhServer, type FakeItem, type FakeServerOptions } from './fake-server.ts';
+import { BLOCK, PLACE_TEST_BLOCK_REGISTRY } from './fixtures/chunk-fixtures.ts';
+import { FakeGtnhServer, type FakeItem, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 // The fake player stands at (-4.5, 106, -7.5) on a grass floor at y=105: its body is in the
 // cells (-5, 106, -8) and (-5, 107, -8), its eyes at y 107.62. The fence mirrors the real

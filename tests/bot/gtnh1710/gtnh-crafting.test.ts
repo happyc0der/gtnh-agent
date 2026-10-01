@@ -20,14 +20,14 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK } from './chunk-fixtures.ts';
+import { BLOCK } from './fixtures/chunk-fixtures.ts';
 import {
   FakeChestSim,
   type FakeIngredient,
   type FakeRecipe,
   type FakeStack,
-} from './fake-chests.ts';
-import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+} from './fixtures/fake-chests.ts';
+import { FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 // The fake player stands at (-4.5, 106, -7.5); the table is next to it.
 const TABLE = { x: -4, y: 106, z: -6 };

@@ -2,14 +2,18 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, vi } from 'vitest';
-import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
-import { PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
-import { defaultConfig, type MovementConfig } from '../../../src/config/env.ts';
-import { createAction, type ActionSpec, type ExploreToward } from '../../../src/domain/actions.ts';
-import type { Position } from '../../../src/domain/common.ts';
-import { mintValidatedAction } from '../../../src/domain/validated-action.ts';
-import { systemClock } from '../../../src/util/clock.ts';
-import { sequentialIds } from '../../../src/util/ids.ts';
+import { Gtnh1710Client } from '../../../../src/bot/gtnh1710/gtnh-client.ts';
+import { PLAYER_EYE_HEIGHT } from '../../../../src/bot/gtnh1710/packets.ts';
+import { defaultConfig, type MovementConfig } from '../../../../src/config/env.ts';
+import {
+  createAction,
+  type ActionSpec,
+  type ExploreToward,
+} from '../../../../src/domain/actions.ts';
+import type { Position } from '../../../../src/domain/common.ts';
+import { mintValidatedAction } from '../../../../src/domain/validated-action.ts';
+import { systemClock } from '../../../../src/util/clock.ts';
+import { sequentialIds } from '../../../../src/util/ids.ts';
 import { BLOCK, DIG_TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
 import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
 

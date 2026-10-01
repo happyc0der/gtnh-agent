@@ -1,6 +1,6 @@
 /**
  * Times the world survey (src/bot/gtnh1710/world-survey.ts) on the bench terrain of
- * tests/bot/gtnh1710/survey-terrain.ts: the 17 x 17 chunks a client holds with the server's
+ * tests/bot/gtnh1710/fixtures/survey-terrain.ts: the 17 x 17 chunks a client holds with the server's
  * view distance of 8, with a desert, a forest, plains, hills, a river and a lake. For each spot:
  * a near-only re-survey and a full one (far sight too), as medians of warm runs. Offline:
  * nothing connects. The survey runs in the client's event loop between packets, so a typical
@@ -15,8 +15,8 @@ import {
   surveyAround,
   type ChunkSighting,
 } from '../src/bot/gtnh1710/world-survey.ts';
-import { DIG_TEST_BLOCK_REGISTRY } from '../tests/bot/gtnh1710/chunk-fixtures.ts';
-import { surveyTerrain } from '../tests/bot/gtnh1710/survey-terrain.ts';
+import { DIG_TEST_BLOCK_REGISTRY } from '../tests/bot/gtnh1710/fixtures/chunk-fixtures.ts';
+import { surveyTerrain } from '../tests/bot/gtnh1710/fixtures/survey-terrain.ts';
 
 const { values } = parseArgs({ options: { runs: { type: 'string', default: '21' } } });
 const runs = Math.max(3, Math.min(201, Number(values.runs) || 21));

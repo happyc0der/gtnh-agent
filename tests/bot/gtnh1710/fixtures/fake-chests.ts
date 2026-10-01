@@ -1,12 +1,12 @@
 import { gzipSync } from 'node:zlib';
-import { readItemStack, VANILLA_DECODING } from '../../../src/bot/gtnh1710/packets.ts';
+import { readItemStack, VANILLA_DECODING } from '../../../../src/bot/gtnh1710/packets.ts';
 import {
   encodeFrame,
   encodeString,
   encodeVarInt,
   encodeVarShort,
   type Reader,
-} from '../../../src/bot/gtnh1710/wire.ts';
+} from '../../../../src/bot/gtnh1710/wire.ts';
 
 export interface FakeStack {
   id: number;

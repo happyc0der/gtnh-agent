@@ -15,8 +15,8 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import type { FakeQuest } from './fake-better-questing.ts';
-import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+import type { FakeQuest } from './fixtures/fake-better-questing.ts';
+import { FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 const servers: FakeGtnhServer[] = [];
 const clients: Gtnh1710Client[] = [];

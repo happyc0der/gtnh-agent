@@ -24,8 +24,13 @@ import {
   type TrackedWorld,
 } from '../../../src/bot/gtnh1710/world-survey.ts';
 import { worldTime } from '../../../src/domain/game-state.ts';
-import { BLOCK, DIG_TEST_BLOCK_REGISTRY, neidColumn, type BlockFn } from './chunk-fixtures.ts';
-import { surveyTerrain } from './survey-terrain.ts';
+import {
+  BLOCK,
+  DIG_TEST_BLOCK_REGISTRY,
+  neidColumn,
+  type BlockFn,
+} from './fixtures/chunk-fixtures.ts';
+import { surveyTerrain } from './fixtures/survey-terrain.ts';
 
 const ORE = 2711; // gregtech:gt.blockores in the test world
 const registry: Registry = {

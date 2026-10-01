@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig } from '../../../src/config/env.ts';
 import { systemClock } from '../../../src/util/clock.ts';
-import { FakeGtnhServer } from './fake-server.ts';
+import { FakeGtnhServer } from './fixtures/fake-server.ts';
 
 let dir = '';
 const servers: FakeGtnhServer[] = [];

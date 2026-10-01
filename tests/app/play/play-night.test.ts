@@ -20,8 +20,8 @@ import {
   BLOCK,
   PLACE_TEST_BLOCK_REGISTRY,
   type BlockFn,
-} from '../../bot/gtnh1710/chunk-fixtures.ts';
-import { FakeGtnhServer } from '../../bot/gtnh1710/fake-server.ts';
+} from '../../bot/gtnh1710/fixtures/chunk-fixtures.ts';
+import { FakeGtnhServer } from '../../bot/gtnh1710/fixtures/fake-server.ts';
 
 /** Bedrock at 0, stone at 100, dirt at 101-104, grass at 105: the fake player stands at y=106. */
 const solidGround: BlockFn = (_x, y) =>

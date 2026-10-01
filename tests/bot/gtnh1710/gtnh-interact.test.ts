@@ -17,9 +17,14 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK, TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
-import type { FakeIngredient, FakeModBlock, FakeRecipe, FakeStack } from './fake-chests.ts';
-import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+import { BLOCK, TEST_BLOCK_REGISTRY } from './fixtures/chunk-fixtures.ts';
+import type {
+  FakeIngredient,
+  FakeModBlock,
+  FakeRecipe,
+  FakeStack,
+} from './fixtures/fake-chests.ts';
+import { FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 // The fake player stands at (-4.5, 106, -7.5) on a grass floor at y=105.
 const FURNACE = { x: -4, y: 106, z: -6 };

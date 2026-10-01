@@ -22,14 +22,14 @@ import { MockPlannerProvider } from '../../../src/planner/mock-planner-provider.
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK } from '../../bot/gtnh1710/chunk-fixtures.ts';
-import type { FakeStack } from '../../bot/gtnh1710/fake-chests.ts';
+import { BLOCK } from '../../bot/gtnh1710/fixtures/chunk-fixtures.ts';
+import type { FakeStack } from '../../bot/gtnh1710/fixtures/fake-chests.ts';
 import {
   FakeGtnhServer,
   gtBlockEventsMessage,
   gtTileEntityMessage,
   spawnFrame,
-} from '../../bot/gtnh1710/fake-server.ts';
+} from '../../bot/gtnh1710/fixtures/fake-server.ts';
 
 // The fake world: a grass floor at y=105, the player at (-4.5, 106, -7.5), a chest at
 // (-5, 106, -6) with 128 cobblestone, a walking fence around both.

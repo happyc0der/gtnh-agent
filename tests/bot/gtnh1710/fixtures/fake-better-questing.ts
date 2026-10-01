@@ -2,7 +2,7 @@ import {
   BQ_CHANNEL,
   BqAssembler,
   encodeBqSlices,
-} from '../../../src/bot/gtnh1710/better-questing.ts';
+} from '../../../../src/bot/gtnh1710/better-questing.ts';
 import {
   isCompound,
   nbtTag,
@@ -10,9 +10,9 @@ import {
   type NbtTag,
   type NbtTagCompound,
   type NbtValue,
-} from '../../../src/bot/gtnh1710/nbt.ts';
-import { encodeFrame, encodeString, encodeVarShort } from '../../../src/bot/gtnh1710/wire.ts';
-import { logicResult, type QuestLogic } from '../../../src/domain/quest-book.ts';
+} from '../../../../src/bot/gtnh1710/nbt.ts';
+import { encodeFrame, encodeString, encodeVarShort } from '../../../../src/bot/gtnh1710/wire.ts';
+import { logicResult, type QuestLogic } from '../../../../src/domain/quest-book.ts';
 import type { FakeChestSim, FakeStack } from './fake-chests.ts';
 
 /**

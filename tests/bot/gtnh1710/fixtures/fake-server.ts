@@ -9,7 +9,7 @@ import {
   FrameDecoder,
   i32,
   Reader,
-} from '../../../src/bot/gtnh1710/wire.ts';
+} from '../../../../src/bot/gtnh1710/wire.ts';
 import { FakeQuestBookSim, type FakeQuestBookOptions } from './fake-better-questing.ts';
 import {
   encodeStack,

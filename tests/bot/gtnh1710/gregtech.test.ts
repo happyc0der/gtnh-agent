@@ -10,14 +10,14 @@ import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { ProtocolError } from '../../../src/bot/gtnh1710/wire.ts';
 import { defaultConfig } from '../../../src/config/env.ts';
 import { systemClock } from '../../../src/util/clock.ts';
-import { BLOCK } from './chunk-fixtures.ts';
+import { BLOCK } from './fixtures/chunk-fixtures.ts';
 import {
   DEFAULT_MODS,
   FakeGtnhServer,
   gtBlockEventsMessage,
   gtTileEntityMessage,
   type FakeServerOptions,
-} from './fake-server.ts';
+} from './fixtures/fake-server.ts';
 
 // Common data bytes: works (64) | active (8) | facing.
 const IDLE = 64;

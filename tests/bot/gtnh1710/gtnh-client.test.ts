@@ -14,8 +14,8 @@ import { sequentialIds } from '../../../src/util/ids.ts';
 import { memoryRepos } from '../../fixtures/index.ts';
 import { encodeFrame } from '../../../src/bot/gtnh1710/wire.ts';
 import { assessDangers } from '../../../src/safety/safety-policy.ts';
-import { BLOCK } from './chunk-fixtures.ts';
-import { DEFAULT_MODS, FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+import { BLOCK } from './fixtures/chunk-fixtures.ts';
+import { DEFAULT_MODS, FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 const servers: FakeGtnhServer[] = [];
 const clients: Gtnh1710Client[] = [];

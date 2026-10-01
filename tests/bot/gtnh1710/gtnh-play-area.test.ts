@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ActionSpec } from '../../../src/domain/actions.ts';
-import { spawnFrame } from './fake-server.ts';
+import { spawnFrame } from './fixtures/fake-server.ts';
 import {
   explore,
   explorerHarness,
@@ -9,7 +9,7 @@ import {
   perform,
   positionOf,
   SPAWN,
-} from './explore-world.ts';
+} from './fixtures/explore-world.ts';
 
 const harness = explorerHarness();
 beforeEach(harness.setup);

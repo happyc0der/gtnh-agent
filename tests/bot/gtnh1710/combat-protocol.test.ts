@@ -18,8 +18,13 @@ import {
 } from '../../../src/bot/gtnh1710/wire.ts';
 import { WorldModel } from '../../../src/bot/gtnh1710/world-model.ts';
 import { GameStateSchema } from '../../../src/domain/game-state.ts';
-import { chunkBulkFrame, flatWorld, neidColumn, TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
-import { encodeMetadata } from './fake-combat.ts';
+import {
+  chunkBulkFrame,
+  flatWorld,
+  neidColumn,
+  TEST_BLOCK_REGISTRY,
+} from './fixtures/chunk-fixtures.ts';
+import { encodeMetadata } from './fixtures/fake-combat.ts';
 
 const GTNH = { itemStackSizeVarInt: true, neid: true };
 const at = new Date('2026-09-30T12:00:00.000Z');

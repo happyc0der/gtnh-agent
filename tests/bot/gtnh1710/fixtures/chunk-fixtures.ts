@@ -1,6 +1,6 @@
 import { deflateSync } from 'node:zlib';
-import type { ColumnHeader } from '../../../src/bot/gtnh1710/chunk-data.ts';
-import { encodeFrame, i32, u16 } from '../../../src/bot/gtnh1710/wire.ts';
+import type { ColumnHeader } from '../../../../src/bot/gtnh1710/chunk-data.ts';
+import { encodeFrame, i32, u16 } from '../../../../src/bot/gtnh1710/wire.ts';
 
 /** Block ids used by the test worlds (the vanilla 1.7.10 numbering, as in the real registry). */
 export const BLOCK = {

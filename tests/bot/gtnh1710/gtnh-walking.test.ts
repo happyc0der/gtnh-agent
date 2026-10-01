@@ -16,8 +16,19 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { SqliteActionLog } from '../../../src/executor/action-log.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK, flatWorld, FOLIAGE, openSkyLight, TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
-import { DEFAULT_MODS, FakeGtnhServer, spawnFrame, type FakeServerOptions } from './fake-server.ts';
+import {
+  BLOCK,
+  flatWorld,
+  FOLIAGE,
+  openSkyLight,
+  TEST_BLOCK_REGISTRY,
+} from './fixtures/chunk-fixtures.ts';
+import {
+  DEFAULT_MODS,
+  FakeGtnhServer,
+  spawnFrame,
+  type FakeServerOptions,
+} from './fixtures/fake-server.ts';
 
 // The fake world is a grass floor at y=105 with the player at (-4.5, 106, -7.5): the same
 // x/z as the real test pen, whose fence this mirrors one level lower.

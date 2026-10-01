@@ -8,7 +8,7 @@ import { createAction, type ActionSpec } from '../../../src/domain/actions.ts';
 import { mintValidatedAction } from '../../../src/domain/validated-action.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+import { FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 // Seen live: the agent had an apple and hunger fell, but EAT_FOOD was not implemented, so every
 // EAT failed until the repeated-failure rule stopped play.

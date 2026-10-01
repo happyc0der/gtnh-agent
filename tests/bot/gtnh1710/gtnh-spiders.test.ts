@@ -11,8 +11,8 @@ import { DeterministicDecisionProvider } from '../../../src/system1/decision-pro
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import { memoryRepos } from '../../fixtures/index.ts';
-import { flatWorld, openSkyLight } from './chunk-fixtures.ts';
-import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+import { flatWorld, openSkyLight } from './fixtures/chunk-fixtures.ts';
+import { FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 const servers: FakeGtnhServer[] = [];
 const clients: Gtnh1710Client[] = [];

@@ -17,8 +17,8 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK, DIG_TEST_BLOCK_REGISTRY, type BlockFn } from './chunk-fixtures.ts';
-import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
+import { BLOCK, DIG_TEST_BLOCK_REGISTRY, type BlockFn } from './fixtures/chunk-fixtures.ts';
+import { FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 // The fake player stands at (-4.5, 106, -7.5) on grass at y=105, over dirt (101-104) and
 // stone (100): solid ground, unlike the flat test world (grass over air).

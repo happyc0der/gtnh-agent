@@ -32,7 +32,7 @@ import {
   type BlockFn,
   type LightFn,
   type MetaFn,
-} from './chunk-fixtures.ts';
+} from './fixtures/chunk-fixtures.ts';
 
 const NEID = { neid: true };
 const VANILLA = { neid: false };
