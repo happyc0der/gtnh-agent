@@ -553,6 +553,12 @@ describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's suppo
     expect(codes(dig(0, 64, 0), state)).toEqual(['UNSAFE_DIG']);
     // Gravel itself, with nothing above it, may be dug.
     expect(codes(dig(2, 65, 1), state)).toEqual([]);
+    // A garden the player stands in (a plant the body passes) may be dug: nothing holds it up
+    // (seen live: a starving agent's dig of the garden it had walked into was refused).
+    const inGarden = makeState((w) => {
+      w.resourceBlocks.push({ block: 'harvestcraft:stalkgarden', position: { x: 1, y: 64, z: 1 } });
+    });
+    expect(codes(dig(1, 64, 1), inGarden)).toEqual([]);
   });
 
   it('keeps the dug block clear of known hazards and inside the boundary', () => {

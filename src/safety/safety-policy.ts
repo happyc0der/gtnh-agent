@@ -893,7 +893,12 @@ function digChecks(
   const position = state.player.position.known ? state.player.position.value : null;
   if (position !== null) {
     const own = bodyColumns(position).some((c) => c.x === target.x && c.z === target.z);
-    if (own && target.y <= headBlockY(position)) {
+    // Below the feet: what holds the player up; at the feet and the head, in its own columns,
+    // anything but a plant the body passes, which breaking moves nothing (seen live: a
+    // starving agent stood in the HarvestCraft garden it had walked to, and its dig was
+    // refused as "under the player").
+    const below = target.y < Math.floor(position.y + 1e-6);
+    if (own && (below || (target.y <= headBlockY(position) && !isGardenBlock(listed.block)))) {
       v.push({
         code: 'UNSAFE_DIG',
         severity: 'pause',
