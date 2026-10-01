@@ -7,7 +7,11 @@ import { defaultConfig } from '../../src/config/env.ts';
 import type { SeenChunk } from '../../src/domain/world-memory.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
-import type { PlannerRequest, PlannerResponse } from '../../src/planner/plan-schema.ts';
+import {
+  PlannerRequestSchema,
+  type PlannerRequest,
+  type PlannerResponse,
+} from '../../src/planner/plan-schema.ts';
 import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
 import type { DecisionProvider } from '../../src/system1/decision-provider.ts';
 import { MockDecisionProvider } from '../../src/system1/mock-decision-provider.ts';
@@ -287,6 +291,9 @@ describe('world memory and exploring', () => {
     expect(requests).toHaveLength(2);
     expect(requests[0]?.route?.steps.join(' ')).toContain('no known place yet: explore');
     expect(requests[1]?.journal.at(-1)).toMatch(/EXPLORE is in allowedActions/);
+    // The real planner sends only a request its schema accepts (seen live: this reminder was
+    // too long for a journal line, so the re-ask never reached the model).
+    expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
     expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
     expect(repos.memory.journal(taskId).map((e) => e.text)).toContainEqual(
       expect.stringContaining('although EXPLORE was open; asked again'),
@@ -328,10 +335,13 @@ describe('world memory and exploring', () => {
       });
       repos.actions.update(id, {
         status: 'failed',
+        // The live message, word for word: the note must still fit a journal line.
         execution: {
           ok: false,
-          code: 'FAILED',
-          message: 'not exploring: no way further',
+          code: 'REFUSED',
+          message:
+            'not exploring: no way further: no walkable spot in the play area gets closer to ' +
+            'the target (water, a cliff, a wall or unloaded chunks are in the way)',
           data: {},
         },
       });
@@ -369,8 +379,11 @@ describe('world memory and exploring', () => {
       newId: sequentialIds(),
     });
     expect(requests).toHaveLength(2);
+    // The real planner sends only a request its schema accepts (seen live: a re-ask whose
+    // note was too long for a journal line never reached the model).
+    expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
     expect(requests[1]?.journal.at(-1)).toMatch(
-      /step 1, EXPLORE .* already failed 2 time\(s\) from where the player stands \(last time: not exploring: no way further\)/,
+      /^Step 1 of your plan, EXPLORE .* failed 2 time\(s\) from where the player stands \(not exploring: no way further.*; code will refuse it\./,
     );
     expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
     expect(result.action).toMatchObject({

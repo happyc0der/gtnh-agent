@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ItemCountsSchema } from '../domain/common.ts';
+import { MAX_JOURNAL_LINE } from '../planner/plan-schema.ts';
 import type { Clock } from '../util/clock.ts';
 import type { Db } from './database.ts';
 
@@ -91,7 +92,7 @@ export class MemoryRepository {
   appendJournal(taskId: string, text: string): void {
     const entries = [
       ...this.journal(taskId),
-      { at: this.#clock.now().toISOString(), text: text.slice(0, 300) },
+      { at: this.#clock.now().toISOString(), text: text.slice(0, MAX_JOURNAL_LINE) },
     ];
     let kept = entries;
     if (entries.length > JOURNAL_KEEP + 1) {

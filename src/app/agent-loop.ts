@@ -19,6 +19,7 @@ import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { GATHER } from '../planner/gather.ts';
 import {
+  MAX_JOURNAL_LINE,
   PlannerResponseSchema,
   type Plan,
   type PlannerRequest,
@@ -973,27 +974,25 @@ function repeatedFirstStep(
         (a.status === 'failed' || a.status === 'verification_failed'),
     );
   const e = last?.execution;
-  const said =
+  const message =
     typeof e === 'object' && e !== null && 'message' in e && typeof e.message === 'string'
-      ? ` (last time: ${e.message.slice(0, 200)})`
+      ? e.message
       : '';
-  const step = `${first.type} ${stableStringify(first.args)}`;
-  return {
-    step,
-    failures,
-    note:
-      `Your plan's step 1, ${step}, already failed ${failures} time(s) from where the player ` +
-      `stands${said}, so code would refuse it. Plan something else: another target or another ` +
-      'kind of step.',
-  };
+  const step = `${first.type} ${stableStringify(first.args)}`.slice(0, 120);
+  const head = `Step 1 of your plan, ${step}, failed ${failures} time(s) from where the player stands`;
+  const tail = '; code will refuse it. Plan something else: another target or kind of step.';
+  // What the last failure said, in the room the journal line leaves.
+  const room = MAX_JOURNAL_LINE - head.length - tail.length - 3;
+  const said = message !== '' && room > 20 ? ` (${message.slice(0, room)})` : '';
+  return { step, failures, note: `${head}${said}${tail}` };
 }
 
 /** What the planner is told when it escalated for want of a place while exploring was open. */
 const EXPLORE_REMINDER =
-  'Your last answer escalated for want of a place, but EXPLORE is in allowedActions and it is ' +
-  'day, and the route says where to look: plan an EXPLORE toward the place or biome the route ' +
-  'names (or a direction with little seen) as the last step of the plan. An EXPLORE that ' +
-  'failed before, from elsewhere or toward another point, says nothing about this one.';
+  'You escalated for want of a place, but EXPLORE is in allowedActions, it is day, and the ' +
+  'route says where to look: plan an EXPLORE toward the place or biome it names (or a ' +
+  'direction with little seen) as the last step. A failed EXPLORE from elsewhere or toward ' +
+  'another point says nothing here.';
 
 /** EXPLORE is offered, it is day, and the route points at somewhere to explore. */
 function explorationOpen(request: PlannerRequest): boolean {
@@ -1077,7 +1076,10 @@ async function consultPlanner(
 
   const ask = async (req: PlannerRequest): Promise<PlannerResponse> => {
     try {
-      const parsed = PlannerResponseSchema.safeParse(await planner.plan(req));
+      // A journal line past the request's limit fails the whole request before the model
+      // sees it (seen live: both re-ask notes were too long, so neither re-ask ever ran).
+      const journal = req.journal.map((line) => line.slice(0, MAX_JOURNAL_LINE));
+      const parsed = PlannerResponseSchema.safeParse(await planner.plan({ ...req, journal }));
       return parsed.success
         ? parsed.data
         : {

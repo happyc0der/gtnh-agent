@@ -20,6 +20,9 @@ import {
 import { ExplorationSummarySchema } from '../domain/world-memory.ts';
 import { GatherStepSchema } from './gather.ts';
 
+/** Longest journal line a planner request may carry (a longer one fails the request). */
+export const MAX_JOURNAL_LINE = 300;
+
 /** Hard ceiling on plan length. Config may lower it (planner.maxPlanSteps), never raise it. */
 export const MAX_PLAN_STEPS = 16;
 
@@ -338,7 +341,7 @@ export const PlannerRequestSchema = z.strictObject({
    * The task's journal, compacted (oldest first): plans made, done or failed and why,
    * quests completed, interruptions. What the agent already did and must not repeat.
    */
-  journal: z.array(z.string().max(300)).max(32).default([]),
+  journal: z.array(z.string().max(MAX_JOURNAL_LINE)).max(32).default([]),
   /**
    * Present only when the agent can explore (EXPLORE is then in allowedActions): what world
    * memory knows (places per resource, biomes) and how far each direction has been seen.
