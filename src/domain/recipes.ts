@@ -46,6 +46,7 @@ export const RECIPE_IDS = [
   'chest',
   'wooden_shovel',
   'wooden_axe',
+  'flint',
 ] as const;
 export const RecipeIdSchema = z.enum(RECIPE_IDS);
 export type RecipeId = z.infer<typeof RecipeIdSchema>;
@@ -155,6 +156,18 @@ export const RECIPES: Readonly<Record<RecipeId, CraftingRecipe>> = {
     key: { P: PLANKS, S: ['minecraft:stick'] },
     result: { item: 'minecraft:wooden_axe', count: 1 },
     evidence: WOODEN_TOOL('XX / X# / _#'),
+  },
+  flint: {
+    id: 'flint',
+    // Shapeless: any three cells of the 2x2 grid.
+    pattern: ['GG', 'G '],
+    key: { G: ['minecraft:gravel'] },
+    result: { item: 'minecraft:flint', count: 1 },
+    evidence:
+      'GTNH 2.8.4, verified: IguanaTweaks 2.6.6 IguanaTweaks.flintTweaks adds a shapeless ' +
+      'new ItemStack(Items.flint) from gravelPerFlint=3 gravel (addFlintRecipe=true in ' +
+      'IguanaTinkerTweaks/main.cfg); the CraftTweaker dump lists it. Gravel never drops flint here: ' +
+      'FlintHandler (removeFlintDrop=true) swaps the flint drop for gravel. Vanilla: no recipe.',
   },
 };
 

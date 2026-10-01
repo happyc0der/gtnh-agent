@@ -317,6 +317,12 @@ export const PlannerRequestSchema = z.strictObject({
     .nullable()
     .default(null),
   /**
+   * Where GTNH 2.8.4 differs from vanilla Minecraft 1.7.10 for what the route makes, uses,
+   * digs or needs (and what the player holds), one plain line each, most relevant first:
+   * from the knowledge base's changes table (docs/gtnh-vs-vanilla.md).
+   */
+  gtnhChanges: z.array(z.string().max(300)).max(12).default([]),
+  /**
    * The task's journal, compacted (oldest first): plans made, done or failed and why,
    * quests completed, interruptions. What the agent already did and must not repeat.
    */

@@ -61,6 +61,7 @@ You get one JSON PlannerRequest:
 - recentActions and recentFailures: what was already tried. Do not repeat an action that keeps failing.
 - maxPlanSteps: the most steps a plan may have.
 - exploration (only when the agent can explore): places it has seen per resource (log, dirt, sand, gravel, clay, water, stone, ore; with x, y, z, distance, direction, count, biome), the biomes seen, and per direction how far it has seen (seen) and the room left to the boundary (room).
+- gtnhChanges: where GTNH differs from vanilla Minecraft 1.7.10 for what this task makes, uses, digs or needs, one plain line each (read from the server's own recipes, configs and jars).
 
 Reply with ONLY one JSON object:
 - An escalation when the allowed actions cannot make real progress on the task (it needs something no action below does: mining stone or ores, placing anything but the listed plain blocks, wrenching or machine settings), when doing it would touch a protected item, or when the state is too unknown to plan:
@@ -108,7 +109,8 @@ Rules:
 14. Placing: PLACE_BLOCK only with a listed plain block the player carries, into a listed placeable cell; never sand or gravel above the player's own head, and sand or gravel only into a cell whose takesFalling is true.
 15. Exploring. A good GTNH start has wood (logs) and grass (dirt) close by, gravel and sand near water, clay on riverbanks, and stone; deserts have no dirt; do not keep working a poor spot. When the task needs a block that diggableBlocks does not list (or lists only a few; logs give wood, grass and dirt give dirt, gravel is crafted into flint, clay gives clay balls): if exploration.places has that resource, EXPLORE toward its x and z; otherwise EXPLORE toward a direction with little seen and room left (exploration.directions). Make EXPLORE the last step of its plan: the next plan starts from what it found. When a route step says "no known place yet: explore", EXPLORE toward the place or biome its hint names, else toward a direction with little seen: a place not known yet is never a reason to escalate. A route place marked "remembered" was seen while exploring: EXPLORE toward its x and z, then dig there. Never EXPLORE when state.time.phase is evening or night.
 16. Blocks in state.interactables: use one only when its reach is at most 4.5; otherwise MOVE_TO its standAt (tolerance 0.5) first. Smelting: one SMELT with enough fuel for every item, then do other steps or WAIT (its furnace.secondsLeft), then TAKE_OUTPUT. A furnace keeps its items when you leave. What a furnace makes is decided by the server: never assume a result you have not seen in its output.
-17. Fighting: ATTACK_ENTITY only a listed creature with attackable true, only when state.fightProblems is empty, and only when the task needs it: a hostile that blocks the work, or farm animals (cows, pigs, sheep, chickens) for a quest or food. Never anything else. Retreating and defending against nearby hostiles are not your job (code does that). A kill can explode here, so prefer one target at a time and REPLAN after each ATTACK_ENTITY.`;
+17. Fighting: ATTACK_ENTITY only a listed creature with attackable true, only when state.fightProblems is empty, and only when the task needs it: a hostile that blocks the work, or farm animals (cows, pigs, sheep, chickens) for a quest or food. Never anything else. Retreating and defending against nearby hostiles are not your job (code does that). A kill can explode here, so prefer one target at a time and REPLAN after each ATTACK_ENTITY.
+18. This is GTNH, not vanilla: where request.gtnhChanges or the route says something differs from vanilla Minecraft, trust it over what you remember of vanilla.`;
 
 /** Rough characters per token for these JSON prompts (conservative). */
 const CHARS_PER_TOKEN = 3;
@@ -116,7 +118,8 @@ const CHARS_PER_TOKEN = 3;
 /**
  * Trims a request that would not fit the context window, oldest and least useful first:
  * history (recent actions, then the journal's oldest lines), then the farthest diggable
- * blocks. The rules, the task, the route and the stock are never cut.
+ * blocks, then the least relevant GTNH changes. The rules, the task, the route and the stock
+ * are never cut.
  */
 export function fitPlannerRequest(
   request: PlannerRequest,
@@ -132,6 +135,7 @@ export function fitPlannerRequest(
       x.state.diggableBlocks.length > 12
         ? { ...x, state: { ...x.state, diggableBlocks: x.state.diggableBlocks.slice(0, 12) } }
         : null,
+    (x) => (x.gtnhChanges.length > 4 ? { ...x, gtnhChanges: x.gtnhChanges.slice(0, 4) } : null),
     (x) => (x.recentActions.length > 0 ? { ...x, recentActions: [] } : null),
   ];
   for (const step of steps) {

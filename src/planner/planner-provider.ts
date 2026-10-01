@@ -6,6 +6,7 @@ import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
 import { SafetyConfigSchema, type SafetyConfig } from '../domain/safety.ts';
+import { gtnhChangesFor } from '../goals/gtnh-changes.ts';
 import { ROUTE_BOOK } from '../goals/route-book.ts';
 import { describeRoute, planRoute, type PlaceLookup } from '../goals/route.ts';
 import { parseToolName, usesLeft } from '../domain/tools.ts';
@@ -323,12 +324,31 @@ export function routeForPlanner(
   state: GameState,
   exploration?: ExplorationSummary,
 ): PlannerRequest['route'] {
+  return routeAndChangesForPlanner(state, exploration).route;
+}
+
+/**
+ * The route (as routeForPlanner) and the GTNH-vs-vanilla changes that concern it and what
+ * the player holds (request.gtnhChanges), from one route calculation.
+ */
+export function routeAndChangesForPlanner(
+  state: GameState,
+  exploration?: ExplorationSummary,
+): {
+  route: PlannerRequest['route'];
+  gtnhChanges: string[];
+} {
   // A building task (e.g. the night shelter): the blueprint is the route.
   const blueprint = state.currentTask?.blueprint;
-  if (blueprint !== undefined && blueprint.length > 0) return { stock: [], steps: blueprint };
-  const goal = state.currentTask?.requirements;
-  if (goal === undefined || Object.keys(goal).length === 0) return null;
+  if (blueprint !== undefined && blueprint.length > 0) {
+    return { route: { stock: [], steps: blueprint }, gtnhChanges: [] };
+  }
   const inventory = state.inventory.known ? state.inventory.value.items : {};
+  const held = Object.keys(inventory);
+  const goal = state.currentTask?.requirements;
+  if (goal === undefined || Object.keys(goal).length === 0) {
+    return { route: null, gtnhChanges: gtnhChangesFor(null, held) };
+  }
   const at = state.player.position.known ? state.player.position.value : null;
   // Containers whose contents are known (seen now, or remembered by the agent).
   const storage = state.storage.flatMap((s) =>
@@ -354,8 +374,11 @@ export function routeForPlanner(
     return { ...leg, hint: leg.hint === null ? biome : `${biome}; ${leg.hint}` };
   });
   return {
-    stock: route.stock.slice(0, 32),
-    steps: describeRoute({ ...route, legs }).slice(0, 40),
+    route: {
+      stock: route.stock.slice(0, 32),
+      steps: describeRoute({ ...route, legs }).slice(0, 40),
+    },
+    gtnhChanges: gtnhChangesFor(route, held),
   };
 }
 
@@ -419,6 +442,7 @@ export function buildPlannerRequest(input: {
 }): PlannerRequest {
   const { config } = input.safety;
   const { exploration } = input;
+  const { route, gtnhChanges } = routeAndChangesForPlanner(input.state, exploration);
   return PlannerRequestSchema.parse({
     state: sanitizeStateForPlanner(input.state, input.safety.protectedItems, config),
     task: input.state.currentTask,
@@ -447,7 +471,8 @@ export function buildPlannerRequest(input: {
     recentActions: input.recentActions,
     recentFailures: input.recentFailures,
     maxPlanSteps: input.maxPlanSteps,
-    route: routeForPlanner(input.state, exploration),
+    route,
+    gtnhChanges,
     journal: [...(input.journal ?? [])].slice(-32),
   });
 }

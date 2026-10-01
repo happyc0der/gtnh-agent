@@ -180,7 +180,8 @@ exploring, marked "remembered"), where a player would look when no place is know
 nearest seen biome where it is common, e.g. grass in a forest, never in a desert), and a
 rough time. The planner gets the route in its request and plans along it; the model still makes
 every decision. The route is general: smelting, tools, mob drops and exported recipe data
-are new book entries, not new planner logic.
+are new book entries, not new planner logic. The book holds GTNH's real recipes, ore veins
+and harvest levels (see [Knowledge base](#knowledge-base)).
 
 **Any goal, not only quests.** `cli play --live --needs item=count,...` makes play pursue a
 goal of the player's own (task `goal-...`) exactly like a quest: the planner gets its route,
@@ -243,6 +244,127 @@ verified like any other. Play stops, and says why, when:
 A failed action or a safe detour (retreating, eating) does not stop play by itself: that is part
 of playing, and the planner sees it in its recent history. Play is still started by a human and
 bounded in time (at most 8 hours).
+
+## Knowledge base
+
+Routes can only plan what the book knows. The book is built from a **generated GTNH 2.8.4
+knowledge base**: `src/goals/knowledge/gtnh-2.8.4.json.gz` (about 730 KiB, 6.8 MiB of JSON),
+loaded once on first use by `src/goals/knowledge.ts`. Item names follow the inventory's naming
+(registry name, `@damage` when not 0). What it holds, and where each part comes from (details
+and evidence in [GTNH compatibility: knowledge base](gtnh-compatibility.md#knowledge-base-2026-09-30)):
+
+| Part                      | Count    | Source on the test server                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Crafting recipes          | 53,821   | CraftTweaker's `/minetweaker recipes` dump: shaped and shapeless, ore-dictionary ingredients, 2x2 or 3x3, crafting tools marked                                                                                                                                                                                                                                                                          |
+| Output counts             | 3,312    | Not in the dump. Each row says where its count comes from (`countFrom`): GTNewHorizonsCoreMod's recipe scripts (its jar, matched to the dumped recipes: 3,237), the hand-verified table (14), GregTech's saw recipes for planks and sticks (7, read with `javap`), or vanilla's count where GTNH kept vanilla's exact recipe (54, marked `vanilla`). Other counts are unknown (`0`; the route assumes 1) |
+| Furnace recipes           | 6,128    | `/minetweaker recipes furnace` (output counts not dumped: 1 assumed)                                                                                                                                                                                                                                                                                                                                     |
+| Ore dictionary            | 22,006   | `/minetweaker oredict` (`:*` wildcards expanded to every damage value seen)                                                                                                                                                                                                                                                                                                                              |
+| Item names                | 27,050   | Every name is checked against `/minetweaker names` (the item registry) and the agent's `ItemName` format                                                                                                                                                                                                                                                                                                 |
+| GT ore veins / small ores | 79 / 55  | GregTech's jar (`OreMixes`, `SmallOres`): heights, weights, density, size, dimensions, the four ores of each vein                                                                                                                                                                                                                                                                                        |
+| GT materials              | 801      | GregTech's jar (`MaterialsInit1`): id and tool quality, which set an ore's harvest level                                                                                                                                                                                                                                                                                                                 |
+| Ore drops                 |          | GT's code: a vein ore drops its raw ore (`FortuneItem` in `GregTech.cfg`); a small ore drops a weighted mix of gems, crushed ore and impure dust                                                                                                                                                                                                                                                         |
+| Harvest levels, tools     | 60 / 199 | `config/IguanaTinkerTweaks` (block levels, tool levels, Tinkers' material levels, level names); GT ores use GT's own rule                                                                                                                                                                                                                                                                                |
+| Disabled tools / swords   | 48 / 12  | IguanaTweaks' `disableRegularTools` / `disableRegularSwords` with its blacklist (`main.cfg`): the listed (or listed mods') pickaxes, shovels and axes mine nothing, the listed swords do no damage. Only `ItemTool`s and `ItemSword`s are affected (`javap`), so GregTech's listed tool item is not disabled, and no vanilla sword is listed                                                             |
+| Vanilla 1.7.10 layer      | 312 / 21 | The base layer under GTNH's data: the 1.7.10 server jar (crafting recipes with counts, furnace recipes, tool materials and tools, ore generation, block drops) and minecraft-data 3.117.0 (PrismarineJS, MIT: items, blocks, foods, tool speeds, mobs, biomes, enchantments, effects)                                                                                                                    |
+| Changes from vanilla      | 255      | The vanilla layer compared with GTNH's: recipes, smelting, drops, tools, ores and hunger, each side with its source; generated as [GTNH 2.8.4 vs vanilla](gtnh-vs-vanilla.md)                                                                                                                                                                                                                            |
+
+**Regenerating it** (the server must be running; the dump commands are read-only lists):
+
+```sh
+node scripts/test-server-admin.ts rcon minetweaker oredict
+node scripts/test-server-admin.ts rcon minetweaker recipes        # replies "timed out": it keeps running
+node scripts/test-server-admin.ts rcon minetweaker recipes furnace
+node scripts/test-server-admin.ts rcon minetweaker names
+node scripts/test-server-admin.ts rcon minetweaker mods
+node scripts/build-knowledge.ts            # needs TEST_SERVER_DIR (or --server, --log, --out)
+```
+
+Each dump appends to the server's `minetweaker.log`; the build reads the last of each. A full
+recipe dump pauses the server for a few seconds. `scripts/build-knowledge.ts` reads only files in
+the server folder: the log, `config/GregTech/*.cfg`, `config/IguanaTinkerTweaks/*.cfg`,
+`config/HungerOverhaul/HungerOverhaul.cfg`, two mod jars and the vanilla server jar
+(`minecraft_server.1.7.10.jar`), which it parses itself (`scripts/knowledge/jvm.ts`: a zip
+reader, a class-file parser, a symbolic interpreter for straight-line code such as GT's data
+tables, and a small executor for the vanilla recipe classes' loops; the lint forbids spawning
+`javap`), plus minecraft-data from `node_modules`. The vanilla jar is obfuscated, so its classes
+are found by what they contain (e.g. `CraftingManager` by its recipe registrations), not by
+name. The data records each source file's size and SHA-256 (`sources`) and the caveats
+(`notes`). The build also writes [docs/gtnh-vs-vanilla.md](gtnh-vs-vanilla.md); run
+`corepack pnpm exec prettier --write docs/gtnh-vs-vanilla.md` afterwards.
+`tests/goals/knowledge.test.ts` checks its integrity and known facts.
+
+**Two layers.** Vanilla 1.7.10 is the base layer (`vanilla`: what the game does before any mod)
+and everything else is GTNH's, which wins wherever it says something: GTNH's recipes are the
+dump's, GT's veins replace vanilla ore generation, IguanaTweaks' rules decide which tools work,
+Hunger Overhaul's config decides healing. The vanilla layer fills in where GTNH's data is silent
+(a recipe GTNH kept exactly takes vanilla's count, marked `vanilla`; dig yields not changed by
+GTNH, `VANILLA_DIG_YIELDS` in `route-book.ts`, apply as they are). Every fact says its layer and
+source. minecraft-data's 1.7 recipes are 1.8's, so recipes come from the jar; minecraft-data
+gives the item, block, food, mob, biome, enchantment and effect tables (credited in
+`scripts/knowledge/vanilla.ts`).
+
+**What GTNH changes.** `changes` compares the layers, one entry per difference: the vanilla
+value and the GTNH value, each with its source, the items it concerns (`keys`), and one plain
+line of what changed (e.g. "Gravel never drops flint; craft flint from 3 gravel (shapeless,
+2x2)", "Wooden Planks: the same ingredients make 2, not 4 (4 with a saw in the grid)"). A
+vanilla recipe counts as changed when no GTNH recipe has its exact ingredients (replaced or
+removed), when one does but needs a crafting tool too, or when its known count differs.
+`src/goals/gtnh-changes.ts` picks the entries that concern the current route and sends them to
+the planner as `request.gtnhChanges` (at most 8 lines): a recipe change for an item the route
+makes (the goal first), drops, tools and ores for what it digs or the tool kinds it needs,
+smelting for what it smelts, then what the player holds (food: Hunger Overhaul). The planner
+prompt tells the model to trust these and the route over its memory of vanilla.
+
+**How routes use it.** `src/goals/route-book.ts` builds the book once (`ROUTE_BOOK` is lazy;
+`HAND_BOOK` is the hand-verified book alone):
+
+- Recipes: the generated crafting recipes (station `2x2` or `crafting_table`; ore-dictionary
+  ingredients as `anyOf` lists; `ore:craftingTool*` ingredients as tools, used but not consumed),
+  furnace recipes (station `furnace`) and the hand-verified recipes of `src/domain/recipes.ts`.
+  A hand-verified recipe replaces the generated recipe it matches (same output and ingredient
+  sets), keeping its verified count and taking the wider ingredient lists.
+- Sources: bare-hand digs (`DIG_YIELDS`), digs that need a tool (stone gives cobblestone, with
+  the IguanaTweaks level), and GT ores that generate in the Overworld: a vein ore gives its raw
+  ore (pickaxe level from GT's rule, where: the vein and its height range), a small ore gives
+  its average drops.
+- Tools (item, kind, level) and the item that provides each station. Tools IguanaTweaks
+  disables are left out: a vanilla iron pickaxe is no pickaxe here, held or to make.
+
+`src/goals/route.ts` stays general (nothing in it is GTNH-specific):
+
+- **Fast with thousands of recipes.** Recipes are indexed by output, and the book becomes an
+  AND/OR graph once. Per route, a cost table estimates every item's cheapest way (seconds of
+  digging, crafting and smelting) with Knuth's generalization of Dijkstra: items settle cheapest
+  first, an option counts once each of its requirements is met, and cycles (ingot to plate to
+  ingot) cannot make an item look impossible. A deep GTNH route takes well under a second.
+- **Choosing.** For each item the route weighs every way to get it with what is held: a held
+  ingredient is free, a missing crafting tool or dig tool is a one-time cost, a station nobody
+  knows of costs a little, and a machine station (no item to make it) rules a recipe out. Ties go
+  to hand-verified recipes. Output counts the data does not know are taken as 1 and shown as
+  `>=N`.
+- **Tools.** A gather leg whose blocks need a tool the inventory lacks gets the cheapest fitting
+  tool first, expanding its recipe tree; its steps are marked `[for: tool: ...]`. If the tool
+  needs the item it will dig (a pickaxe made of what it mines), the route gets those items
+  another way first. Held tools match by kind and level (worn vanilla tools by base name);
+  Tinkers' Construct tools take their level from NBT, so they count as fitting with a warning.
+- **Stations.** `planRoute(..., stations)` takes the stations the agent can use; each needed one
+  is listed as available, held (place it), missing (with how to make its item), or, when the
+  caller does not say, as needed. The route never places anything.
+- **What it cannot do.** Unresolved items carry a reason, e.g. "digging
+  gregtech:gt.blockores@16500 (GT small ore Diamond: y 5-15) needs a pickaxe level >= 3: none
+  held, none known to make". When nothing completes, the route still expands the recipe that
+  gets closest, so the planner sees what it can already do and exactly what is missing.
+
+Not in the knowledge base (open gaps): GT machine recipes (no read-only dump exists; recipes
+whose station is a machine would simply be skipped), Tinkers' Construct tool building (Part
+Builder and Tool Station are not crafting-table recipes, yet they make GTNH's only early
+pickaxes above level 0: the vanilla iron pickaxe mines nothing here, so a route to iron or
+diamonds says it cannot make the pickaxe), the output counts of recipes not registered by the
+coremod scripts, mob stats and drops (minecraft-data's 1.7 mobs carry names and categories only;
+the jar's entity classes are not read), Hunger Overhaul's per-food values (only its switches
+are read), and where GT ores are in the world (the agent's chunk scan sees
+`gregtech:gt.blockores` with the harvest level as metadata; the ore's material lives in its
+tile entity).
 
 ## Plans across cycles
 
@@ -879,6 +1001,6 @@ src/llm          Ollama client, model decision provider, model planner (opt-in)
 src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, explore, chests, crafting, dig and place in a fence or a moving play area; block windows; fighting; world surveys), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
-src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records
+src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
 src/app          agent loop, sessions, play loop (with scouting), quest book, provider factory, mock scenarios, CLI
 ```
