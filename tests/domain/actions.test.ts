@@ -21,6 +21,7 @@ const deps = { newId: (p: string) => `${p}_0001`, now: () => new Date('2026-01-0
 const oneOfEach: ActionSpec[] = [
   { type: 'OBSERVE_STATE', args: {} },
   { type: 'MOVE_TO', args: { target: { x: 1, y: 64, z: 1 }, tolerance: 1 } },
+  { type: 'EXPLORE', args: { toward: 'south_west', maxDistance: 64 } },
   { type: 'WAIT', args: { durationMs: 1000 } },
   { type: 'EAT_FOOD', args: { item: 'minecraft:bread' } },
   { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } },
@@ -126,6 +127,18 @@ describe('action model', () => {
       { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 0, craftingTableId: null } },
     ],
     ['crafting without saying where', { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 1 } }],
+    ['exploring too far', { type: 'EXPLORE', args: { toward: 'north', maxDistance: 97 } }],
+    ['exploring a few steps', { type: 'EXPLORE', args: { toward: 'north', maxDistance: 7 } }],
+    ['an unknown direction', { type: 'EXPLORE', args: { toward: 'up', maxDistance: 32 } }],
+    [
+      'a point with a height',
+      { type: 'EXPLORE', args: { toward: { x: 1, y: 70, z: 2 }, maxDistance: 32 } },
+    ],
+    [
+      'a point beyond the world border',
+      { type: 'EXPLORE', args: { toward: { x: 3e7 + 1, z: 0 }, maxDistance: 32 } },
+    ],
+    ['exploring without a limit', { type: 'EXPLORE', args: { toward: 'east' } }],
   ])('rejects %s', (_name, spec) => {
     expect(ActionSpecSchema.safeParse(spec).success).toBe(false);
     expect(() =>

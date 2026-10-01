@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import { loadConfig } from '../config/env.ts';
 import { isPlaceableItem, PLACEABLE_ITEMS } from '../domain/blocks.ts';
+import { MAX_EXPLORE_DISTANCE, MIN_EXPLORE_DISTANCE } from '../domain/actions.ts';
 import { TaskStatusSchema } from '../domain/tasks.ts';
 import { IN_MEMORY, openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
@@ -14,10 +15,12 @@ import { syncConfigToDatabase, type CycleResult } from './agent-loop.ts';
 import {
   movementStatus,
   parseBlockPosition,
+  parseExploreToward,
   runLiveChest,
   runLiveCycle,
   runLiveDig,
   runLivePlace,
+  runLiveExplore,
   runLiveSession,
   runLiveMove,
   setMovementHalted,
@@ -25,6 +28,7 @@ import {
   watchLive,
   withLiveClient,
 } from './live-agent.ts';
+import { describeKnownPlaces, parseMapPoint } from './world-memory-commands.ts';
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
@@ -60,6 +64,13 @@ Usage:
       WALK the player (needs MC_ENABLE_MOVEMENT=true and a fence). One action, validated,
       executed and verified like the agent's own; Ctrl+C stops it. --dry-run only plans it
       and draws the path on a map of the fence.
+  node src/app/cli.ts explore --live --toward <north|north_east|...|x,z> [--distance 64] [--db <path>]
+      EXPLORE (needs MC_ENABLE_MOVEMENT=true and MC_MOVEMENT_MODE=follow): walk over land toward
+      a direction or a point, in hops, at most --distance blocks (8-96), in daylight only, as a
+      checked user action; prints what it saw and what world memory knows. Ctrl+C stops it.
+  node src/app/cli.ts places [--at x,z] [--db <path>]
+      What world memory knows, as the planner gets it (chunks seen, places per resource,
+      biomes, how far each direction is seen), from --at or the last observed position.
   node src/app/cli.ts chest --live --container <id> [--withdraw <item> | --deposit <item>] [--count N]
       Open a configured vanilla chest (needs MC_ENABLE_CONTAINERS=true) and optionally move
       exactly N items, as checked user actions; prints the chest and inventory afterwards.
@@ -187,6 +198,8 @@ async function main(argv: string[]): Promise<number> {
       to: { type: 'string' },
       at: { type: 'string' },
       item: { type: 'string' },
+      toward: { type: 'string' },
+      distance: { type: 'string', default: '64' },
       container: { type: 'string' },
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
@@ -307,6 +320,65 @@ async function main(argv: string[]): Promise<number> {
       if (maps.length > 0) process.stdout.write(`${maps.join('\n')}\n`);
       if (out.result === null) return out.plan?.ok === true ? 0 : 1;
       return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'explore': {
+      if (!values.live) {
+        process.stderr.write(
+          'explore walks on the configured test server; pass --live to confirm.\n',
+        );
+        return 1;
+      }
+      const toward = values.toward === undefined ? null : parseExploreToward(values.toward);
+      if (toward === null) {
+        process.stderr.write(
+          'explore requires --toward <direction | x,z>: north, north_east, east, south_east, ' +
+            'south, south_west, west, north_west, or a point such as 120,-40\n',
+        );
+        return 1;
+      }
+      const distance = Number(values.distance);
+      if (
+        !Number.isInteger(distance) ||
+        distance < MIN_EXPLORE_DISTANCE ||
+        distance > MAX_EXPLORE_DISTANCE
+      ) {
+        process.stderr.write(
+          `--distance must be a whole number from ${MIN_EXPLORE_DISTANCE} to ${MAX_EXPLORE_DISTANCE}\n`,
+        );
+        return 1;
+      }
+      const out = await runLiveExplore(config, dbPath, toward, distance, log);
+      print({
+        ...(values.full
+          ? { result: out.result, connection: out.info }
+          : compact('live-explore', dbPath, out.result)),
+        worldMemory: out.exploration,
+      });
+      return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'places': {
+      const at = values.at === undefined ? null : parseMapPoint(values.at);
+      if (values.at !== undefined && at === null) {
+        process.stderr.write('--at must be x,z (or x,y,z)\n');
+        return 1;
+      }
+      const db = openDatabase(dbPath);
+      try {
+        const out = describeKnownPlaces(
+          createRepositories(db, systemClock),
+          config,
+          at,
+          new Date(),
+        );
+        if (!out.ok) {
+          process.stderr.write(`${out.error}\n`);
+          return 1;
+        }
+        print(out.value);
+        return 0;
+      } finally {
+        db.close();
+      }
     }
     case 'watch': {
       if (!values.live) {

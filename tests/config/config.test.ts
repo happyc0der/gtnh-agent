@@ -55,6 +55,38 @@ describe('configuration', () => {
     expect(config.safety.boundary.max).toEqual({ x: 256, y: 255, z: 256 });
   });
 
+  it("movement keeps its fixed fence by default; 'follow' moves a bounded play area", () => {
+    const fixed = defaultConfig().minecraft.movement;
+    expect(fixed).toMatchObject({ mode: 'fixed', fence: null, area: { side: 64, height: 32 } });
+    const fromEnv = loadConfig({
+      env: { MC_MOVEMENT_MODE: 'follow', SAFETY_BOUNDARY_MIN: '-200,0,-200' },
+      cwd: emptyDir(),
+    }).config;
+    expect(fromEnv.minecraft.movement.mode).toBe('follow');
+    expect(() => loadConfig({ env: { MC_MOVEMENT_MODE: 'roam' }, cwd: emptyDir() })).toThrow(
+      /movement\.mode/,
+    );
+    expect(() => defaultConfig({ minecraft: { movement: { area: { side: 65 } } } })).toThrow();
+    expect(() => defaultConfig({ minecraft: { movement: { area: { height: 33 } } } })).toThrow();
+    // In 'follow' mode the safety boundary is the exploration area: it must stay bounded.
+    expect(() =>
+      defaultConfig({
+        minecraft: { movement: { mode: 'follow' } },
+        safety: {
+          boundary: { min: { x: -5000, y: 0, z: -5000 }, max: { x: 5000, y: 255, z: 5000 } },
+        },
+      }),
+    ).toThrow(/exploration area/);
+    // The same boundary is fine with the fixed fence.
+    expect(
+      defaultConfig({
+        safety: {
+          boundary: { min: { x: -5000, y: 0, z: -5000 }, max: { x: 5000, y: 255, z: 5000 } },
+        },
+      }).minecraft.movement.mode,
+    ).toBe('fixed');
+  });
+
   it('digging is off unless enabled, and its heights are bounded', () => {
     expect(defaultConfig().minecraft.digging).toEqual({ enabled: false, maxHeightAboveFence: 4 });
     const { config } = loadConfig({ cwd: emptyDir(), env: { MC_ENABLE_DIGGING: 'true' } });

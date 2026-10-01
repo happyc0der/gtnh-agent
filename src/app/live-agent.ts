@@ -6,10 +6,16 @@ import type { MachineFlags } from '../bot/gtnh1710/gregtech.ts';
 import type { NearbyEntity, TrackedMachine } from '../bot/gtnh1710/world-model.ts';
 import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
 import type { AgentConfig } from '../config/env.ts';
-import type { ActionSpec } from '../domain/actions.ts';
+import {
+  ExploreDirectionSchema,
+  ExploreTowardSchema,
+  type ActionSpec,
+  type ExploreToward,
+} from '../domain/actions.ts';
 import type { PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
+import type { ExplorationSummary } from '../domain/world-memory.ts';
 import { openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../system1/decision-provider.ts';
@@ -17,6 +23,7 @@ import { systemClock } from '../util/clock.ts';
 import { randomIds } from '../util/ids.ts';
 import {
   buildSafetyContext,
+  explorationFor,
   runSingleCycle,
   runUserAction,
   syncConfigToDatabase,
@@ -38,6 +45,8 @@ export async function withLiveClient<T>(
   const client = new Gtnh1710Client({
     config: config.minecraft,
     clock: systemClock,
+    // Movement mode 'follow': the play area never leaves the safety boundary.
+    explorationBoundary: config.safety.boundary,
     ...(log ? { log } : {}),
   });
   try {
@@ -216,7 +225,19 @@ export function movementStatus(config: AgentConfig): Record<string, unknown> {
   const p = config.minecraft.placing;
   return {
     enabled: m.enabled,
+    mode: m.mode,
     fence: m.fence,
+    playArea:
+      m.mode === 'follow'
+        ? {
+            ...m.area,
+            note: 'centred on the player, inside the exploration boundary (safety.boundary)',
+            explorationBoundary: {
+              min: config.safety.boundary.min,
+              max: config.safety.boundary.max,
+            },
+          }
+        : null,
     stopFile: resolve(m.stopFile),
     halted: existsSync(resolve(m.stopFile)),
     digging: {
@@ -547,6 +568,82 @@ export async function runLivePlace(
             result,
             placing: summarizePlacing(state),
             inventory: state.inventory.known ? state.inventory.value.items : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Exploring
+// ---------------------------------------------------------------------------
+
+const POINT_XZ = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+
+/** "north", "south_east" (or "south-east"), or "x,z": where EXPLORE heads; null if neither. */
+export function parseExploreToward(text: string): ExploreToward | null {
+  const direction = ExploreDirectionSchema.safeParse(text.trim().toLowerCase().replace('-', '_'));
+  if (direction.success) return direction.data;
+  const m = POINT_XZ.exec(text);
+  if (m === null) return null;
+  const point = ExploreTowardSchema.safeParse({ x: Number(m[1]), z: Number(m[2]) });
+  return point.success ? point.data : null;
+}
+
+export interface LiveExploreResult {
+  result: CycleResult;
+  /** What world memory knows afterwards (null unless the play area follows the player). */
+  exploration: ExplorationSummary | null;
+  info: ConnectionInfo;
+}
+
+/**
+ * EXPLOREs once as a user-requested action: validated (schema, safety policy, preconditions),
+ * walked in hops, re-observed and verified like the agent's own actions; what the player saw
+ * goes into world memory. Ctrl+C or the stop file stops it at its next step.
+ */
+export async function runLiveExplore(
+  config: AgentConfig,
+  dbPath: string,
+  toward: ExploreToward,
+  maxDistance: number,
+  log?: (line: string) => void,
+): Promise<LiveExploreResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const where = typeof toward === 'string' ? toward : `${toward.x},${toward.z}`;
+          const result = await runUserAction(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: null,
+              clock: systemClock,
+              newId: randomIds,
+            },
+            { type: 'EXPLORE', args: { toward, maxDistance } },
+            `requested by the operator: explore --toward ${where} --distance ${maxDistance}`,
+          );
+          const state = await client.observe();
+          return {
+            result,
+            exploration: explorationFor(config, repos, state, new Date()) ?? null,
             info: client.info(),
           };
         } finally {

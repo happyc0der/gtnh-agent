@@ -546,6 +546,45 @@ describe('PLACE_BLOCK: only observed placeable cells, never the body, nothing th
   });
 });
 
+describe('EXPLORE: inside the boundary, bounded, only in daylight', () => {
+  const explore = (
+    toward: Extract<ActionSpec, { type: 'EXPLORE' }>['args']['toward'],
+    maxDistance = 64,
+  ): ActionSpec => ({ type: 'EXPLORE', args: { toward, maxDistance } });
+  const at = (timeOfDay: number) => makeState((w) => void (w.timeOfDay = timeOfDay));
+
+  it('allows a direction, or a point inside the boundary, in daylight', () => {
+    expect(codes(explore('north'))).toEqual([]);
+    expect(codes(explore({ x: 200, z: -100 }, 96))).toEqual([]);
+    // Unscanned ground is what exploring is for: no hazard-scan coverage rule, unlike MOVE_TO.
+    expect(codes(explore({ x: 250, z: 250 }, 96))).toEqual([]);
+    expect(codes(explore('south'), at(23_500))).toEqual([]); // dawn
+  });
+
+  it('refuses a point outside the boundary, in plans too (static check)', () => {
+    expect(codes(explore({ x: 300, z: 0 }))).toContain('OUT_OF_BOUNDS');
+    expect(evaluateStaticSpec(explore({ x: 0, z: -257 }), safetyCtx()).map((v) => v.code)).toEqual([
+      'OUT_OF_BOUNDS',
+    ]);
+    expect(evaluateStaticSpec(explore('north_west'), safetyCtx())).toEqual([]);
+  });
+
+  it('refuses in the evening, at night, and when the time of day is unknown', () => {
+    expect(codes(explore('north'), at(12_500))).toEqual(['NOT_DAYTIME']);
+    expect(codes(explore('north'), at(18_000))).toEqual(['NOT_DAYTIME']);
+    const noClock: GameState = { ...makeState(), time: unknown('no time update yet') };
+    expect(codes(explore('north'), noClock)).toEqual(['STATE_UNKNOWN']);
+    // An escape is never refused for the dark: a retreat is not an EXPLORE.
+    const retreat: ActionSpec = { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } };
+    expect(codes(retreat, at(18_000))).toEqual([]);
+  });
+
+  it('is not allowed during danger', () => {
+    const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
+    expect(codes(explore('west'), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+});
+
 describe('rule 6: repeated failures', () => {
   const spec: ActionSpec = { type: 'INSPECT_MACHINE', args: { machineId: 'machine.macerator.1' } };
   const failingHistory = (n: number): FailureHistory => ({

@@ -299,6 +299,7 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
       }
       case 'OBSERVE_STATE':
       case 'MOVE_TO':
+      case 'EXPLORE':
       case 'WAIT':
       case 'PAUSE_AND_ASK_USER':
         break;

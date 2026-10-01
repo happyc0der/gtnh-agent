@@ -161,6 +161,7 @@ export class MineflayerClient implements MinecraftClient {
       // TODO(containers): modded container GUIs (GT, AE2, etc.) need per-mod window adapters.
       // TODO(machines): GT machine state is not exposed via the vanilla protocol; needs research.
       case 'MOVE_TO':
+      case 'EXPLORE':
       case 'RETURN_TO_SAFE_LOCATION':
       case 'EAT_FOOD':
       case 'OPEN_CONTAINER':

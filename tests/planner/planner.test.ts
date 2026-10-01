@@ -11,6 +11,7 @@ import {
   buildPlannerRequest,
   sanitizeStateForPlanner,
 } from '../../src/planner/planner-provider.ts';
+import { summarizeExploration } from '../../src/domain/world-memory.ts';
 import { makeState, safetyCtx } from '../fixtures/index.ts';
 
 const validPlan: Plan = {
@@ -286,6 +287,69 @@ describe('planner request and mock planner', () => {
         (v) => v.code,
       ),
     ).toEqual(['PROTECTED_ITEM']);
+  });
+
+  it('offers EXPLORE, with what world memory knows, only when the agent can explore', () => {
+    expect(request().allowedActions).not.toContain('EXPLORE');
+    expect(request().exploration).toBeUndefined();
+    const exploration = summarizeExploration({
+      chunks: [
+        {
+          dimension: 'overworld',
+          chunkX: 0,
+          chunkZ: 4,
+          biome: { id: 229, name: 'Hot Forest', share: 1 },
+          counts: { log: 9 },
+          examples: { log: [{ x: 4, y: 64, z: 70 }] },
+          seenAt: '2026-01-01T11:58:00.000Z',
+        },
+      ],
+      from: { x: 1, y: 64, z: 1 },
+      boundary: safetyCtx().config.boundary,
+      now: new Date('2026-01-01T12:00:00.000Z'),
+    });
+    const r = buildPlannerRequest({
+      state: makeState(),
+      safety: safetyCtx(),
+      maxPlanSteps: 4,
+      recentActions: [],
+      recentFailures: [],
+      exploration,
+    });
+    expect(r.allowedActions).toContain('EXPLORE');
+    expect(r.allowedActions).toHaveLength(15);
+    expect(r.exploration?.places).toEqual([
+      {
+        resource: 'log',
+        x: 4,
+        z: 70,
+        distance: 69,
+        direction: 'south',
+        count: 9,
+        biome: 'Hot Forest',
+        seenMinutesAgo: 2,
+      },
+    ]);
+    expect(JSON.stringify(plannerResponseJsonSchema())).toContain('north_east');
+  });
+
+  it('a plan may explore toward a point inside the boundary, not outside it', () => {
+    const exploreTo = (x: number, z: number): Plan => ({
+      ...validPlan,
+      steps: [
+        {
+          step: 1,
+          action: { type: 'EXPLORE', args: { toward: { x, z }, maxDistance: 96 } },
+          rationale: 'find wood',
+        },
+      ],
+    });
+    expect(validatePlan(exploreTo(40, 70), safetyCtx(), 8).ok).toBe(true);
+    expect(
+      validatePlan(exploreTo(4000, 70), safetyCtx(), 8).stepViolations[0]?.violations.map(
+        (v) => v.code,
+      ),
+    ).toEqual(['OUT_OF_BOUNDS']);
   });
 
   it('a plan may dig an allowlisted block, but not a block outside the boundary', () => {

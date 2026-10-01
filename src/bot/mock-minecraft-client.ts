@@ -1,4 +1,4 @@
-import type { ActionType } from '../domain/actions.ts';
+import type { ActionType, ExploreToward } from '../domain/actions.ts';
 import {
   fallsWhenPlaced,
   isDiggableBlock,
@@ -7,6 +7,7 @@ import {
   type PlaceableBlock,
   type PlaceableItem,
 } from '../domain/blocks.ts';
+import { COMPASS } from '../domain/world-memory.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
@@ -358,6 +359,9 @@ export class MockMinecraftClient implements MinecraftClient {
       case 'MOVE_TO':
         return this.#moveTo(action.args.target);
 
+      case 'EXPLORE':
+        return this.#explore(action.args.toward, action.args.maxDistance);
+
       case 'RETURN_TO_SAFE_LOCATION':
         if (validated.resolvedTarget === null) return failed('no resolved safe location', 'ERROR');
         return this.#moveTo(validated.resolvedTarget);
@@ -645,6 +649,23 @@ export class MockMinecraftClient implements MinecraftClient {
     this.world.player.position = { ...target };
     this.#clock.advance(Math.round((d / this.world.blocksPerSecond) * 1000));
     return ok(`moved ${d.toFixed(1)} blocks`, { distance: Number(d.toFixed(2)) });
+  }
+
+  /** A straight walk (no terrain is simulated) toward the direction or point, at most maxDistance. */
+  #explore(toward: ExploreToward, maxDistance: number): ClientActionResult {
+    const p = this.world.player.position;
+    const heading =
+      typeof toward === 'string' ? COMPASS[toward] : { x: toward.x - p.x, z: toward.z - p.z };
+    const length = Math.hypot(heading.x, heading.z);
+    const d = typeof toward === 'string' ? maxDistance : Math.min(maxDistance, length);
+    if (length < 1e-9 || d < 1) return failed('already there', 'REFUSED');
+    const target = {
+      x: p.x + (heading.x / length) * d,
+      y: p.y,
+      z: p.z + (heading.z / length) * d,
+    };
+    const moved = this.#moveTo(target);
+    return ok(`explored ${d.toFixed(1)} blocks`, { ...moved.data, walked: Number(d.toFixed(2)) });
   }
 
   #container(id: string): MockContainer | string {
