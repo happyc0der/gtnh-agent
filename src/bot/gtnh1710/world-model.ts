@@ -178,6 +178,11 @@ export class WorldModel {
   readonly #chat: string[] = [];
   readonly #entities = new Map<number, TrackedEntity>();
   #selfEntityId: number | null = null;
+
+  /** The player's own entity id (from Join Game), or null before it arrived. */
+  get selfEntityId(): number | null {
+    return this.#selfEntityId;
+  }
   /** Set when an entity packet could not be decoded: the entity picture may be incomplete. */
   #entityProblem: string | null = null;
   /** Loaded chunk columns: arrival times (for entity readiness) and block ids (for hazards). */

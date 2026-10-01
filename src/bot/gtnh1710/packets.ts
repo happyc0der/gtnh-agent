@@ -26,7 +26,8 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // walking.ts has checked), vanilla chests ('activate-block', 'select-slot', 'click-window',
 // 'confirm-transaction', 'close-window', only as container.ts plans them) and digging one
 // block ('dig-block' with status start/cancel/finish only, for targets digging.ts has
-// checked); see Gtnh1710Client.
+// checked); see Gtnh1710Client. 'player-look' and 'swing-arm' only change what other
+// players see: where the head points, and the arm swinging while digging.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -43,7 +44,9 @@ export type OutboundKind =
   | 'click-window'
   | 'confirm-transaction'
   | 'close-window'
-  | 'dig-block';
+  | 'dig-block'
+  | 'player-look'
+  | 'swing-arm';
 
 /**
  * C07 Player Digging statuses the client may send. 1.7.10 also uses this packet for 3 (drop
@@ -249,6 +252,26 @@ export const outbound = {
           Buffer.from([face]),
         ]),
       ),
+    };
+  },
+
+  /** C05 Player Look (f32 yaw, f32 pitch, bool on ground): turn the head, without moving. */
+  playerLook(yaw: number, pitch: number, onGround: boolean): OutboundPacket {
+    if (!Number.isFinite(yaw) || !Number.isFinite(pitch) || Math.abs(pitch) > 90) {
+      throw new ProtocolError('refusing a bad look direction');
+    }
+    return {
+      kind: 'player-look',
+      frame: encodeFrame(0x05, Buffer.concat([f32(yaw), f32(pitch), bool(onGround)])),
+    };
+  },
+
+  /** C0A Animation (i32 own entity id, i8 1 = swing the arm), as a client does while digging. */
+  swingArm(entityId: number): OutboundPacket {
+    if (!Number.isInteger(entityId)) throw new ProtocolError('bad entity id');
+    return {
+      kind: 'swing-arm',
+      frame: encodeFrame(0x0a, Buffer.concat([i32(entityId), Buffer.from([1])])),
     };
   },
 

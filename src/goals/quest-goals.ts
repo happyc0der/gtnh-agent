@@ -57,17 +57,22 @@ export interface Abilities {
   craft: ReadonlySet<string>;
 }
 
-/** Items the digging ability yields from its allowlisted blocks. */
+/**
+ * Items the digging ability yields from its allowlisted blocks (src/domain/blocks.ts), bare
+ * handed: sand, gravel (or flint), clay (4 clay balls), dirt and grass (dirt), logs, leaves
+ * (saplings, apples). Stone needs a pickaxe, so cobblestone is not here.
+ */
 export const BASE_ABILITIES: Abilities = {
   gather: new Set([
-    'minecraft:gravel',
     'minecraft:sand',
-    'minecraft:dirt',
-    'minecraft:clay_ball',
+    'minecraft:gravel',
     'minecraft:flint',
+    'minecraft:clay_ball',
+    'minecraft:dirt',
     'minecraft:log',
+    'minecraft:log2',
     'minecraft:sapling',
-    'minecraft:cobblestone',
+    'minecraft:apple',
   ]),
   craft: new Set(),
 };

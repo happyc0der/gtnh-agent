@@ -123,7 +123,13 @@ export interface BlockPos {
   readonly z: number;
 }
 
-/** Where digging is allowed: the fence's columns, from its level up to maxHeightAboveFence. */
+/**
+ * Where digging is allowed: the fence's columns. A fence on one level (the test pen) digs
+ * from its level up to maxHeightAboveFence above it, never its floor. A terrain fence (a
+ * height range, like the walker's) digs around the feet: from one block below them (the
+ * ground layer next to the player, as a player digs sand or dirt) up to maxHeightAboveFence
+ * above them, within the fence's heights.
+ */
 export interface DigArea {
   readonly fence: Fence;
   readonly maxHeightAboveFence: number;
@@ -184,14 +190,26 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
   }
 
   const { fence, maxHeightAboveFence } = area;
-  const level = fence.min.y;
   if (x < fence.min.x || x > fence.max.x || z < fence.min.z || z > fence.max.z) {
     return refuse(`${fmt(target)} is outside the fence's columns`);
   }
-  if (y < level || y > level + maxHeightAboveFence) {
-    return refuse(
-      `${fmt(target)} is outside the dig heights y=${level}..${level + maxHeightAboveFence} (never the floor below the fence level)`,
-    );
+  const terrain = fence.min.y !== fence.max.y;
+  const feetLevel = Math.floor(feet.y + 1e-6);
+  if (terrain) {
+    const low = Math.max(fence.min.y - 1, feetLevel - 1);
+    const high = Math.min(fence.max.y, feetLevel) + maxHeightAboveFence;
+    if (y < low || y > high) {
+      return refuse(
+        `${fmt(target)} is outside the dig heights y=${low}..${high} (from one below the feet up to ${maxHeightAboveFence} above them, inside the fence)`,
+      );
+    }
+  } else {
+    const level = fence.min.y;
+    if (y < level || y > level + maxHeightAboveFence) {
+      return refuse(
+        `${fmt(target)} is outside the dig heights y=${level}..${level + maxHeightAboveFence} (never the floor below the fence level)`,
+      );
+    }
   }
 
   const id = world.blockAt(x, y, z);
@@ -233,6 +251,11 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
         `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block)`,
       );
     }
+  }
+  // Below the feet, only a hole one block deep: the block under it must stay (a cave or a
+  // deeper hole below would turn a one-block step down into a fall).
+  if (y < feetLevel && (world.blockAt(x, y - 1, z) ?? 0) === 0) {
+    return refuse(`${fmt(target)} has nothing under it: digging it would open a deeper hole`);
   }
   const aboveId = world.blockAt(x, y + 1, z) ?? 0;
   const above = aboveId === 0 ? undefined : world.blockName(aboveId);

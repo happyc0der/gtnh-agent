@@ -34,9 +34,22 @@ export function diggableOf(table: Uint8Array, id: number): DiggableBlock | undef
 }
 
 /**
- * Diggable blocks within a sphere around the feet, at or above the feet level, nearest first
- * (ties by position). The ground the player stands on (grass or dirt almost everywhere) is
- * left out: it is never dug, and it would crowd out everything else. Fail closed: any
+ * Blocks one level below the feet that are listed: the ground a player digs for sand,
+ * gravel and clay. Grass, dirt and the rest are left out down there: they are the floor
+ * almost everywhere and would crowd out everything else.
+ */
+export const GROUND_RESOURCES: ReadonlySet<DiggableBlock> = new Set<DiggableBlock>([
+  'minecraft:sand',
+  'minecraft:gravel',
+  'minecraft:clay',
+]);
+
+/**
+ * Diggable blocks within a sphere around the feet, at or above the feet level, plus the
+ * GROUND_RESOURCES one level below it; nearest first (ties by position). Like a player, the
+ * scan sees only EXPOSED blocks: at least one face touches air (no x-ray through the
+ * ground). The blocks under the player itself are left out: they are never dug. Fail
+ * closed: any
  * column in range that has not arrived or could not be decoded makes the scan unknown. At
  * most `max` are listed; beyond that the declared radius shrinks below the first block left
  * out, so the list is always complete within the radius it declares.
@@ -53,7 +66,19 @@ export function scanResources(
   const maxX = Math.floor(feet.x + radius);
   const minZ = Math.floor(feet.z - radius);
   const maxZ = Math.floor(feet.z + radius);
-  const minY = Math.max(0, Math.floor(feet.y));
+  const feetLevel = Math.floor(feet.y + 1e-6);
+  const minY = Math.max(0, feetLevel - 1);
+  // The columns the player's body stands in (half width 0.3), whose blocks below the feet
+  // hold the player up.
+  const ownX = [Math.floor(feet.x - 0.3), Math.floor(feet.x + 0.3)];
+  const ownZ = [Math.floor(feet.z - 0.3), Math.floor(feet.z + 0.3)];
+  const exposed = (x: number, y: number, z: number): boolean =>
+    store.blockAt(x + 1, y, z) === 0 ||
+    store.blockAt(x - 1, y, z) === 0 ||
+    store.blockAt(x, y + 1, z) === 0 ||
+    store.blockAt(x, y - 1, z) === 0 ||
+    store.blockAt(x, y, z + 1) === 0 ||
+    store.blockAt(x, y, z - 1) === 0;
   const maxY = Math.min(255, Math.floor(feet.y + radius));
 
   let missing = 0;
@@ -90,7 +115,18 @@ export function scanResources(
         const id = section[((y & 15) << 8) | ((z & 15) << 4) | (x & 15)] as number;
         if (id === 0) continue;
         const block = diggableOf(table, id);
-        if (block !== undefined) {
+        const support =
+          y < feetLevel &&
+          x >= (ownX[0] as number) &&
+          x <= (ownX[1] as number) &&
+          z >= (ownZ[0] as number) &&
+          z <= (ownZ[1] as number);
+        if (
+          block !== undefined &&
+          (y >= feetLevel || GROUND_RESOURCES.has(block)) &&
+          !support &&
+          exposed(x, y, z)
+        ) {
           found.push({ block, position: { x, y, z }, distance: Math.sqrt(h2 + dy * dy) });
         }
       }

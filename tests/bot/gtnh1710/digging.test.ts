@@ -141,6 +141,46 @@ const AREA: DigArea = {
 const FEET: Vec3 = { x: 0.5, y: 200, z: 0.5 };
 const k = (x: number, y: number, z: number): string => `${x},${y},${z}`;
 
+// A terrain fence (a height range): digging goes from one below the feet up.
+const TERRAIN: DigArea = {
+  fence: { min: { x: -4, y: 195, z: -4 }, max: { x: 4, y: 205, z: 4 } },
+  maxHeightAboveFence: 4,
+};
+
+describe('checkDig on terrain', () => {
+  it('digs the ground layer next to the player, but only one block deep', () => {
+    // Sand in the glass floor east of the player, with a floor under it.
+    const ground = { [k(1, 199, 0)]: ID.sand, [k(1, 198, 0)]: ID.glass };
+    expect(checkDig(world(ground), TERRAIN, FEET, { x: 1, y: 199, z: 0 })).toMatchObject({
+      ok: true,
+      block: 'minecraft:sand',
+    });
+    // Nothing under it: the hole would open into the air below.
+    expect(
+      checkDig(world({ [k(1, 199, 0)]: ID.sand }), TERRAIN, FEET, { x: 1, y: 199, z: 0 }),
+    ).toMatchObject({ ok: false, reason: expect.stringMatching(/nothing under it/) as unknown });
+    // Two below the feet: never.
+    const deep = { ...ground, [k(1, 198, 0)]: ID.sand, [k(1, 197, 0)]: ID.glass };
+    expect(checkDig(world(deep), TERRAIN, FEET, { x: 1, y: 198, z: 0 })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/outside the dig heights y=199\.\.204/) as unknown,
+    });
+  });
+
+  it('never digs the block the player stands on', () => {
+    const under = { [k(0, 199, 0)]: ID.sand, [k(0, 198, 0)]: ID.glass };
+    expect(checkDig(world(under), TERRAIN, FEET, { x: 0, y: 199, z: 0 })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/under the player/) as unknown,
+    });
+  });
+
+  it('the pen keeps its floor: below the fence level is never dug there', () => {
+    const ground = { [k(1, 199, 0)]: ID.sand, [k(1, 198, 0)]: ID.glass };
+    expect(checkDig(world(ground), AREA, FEET, { x: 1, y: 199, z: 0 }).ok).toBe(false);
+  });
+});
+
 describe('checkDig', () => {
   it('allows an allowlisted block next to the player, with only air and plain blocks around it', () => {
     const r = checkDig(world({ [k(1, 200, 0)]: ID.dirt }), AREA, FEET, { x: 1, y: 200, z: 0 });

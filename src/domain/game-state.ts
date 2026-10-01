@@ -100,17 +100,18 @@ export type ResourceBlock = z.infer<typeof ResourceBlockSchema>;
 
 /**
  * Blocks near the player that matter for digging, from the blocks the server sent. Only
- * allowlisted blocks at or above the player's feet level are listed (every other block,
- * and the ground it stands on, is left out), so this stays small.
+ * allowlisted blocks a player could see (a face touching air) are listed: at or above the
+ * player's feet level, plus sand, gravel and clay one level below it (the ground layer a
+ * player digs). The blocks the player stands on are never listed.
  */
 export const NearbyBlocksSchema = z.strictObject({
   /**
    * How far (blocks, from the player's feet to block centres) the scan looked. `resources`
-   * is complete within it: a block at or above the feet level that is not listed there is
-   * not a diggable block.
+   * is complete within it: a visible block that qualifies but is not listed there is not a
+   * diggable block.
    */
   scanRadius: z.number().min(0).max(64),
-  /** Diggable blocks within `scanRadius`, at or above the feet level, nearest first. */
+  /** Diggable blocks within `scanRadius` (see above), nearest first. */
   resources: z.array(ResourceBlockSchema).max(MAX_REPORTED_RESOURCES),
   /**
    * Positions near the player (within the scan's full radius, even when `scanRadius` shrank)

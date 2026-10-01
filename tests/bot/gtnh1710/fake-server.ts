@@ -527,6 +527,7 @@ export class FakeGtnhServer {
             break;
           case 0x03:
             this.idleTicks += 1;
+            this.digSim.onPlayerTick();
             if (!healthSent && this.confirmedPositions.length > 0) {
               healthSent = true;
               const h = this.#opts.health;
@@ -548,6 +549,7 @@ export class FakeGtnhServer {
               pitch: r.f32(),
               onGround: r.bool(),
             });
+            this.digSim.onPlayerTick();
             break;
           case 0x17: {
             const channel = r.string();

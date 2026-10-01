@@ -18,7 +18,7 @@ import {
   type Click,
   type TransferDirection,
 } from './container.ts';
-import { checkDig, digWaitTicks, TICK_MS, type DigArea } from './digging.ts';
+import { checkDig, digWaitTicks, eyesOf, TICK_MS, type DigArea } from './digging.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
 import {
@@ -77,6 +77,25 @@ const DIG_OUTCOME_TIMEOUT_MS = 2_000;
 const DIG_SETTLE_MS = 5 * TICK_MS;
 /** How long the drop may take to reach the inventory: a 10-tick pickup delay, plus falling. */
 const DROP_WAIT_MS = 2_000;
+
+/** "2 x minecraft:sand, 1 x minecraft:flint" (at most 200 characters). */
+function describeGain(gained: ReadonlyArray<[string, number]>): string {
+  return gained
+    .map(([item, n]) => `${n} x ${item}`)
+    .join(', ')
+    .slice(0, 200);
+}
+
+/** Yaw and pitch (degrees, Minecraft's convention) from the eyes to a block's centre. */
+function lookAt(eyes: Vec3, block: BlockPosition): { yaw: number; pitch: number } {
+  const dx = block.x + 0.5 - eyes.x;
+  const dy = block.y + 0.5 - eyes.y;
+  const dz = block.z + 0.5 - eyes.z;
+  return {
+    yaw: (Math.atan2(-dx, dz) * 180) / Math.PI,
+    pitch: (-Math.atan2(dy, Math.hypot(dx, dz)) * 180) / Math.PI,
+  };
+}
 /**
  * Reported with every presence and walking packet. The walker only ever stands or walks on
  * a full block (never jumps or falls), so the player is always on the ground.
@@ -551,16 +570,67 @@ export class Gtnh1710Client implements MinecraftClient {
   }
 
   /**
-   * DIG_BLOCK: break one allowlisted block with an empty hand. C07 start, then the dig time
-   * (vanilla x 1.25 + 2 ticks, re-checking everything every tick), then C07 finish; a
-   * problem on the way sends C07 cancel. Success needs the server's own block change to
-   * air, with no re-send after it. Reports whether the drop reached the inventory.
+   * DIG_BLOCK: break one allowlisted block with an empty hand, like a player: face it, swing
+   * the arm, C07 start, the dig time (vanilla x 1.25 + 2 ticks, re-checking everything
+   * every tick), C07 finish; a problem on the way sends C07 cancel. Success needs the
+   * server's own block change to air, with no re-send after it. Reports whether the drop
+   * reached the inventory. A drop that fell into a one-block-deep hole right next to the
+   * player lies below its pickup reach, so the player steps down into the hole for it.
    */
   async #dig(target: BlockPosition): Promise<ClientActionResult> {
+    const dug = await this.#digOnce(target);
+    if (dug.hole === null) return dug.result;
+    const { x, y, z } = target;
+    const walked = await this.#walkTo({ x: x + 0.5, y, z: z + 0.5 }, { stopForThreats: true });
+    const gained = walked.ok ? await this.#dropGain(dug.hole.itemsBefore) : [];
+    const drops = describeGain(gained);
+    const where = `(${x}, ${y}, ${z})`;
+    this.#log(
+      `stepped into the hole at ${where}: ${walked.ok ? (gained.length > 0 ? drops : 'no drop') : walked.message}`,
+    );
+    return ok(
+      `${dug.result.message.replace(/; no drop reached.*$/, '')}; ` +
+        (walked.ok
+          ? gained.length > 0
+            ? `stepped into the hole and picked up ${drops}`
+            : 'stepped into the hole, but no drop reached the inventory'
+          : `the drop is in the hole at ${where}, but stepping in failed: ${walked.message}`),
+      {
+        ...dug.result.data,
+        dropCollected: gained.length > 0,
+        drops,
+        steppedIntoHole: walked.ok,
+      },
+    );
+  }
+
+  /** Items gained since `before`, waiting up to DROP_WAIT_MS for the first one. */
+  async #dropGain(before: Readonly<Record<string, number>>): Promise<Array<[string, number]>> {
+    const increase = (): Array<[string, number]> => {
+      const now = this.#world.inventoryItems() ?? {};
+      return Object.entries(now)
+        .map(([item, n]): [string, number] => [item, n - (before[item] ?? 0)])
+        .filter(([, d]) => d > 0);
+    };
+    await this.#waitFor(() => increase().length > 0, DROP_WAIT_MS);
+    return increase();
+  }
+
+  async #digOnce(target: BlockPosition): Promise<{
+    result: ClientActionResult;
+    /** Set when the drop lies in a one-block-deep hole next to the player. */
+    hole: { itemsBefore: Readonly<Record<string, number>> } | null;
+  }> {
+    const done = (result: ClientActionResult): { result: ClientActionResult; hole: null } => ({
+      result,
+      hole: null,
+    });
     const blocker = this.#digBlocker();
     const fence = this.#opts.config.movement.fence;
     if (blocker !== null || fence === null) {
-      return failed(`not digging: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED');
+      return done(
+        failed(`not digging: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED'),
+      );
     }
     const area: DigArea = {
       fence: fenceOf(fence),
@@ -572,21 +642,23 @@ export class Gtnh1710Client implements MinecraftClient {
       // A chest left open by an earlier action is closed first (never with a full cursor).
       if (this.#world.openWindow !== null) {
         const closed = this.#closeOpenWindow();
-        if (closed !== null) return failed(`not digging: ${closed.message}`, 'REFUSED');
+        if (closed !== null) return done(failed(`not digging: ${closed.message}`, 'REFUSED'));
       }
       const world = this.#world.walkWorld();
       const feet = this.#world.ownPosition;
       if (world === null || feet === null) {
-        return failed('not digging: block data or position unknown', 'REFUSED');
+        return done(failed('not digging: block data or position unknown', 'REFUSED'));
       }
       const check = checkDig(world, area, feet, target);
-      if (!check.ok) return failed(`not digging: ${check.reason}`, 'REFUSED');
+      if (!check.ok) return done(failed(`not digging: ${check.reason}`, 'REFUSED'));
       // An empty hand: no tool can wear out, fell a whole tree or do anything else.
       const hand = this.#emptyHotbarSlot();
       if (hand === null) {
-        return failed(
-          'not digging: no empty hotbar slot (the agent digs with an empty hand)',
-          'REFUSED',
+        return done(
+          failed(
+            'not digging: no empty hotbar slot (the agent digs with an empty hand)',
+            'REFUSED',
+          ),
         );
       }
       if (hand !== this.#world.heldSlot) {
@@ -606,22 +678,36 @@ export class Gtnh1710Client implements MinecraftClient {
       let verdict: { ok: true } | { ok: false; result: ClientActionResult };
       try {
         this.#log(`digging ${check.block} at ${where}: ${ticks} ticks`);
+        // Face the block, as a player does (other players see where the head points).
+        const look = lookAt(eyesOf(feet), target);
+        this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
+        this.#lastYaw = look.yaw;
+        const self = this.#world.selfEntityId;
+        if (self !== null) this.#send(outbound.swingArm(self));
         this.#send(outbound.digBlock(DIG_STATUS.start, x, y, z, check.face));
         const startedAt = clock.now().getTime();
+        let tick = 0;
         while (clock.now().getTime() - startedAt < ticks * TICK_MS) {
           await delay(TICK_MS);
+          tick += 1;
+          // A digging client swings its arm every few ticks; the server shows it to others.
+          if (self !== null && tick % 4 === 0 && this.#phase === 'play') {
+            this.#send(outbound.swingArm(self));
+          }
           const problem = this.#digProblem(area, target, check.blockId, watch, guard);
           if (problem !== null) {
             if (this.#phase === 'play') {
               this.#send(outbound.digBlock(DIG_STATUS.cancel, x, y, z, check.face));
             }
             this.#log(`dig stopped: ${problem}`);
-            return failed(`dig of ${check.block} at ${where} stopped: ${problem}`, 'FAILED', {
-              x,
-              y,
-              z,
-              block: check.block,
-            });
+            return done(
+              failed(`dig of ${check.block} at ${where} stopped: ${problem}`, 'FAILED', {
+                x,
+                y,
+                z,
+                block: check.block,
+              }),
+            );
           }
         }
         const sentAt = watch.updates.length;
@@ -630,36 +716,34 @@ export class Gtnh1710Client implements MinecraftClient {
       } finally {
         this.#world.unwatch(watch);
       }
-      if (!verdict.ok) return verdict.result;
+      if (!verdict.ok) return done(verdict.result);
 
       // The drop spawns in the block's cell and is picked up (after 10 ticks) only when it
       // lands within reach of the player's body; report whether it arrived.
-      let gained: Array<[string, number]> = [];
-      if (itemsBefore !== null) {
-        const increase = (): Array<[string, number]> => {
-          const now = this.#world.inventoryItems() ?? {};
-          return Object.entries(now)
-            .map(([item, n]): [string, number] => [item, n - (itemsBefore[item] ?? 0)])
-            .filter(([, d]) => d > 0);
-        };
-        await this.#waitFor(() => increase().length > 0, DROP_WAIT_MS);
-        gained = increase();
-      }
-      const drops = gained
-        .map(([item, n]) => `${n} x ${item}`)
-        .join(', ')
-        .slice(0, 200);
+      const gained = itemsBefore === null ? [] : await this.#dropGain(itemsBefore);
+      const drops = describeGain(gained);
       const dropCollected = gained.length > 0;
       this.#log(`dug ${check.block} at ${where}; drop ${dropCollected ? drops : 'not collected'}`);
-      return ok(
+      const result = ok(
         `dug ${check.block} at ${where} in ${ticks} ticks; ` +
           (dropCollected
             ? `the drop reached the inventory: ${drops}`
             : itemsBefore === null
               ? 'the inventory was unknown, so the drop could not be checked'
-              : 'no drop reached the inventory (none, or it fell out of pickup range)'),
+              : `no drop reached the inventory (none, or it lies at ${where} out of pickup reach: walk onto it)`),
         { x, y, z, block: check.block, ticks, dropCollected, drops },
       );
+      // A one-block-deep hole right next to the player (terrain digging below the feet).
+      const feetLevel = Math.floor(feet.y + 1e-6);
+      const nextTo =
+        Math.abs(x + 0.5 - feet.x) <= 1.5 &&
+        Math.abs(z + 0.5 - feet.z) <= 1.5 &&
+        y === feetLevel - 1;
+      const terrain = area.fence.min.y !== area.fence.max.y;
+      return {
+        result,
+        hole: !dropCollected && itemsBefore !== null && terrain && nextTo ? { itemsBefore } : null,
+      };
     } finally {
       this.#digging = false;
     }
