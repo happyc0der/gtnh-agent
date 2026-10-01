@@ -3876,13 +3876,14 @@ export class Gtnh1710Client implements MinecraftClient {
    */
   async #retreat(target: Readonly<Position> | null): Promise<ClientActionResult> {
     const fence = this.#fence().fence;
-    const far =
-      target !== null &&
-      fence !== null &&
-      this.#opts.config.movement.mode === 'follow' &&
-      !fenceHolds(fence, target);
+    const follow =
+      target !== null && fence !== null && this.#opts.config.movement.mode === 'follow';
+    const far = follow && !fenceHolds(fence, target);
     if (!far || this.#movementBlocker() !== null || this.#walking || this.#exploring) {
-      return this.#walkTo(target, { stopForThreats: false });
+      const walk = await this.#walkTo(target, { stopForThreats: false });
+      // A path longer than one walk may take is walked in hops too, like a far location (seen
+      // live: 49 blocks around a slope with the limit at 32, refused twice, play stopped).
+      if (walk.ok || !follow || !/the path is [\d.]+ blocks long/.test(walk.message)) return walk;
     }
     let trip: Trip;
     this.#exploring = true;

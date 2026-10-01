@@ -253,6 +253,15 @@ describe('entity packets', () => {
       expect(e.votes, e.name).toBeGreaterThanOrEqual(10);
       expect(e.votes, e.name).toBe(e.total);
     }
+    // Read in a mod's code, a type number may only name a hostile: harmless takes live votes.
+    for (const e of MODDED_ENTITY_TABLE.filter((x) => x.fromCode !== undefined)) {
+      expect(e.category, e.name).toBe('hostile');
+    }
+    // Seen live: "etfuturum#4" came at the agent; its code registers the husk as number 4.
+    expect(classifyModded('etfuturum', 4, '2.6.2.25-GTNH')).toEqual({
+      name: 'etfuturum.husk',
+      category: 'hostile',
+    });
   });
 
   it('classifies fail-closed: unknown vanilla ids and unlisted mods are unclassified', () => {

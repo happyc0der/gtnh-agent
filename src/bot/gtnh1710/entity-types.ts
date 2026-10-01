@@ -74,9 +74,14 @@ export interface ModdedEntityEntry {
   /** The entity's registry name, as the server saves it. */
   name: string;
   category: EntityCategory;
-  /** Identification evidence: matching votes / all votes (scripts/identify-entities.ts). */
+  /**
+   * Identification evidence: matching votes / all votes (scripts/identify-entities.ts); 0 / 0
+   * when the entry comes from the mod's own registration code instead (`fromCode`).
+   */
   votes: number;
   total: number;
+  /** Where in the mod's code the type number is registered, when read there (javap). */
+  fromCode?: string;
   /** Mod version the identification was made with; the entry applies to that version only. */
   modVersion: string;
 }
@@ -101,6 +106,39 @@ export const MODDED_ENTITY_TABLE: readonly ModdedEntityEntry[] = [
     category: 'passive',
     votes: 175,
     total: 175,
+    modVersion: '2.6.2.25-GTNH',
+  },
+  // Read in the mod's code (javap, etfuturum-2.6.2.25-GTNH.jar): CommonProxy registers its
+  // entities with fixed numbers. Seen live: "etfuturum#4" (a husk: a zombie that does not burn
+  // by day) came at the agent in the desert, unidentified.
+  {
+    modId: 'etfuturum',
+    typeId: 1,
+    name: 'etfuturum.endermite',
+    category: 'hostile',
+    votes: 0,
+    total: 0,
+    fromCode: 'CommonProxy: registerEntity(EntityEndermite.class, "endermite", 1, ...)',
+    modVersion: '2.6.2.25-GTNH',
+  },
+  {
+    modId: 'etfuturum',
+    typeId: 4,
+    name: 'etfuturum.husk',
+    category: 'hostile',
+    votes: 0,
+    total: 0,
+    fromCode: 'CommonProxy: registerEntity(EntityHusk.class, "husk", 4, ...)',
+    modVersion: '2.6.2.25-GTNH',
+  },
+  {
+    modId: 'etfuturum',
+    typeId: 5,
+    name: 'etfuturum.stray',
+    category: 'hostile',
+    votes: 0,
+    total: 0,
+    fromCode: 'CommonProxy: registerEntity(EntityStray.class, "stray", 5, ...)',
     modVersion: '2.6.2.25-GTNH',
   },
   {

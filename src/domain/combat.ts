@@ -38,6 +38,11 @@ export type HostileTactic = (typeof HOSTILE_TACTICS)[number];
  */
 const VANILLA_TACTICS: ReadonlyMap<string, HostileTactic> = new Map<string, HostileTactic>([
   ['minecraft:Zombie', 'melee'],
+  // Et Futurum's backports (src/bot/gtnh1710/entity-types.ts): a husk is a zombie that does
+  // not burn by day, a stray a skeleton, an endermite bites.
+  ['etfuturum.husk', 'melee'],
+  ['etfuturum.stray', 'ranged'],
+  ['etfuturum.endermite', 'melee'],
   ['minecraft:Spider', 'melee'],
   ['minecraft:CaveSpider', 'melee'],
   ['minecraft:Slime', 'melee'],
