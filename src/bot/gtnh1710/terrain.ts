@@ -348,6 +348,9 @@ function terrainEdges(world: WalkWorld, fence: Fence, breaks?: WalkBreaks): (n: 
   const breakCosts = new Map<string, number | null>();
   const breakCost = (from: Node, c: Cell): number | null => {
     if (breaks === undefined) return null;
+    // Most blocked cells are not breakable at all (logs, the ground of a slope): by name first.
+    const id = world.blockAt(c.x, c.y, c.z);
+    if (id === undefined || id === 0 || !breaks.blocks.has(world.blockName(id) ?? '')) return null;
     const k = `${key(from)}>${key(c)}`;
     let v = breakCosts.get(k);
     if (v === undefined) {
