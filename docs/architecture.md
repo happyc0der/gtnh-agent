@@ -154,6 +154,20 @@ time. The planner gets the route in its request and plans along it; the model st
 every decision. The route is general: smelting, tools, mob drops and exported recipe data
 are new book entries, not new planner logic.
 
+**Storage in the stocktake.** Containers whose contents the agent knows (seen now, or
+remembered) count as "stored": the route fetches from them, nearest first, before it
+gathers or crafts (withdraw steps), and the planner sees what each container holds.
+
+**Checkpoints and compaction.** Long work is done in chunks. The planner plans only the next
+one or two route steps; when they are done the agent checkpoints and asks again with fresh
+stock. Each task keeps a journal written by code at every checkpoint: a plan made, done or
+failed (and why), the planner escalating, a quest completed, an interruption (a mob, the
+night, a stuck session). Like a long conversation, it is compacted: past 16 lines the oldest
+are folded into one "earlier" summary (counts and the latest failures). The planner reads the
+journal instead of a raw log, continues where the task stopped and avoids repeating failures.
+Interruptions (mobs, hunger, lava, night) are still handled first by System 1's reflexes;
+a step that no longer fits the world is refused and replanned.
+
 `src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the inventory, records the
 quests that are now satisfied, makes the next quest the current task (`quest-<id>`, its subgoal
 saying what is still missing) and runs one bounded session on it (`runSession`). In the session

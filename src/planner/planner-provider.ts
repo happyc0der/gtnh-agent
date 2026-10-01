@@ -113,6 +113,14 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       name: s.name,
       position: s.position.known ? s.position.value : null,
       distance: distanceTo(s.position),
+      // What it holds, if seen or remembered (the 20 largest stacks), else null.
+      items: s.items.known
+        ? Object.entries(s.items.value)
+            .filter(([, q]) => q > 0)
+            .sort(([a, qa], [b, qb]) => qb - qa || (a < b ? -1 : 1))
+            .slice(0, 20)
+            .map(([item, quantity]) => ({ item, quantity }))
+        : null,
     })),
     craftingTables: state.craftingTables.slice(0, 32).map((t) => ({
       id: t.id,
@@ -172,7 +180,24 @@ export function routeForPlanner(state: GameState): PlannerRequest['route'] {
   const goal = state.currentTask?.requirements;
   if (goal === undefined || Object.keys(goal).length === 0) return null;
   const inventory = state.inventory.known ? state.inventory.value.items : {};
-  const route = planRoute(goal, inventory, ROUTE_BOOK, placesInView(state));
+  const at = state.player.position.known ? state.player.position.value : null;
+  // Containers whose contents are known (seen now, or remembered by the agent).
+  const storage = state.storage.flatMap((s) =>
+    s.items.known
+      ? [
+          {
+            id: s.id,
+            where: s.position.known ? { ...s.position.value } : null,
+            distance:
+              at !== null && s.position.known
+                ? Number(distance(at, s.position.value).toFixed(1))
+                : null,
+            items: s.items.value,
+          },
+        ]
+      : [],
+  );
+  const route = planRoute(goal, inventory, ROUTE_BOOK, placesInView(state), storage);
   return { stock: route.stock.slice(0, 32), steps: describeRoute(route).slice(0, 40) };
 }
 
@@ -182,6 +207,8 @@ export function buildPlannerRequest(input: {
   maxPlanSteps: number;
   recentActions: RecentActionSummary[];
   recentFailures: RecentFailureSummary[];
+  /** The task's compact journal (checkpoints so far), oldest first. */
+  journal?: readonly string[];
 }): PlannerRequest {
   const { config } = input.safety;
   return PlannerRequestSchema.parse({
@@ -208,5 +235,6 @@ export function buildPlannerRequest(input: {
     recentFailures: input.recentFailures,
     maxPlanSteps: input.maxPlanSteps,
     route: routeForPlanner(input.state),
+    journal: [...(input.journal ?? [])].slice(-32),
   });
 }

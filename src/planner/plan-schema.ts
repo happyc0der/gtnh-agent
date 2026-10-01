@@ -126,6 +126,11 @@ export const CompactStateSchema = z.strictObject({
         name: z.string(),
         position: PositionSchema.nullable(),
         distance: z.number().min(0).nullable(),
+        /** What it holds (seen or remembered), largest stacks first; null if unknown. */
+        items: z
+          .array(z.strictObject({ item: z.string(), quantity: z.int() }))
+          .max(20)
+          .nullable(),
       }),
     )
     .max(32),
@@ -204,6 +209,7 @@ export const PlannerRequestSchema = z.strictObject({
           z.strictObject({
             item: z.string(),
             have: z.int().min(0),
+            stored: z.int().min(0),
             need: z.int().min(0),
             missing: z.int().min(0),
           }),
@@ -213,6 +219,11 @@ export const PlannerRequestSchema = z.strictObject({
     })
     .nullable()
     .default(null),
+  /**
+   * The task's journal, compacted (oldest first): plans made, done or failed and why,
+   * quests completed, interruptions. What the agent already did and must not repeat.
+   */
+  journal: z.array(z.string().max(300)).max(32).default([]),
 });
 export type PlannerRequest = z.infer<typeof PlannerRequestSchema>;
 

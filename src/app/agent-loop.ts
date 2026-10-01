@@ -602,9 +602,15 @@ function updatePlanProgress(
   ref: PlanStepRef,
   outcome: ExecutionOutcome,
 ): boolean {
+  const journal = (text: string): void => {
+    const plan = repos.plans.get(ref.planId);
+    if (plan !== null) repos.memory.appendJournal(plan.taskId, text);
+  };
   switch (outcome.status) {
     case 'succeeded': {
       const plan = repos.plans.advance(ref.planId);
+      if (plan.status === 'completed')
+        journal(`plan #${plan.id} done: ${plan.plan.goal}`.slice(0, 300));
       // A plan a human wrote for the task IS the task: finishing it finishes the task.
       if (plan.status === 'completed' && plan.planner === OPERATOR_PLANNER) {
         repos.tasks.setStatus(plan.taskId, 'completed');
@@ -612,6 +618,12 @@ function updatePlanProgress(
       return false;
     }
     case 'rejected':
+      journal(
+        `plan #${ref.planId} failed at step ${ref.stepIndex + 1} (${outcome.actionType}): ` +
+          (outcome.validation.preconditionFailures[0] ??
+            outcome.validation.violations[0]?.message ??
+            'rejected'),
+      );
       repos.plans.setStatus(
         ref.planId,
         'failed',
@@ -625,6 +637,10 @@ function updatePlanProgress(
     case 'verification_failed': {
       const failures = repos.plans.recordStepFailure(ref.planId);
       if (failures <= ref.failureHandling.maxRetriesPerStep) return false; // retry next cycle
+      journal(
+        `plan #${ref.planId} failed at step ${ref.stepIndex + 1} (${outcome.actionType}) ` +
+          `${failures} time(s): ${outcome.execution?.message ?? 'not verified'}`,
+      );
       repos.plans.setStatus(
         ref.planId,
         'failed',
@@ -703,6 +719,7 @@ async function consultPlanner(
       .flatMap((f) =>
         isAllowlistedActionType(f.actionType) ? [{ ...f, actionType: f.actionType }] : [],
       ),
+    journal: repos.memory.journal(taskId).map((e) => e.text),
   });
 
   let response: PlannerResponse;
@@ -732,6 +749,7 @@ async function consultPlanner(
 
   if (response.kind === 'escalation') {
     const e = response.escalation;
+    repos.memory.appendJournal(taskId, `planner escalated (${e.reason}): ${e.message}`);
     return pauseWith(e.questionForUser, {
       kind: 'escalation',
       reason: e.reason,
@@ -792,5 +810,9 @@ async function consultPlanner(
       { kind: 'approval-required', planId: stored.id, goal: plan.goal, steps: plan.steps.length },
     );
   }
+  repos.memory.appendJournal(
+    taskId,
+    `new plan #${stored.id}: ${stored.plan.goal} (${stored.plan.steps.length} steps)`,
+  );
   return stepOf(stored, 'plan-accepted');
 }

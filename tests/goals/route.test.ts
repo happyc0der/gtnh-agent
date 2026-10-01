@@ -17,13 +17,48 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
       ROUTE_BOOK,
       SAND_HERE,
     );
-    expect(route.stock).toEqual([{ item: 'minecraft:sand', have: 55, need: 128, missing: 73 }]);
+    expect(route.stock).toEqual([
+      { item: 'minecraft:sand', have: 55, stored: 0, need: 128, missing: 73 },
+    ]);
     expect(route.fromInventory).toEqual({ 'minecraft:sand': 55 });
     expect(route.raw).toEqual({ 'minecraft:sand': 73 });
     expect(route.legs).toMatchObject([
       { kind: 'gather', item: 'minecraft:sand', quantity: 73, actions: 73, best: { amount: 64 } },
     ]);
     expect(route.unresolved).toEqual({});
+  });
+
+  it('fetches from known containers before gathering, nearest container first', () => {
+    const chests = [
+      {
+        id: 'chest.far',
+        where: { x: 30, y: 64, z: 0 },
+        distance: 30,
+        items: { 'minecraft:sand': 64 },
+      },
+      {
+        id: 'chest.near',
+        where: { x: 3, y: 64, z: 0 },
+        distance: 3,
+        items: { 'minecraft:sand': 20 },
+      },
+    ];
+    const route = planRoute(
+      { 'minecraft:sand': 128 },
+      { 'minecraft:sand': 55 },
+      ROUTE_BOOK,
+      SAND_HERE,
+      chests,
+    );
+    expect(route.stock).toEqual([
+      { item: 'minecraft:sand', have: 55, stored: 84, need: 128, missing: 0 },
+    ]);
+    expect(route.legs).toMatchObject([
+      { kind: 'withdraw', containerId: 'chest.near', quantity: 20 },
+      { kind: 'withdraw', containerId: 'chest.far', quantity: 53 },
+    ]);
+    expect(route.raw).toEqual({});
+    expect(describeRoute(route)[0]).toBe('stock: minecraft:sand have 55 + 84 stored / need 128');
   });
 
   it('expands recipes depth-first: ingredients before what they make', () => {
@@ -90,7 +125,9 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
       },
     };
     const route = routeForPlanner(state);
-    expect(route?.stock).toEqual([{ item: 'minecraft:stick', have: 0, need: 4, missing: 4 }]);
+    expect(route?.stock).toEqual([
+      { item: 'minecraft:stick', have: 0, stored: 0, need: 4, missing: 4 },
+    ]);
     expect(route?.steps.some((s) => s.includes('craft sticks x1'))).toBe(true);
     expect(routeForPlanner(base)).toBeNull();
   });

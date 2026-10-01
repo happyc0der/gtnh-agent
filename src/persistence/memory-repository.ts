@@ -7,6 +7,12 @@ import type { Db } from './database.ts';
 export const CURRENT_TASK_KEY = 'current_task';
 /** agent_state key prefix for a task's item requirements: `task_requirements:<taskId>`. */
 export const TASK_REQUIREMENTS_PREFIX = 'task_requirements:';
+/** agent_state key prefix for a task's journal: `task_journal:<taskId>`. */
+export const TASK_JOURNAL_PREFIX = 'task_journal:';
+/** Journal lines kept in full; older ones are folded into one summary line. */
+export const JOURNAL_KEEP = 16;
+
+const JournalSchema = z.array(z.strictObject({ at: z.string(), text: z.string().max(300) }));
 
 /**
  * Small pieces of agent memory that the live server cannot tell the agent: which task it
@@ -55,6 +61,32 @@ export class MemoryRepository {
     );
   }
 
+  /**
+   * A task's journal: what happened at each checkpoint (plans made, done or failed, quests,
+   * interruptions), oldest first. Compacted like a conversation: past JOURNAL_KEEP lines,
+   * the oldest are folded into a single "earlier" summary line, so it stays small.
+   */
+  journal(taskId: string): Array<{ at: string; text: string }> {
+    const raw = this.getValue(`${TASK_JOURNAL_PREFIX}${taskId}`);
+    return raw === null ? [] : JournalSchema.parse(JSON.parse(raw));
+  }
+
+  appendJournal(taskId: string, text: string): void {
+    const entries = [
+      ...this.journal(taskId),
+      { at: this.#clock.now().toISOString(), text: text.slice(0, 300) },
+    ];
+    let kept = entries;
+    if (entries.length > JOURNAL_KEEP + 1) {
+      const old = entries.slice(0, entries.length - JOURNAL_KEEP);
+      kept = [
+        { at: (old[0] as { at: string }).at, text: compactJournal(old.map((e) => e.text)) },
+        ...entries.slice(entries.length - JOURNAL_KEEP),
+      ];
+    }
+    this.setValue(`${TASK_JOURNAL_PREFIX}${taskId}`, JSON.stringify(kept));
+  }
+
   /** Records what a container held at `observedAt` (a newer observation replaces an older one). */
   rememberContainer(containerId: string, items: Record<string, number>, observedAt: string): void {
     this.#db
@@ -79,4 +111,30 @@ export class MemoryRepository {
       observedAt: z.string().parse(row.observed_at),
     };
   }
+}
+
+/**
+ * Folds journal lines into one: counts of plans made, done and failed, quests completed and
+ * interruptions, then the most recent failure reasons (what to avoid). Deterministic.
+ */
+export function compactJournal(lines: readonly string[]): string {
+  const prior = lines.find((l) => l.startsWith('earlier: '));
+  const body = lines.filter((l) => !l.startsWith('earlier: '));
+  const count = (re: RegExp): number => body.filter((l) => re.test(l)).length;
+  const failures = body
+    .filter((l) => / failed| escalated/.test(l))
+    .slice(-2)
+    .map((l) => l.replace(/^plan #\d+ /, '').slice(0, 80));
+  const parts = [
+    `${count(/^new plan /)} plans made`,
+    `${count(/^plan #\d+ done/)} done`,
+    `${count(/ failed/)} failed`,
+    `${count(/^QUEST /)} quests completed`,
+    `${count(/^interrupted/)} interruptions`,
+  ];
+  const text =
+    `earlier: ${parts.join(', ')}` +
+    (failures.length > 0 ? `; recent failures: ${failures.join(' | ')}` : '') +
+    (prior !== undefined ? ` (before that: ${prior.slice('earlier: '.length, 120)})` : '');
+  return text.slice(0, 300);
 }

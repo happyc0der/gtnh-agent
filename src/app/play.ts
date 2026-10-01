@@ -243,6 +243,7 @@ export async function runPlay(
     progress = update.progress;
     for (const q of update.added) {
       questsCompleted.push(q.name);
+      deps.repos.memory.appendJournal(`quest-${q.id}`, `QUEST "${q.name}" completed`);
       emit({
         kind: 'quest-completed',
         quest: q.name,
@@ -332,6 +333,13 @@ export async function runPlay(
       cycles: result.cycles.length,
     });
 
+    // Interruptions are checkpoints too: the planner reads them in the task's journal.
+    if (dark !== null || !['limit', 'task-finished'].includes(result.stopKind)) {
+      deps.repos.memory.appendJournal(
+        adopted.taskId,
+        `interrupted: ${dark !== null ? nightReason(dark) : result.stopReason}`,
+      );
+    }
     if (dark !== null) return done(nightReason(dark), dark);
     if (result.stopKind === 'stop-requested' && !met) return done(result.stopReason);
     if (!CONTINUE_AFTER.has(result.stopKind)) return done(result.stopReason);

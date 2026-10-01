@@ -53,7 +53,24 @@ export interface KnownPlace {
 /** Where `blocks` are known to be, nearest first. */
 export type PlaceLookup = (blocks: readonly string[]) => KnownPlace[];
 
+/** A container whose contents the agent knows (it saw them, or remembers them). */
+export interface StoredContainer {
+  id: string;
+  where: { x: number; y: number; z: number } | null;
+  /** Blocks from the player (null if unknown). */
+  distance: number | null;
+  items: Readonly<Record<string, number>>;
+}
+
 export type RouteLeg =
+  | {
+      kind: 'withdraw';
+      containerId: string;
+      item: string;
+      quantity: number;
+      where: { x: number; y: number; z: number } | null;
+      distance: number | null;
+    }
   | {
       kind: 'gather';
       item: string;
@@ -82,8 +99,12 @@ export type RouteLeg =
 /** One goal item: how many are held, how many the goal needs, how many are missing. */
 export interface StockLine {
   item: string;
+  /** In the inventory. */
   have: number;
+  /** In known containers. */
+  stored: number;
   need: number;
+  /** Not held and not stored. */
   missing: number;
 }
 
@@ -93,6 +114,8 @@ export interface Route {
   stock: StockLine[];
   /** What the inventory already covers (and the route reserves for the goal). */
   fromInventory: Record<string, number>;
+  /** What known containers cover (fetched by withdraw legs). */
+  fromStorage: Record<string, number>;
   /** Raw materials to gather, in total. */
   raw: Record<string, number>;
   /** Steps in order: ingredients are always gathered or crafted before what they make. */
@@ -113,9 +136,15 @@ export function planRoute(
   inventory: Readonly<Record<string, number>>,
   book: RouteBook,
   places: PlaceLookup = () => [],
+  storage: readonly StoredContainer[] = [],
 ): Route {
   const pool = new Map(Object.entries(inventory).filter(([, n]) => n > 0));
+  // Containers nearest first (unknown distance last), each with what is left in it.
+  const stores = [...storage]
+    .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity))
+    .map((c) => ({ ...c, left: new Map(Object.entries(c.items).filter(([, n]) => n > 0)) }));
   const fromInventory: Record<string, number> = {};
+  const fromStorage: Record<string, number> = {};
   const raw: Record<string, number> = {};
   const unresolved: Record<string, number> = {};
   const legs: RouteLeg[] = [];
@@ -152,8 +181,39 @@ export function planRoute(
     return result;
   };
 
+  /** Fetches up to `n` of `item` from known containers (nearest first); returns how many. */
+  const fetch = (item: string, n: number): number => {
+    let got = 0;
+    for (const c of stores) {
+      if (got >= n) break;
+      const there = c.left.get(item) ?? 0;
+      if (there <= 0) continue;
+      const q = Math.min(there, n - got);
+      c.left.set(item, there - q);
+      got += q;
+      add(fromStorage, item, q);
+      const leg = legs.find(
+        (l) => l.kind === 'withdraw' && l.containerId === c.id && l.item === item,
+      );
+      if (leg !== undefined && leg.kind === 'withdraw') leg.quantity += q;
+      else {
+        legs.push({
+          kind: 'withdraw',
+          containerId: c.id,
+          item,
+          quantity: q,
+          where: c.where,
+          distance: c.distance,
+        });
+      }
+    }
+    return got;
+  };
+
   const acquire = (item: string, n: number, depth: number, stack: Set<string>): void => {
-    const rest = n - take(item, n);
+    let rest = n - take(item, n);
+    if (rest <= 0) return;
+    rest -= fetch(item, rest);
     if (rest <= 0) return;
     if (depth > MAX_DEPTH || stack.has(item)) {
       add(unresolved, item, rest);
@@ -253,13 +313,14 @@ export function planRoute(
     .filter(([, n]) => n > 0)
     .map(([item, need]) => {
       const have = inventory[item] ?? 0;
-      return { item, have, need, missing: Math.max(0, need - have) };
+      const stored = storage.reduce((sum, c) => sum + (c.items[item] ?? 0), 0);
+      return { item, have, stored, need, missing: Math.max(0, need - have - stored) };
     });
   for (const [item, n] of Object.entries(goal)) if (n > 0) acquire(item, n, 0, new Set());
   const stations = [
     ...new Set(legs.flatMap((l) => (l.kind === 'craft' && l.station !== '2x2' ? [l.station] : []))),
   ];
-  return { goal: { ...goal }, stock, fromInventory, raw, legs, unresolved, stations };
+  return { goal: { ...goal }, stock, fromInventory, fromStorage, raw, legs, unresolved, stations };
 }
 
 const roundMinutes = (seconds: number): number => Number((seconds / 60).toFixed(1));
@@ -272,14 +333,26 @@ export function describeRoute(route: Route): string[] {
       .map(([item, n]) => `${n} ${item}`)
       .join(', ');
   lines.push(
-    `stock: ${route.stock.map((x) => `${x.item} have ${x.have} / need ${x.need}`).join('; ')}`,
+    `stock: ${route.stock
+      .map(
+        (x) =>
+          `${x.item} have ${x.have}${x.stored > 0 ? ` + ${x.stored} stored` : ''} / need ${x.need}`,
+      )
+      .join('; ')}`,
   );
   if (Object.keys(route.fromInventory).length > 0) {
     lines.push(`already held for this: ${list(route.fromInventory)}`);
   }
   if (Object.keys(route.raw).length > 0) lines.push(`raw materials to gather: ${list(route.raw)}`);
   route.legs.forEach((leg, i) => {
-    if (leg.kind === 'gather') {
+    if (leg.kind === 'withdraw') {
+      const at =
+        leg.where === null
+          ? ''
+          : ` at (${leg.where.x}, ${leg.where.y}, ${leg.where.z})` +
+            (leg.distance === null ? '' : ` ${leg.distance.toFixed(0)} m away`);
+      lines.push(`${i + 1}. withdraw ${leg.quantity} ${leg.item} from ${leg.containerId}${at}`);
+    } else if (leg.kind === 'gather') {
       const place = (p: KnownPlace): string =>
         `${p.label === undefined ? '' : `${p.label} `}(${p.where.x}, ${p.where.y}, ${p.where.z}) ` +
         `${p.distance.toFixed(0)} m away, ~${p.amount} seen`;
