@@ -1,7 +1,7 @@
 import type { ExploreToward } from '../../domain/actions.ts';
 import { COMPASS } from '../../domain/world-memory.ts';
 import type { PointBox } from './play-area.ts';
-import { reachableFeet, standProblem } from './terrain.ts';
+import { reachableFeet, standingCell, standProblem } from './terrain.ts';
 import type { Fence, Vec3, WalkWorld } from './walking.ts';
 
 /**
@@ -88,7 +88,7 @@ export function chooseHop(
   maxLength: number,
   exclude: ReadonlySet<string> = new Set(),
 ): HopChoice {
-  const start: Node = { x: Math.floor(from.x), y: Math.round(from.y), z: Math.floor(from.z) };
+  const start: Node = standingCell(world, from);
   const inside = (n: Node): boolean =>
     n.x >= fence.min.x &&
     n.x <= fence.max.x &&

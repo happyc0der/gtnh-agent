@@ -49,6 +49,33 @@ const name = (world: WalkWorld, id: number): string =>
   id === 0 ? 'minecraft:air' : (world.blockName(id) ?? `unnamed block id ${id}`);
 
 /**
+ * The block a walk starts from: the one under the centre of the feet, or, when that has no
+ * floor and the player stands on the edge of a neighbour instead (its box, 0.3 each way,
+ * reaches over it, and that holds it up as in the game), the nearest such neighbour. A walk
+ * begins by centring on its start block, which from there is a short step along that edge.
+ * Seen live: a walk stopped at z 9.1, on the edge of the block at z 8, and every walk from
+ * there was refused: "no known full block underfoot (minecraft:air)".
+ */
+export function standingCell(world: WalkWorld, from: Vec3): { x: number; y: number; z: number } {
+  const y = Math.round(from.y);
+  const centre = { x: Math.floor(from.x), y, z: Math.floor(from.z) };
+  if (standProblem(world, centre.x, y, centre.z) === null) return centre;
+  let best: { x: number; y: number; z: number } | null = null;
+  let nearest = Infinity;
+  for (const x of cellsAcross(from.x - 0.3, from.x + 0.3)) {
+    for (const z of cellsAcross(from.z - 0.3, from.z + 0.3)) {
+      if ((x === centre.x && z === centre.z) || standProblem(world, x, y, z) !== null) continue;
+      const d = Math.hypot(x + 0.5 - from.x, z + 0.5 - from.z);
+      if (d < nearest) {
+        best = { x, y, z };
+        nearest = d;
+      }
+    }
+  }
+  return best ?? centre;
+}
+
+/**
  * Why the player could not stand with its feet in block (x, y, z), or null: a known full
  * block under it, its feet and head cells passable (a plant the body passes is fine there),
  * and no hazard in the 3 x 3 columns around, from under the feet to above the head.
@@ -215,7 +242,7 @@ export function planTerrainWalk(
   if (Math.abs(from.y - Math.round(from.y)) > EPS) {
     return refuse(`the player's feet are at y=${from.y}, not on a block top`);
   }
-  const start: Node = { x: Math.floor(from.x), y: Math.round(from.y), z: Math.floor(from.z) };
+  const start: Node = standingCell(world, from);
   const goal: Node = { x: Math.floor(to.x), y: Math.floor(to.y + EPS), z: Math.floor(to.z) };
   if (!inFence(fence, goal.x, goal.y, goal.z))
     return refuse('the target is outside the movement fence');
@@ -488,7 +515,7 @@ export function reachableFeet(
 ): Map<string, ReachedFeet> {
   const reached = new Map<string, ReachedFeet>();
   if (Math.abs(from.y - Math.round(from.y)) > EPS) return reached;
-  const start: Node = { x: Math.floor(from.x), y: Math.round(from.y), z: Math.floor(from.z) };
+  const start: Node = standingCell(world, from);
   if (!inFence(fence, start.x, start.y, start.z)) return reached;
   if (standProblem(world, start.x, start.y, start.z) !== null) return reached;
   const edges = terrainEdges(world, fence, breaks);

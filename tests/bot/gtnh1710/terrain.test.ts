@@ -5,6 +5,7 @@ import {
   bodyProblem,
   checkSupport,
   restingY,
+  standingCell,
   fallDistances,
   landingHazard,
   MAX_DROP,
@@ -480,6 +481,17 @@ describe('gravity: what holds the player up', () => {
     const step = terrain(() => 63, { '1,64,0': ID.stone });
     expect(checkSupport(step, at(0.5, 65, 0.5))).toEqual({ kind: 'floating', landY: 64 });
     expect(checkSupport(step, at(0.9, 65, 0.5))).toEqual({ kind: 'supported' });
+  });
+
+  it('a walk starts from the block it stands on the edge of, when there is none under its centre', () => {
+    // Seen live: a walk stopped at z 9.1, on the edge of the block at z 8 (air at z 9), and
+    // every walk from there was refused: "no known full block underfoot (minecraft:air)".
+    const ledge = terrain((_, z) => (z <= 0 ? 63 : 50)); // ground at z <= 0, a drop beyond
+    const from = at(0.5, 64, 1.1); // the box reaches back over z 0 by 0.2
+    expect(standingCell(ledge, from)).toEqual({ x: 0, y: 64, z: 0 });
+    const plan = planTerrainWalk(ledge, FENCE, from, at(0.5, 64, -3.5), 64);
+    expect(plan.ok).toBe(true);
+    expect(standingCell(flat, at(0.5, 64, 0.5))).toEqual({ x: 0, y: 64, z: 0 });
   });
 
   it('feet hanging a little above the ground come to rest on it, as in a game client', () => {
