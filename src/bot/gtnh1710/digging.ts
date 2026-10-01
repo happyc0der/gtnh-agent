@@ -57,7 +57,7 @@ export const MAX_DIG_REACH = 4.5;
 
 /**
  * After the finish, the client waits for the server's verdict on the block: its answer, then
- * this many quiet ticks with no further update for it (gtnh-client.ts #digVerdict).
+ * this many quiet ticks with no further update for it (client/dig-actions.ts #digVerdict).
  */
 export const DIG_SETTLE_TICKS = 5;
 

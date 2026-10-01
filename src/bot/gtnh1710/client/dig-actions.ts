@@ -373,7 +373,7 @@ export class DigActions {
 
   /**
    * The dig itself, as DIG_BLOCK, DIG_DOWN and a walk's breaks all make it (the caller holds
-   * #digging and has checked its blockers). A window left open is closed first (never with a
+   * core.digging and has checked its blockers). A window left open is closed first (never with a
    * full cursor); `rule` is checked on the latest blocks, the hand chosen (#chooseHand) and
    * `rule` checked again; then it faces the block, swings, sends C07 start, waits the dig time
    * (digWaitTicks at the tool's speed) with `rule`, the guard, the block and the tool in hand

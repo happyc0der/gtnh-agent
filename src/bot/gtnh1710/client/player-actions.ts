@@ -172,7 +172,7 @@ export class PlayerActions {
   }
 
   /**
-   * Ends the server's spawn protection (see #eat) with a right-click on the plain ground
+   * Ends the server's spawn protection (see eat) with a right-click on the plain ground
    * underfoot with an empty hand, which uses, places and opens nothing. Null once it has
    * ended, else why it is still on.
    */

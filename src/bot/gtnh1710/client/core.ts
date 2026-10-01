@@ -41,7 +41,10 @@ export class ClientCore {
   decoding: PlayDecodeOptions = VANILLA_DECODING;
   closedReason: string | null = null;
   confirmedPositions = 0;
-  /** Where the last server position packet put the player, in words (#noteCorrection). */
+  /**
+   * Where the last server position packet put the player, in words (connection.ts
+   * #noteCorrection).
+   */
   lastCorrection: string | null = null;
   #listeners: Array<() => void> = [];
   /** Server verdicts on our clicks (S32), by action number. */
@@ -118,7 +121,10 @@ export class ClientCore {
     return this.world.food === 0;
   }
 
-  /** The stop reason for a server correction, with where it put the player (#noteCorrection). */
+  /**
+   * The stop reason for a server correction, with where it put the player (connection.ts
+   * #noteCorrection).
+   */
   corrected(): string {
     return this.lastCorrection === null
       ? 'the server corrected the position'

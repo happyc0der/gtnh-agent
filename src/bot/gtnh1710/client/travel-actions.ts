@@ -67,12 +67,13 @@ export class TravelActions {
   /**
    * Walks toward `goal` in hops. Each hop goes to the spot inside the current play area that a
    * walk reaches and that is closest to the goal (explore.ts), as an ordinary checked walk
-   * (#walkTo: every step re-checked; threats stop it when `stopForThreats`). With threats
-   * watched, it first waits until the chunks and entities around each new spot have arrived.
-   * After each hop it surveys what it sees (world memory). It stops within `arrive` blocks of
-   * the goal, after `maxDistance` blocks walked, when no hop gets closer (water, cliffs), when
-   * two hops in a row gain less than a block (stuck), at `maxHops` or `maxMs`, when it gets
-   * dark (`daylightOnly`), or on anything that stops a walk (`safe` false).
+   * (movement-actions.ts walkTo: every step re-checked; threats stop it when
+   * `stopForThreats`). With threats watched, it first waits until the chunks and entities
+   * around each new spot have arrived. After each hop it surveys what it sees (world memory).
+   * It stops within `arrive` blocks of the goal, after `maxDistance` blocks walked, when no hop
+   * gets closer (water, cliffs), when two hops in a row gain less than a block (stuck), at
+   * `maxHops` or `maxMs`, when it gets dark (`daylightOnly`), or on anything that stops a walk
+   * (`safe` false).
    */
   async #hops(
     goal: { x: number; z: number },

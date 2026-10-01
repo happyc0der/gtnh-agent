@@ -82,7 +82,7 @@ export class MovementActions {
   /**
    * Plans a walk without moving (for previews and dry runs), with a text map of the fence.
    * Works whether or not movement is enabled; null when no fence is configured. With
-   * `breakLeaves` it plans as MOVE_TO does (#walkBreaks).
+   * `breakLeaves` it plans as MOVE_TO does (walkBreaks).
    */
   previewWalk(
     target: Position | null,
@@ -157,8 +157,8 @@ export class MovementActions {
    * only with digging enabled (and presence ticks, which digging needs), on a fence with a
    * height range, and with an empty hotbar slot to break them with (no allowlisted tool is
    * faster on leaves, so the hand is empty; without one every break would be refused).
-   * #withWorkAreas offers stand spots with it and MOVE_TO plans with it, so a stand spot a
-   * walk reaches by breaking leaves is one a MOVE_TO plans to the same way.
+   * observation.ts #withWorkAreas offers stand spots with it and MOVE_TO plans with it, so a
+   * stand spot a walk reaches by breaking leaves is one a MOVE_TO plans to the same way.
    */
   walkBreaks(fence: Fence): WalkBreaks | undefined {
     const cfg = this.#opts.config;
@@ -176,7 +176,7 @@ export class MovementActions {
     target: Readonly<Position> | null,
     options: {
       stopForThreats: boolean;
-      /** MOVE_TO: over terrain, with digging enabled, break leaves in the way (#walkBreaks). */
+      /** MOVE_TO: over terrain, with digging enabled, break leaves in the way (walkBreaks). */
       breakLeaves?: boolean;
       /** Never held for a break (the validated action's protected items). */
       protectedItems?: ReadonlySet<string>;
@@ -346,11 +346,11 @@ export class MovementActions {
 
   /**
    * Breaks what a terrain walk's next move needs out of its way (planned by planTerrainWalk
-   * with #walkBreaks: leaves only), standing where the walk has got to, exactly as DIG_BLOCK
-   * digs (#digChecked): checkWalkBreak (checkDig's rules, leaves only, inside the safety
-   * boundary) on the blocks the server sent just before each dig and every tick while
-   * digging, with the walk's own guard; the dig time; C07 start and finish; success only on
-   * the server's change to air with no re-send. The walk's checks come first
+   * with walkBreaks: leaves only), standing where the walk has got to, exactly as DIG_BLOCK
+   * digs (dig-actions.ts digChecked): checkWalkBreak (checkDig's rules, leaves only, inside
+   * the safety boundary) on the blocks the server sent just before each dig and every tick
+   * while digging, with the walk's own guard; the dig time; C07 start and finish; success
+   * only on the server's change to air with no re-send. The walk's checks come first
    * (#walkInterruption: the stop file, halt(), a correction, health, threats), and presence
    * ticks go on while the player stands and digs. A cell that is open already (a leaf
    * decayed) is passed over. Null when the way is open, else why the walk must stop;

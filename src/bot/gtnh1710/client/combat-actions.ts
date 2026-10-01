@@ -201,7 +201,7 @@ export class CombatActions {
   }
 
   /**
-   * One ATTACK_ENTITY burst (see #attack): the action's result and, when the target died,
+   * One ATTACK_ENTITY burst (see attack): the action's result and, when the target died,
    * where it last stood (its drops spawn there), its type and the weapon struck with.
    */
   async #strikeBurst(entityId: number, fence: Fence, weapon: Weapon): Promise<Burst> {
@@ -348,10 +348,10 @@ export class CombatActions {
    * After killing a farm animal: its drops (raw meat, leather, wool...) spawn where it died,
    * and the player struck from up to 2.2 blocks away with a bare hand (4.5 with an axe), out
    * of the pickup reach (the body's box grown by 1 sideways and 0.5 up and down: the vanilla
-   * player's onLivingUpdate). As a dig fetches a drop it cannot reach (#dig), it walks onto the
-   * spot the animal died on, or the nearest standable spot beside it, with an ordinary checked
-   * walk that stops for threats, then waits for the drops to arrive. The kill stands whatever
-   * the walk does; the result says what was picked up.
+   * player's onLivingUpdate). As a dig fetches a drop it cannot reach (dig-actions.ts dig), it
+   * walks onto the spot the animal died on, or the nearest standable spot beside it, with an
+   * ordinary checked walk that stops for threats, then waits for the drops to arrive. The kill
+   * stands whatever the walk does; the result says what was picked up.
    */
   async #collectKillDrops(
     result: ClientActionResult,

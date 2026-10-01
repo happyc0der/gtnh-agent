@@ -66,7 +66,10 @@ export class PlaceActions {
     return null;
   }
 
-  /** checkPlace on the latest block data, position and entities, after #interruption. */
+  /**
+   * checkPlace on the latest block data, position and entities, after dig-actions.ts
+   * interruption.
+   */
   #placeCheck(
     area: PlaceArea,
     target: BlockPosition,

@@ -41,10 +41,10 @@ export class Observation {
           : `connection lost: ${this.#core.closedReason}`,
       );
     }
-    // A player the server put in the air lands first (#keepSupported), so what is observed,
-    // the night pit's "standing on a block" above all, sees it on the ground. Seen live: saved
-    // mid-jump at logout, the player joined 0.42 above the sand, and the session went offline
-    // for the night ("no pit: the player is not standing on a block").
+    // A player the server put in the air lands first (movement-actions.ts keepSupported), so
+    // what is observed, the night pit's "standing on a block" above all, sees it on the ground.
+    // Seen live: saved mid-jump at logout, the player joined 0.42 above the sand, and the
+    // session went offline for the night ("no pit: the player is not standing on a block").
     await this.#core.movement.keepSupported();
     if (this.#core.phase !== 'play') {
       throw new Error(`connection lost: ${this.#core.closedReason ?? 'closed'}`);
@@ -60,7 +60,8 @@ export class Observation {
 
   /**
    * Keeps only the interactable blocks (and found crafting tables) the agent may use inside
-   * the fence of the moment (#fence()), and adds where to stand to use each (interact.ts).
+   * the fence of the moment (core.ts fence()), and adds where to stand to use each
+   * (interact.ts).
    */
   #withInteractables(state: GameState): GameState {
     if (!state.interactables.known) return state;
@@ -134,7 +135,8 @@ export class Observation {
       // cactus and foliage were offered, and every walk to them failed). Terrain fences only:
       // a one-level fence (the pen) walks by planWalk, which the flood does not model. When
       // the player cannot walk at all, blocks in reach stay diggable where it stands. A
-      // walk may break leaves on its way (#walkBreaks), as a MOVE_TO there then does.
+      // walk may break leaves on its way (movement-actions.ts walkBreaks), as a MOVE_TO
+      // there then does.
       const reachable =
         fence.min.y === fence.max.y
           ? undefined
