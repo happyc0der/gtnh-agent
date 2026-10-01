@@ -319,6 +319,8 @@ export class WorldModel {
   #dimension: number | null = null;
   #position: PlayerPosition | null = null;
   #health: { health: number; food: number } | null = null;
+  /** When an update last showed the player's health going down. */
+  #lastHurtAt: Date | null = null;
   /** The last S03: the day time then, whether it advances, and when it arrived. */
   #time: { dayTicks: number; daylightCycle: boolean; at: Date } | null = null;
   #heldSlot = 0;
@@ -1279,6 +1281,7 @@ export class WorldModel {
         this.#position = { x: packet.x, feetY: packet.eyeY - PLAYER_EYE_HEIGHT, z: packet.z };
         return;
       case 'update-health':
+        if (this.#health !== null && packet.health < this.#health.health) this.#lastHurtAt = at;
         this.#health = { health: packet.health, food: packet.food };
         return;
       case 'time-update':
@@ -1406,6 +1409,7 @@ export class WorldModel {
         armor: this.#armor(),
         heldTool: this.#heldTool(),
         weapon: this.#weapon(),
+        lastHurtAt: this.#lastHurtAt === null ? null : this.#lastHurtAt.toISOString(),
       },
       inventory: this.#inventory(),
       nearbyThreats: this.#threats(now),

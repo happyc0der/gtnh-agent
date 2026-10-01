@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { Action } from '../domain/actions.ts';
 import { PositionSchema, type Position } from '../domain/common.ts';
 import type { ExplorationSummary } from '../domain/world-memory.ts';
 import type { MemoryRepository } from '../persistence/memory-repository.ts';
@@ -43,7 +42,7 @@ export function readDeadEnds(memory: MemoryRepository): DeadEnd[] {
 /** Records the point of an EXPLORE that could not start for want of a way ("no way further"). */
 export function rememberDeadEnd(
   memory: MemoryRepository,
-  action: Pick<Action, 'type' | 'args'>,
+  action: { type: string; args: unknown },
   result: { ok: boolean; message: string } | null,
   from: Position | null,
 ): void {

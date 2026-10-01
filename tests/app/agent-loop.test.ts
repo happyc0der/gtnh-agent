@@ -454,6 +454,59 @@ describe('world memory and exploring', () => {
     expect(result.action).toMatchObject({ type: 'EXPLORE', args: { toward: { x: -30, z: 20 } } });
   });
 
+  it('asks once more when every GATHER in the plan would find nothing to dig', async () => {
+    const clock = testClock();
+    const { client } = makeWorld((w) => {
+      if (w.task !== null) w.task.requirements = { 'minecraft:gravel': 8 };
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = defaultConfig({
+      ...MOCK_CONFIG,
+      minecraft: { movement: { enabled: true, mode: 'follow' } },
+    });
+    syncConfigToDatabase(config, repos);
+    const gatherGravel: PlannerResponse = {
+      kind: 'plan',
+      plan: {
+        ...(explorePlan as Extract<PlannerResponse, { kind: 'plan' }>).plan,
+        steps: [
+          {
+            step: 1,
+            action: { type: 'GATHER', args: { block: 'minecraft:gravel', count: 8 } },
+            rationale: 'gravel is needed',
+          },
+        ],
+      },
+    };
+    // Seen live: "GATHER logs, GATHER gravel" again and again with neither to dig.
+    const requests: PlannerRequest[] = [];
+    const planner: PlannerProvider = {
+      name: 'hopeful',
+      plan: (request) => {
+        requests.push(request);
+        return Promise.resolve(
+          requests.length === 1 ? gatherGravel : (explorePlan as PlannerResponse),
+        );
+      },
+    };
+    const result = await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    });
+    expect(requests).toHaveLength(2);
+    expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
+    expect(requests[1]?.journal.at(-1)).toMatch(
+      /^Your plan would dig nothing \(GATHER minecraft:gravel: no minecraft:gravel left in view to dig\)\. Plan something else: EXPLORE/,
+    );
+    expect(result.action).toMatchObject({ type: 'EXPLORE' });
+  });
+
   it('keeps remembering, but offers no EXPLORE, with a fixed fence', async () => {
     const { repos, planner } = await cycle({ enabled: true, mode: 'fixed' });
     expect(repos.worldMemory.count()).toBe(1);

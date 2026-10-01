@@ -22,7 +22,7 @@ import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
-import { GATHER } from '../planner/gather.ts';
+import { chooseGatherAction, GATHER, startGather } from '../planner/gather.ts';
 import {
   MAX_JOURNAL_LINE,
   PlannerResponseSchema,
@@ -44,7 +44,13 @@ import type { PlanFacts, RouterContext } from '../system1/state-queries.ts';
 import type { Clock } from '../util/clock.ts';
 import type { IdGenerator } from '../util/ids.ts';
 import { errorMessage, stableStringify } from '../util/json.ts';
-import { gatherAfterAction, gatherStopped, gatherTurn, type GatherRef } from './gather-step.ts';
+import {
+  gatherAfterAction,
+  gatherStopped,
+  gatherTurn,
+  previewCheck,
+  type GatherRef,
+} from './gather-step.ts';
 import { readDeadEnds, rememberDeadEnd, withoutDeadEnds } from './dead-ends.ts';
 import { readTrail, recordTrail, TRAIL_LOCATION, trailRetreat } from './trail.ts';
 import { knownStepAfterAction, nextKnownStep } from './known-steps.ts';
@@ -1058,12 +1064,48 @@ function refusedFirstStep(
   step: string;
   why: string;
   note: string;
-  action: Pick<Action, 'type' | 'args'>;
+  action: { type: string; args: unknown };
   /** What the last failure of this very step said, when it is a repeated failure. */
   lastFailure: string | null;
 } | null {
-  const first = plan.steps[0]?.action;
-  if (first === undefined || first.type === GATHER) return null;
+  // GATHER steps run first to last, one with nothing to dig skipped (gatherEnded): the step
+  // that would act first is the one to check, and with none, the plan would do nothing (seen
+  // live: "GATHER logs, GATHER gravel" again and again, the logs walled in, no gravel in view).
+  const idle: string[] = [];
+  let first: ActionSpec | undefined;
+  for (const s of plan.steps) {
+    if (s.action.type !== GATHER) {
+      first = s.action;
+      break;
+    }
+    const choice = chooseGatherAction(
+      s.action,
+      startGather(0, 0, s.action, state, ctx.now),
+      state,
+      {
+        reach: ctx.config.interactionReach,
+        now: ctx.now,
+        check: previewCheck(deps.repos.actions, taskId, state, ctx),
+      },
+    );
+    if (choice.kind === 'act') return null;
+    if (choice.end === 'no-target') idle.push(`GATHER ${s.action.args.block}: ${choice.why}`);
+  }
+  if (first === undefined) {
+    if (idle.length === 0) return null;
+    const why = idle.join('; ');
+    const head = 'Your plan would dig nothing';
+    const tail = '. Plan something else: EXPLORE toward where it can be reached, or another step.';
+    const room = MAX_JOURNAL_LINE - head.length - tail.length - 3;
+    const lead = plan.steps[0]?.action as { type: string; args: unknown };
+    return {
+      step: idle.map((l) => l.split(':')[0]).join(', '),
+      why,
+      note: `${head} (${why.slice(0, Math.max(0, room))})${tail}`,
+      action: lead,
+      lastFailure: null,
+    };
+  }
   const action = createAction(
     { spec: first, reason: "dry run of a new plan's first step", origin: 'planner', taskId },
     { newId: () => 'dry-run', now: () => deps.clock.now() },

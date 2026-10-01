@@ -9,6 +9,7 @@ import {
 } from '../domain/actions.ts';
 import { parseObservedStorageId, profileForBlock } from '../domain/interactions.ts';
 import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
+import { hostileTactic } from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import { MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
 import {
@@ -307,6 +308,8 @@ export function assessDangers(state: GameState, ctx: SafetyContext): SafetyViola
   }
   if (state.nearbyThreats.known) {
     const t = state.nearbyThreats.value;
+    const shooter = rangedHostileInView(state);
+    const hurt = hurtLately(state);
     if (
       t.nearestHostileDistance !== null &&
       t.nearestHostileDistance <= config.hostileThreatRadius
@@ -316,6 +319,27 @@ export function assessDangers(state: GameState, ctx: SafetyContext): SafetyViola
         severity: 'block',
         message: `${t.hostileCount} hostile(s), nearest at ${t.nearestHostileDistance.toFixed(1)} blocks`,
         details: { hostileCount: t.hostileCount, nearest: t.nearestHostileDistance },
+      });
+    } else if (shooter !== null) {
+      // Seen live: a giant skeleton shot the agent from 10 to 16 blocks, outside the threat
+      // radius, so nothing counted as danger and it walked back into the arrows (20 -> 8).
+      v.push({
+        code: 'HOSTILES_NEARBY',
+        severity: 'block',
+        message: `${shooter.type} shoots from ${shooter.distance.toFixed(1)} blocks (in range of the entity scan)`,
+        details: { hostileCount: t.hostileCount, nearest: shooter.distance, ranged: shooter.type },
+      });
+    } else if (hurt !== null && t.nearestHostileDistance !== null) {
+      // Hurt a moment ago with a hostile about: something is attacking, from wherever.
+      v.push({
+        code: 'HOSTILES_NEARBY',
+        severity: 'block',
+        message: `the player was hurt ${(hurt / 1000).toFixed(0)} s ago, a hostile at ${t.nearestHostileDistance.toFixed(1)} blocks`,
+        details: {
+          hostileCount: t.hostileCount,
+          nearest: t.nearestHostileDistance,
+          hurtMsAgo: hurt,
+        },
       });
     }
     // Fail closed: an entity the agent cannot identify is treated like a hostile one.
@@ -566,6 +590,32 @@ function exploreTimeChecks(state: GameState): SafetyViolation[] {
  * within reach can wall the agent in with it, and a creeper's blast opens it again. Shelters
  * are built before dark, while the state is safe (docs/action-contract.md).
  */
+/** Being hurt this recently (ms) with a hostile about counts as being attacked. */
+export const HURT_DANGER_MS = 15_000;
+
+/**
+ * The nearest hostile that shoots (a skeleton, a witch, a blaze, Special Mobs ones too:
+ * hostileTactic), anywhere in the entity scan: their reach is the scan's, not the threat
+ * radius. Null when none, or the entities are not known.
+ */
+function rangedHostileInView(state: GameState): { type: string; distance: number } | null {
+  if (!state.nearbyEntities.known) return null;
+  let best: { type: string; distance: number } | null = null;
+  for (const e of state.nearbyEntities.value.entities) {
+    if (e.category !== 'hostile' || hostileTactic(e.type) !== 'ranged') continue;
+    if (best === null || e.distance < best.distance) best = { type: e.type, distance: e.distance };
+  }
+  return best;
+}
+
+/** How long ago (ms) the player was last hurt, when within HURT_DANGER_MS of the observation. */
+function hurtLately(state: GameState): number | null {
+  const at = state.player.lastHurtAt;
+  if (at === null) return null;
+  const ago = Date.parse(state.timestamp) - Date.parse(at);
+  return ago >= 0 && ago <= HURT_DANGER_MS ? ago : null;
+}
+
 function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolation[] {
   if (dangers.length === 0) return [];
   const codes = new Set(dangers.map((d) => d.code));

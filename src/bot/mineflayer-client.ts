@@ -117,6 +117,7 @@ export class MineflayerClient implements MinecraftClient {
         armor: unknown('TODO: armor mapping not implemented'),
         heldTool: unknown('TODO: held tool mapping not implemented'),
         weapon: unknown('the Mineflayer adapter does not fight'),
+        lastHurtAt: null,
       },
       inventory: unnamed
         ? unknown('inventory contains items without a known registry name (modded?)')

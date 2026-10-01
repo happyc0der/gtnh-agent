@@ -3584,7 +3584,9 @@ export class Gtnh1710Client implements MinecraftClient {
         const next = step.pos;
         const reason = this.#stepProblem(world, fence, at, next, {
           placementsAtStart,
-          healthAtStart,
+          // An escape (threats do not stop it) keeps going when hit, too (seen live: a retreat
+          // from a skeleton stopped at its first arrow, and the next walk led back into range).
+          healthAtStart: options.stopForThreats ? healthAtStart : null,
           stopForThreats: options.stopForThreats,
           terrain,
         });
