@@ -77,7 +77,9 @@ export const PLACE_TARGETS: ReadonlySet<string> = new Set([
  */
 export const CLICKABLE_SUPPORTS: ReadonlySet<string> = new Set<string>([
   ...WALKABLE_SURFACES,
-  ...SOLID_DIGGABLE_BLOCKS,
+  // The vanilla ones: the modded leaves on the dig allowlist were checked for digging only,
+  // and a garden is no block to click (it would be picked up).
+  ...SOLID_DIGGABLE_BLOCKS.filter((b) => b.startsWith('minecraft:')),
 ]);
 
 /** Blocks that hold sand or gravel up: the walker's full blocks (not leaves, not plants). */

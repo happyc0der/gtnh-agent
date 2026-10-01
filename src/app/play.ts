@@ -503,7 +503,7 @@ export async function runPlay(
   let exitTries = 0;
   /** A note for the next goal's journal (e.g. how to leave the night shelter). */
   let wakeNote: string | null = null;
-  /** The last session saw chunks world memory had not seen before. */
+  /** The last session saw chunks near that world memory had not seen near before. */
   let explored = false;
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
   let last: { questId: string; missing: number; stuck: number } | null = null;

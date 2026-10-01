@@ -23,6 +23,7 @@ import {
   withSkippedEntities,
   type GatherAct,
   type GatherEnd,
+  type GatherOptions,
   type GatherProgress,
   type GatherStep,
 } from '../planner/gather.ts';
@@ -46,7 +47,8 @@ export interface GatherRef {
 
 /**
  * The action a GATHER step takes this cycle (`entity`: the animal it is for, or null for a
- * block), or how it ended before taking one.
+ * block; `travel`: an EXPLORE toward a place the block is remembered at), or how it ended
+ * before taking one.
  */
 export type GatherTurn =
   | {
@@ -55,6 +57,7 @@ export type GatherTurn =
       target: BlockPosition;
       walk: boolean;
       entity: number | null;
+      travel?: boolean;
       reason: string;
     }
   | { kind: 'end'; end: GatherEnd; why: string };
@@ -157,6 +160,7 @@ export function gatherTurn(
   ref: GatherRef,
   state: GameState,
   ctx: SafetyContext,
+  remembered: GatherOptions['remembered'] = [],
 ): GatherTurn {
   const saved = loadProgress(repos, ref);
   const started = saved ?? startGather(ref.planId, ref.stepIndex, ref.gather, state, ctx.now);
@@ -164,6 +168,7 @@ export function gatherTurn(
     reach: ctx.config.interactionReach,
     now: ctx.now,
     check: previewCheck(repos.actions, ref.taskId, state, ctx),
+    remembered,
   });
   const p = {
     ...started,
@@ -200,20 +205,24 @@ export function gatherTurn(
     );
   }
   saveProgress(repos, ref.taskId, p);
+  const name = sourceName(progressSource(p));
   const what =
-    choice.entity !== null
-      ? choice.spec.type === 'MOVE_TO'
-        ? `walk to ${formatPosition(choice.spec.args.target)} next to ${sourceName(progressSource(p))} ${choice.entity}`
-        : `strike ${sourceName(progressSource(p))} ${choice.entity}`
-      : choice.spec.type === 'MOVE_TO'
-        ? `walk to ${formatPosition(choice.spec.args.target)} to dig ${formatPosition(choice.target)}`
-        : `dig ${formatPosition(choice.target)}`;
+    choice.travel === true
+      ? `head for the ${name} remembered at ${formatPosition(choice.target)}`
+      : choice.entity !== null
+        ? choice.spec.type === 'MOVE_TO'
+          ? `walk to ${formatPosition(choice.spec.args.target)} next to ${name} ${choice.entity}`
+          : `strike ${name} ${choice.entity}`
+        : choice.spec.type === 'MOVE_TO'
+          ? `walk to ${formatPosition(choice.spec.args.target)} to dig ${formatPosition(choice.target)}`
+          : `dig ${formatPosition(choice.target)}`;
   return {
     kind: 'act',
     spec: choice.spec,
     target: choice.target,
     walk: choice.walk,
     entity: choice.entity,
+    ...(choice.travel === true ? { travel: true } : {}),
     reason:
       `${head(p)}: ${what} (${gathered}/${p.count} gathered, ` +
       `action ${p.actions + 1} of at most ${GATHER_MAX_ACTIONS})`,

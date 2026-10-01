@@ -42,6 +42,17 @@ export const DIGGABLE: ReadonlyMap<DiggableBlock, DiggableBlockInfo> = new Map<
   ['minecraft:log2', { hardness: 2, bareHandHarvests: true, falls: false }],
   ['minecraft:leaves', { hardness: 0.2, bareHandHarvests: true, falls: false }],
   ['minecraft:leaves2', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  // Biomes O' Plenty 2.1.0 (javap): BlockBOPLeaves, BlockBOPColorizedLeaves,
+  // BlockBOPAppleLeaves and BlockBOPPersimmonLeaves all extend BlockLeavesBase with
+  // Material.leaves and setHardness(0.2F), with no tile entity and no collision effect.
+  ['BiomesOPlenty:leaves1', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  ['BiomesOPlenty:leaves2', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  ['BiomesOPlenty:leaves3', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  ['BiomesOPlenty:leaves4', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  ['BiomesOPlenty:colorizedLeaves1', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  ['BiomesOPlenty:colorizedLeaves2', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  ['BiomesOPlenty:appleLeaves', { hardness: 0.2, bareHandHarvests: true, falls: false }],
+  ['BiomesOPlenty:persimmonLeaves', { hardness: 0.2, bareHandHarvests: true, falls: false }],
   ['minecraft:dirt', { hardness: 0.5, bareHandHarvests: true, falls: false }],
   ['minecraft:grass', { hardness: 0.6, bareHandHarvests: true, falls: false }],
   ['minecraft:sand', { hardness: 0.5, bareHandHarvests: true, falls: true }],

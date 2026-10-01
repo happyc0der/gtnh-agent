@@ -13,9 +13,11 @@ import type { Box } from './geometry.ts';
 /**
  * World memory: what the agent has SEEN while moving, per chunk (16 x 16 columns). Only what
  * a player could see counts: blocks near the surface with a face touching air, in a clear
- * line of sight from the eyes, in daylight (src/bot/gtnh1710/world-survey.ts). Chunks never
- * seen are unknown, whatever the server sent. Chunk coordinates are kept as integers, so
- * chunk-grid rules (such as GregTech's ore-vein grid) can be applied to them later.
+ * line of sight from the eyes, in daylight; and farther away, by far sight, the landmarks a
+ * player makes out from afar on the top blocks: water, sand, gravel, clay, stone, lava
+ * (src/bot/gtnh1710/world-survey.ts). Chunks never seen are unknown, whatever the server
+ * sent. Chunk coordinates are kept as integers, so chunk-grid rules (such as GregTech's
+ * ore-vein grid) can be applied to them later.
  */
 
 /** What a survey counts, by block name (world-survey.ts maps names to kinds). */
@@ -51,6 +53,12 @@ export const SeenChunkSchema = z.strictObject({
   dimension: DimensionSchema,
   chunkX: z.int().min(-CHUNK_LIMIT).max(CHUNK_LIMIT),
   chunkZ: z.int().min(-CHUNK_LIMIT).max(CHUNK_LIMIT),
+  /**
+   * Seen near at least once: some of it lay within the survey's range, where every kind is
+   * looked for. False while only far sight has seen it, which counts landmarks on the top
+   * blocks and nothing else (no trees, no grass): a lake spotted from afar is no look around.
+   */
+  near: z.boolean(),
   /** The most common biome of its columns; null when the chunk data carried no biomes. */
   biome: SeenBiomeSchema.nullable(),
   /** How many blocks of each kind were seen (kinds not seen are absent). */
@@ -69,8 +77,9 @@ const samePosition = (a: BlockPosition, b: BlockPosition): boolean =>
 
 /**
  * Two sightings of one chunk. Each sees only what is in view from where the player stood, so
- * a count is the most seen of that kind in any sighting; examples are kept (newest first) up
- * to MAX_EXAMPLES; the biome and the time come from the newer sighting.
+ * a count is the most seen of that kind in any sighting (a later near look refines what far
+ * sight saw, and a far one never lowers it); examples are kept (newest first) up to
+ * MAX_EXAMPLES; the biome and the time come from the newer sighting; it is near once either is.
  */
 export function mergeSeen(a: SeenChunk, b: SeenChunk): SeenChunk {
   const [older, newer] = Date.parse(a.seenAt) <= Date.parse(b.seenAt) ? [a, b] : [b, a];
@@ -85,7 +94,13 @@ export function mergeSeen(a: SeenChunk, b: SeenChunk): SeenChunk {
       .slice(0, MAX_EXAMPLES);
     if (kept.length > 0) examples[kind] = kept;
   }
-  return { ...newer, biome: newer.biome ?? older.biome, counts, examples };
+  return {
+    ...newer,
+    near: older.near || newer.near,
+    biome: newer.biome ?? older.biome,
+    counts,
+    examples,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +257,12 @@ const centreOf = (c: SeenChunk): { x: number; z: number } => ({
  * of it (plus a much richer one, if any), the biomes seen, and per direction how far it has
  * been seen and how much room is left to the boundary. Distances are horizontal blocks from
  * `from`. Pure.
+ *
+ * Chunks seen only from afar count like any other: their places are blocks that were seen
+ * (water at x, y, z), their biomes were read from the chunk data, and a direction is seen as
+ * far as a landmark was made out that way. Far sight records a chunk only where something
+ * stood out, so a way whose view a hill or a canopy hid stays little seen: that is where a
+ * player would go to look.
  */
 export function summarizeExploration(input: {
   chunks: readonly SeenChunk[];

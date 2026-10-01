@@ -13,7 +13,10 @@ import type { SessionLimits, SessionResult } from './live-session.ts';
  * human; then the quests begin. It happens once: a completed scouting task is never redone.
  */
 export const SCOUT_TASK_ID = 'scout-area';
-/** Chunks seen below which play scouts first (one spot's view is about 25 chunks). */
+/**
+ * Chunks seen near below which play scouts first (one spot's near view is about 25-37 chunks;
+ * what far sight spots beyond it does not count: landmarks only, no trees).
+ */
 export const SCOUT_BELOW_CHUNKS = 50;
 /** Chunks seen at which scouting is done: two or three long explores. */
 export const SCOUT_DONE_CHUNKS = 100;
@@ -22,7 +25,7 @@ export const SCOUT_GOAL =
   'up to 96 blocks each, to find wood (logs), water with sand, gravel and clay, and stone.';
 
 export interface Scouting {
-  /** Chunks the agent has seen so far (world memory). */
+  /** Chunks the agent has seen near so far (world memory; not those seen only from afar). */
   chunksSeen: () => number;
 }
 

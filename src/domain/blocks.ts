@@ -1,16 +1,25 @@
 import { z } from 'zod';
 
 /**
- * Vanilla natural blocks that a bare hand harvests (their material needs no tool): full
- * cubes, with no tile entity, never part of a build. The dig allowlist's solid part: what
- * may touch a dug block, and what a placement may click against (DIG_NEIGHBOURS and
- * CLICKABLE_SUPPORTS in src/bot/gtnh1710), are these, never a garden.
+ * Natural blocks that a bare hand harvests (their material needs no tool): vanilla's, and
+ * modded ones read in their mod's code to be the same (Biomes O' Plenty's leaves). Full
+ * blocks, with no tile entity, never part of a build. The dig allowlist's solid part: what
+ * may touch a dug block (DIG_NEIGHBOURS in src/bot/gtnh1710/digging.ts) is these, never a
+ * garden (a plant on a dug block drops).
  */
 export const SOLID_DIGGABLE_BLOCKS = [
   'minecraft:log',
   'minecraft:log2',
   'minecraft:leaves',
   'minecraft:leaves2',
+  'BiomesOPlenty:leaves1',
+  'BiomesOPlenty:leaves2',
+  'BiomesOPlenty:leaves3',
+  'BiomesOPlenty:leaves4',
+  'BiomesOPlenty:colorizedLeaves1',
+  'BiomesOPlenty:colorizedLeaves2',
+  'BiomesOPlenty:appleLeaves',
+  'BiomesOPlenty:persimmonLeaves',
   'minecraft:dirt',
   'minecraft:grass',
   'minecraft:sand',

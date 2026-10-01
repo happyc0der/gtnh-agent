@@ -358,6 +358,7 @@ describe('planner request and mock planner', () => {
           dimension: 'overworld',
           chunkX: 0,
           chunkZ: 4,
+          near: true,
           biome: { id: 229, name: 'Hot Forest', share: 1 },
           counts: { log: 9 },
           examples: { log: [{ x: 4, y: 64, z: 70 }] },

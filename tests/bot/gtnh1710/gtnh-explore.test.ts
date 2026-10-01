@@ -35,6 +35,9 @@ describe('EXPLORE', { timeout: 30_000 }, () => {
     expect(r.data['progress']).toBeGreaterThan(16);
     expect((await positionOf(client)).z).toBeGreaterThan(SPAWN.z + 16);
     expect(r.message).toMatch(/Hot Forest/);
+    // Open ground ahead: it stopped because maxDistance was spent, not for want of a way (seen
+    // live: "no way further" a few blocks short, remembered as a dead end each time).
+    expect(String(r.data['stoppedBecause'])).toMatch(/^walked (nearly )?the whole maxDistance/);
     // Every step was an ordinary walking step, at most 0.2 blocks from the one before.
     let prev = { x: SPAWN.x, z: SPAWN.z };
     for (const s of server.walkSteps()) {

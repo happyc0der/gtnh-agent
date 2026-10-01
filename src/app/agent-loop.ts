@@ -29,6 +29,8 @@ import {
   gatherSourceOf,
   sourceName,
   startGather,
+  type GatherOptions,
+  type GatherStep,
 } from '../planner/gather.ts';
 import {
   MAX_JOURNAL_LINE,
@@ -38,7 +40,11 @@ import {
   type PlannerResponse,
 } from '../planner/plan-schema.ts';
 import { trimStaleSteps, validatePlan } from '../planner/plan-validator.ts';
-import { buildPlannerRequest, type PlannerProvider } from '../planner/planner-provider.ts';
+import {
+  buildPlannerRequest,
+  rememberedPlacesOf,
+  type PlannerProvider,
+} from '../planner/planner-provider.ts';
 import { mergeProtectedItems } from '../safety/protected-items.ts';
 import {
   actionFingerprint,
@@ -774,9 +780,16 @@ interface PlanStepRef {
   planner: string;
   /**
    * The step is a GATHER (gather-step.ts), which runs many actions: this one is for the
-   * block at `target` (`walk`: the walk to its stand spot), or for the animal `entity`.
+   * block at `target` (`walk`: the walk to its stand spot; `travel`: an EXPLORE toward a
+   * place it is remembered at), or for the animal `entity`.
    */
-  gather?: { ref: GatherRef; target: BlockPosition; walk: boolean; entity: number | null };
+  gather?: {
+    ref: GatherRef;
+    target: BlockPosition;
+    walk: boolean;
+    entity: number | null;
+    travel?: boolean;
+  };
 }
 
 const reviewHint = (taskId: string, planId: number): string =>
@@ -790,6 +803,25 @@ type Consulted =
       outcome: PlannerOutcome;
       ended: { status: CycleStatus; label: string; why: string };
     };
+
+/**
+ * Where world memory remembers a GATHER step's block, for a step with none of it in view
+ * (gather.ts GatherOptions.remembered). None for an animal: animals wander, and world memory
+ * keeps places of blocks only.
+ */
+function rememberedFor(
+  deps: AgentDeps,
+  gather: GatherStep,
+  state: GameState,
+  now: Date,
+): NonNullable<GatherOptions['remembered']> {
+  if (!('block' in gather.args)) return [];
+  return rememberedPlacesOf(
+    gather.args.block,
+    state,
+    explorationFor(deps.config, deps.repos, state, now),
+  );
+}
 
 function stepOf(
   deps: AgentDeps,
@@ -826,7 +858,13 @@ function stepOf(
       stepIndex: stored.nextStep,
       gather: step.action,
     };
-    const turn = gatherTurn(deps.repos, ref, state, ctx);
+    const turn = gatherTurn(
+      deps.repos,
+      ref,
+      state,
+      ctx,
+      rememberedFor(deps, step.action, state, ctx.now),
+    );
     if (turn.kind === 'end') return gatherEnded(deps.repos, stored, turn, outcome);
     return {
       chosen: {
@@ -837,7 +875,13 @@ function stepOf(
       outcome,
       planStep: {
         ...planStep,
-        gather: { ref, target: turn.target, walk: turn.walk, entity: turn.entity },
+        gather: {
+          ref,
+          target: turn.target,
+          walk: turn.walk,
+          entity: turn.entity,
+          ...(turn.travel === true ? { travel: true } : {}),
+        },
       },
     };
   }
@@ -1103,6 +1147,7 @@ function refusedFirstStep(
         reach: ctx.config.interactionReach,
         now: ctx.now,
         check: previewCheck(deps.repos.actions, taskId, state, ctx),
+        remembered: rememberedFor(deps, s.action, state, ctx.now),
       },
     );
     if (choice.kind === 'act') return null;

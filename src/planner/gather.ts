@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ActionSpec } from '../domain/actions.ts';
+import { MAX_EXPLORE_DISTANCE, MIN_EXPLORE_DISTANCE, type ActionSpec } from '../domain/actions.ts';
 import { DiggableBlockSchema, type DiggableBlock } from '../domain/blocks.ts';
 import {
   attackRefusal,
@@ -140,7 +140,8 @@ export const GatherProgressSchema = z.strictObject({
   skippedEntities: z.array(EntityNumberSchema).max(MAX_SKIPPED).default([]),
   /**
    * The block (or the animal, `entity`, and where it stood) the last action was for, whether
-   * that action was the walk to it, and how many walks in a row went to that animal.
+   * that action was the walk to it, and how many walks in a row went to that animal; `travel`
+   * when it was an EXPLORE toward a remembered place (its position is that place).
    */
   last: z
     .strictObject({
@@ -148,6 +149,7 @@ export const GatherProgressSchema = z.strictObject({
       walk: z.boolean(),
       entity: EntityNumberSchema.nullable().default(null),
       walks: z.int().min(0).default(0),
+      travel: z.boolean().optional(),
     })
     .nullable(),
 });
@@ -239,11 +241,15 @@ export function gatherBound(progress: GatherProgress, now: Date): string | null 
   return null;
 }
 
-/** What one of the step's actions was for: a block, or an animal (`entity`) where it stood. */
+/**
+ * What one of the step's actions was for: a block, or an animal (`entity`) where it stood;
+ * `travel`: an EXPLORE toward a place the block is remembered at.
+ */
 export interface GatherAct {
   target: BlockPosition;
   walk: boolean;
   entity: number | null;
+  travel?: boolean;
 }
 
 /**
@@ -273,6 +279,7 @@ export function recordGatherAction(
       walk: act.walk,
       entity: act.entity,
       walks: act.walk ? (same && progress.last?.walk === true ? progress.last.walks : 0) + 1 : 0,
+      ...(act.travel === true ? { travel: true } : {}),
     },
   };
 }
@@ -308,11 +315,23 @@ export interface GatherOptions {
    * proposes what the policy would refuse for that block.
    */
   check: (spec: ActionSpec, from: Position) => string | null;
+  /**
+   * Where world memory remembers the block beyond what the current scan covers, nearest first
+   * (planner-provider.ts rememberedPlacesOf). With none of it in view, the step heads for the
+   * nearest with an EXPLORE toward its x and z, as a person walks back to the gravel they saw
+   * on a hillside. Seen live: GATHER gravel ended "no gravel left in view" with gravel
+   * remembered 92 blocks south, and the planner, asked again, planned the same.
+   */
+  remembered?: ReadonlyArray<{ x: number; y: number; z: number; distance: number }>;
 }
+
+/** Within this far (blocks, level) of a remembered place, none of it in view: it is gone. */
+const REMEMBERED_NEAR = 12;
 
 /**
  * The next action, or how the step ends; `skip`: blocks (and `skipEntities`: animals) to
- * remember not to try again. `entity` is the animal the action is for (null for a block).
+ * remember not to try again. `entity` is the animal the action is for (null for a block);
+ * `travel`: an EXPLORE toward a remembered place (`target`).
  */
 export type GatherChoice =
   | {
@@ -321,6 +340,7 @@ export type GatherChoice =
       target: BlockPosition;
       walk: boolean;
       entity: number | null;
+      travel?: boolean;
       skip: BlockPosition[];
       skipEntities: number[];
     }
@@ -387,7 +407,10 @@ export function chooseGatherAction(
     // Out of reach: walk to its stand spot, unless the adapter computes none, or the last
     // walk (or the player) is already there and it is still out of reach.
     if (r.standAt === undefined) continue;
-    const walked = progress.last?.walk === true && same(progress.last.position, r.position);
+    const walked =
+      progress.last?.walk === true &&
+      progress.last.travel !== true &&
+      same(progress.last.position, r.position);
     if (walked || distance(feet, r.standAt) <= GATHER_STAND_TOLERANCE) {
       skip.push(r.position);
       continue;
@@ -437,6 +460,42 @@ export function chooseGatherAction(
     }
     nearestRefusal ??= `${formatPosition(c.position)}: ${why}`;
   }
+  // None of it in view at all: head for the nearest place it is remembered at.
+  let travelRefusal: string | null = null;
+  if (candidates.length === 0 && unreachable === 0) {
+    for (const place of opts.remembered ?? []) {
+      const target = { x: place.x, y: place.y, z: place.z };
+      if (skipped.has(key(target))) continue;
+      if (Math.hypot(place.x + 0.5 - feet.x, place.z + 0.5 - feet.z) <= REMEMBERED_NEAR) {
+        skip.push(target); // there already, and none of it in view: gone (dug, or fell)
+        continue;
+      }
+      const explore: ActionSpec = {
+        type: 'EXPLORE',
+        args: {
+          toward: { x: place.x + 0.5, z: place.z + 0.5 },
+          maxDistance: Math.min(
+            MAX_EXPLORE_DISTANCE,
+            Math.max(MIN_EXPLORE_DISTANCE, Math.ceil(place.distance) + 8),
+          ),
+        },
+      };
+      const why = opts.check(explore, feet);
+      if (why === null) {
+        return {
+          kind: 'act',
+          spec: explore,
+          target,
+          walk: true,
+          entity: null,
+          travel: true,
+          skip,
+          skipEntities: [],
+        };
+      }
+      travelRefusal ??= `the one remembered at ${formatPosition(target)}: ${why}`;
+    }
+  }
   return {
     kind: 'end',
     end: 'no-target',
@@ -448,7 +507,8 @@ export function chooseGatherAction(
             // looking for logs elsewhere when a way around was what it needed.
             `${unreachable} ${block} in view, but no walk from here reaches a spot to dig one ` +
             'from (walled in by leaves, plants or water, too high, or something would fall)'
-          : `no ${block} left in view to dig`,
+          : `no ${block} left in view to dig` +
+            (travelRefusal === null ? '' : ` (${travelRefusal})`),
     skip,
     skipEntities: [],
   };

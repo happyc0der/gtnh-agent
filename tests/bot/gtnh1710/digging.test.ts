@@ -8,6 +8,7 @@ import {
   DIG_NEIGHBOURS,
   faceTowards,
   standSpotFor,
+  WALK_BREAKABLE_BLOCKS,
   walkBreaks,
   type DigArea,
 } from '../../../src/bot/gtnh1710/digging.ts';
@@ -42,18 +43,40 @@ import {
 import { BLOCK, DIG_TEST_BLOCK_REGISTRY, flatWorld, neidColumn } from './chunk-fixtures.ts';
 
 describe('the dig allowlist', () => {
-  it('is exactly the domain allowlist: vanilla natural blocks a bare hand harvests, and gardens', () => {
+  it('is exactly the domain allowlist: natural blocks a bare hand harvests, and gardens', () => {
     expect([...DIGGABLE.keys()].sort()).toEqual([...DIGGABLE_BLOCKS].sort());
     expect([...DIGGABLE_BLOCKS].sort()).toEqual(
       [...SOLID_DIGGABLE_BLOCKS, ...GARDEN_BLOCKS].sort(),
     );
     for (const [name, info] of DIGGABLE) {
-      expect(name.startsWith('minecraft:') || isGardenBlock(name), name).toBe(true);
+      // Vanilla, or a modded block read in its mod's code: Biomes O' Plenty's leaves, and
+      // HarvestCraft's land gardens.
+      expect(
+        name.startsWith('minecraft:') ||
+          /^BiomesOPlenty:\w*[Ll]eaves\d?$/.test(name) ||
+          isGardenBlock(name),
+        name,
+      ).toBe(true);
       expect(info.bareHandHarvests, name).toBe(true);
       expect(info.falls, name).toBe(FALLING_DIGGABLE_BLOCKS.has(name));
     }
     // Never the water garden: it floats on water, where its drop would land.
     expect(DIGGABLE_BLOCKS).not.toContain('harvestcraft:watergarden');
+  });
+
+  it("walks break Biomes O' Plenty's leaves too, as they break vanilla leaves", () => {
+    // Seen live: a Bamboo Forest's leaves (BiomesOPlenty:leaves1), five columns deep, stood
+    // between the agent and gravel on a sand slope, and every EXPLORE there found no way.
+    for (const leaves of [
+      'BiomesOPlenty:leaves1',
+      'BiomesOPlenty:leaves4',
+      'BiomesOPlenty:colorizedLeaves2',
+      'BiomesOPlenty:appleLeaves',
+    ] as const) {
+      expect(WALK_BREAKABLE_BLOCKS.has(leaves), leaves).toBe(true);
+      expect(DIGGABLE.get(leaves)).toEqual({ hardness: 0.2, bareHandHarvests: true, falls: false });
+    }
+    expect([...WALK_BREAKABLE_BLOCKS].every((b) => /leaves/i.test(b))).toBe(true);
   });
 
   it('uses the verified 1.7.10 hardness values (HarvestCraft sets none for its gardens: 0)', () => {
@@ -63,6 +86,14 @@ describe('the dig allowlist', () => {
       'minecraft:log2': 2,
       'minecraft:leaves': 0.2,
       'minecraft:leaves2': 0.2,
+      'BiomesOPlenty:leaves1': 0.2,
+      'BiomesOPlenty:leaves2': 0.2,
+      'BiomesOPlenty:leaves3': 0.2,
+      'BiomesOPlenty:leaves4': 0.2,
+      'BiomesOPlenty:colorizedLeaves1': 0.2,
+      'BiomesOPlenty:colorizedLeaves2': 0.2,
+      'BiomesOPlenty:appleLeaves': 0.2,
+      'BiomesOPlenty:persimmonLeaves': 0.2,
       'minecraft:dirt': 0.5,
       'minecraft:grass': 0.6,
       'minecraft:sand': 0.5,

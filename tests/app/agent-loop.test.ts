@@ -179,6 +179,7 @@ describe('world memory and exploring', () => {
     dimension: 'overworld',
     chunkX: 0,
     chunkZ: 4,
+    near: true,
     biome: { id: 229, name: 'Hot Forest', share: 1 },
     counts: { log: 12 },
     examples: { log: [{ x: 3, y: 64, z: 70 }] },

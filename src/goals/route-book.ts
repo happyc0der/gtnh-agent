@@ -66,6 +66,16 @@ export const VANILLA_DIG_YIELDS: Yields<(typeof SOLID_DIGGABLE_BLOCKS)[number]> 
     { item: 'minecraft:apple', perDig: 0.005 },
   ],
   'minecraft:leaves2': [{ item: 'minecraft:sapling@4', perDig: 0.05 }],
+  // Biomes O' Plenty's leaves (javap: quantityDropped is 1 in 20, of the sapling of their
+  // kind; apple and persimmon leaves drop their fruit only when ripe, not counted here).
+  'BiomesOPlenty:leaves1': [{ item: 'BiomesOPlenty:saplings', perDig: 0.05 }],
+  'BiomesOPlenty:leaves2': [{ item: 'BiomesOPlenty:saplings', perDig: 0.05 }],
+  'BiomesOPlenty:leaves3': [{ item: 'BiomesOPlenty:saplings', perDig: 0.05 }],
+  'BiomesOPlenty:leaves4': [{ item: 'BiomesOPlenty:saplings', perDig: 0.05 }],
+  'BiomesOPlenty:colorizedLeaves1': [{ item: 'BiomesOPlenty:colorizedSaplings', perDig: 0.05 }],
+  'BiomesOPlenty:colorizedLeaves2': [{ item: 'BiomesOPlenty:colorizedSaplings', perDig: 0.05 }],
+  'BiomesOPlenty:appleLeaves': [{ item: 'BiomesOPlenty:saplings', perDig: 0.05 }],
+  'BiomesOPlenty:persimmonLeaves': [{ item: 'BiomesOPlenty:saplings', perDig: 0.05 }],
 };
 
 /** GTNH 2.8.4's changes to what bare-hand digs yield (each verified; see the evidence). */
