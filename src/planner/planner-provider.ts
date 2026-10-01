@@ -464,7 +464,20 @@ export function buildPlannerRequest(input: {
   exploration?: ExplorationSummary;
 }): PlannerRequest {
   const { config } = input.safety;
-  const { exploration } = input;
+  // World memory's places the current scan covers are in view already or out of reach: the
+  // model never sees them as places to EXPLORE toward (seen live: it read the remembered logs
+  // 8 m away from this list, after the route had left them out, and planned the same failing
+  // EXPLORE until the repeated-failure rule stopped play).
+  const covered = scanCovers(input.state);
+  const exploration =
+    input.exploration === undefined
+      ? undefined
+      : {
+          ...input.exploration,
+          places: input.exploration.places.filter(
+            (p) => p.y === null || !covered({ x: p.x, y: p.y, z: p.z }),
+          ),
+        };
   const { route, gtnhChanges } = routeAndChangesForPlanner(input.state, exploration);
   return PlannerRequestSchema.parse({
     state: sanitizeStateForPlanner(input.state, input.safety.protectedItems, config),

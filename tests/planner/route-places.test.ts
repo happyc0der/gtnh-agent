@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExplorationSummary } from '../../src/domain/world-memory.ts';
-import { routeForPlanner } from '../../src/planner/planner-provider.ts';
-import { makeState } from '../fixtures/index.ts';
+import { buildPlannerRequest, routeForPlanner } from '../../src/planner/planner-provider.ts';
+import { makeState, safetyCtx } from '../fixtures/index.ts';
 
 /** The live situation of 2026-10-01: the first quest wants 8 dirt; the agent stands in a desert. */
 function needing(requirements: Record<string, number>) {
@@ -82,6 +82,16 @@ describe('the route uses what exploring found', () => {
     // Out of the sphere, or below the feet (the scan does not list logs there): still a place.
     expect(gather(at(20, 65, 7))).toContain('(20, 65, 7)');
     expect(gather(at(6, 60, 7))).toContain('(6, 60, 7)');
+    // Nor does the request's own copy of world memory list it.
+    const request = buildPlannerRequest({
+      state: needing({ 'minecraft:log': 8 }),
+      safety: safetyCtx(),
+      maxPlanSteps: 8,
+      recentActions: [],
+      recentFailures: [],
+      exploration: { ...at(6, 65, 7), places: [...at(6, 65, 7).places, ...at(20, 65, 7).places] },
+    });
+    expect(request.exploration?.places.map((p) => [p.x, p.y, p.z])).toEqual([[20, 65, 7]]);
     // With the nearby blocks unknown, nothing is covered.
     const blind = needing({ 'minecraft:log': 8 });
     expect(
