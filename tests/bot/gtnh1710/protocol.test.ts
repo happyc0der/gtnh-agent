@@ -79,6 +79,15 @@ describe('outbound packets', () => {
     expect(outbound.pluginMessage('FML|HS', Buffer.from([1, 2])).kind).toBe('plugin-message');
   });
 
+  it('clicks in window 0 (the 2x2 grid) but never closes it (that drops the grid)', () => {
+    const click = outbound.clickWindow(0, 1, 1, 7, null, true);
+    const r = new FrameDecoder().push(click.frame)[0]?.body;
+    expect([r?.i8(), r?.i16(), r?.i8(), r?.i16(), r?.i8(), r?.i16()]).toEqual([0, 1, 1, 7, 0, -1]);
+    expect(() => outbound.closeWindow(0)).toThrow(/refusing to close window 0/);
+    expect(outbound.closeWindow(3).kind).toBe('close-window');
+    expect(() => outbound.clickWindow(-1, 0, 0, 1, null, true)).toThrow(/bad window id/);
+  });
+
   it('echoes the server position exactly (feet = eyes - 1.62, stance = eyes)', () => {
     const packet = outbound.confirmServerPosition(
       { x: 10.25, eyeY: 71.62000000476837, z: -3, yaw: 90, pitch: 5 },
@@ -424,6 +433,73 @@ describe('world model', () => {
     s = w.toGameState(at);
     expect(s.player.heldTool.known).toBe(false);
     expect(s.inventory.known && s.inventory.value.items['minecraft:iron_sword@12']).toBe(1);
+  });
+
+  it('lays out a crafting table window (S2D type 1 announces 9 slots; the window has 10 + 36)', () => {
+    const w = new WorldModel();
+    w.setRegistry(registry);
+    w.apply({ type: 'window-items', windowId: 0, items: empty(46) }, at);
+    w.expectContainer('table.test');
+    w.apply(
+      { type: 'open-window', windowId: 4, inventoryType: 1, title: 'Crafting', slotCount: 9 },
+      at,
+    );
+    const items: Array<{ id: number; count: number; damage: number; hasNbt: boolean } | null> =
+      empty(46);
+    items[0] = { id: 297, count: 2, damage: 0, hasNbt: false }; // the crafting result
+    items[10] = { id: 297, count: 5, damage: 0, hasNbt: false }; // player main inventory
+    w.apply({ type: 'window-items', windowId: 4, items }, at);
+    const open = w.openWindow;
+    expect([open?.containerSlots, open?.slotsKnown, open?.containerId]).toEqual([
+      10,
+      true,
+      'table.test',
+    ]);
+    // The result slot is not inventory; the player's part is.
+    expect(w.toGameState(at).inventory).toMatchObject({
+      known: true,
+      value: { items: { 'minecraft:bread': 5 } },
+    });
+    // Window 0 takes clicks only while no other window is open.
+    expect(w.inventoryClickWindow).toBeNull();
+    w.closeWindowLocally();
+    expect(w.inventoryClickWindow?.slots[9]).toEqual(items[10]);
+  });
+
+  it('tracks window-0 syncs and the cursor for crafting in the 2x2 grid', () => {
+    const w = new WorldModel();
+    w.setRegistry(registry);
+    w.setCraftingTables([{ id: 'table.a', name: 'A table', position: { x: 1, y: 64, z: 2 } }]);
+    w.apply({ type: 'window-items', windowId: 0, items: empty(46) }, at);
+    w.apply(
+      {
+        type: 'set-slot',
+        windowId: -1,
+        slot: -1,
+        item: { id: 297, count: 1, damage: 0, hasNbt: false },
+      },
+      at,
+    );
+    expect([w.inventorySyncs, w.cursorSyncs]).toEqual([1, 1]);
+    const view = w.inventoryClickWindow;
+    expect(view?.cursor).toEqual({ id: 297, count: 1, damage: 0, hasNbt: false });
+    expect(view?.containerSlots).toBe(9);
+    if (view === null || view === undefined) return;
+    const slots = [...view.slots];
+    slots[1] = view.cursor;
+    // While the click was on its way, the server updated another slot: that update is kept.
+    const bread = { id: 297, count: 3, damage: 0, hasNbt: false };
+    w.apply({ type: 'set-slot', windowId: 0, slot: 20, item: bread }, at);
+    w.applyAcceptedClick(0, view, { ...view, slots, cursor: null });
+    expect(w.inventoryWindow?.[1]).toEqual({ id: 297, count: 1, damage: 0, hasNbt: false });
+    expect(w.inventoryWindow?.[20]).toEqual(bread);
+    expect(w.inventoryClickWindow?.cursor).toBeNull();
+    w.apply({ type: 'set-slot', windowId: 0, slot: 20, item: null }, at);
+    // Grid items are not inventory.
+    expect(w.toGameState(at).inventory).toMatchObject({ known: true, value: { items: {} } });
+    expect(w.toGameState(at).craftingTables).toEqual([
+      { id: 'table.a', name: 'A table', position: { known: true, value: { x: 1, y: 64, z: 2 } } },
+    ]);
   });
 
   it('marks the whole inventory unknown if any stack cannot be named', () => {

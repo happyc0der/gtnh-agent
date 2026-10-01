@@ -32,6 +32,7 @@ const oneOfEach: ActionSpec[] = [
     type: 'REFUEL_KNOWN_GENERATOR',
     args: { generatorId: 'g1', fuelItem: 'minecraft:coal', quantity: 1 },
   },
+  { type: 'CRAFT_ITEM', args: { recipe: 'chest', times: 2, craftingTableId: 'table.main' } },
   { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
 ];
 
@@ -69,6 +70,19 @@ describe('action model', () => {
         args: { generatorId: 'g', fuelItem: 'minecraft:coal', quantity: 65 },
       },
     ],
+    [
+      'unknown recipe',
+      { type: 'CRAFT_ITEM', args: { recipe: 'diamond_pickaxe', times: 1, craftingTableId: null } },
+    ],
+    [
+      'too many crafts',
+      { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 65, craftingTableId: null } },
+    ],
+    [
+      'zero crafts',
+      { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 0, craftingTableId: null } },
+    ],
+    ['crafting without saying where', { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 1 } }],
   ])('rejects %s', (_name, spec) => {
     expect(ActionSpecSchema.safeParse(spec).success).toBe(false);
     expect(() =>

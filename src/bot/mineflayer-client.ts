@@ -128,6 +128,7 @@ export class MineflayerClient implements MinecraftClient {
       },
       machines: [],
       storage: [],
+      craftingTables: [],
       openContainerId: null,
       currentTask: null,
       knownRecipeState: null,
@@ -165,6 +166,7 @@ export class MineflayerClient implements MinecraftClient {
       case 'WITHDRAW_ITEM':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
+      case 'CRAFT_ITEM':
         return Promise.resolve(
           failed(`${action.type} is not implemented for Mineflayer yet`, 'NOT_IMPLEMENTED'),
         );

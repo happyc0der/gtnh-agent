@@ -170,6 +170,49 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'ITEMS_CRAFTED': {
+      if (!before.inventory.known || !after.inventory.known) {
+        check('inventory-known', false, 'inventory unknown before or after crafting');
+        break;
+      }
+      const b = before.inventory.value.items;
+      const a = after.inventory.value.items;
+      const total = (items: Record<string, number>, names: readonly string[]): number =>
+        names.reduce((n, name) => n + (items[name] ?? 0), 0);
+      const rb = b[post.result] ?? 0;
+      const ra = a[post.result] ?? 0;
+      check(
+        'result-delta',
+        ra - rb === post.quantity,
+        `${post.result}: ${rb} -> ${ra}, expected +${post.quantity}`,
+      );
+      post.ingredients.forEach((group, i) => {
+        const gb = total(b, group.anyOf);
+        const ga = total(a, group.anyOf);
+        check(
+          `ingredient-delta-${i + 1}`,
+          gb - ga === group.quantity,
+          `${group.anyOf.length === 1 ? group.anyOf[0] : `${group.anyOf.length} kinds`}: ${gb} -> ${ga}, expected -${group.quantity}`,
+        );
+      });
+      // Nothing else may change: no container items handed back, no surprise outputs.
+      const involved = new Set([post.result, ...post.ingredients.flatMap((g) => g.anyOf)]);
+      const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(
+        (name) => !involved.has(name) && (a[name] ?? 0) !== (b[name] ?? 0),
+      );
+      check(
+        'other-items-unchanged',
+        changed.length === 0,
+        changed.length === 0
+          ? 'no other item changed'
+          : `also changed: ${changed
+              .slice(0, 5)
+              .map((name) => `${name} ${b[name] ?? 0} -> ${a[name] ?? 0}`)
+              .join(', ')}`,
+      );
+      break;
+    }
+
     case 'USER_NOTIFIED':
       check(
         'user-acknowledged',

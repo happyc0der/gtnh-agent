@@ -69,6 +69,25 @@ export const ContainersConfigSchema = z.strictObject({
 });
 export type ContainersConfig = z.infer<typeof ContainersConfigSchema>;
 
+/**
+ * Crafting (the third world-changing ability: it consumes items). Off by default. The
+ * player's own 2x2 grid needs no table; 3x3 recipes use only the crafting tables listed
+ * here, and only if the block there is a minecraft:crafting_table.
+ */
+export const CraftingConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  tables: z
+    .record(
+      EntityIdSchema,
+      z.strictObject({
+        name: z.string().min(1).max(100),
+        position: BlockPositionSchema,
+      }),
+    )
+    .default({}),
+});
+export type CraftingConfig = z.infer<typeof CraftingConfigSchema>;
+
 export const MinecraftConfigSchema = z
   .strictObject({
     host: z.string().min(1).max(253).default('127.0.0.1'),
@@ -101,6 +120,7 @@ export const MinecraftConfigSchema = z
     initialStateGraceMs: z.int().min(0).max(30_000).default(3_000),
     movement: MovementConfigSchema.prefault({}),
     containers: ContainersConfigSchema.prefault({}),
+    crafting: CraftingConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -223,6 +243,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
     set(['minecraft', 'movement', 'fence', 'max'], xyz('MC_MOVEMENT_FENCE_MAX', v));
   if ((v = e('MC_MOVEMENT_STOP_FILE'))) set(['minecraft', 'movement', 'stopFile'], v);
   if ((v = e('MC_ENABLE_CONTAINERS'))) set(['minecraft', 'containers', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_CRAFTING'))) set(['minecraft', 'crafting', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))
     set(['safety', 'boundary', 'min'], xyz('SAFETY_BOUNDARY_MIN', v));

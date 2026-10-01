@@ -7,6 +7,7 @@ import {
   PositionSchema,
   TimestampSchema,
 } from './common.ts';
+import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from './recipes.ts';
 
 /**
  * The complete allowlist of in-game actions. Anything not listed here is rejected
@@ -26,6 +27,7 @@ export const ACTION_TYPES = [
   'WITHDRAW_ITEM',
   'INSPECT_MACHINE',
   'REFUEL_KNOWN_GENERATOR',
+  'CRAFT_ITEM',
   'PAUSE_AND_ASK_USER',
 ] as const;
 
@@ -93,6 +95,18 @@ export const RefuelKnownGeneratorSpec = z.strictObject({
     quantity: z.int().min(1).max(MAX_REFUEL_QUANTITY),
   }),
 });
+/**
+ * Craft `times` times with a recipe from the agent's table (src/domain/recipes.ts), in the
+ * player's own 2x2 grid (craftingTableId null) or at a configured crafting table (3x3).
+ */
+export const CraftItemSpec = z.strictObject({
+  type: z.literal('CRAFT_ITEM'),
+  args: z.strictObject({
+    recipe: RecipeIdSchema,
+    times: z.int().min(1).max(MAX_CRAFT_TIMES),
+    craftingTableId: EntityIdSchema.nullable(),
+  }),
+});
 export const PauseAndAskUserSpec = z.strictObject({
   type: z.literal('PAUSE_AND_ASK_USER'),
   args: z.strictObject({ question: z.string().min(1).max(500) }),
@@ -109,6 +123,7 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   WithdrawItemSpec,
   InspectMachineSpec,
   RefuelKnownGeneratorSpec,
+  CraftItemSpec,
   PauseAndAskUserSpec,
 ]);
 export type ActionSpec = z.infer<typeof ActionSpecSchema>;
@@ -142,6 +157,29 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
     generatorId: EntityIdSchema,
     fuelItem: ItemNameSchema,
     quantity: z.int().min(1).max(MAX_REFUEL_QUANTITY),
+  }),
+  z.strictObject({
+    kind: z.literal('ITEMS_CRAFTED'),
+    recipe: RecipeIdSchema,
+    /** The result item and how many of it the inventory gains in total. */
+    result: ItemNameSchema,
+    quantity: z
+      .int()
+      .min(1)
+      .max(MAX_CRAFT_TIMES * 64),
+    /** Per pattern key: the items it may be made of, and how many of them are used in total. */
+    ingredients: z
+      .array(
+        z.strictObject({
+          anyOf: z.array(ItemNameSchema).min(1).max(16),
+          quantity: z
+            .int()
+            .min(1)
+            .max(MAX_CRAFT_TIMES * 9),
+        }),
+      )
+      .min(1)
+      .max(9),
   }),
   z.strictObject({ kind: z.literal('USER_NOTIFIED') }),
 ]);
@@ -191,6 +229,20 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
         fuelItem: spec.args.fuelItem,
         quantity: spec.args.quantity,
       };
+    case 'CRAFT_ITEM': {
+      const recipe = RECIPES[spec.args.recipe];
+      const times = spec.args.times;
+      return {
+        kind: 'ITEMS_CRAFTED',
+        recipe: recipe.id,
+        result: recipe.result.item,
+        quantity: recipe.result.count * times,
+        ingredients: ingredientRequirements(recipe).map((r) => ({
+          anyOf: [...r.anyOf],
+          quantity: r.perCraft * times,
+        })),
+      };
+    }
     case 'PAUSE_AND_ASK_USER':
       return { kind: 'USER_NOTIFIED' };
   }
@@ -222,6 +274,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   WithdrawItemSpec.extend(actionMetadata),
   InspectMachineSpec.extend(actionMetadata),
   RefuelKnownGeneratorSpec.extend(actionMetadata),
+  CraftItemSpec.extend(actionMetadata),
   PauseAndAskUserSpec.extend(actionMetadata),
 ]);
 export type Action = z.infer<typeof ActionSchema>;

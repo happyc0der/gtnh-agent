@@ -90,6 +90,11 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       name: s.name,
       position: s.position.known ? s.position.value : null,
     })),
+    craftingTables: state.craftingTables.slice(0, 32).map((t) => ({
+      id: t.id,
+      name: t.name,
+      position: t.position.known ? t.position.value : null,
+    })),
     generators: state.power.generators.slice(0, 32).map((g) => ({
       id: g.id,
       name: g.name,

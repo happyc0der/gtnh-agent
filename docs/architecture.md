@@ -12,7 +12,7 @@ flowchart TD
         MC["MinecraftClient interface"]
         MOCK["MockMinecraftClient<br/>(full simulation)"]
         MF["MineflayerClient<br/>(skeleton; cannot join GTNH)"]
-        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes, walks in a fence)"]
+        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes, walks in a fence,<br/>uses chests, crafts)"]
         MC --- G17
         MC --- MOCK
         MC --- MF
@@ -190,6 +190,52 @@ So, in layers:
 
 `halt()`, the stop file and an ongoing walk also block chest use.
 
+## Crafting
+
+`CRAFT_ITEM` crafts with a recipe from the agent's table (`src/domain/recipes.ts`): 2x2 recipes in
+the player's own grid (window 0), 3x3 at a configured crafting table. `src/bot/gtnh1710/crafting.ts`
+plans; `Gtnh1710Client` sends. On top of the chest facts, 1.7.10 has three more
+([evidence](gtnh-compatibility.md#crafting-2026-09-30)):
+
+- The server never sends the crafting result slot as a slot update. Only a full window sync shows
+  it, and the server sends one whenever it rejects a click.
+- Taking the result puts the whole stack on the cursor and takes one item from every grid slot.
+- Closing a window, closing the inventory itself, or leaving the server DROPS whatever is in the
+  grid, like the cursor.
+
+GTNH changes many vanilla recipes, so the table is never trusted blindly. In layers:
+
+1. The executor validates as usual. Every ingredient kind the recipe may use must be unprotected,
+   the inventory must hold enough, and a 3x3 recipe needs a known table within `interactionReach`.
+   The postcondition is derived from the table: the result +count × times, each ingredient group
+   −cells × times, and nothing else changed.
+2. The client plans the whole action on its view of the inventory and refuses before anything is
+   opened or clicked when it cannot finish exactly. Window 0 is clicked only with no other window
+   open. A table opens only if it is configured and its block is a `minecraft:crafting_table`, with
+   an empty hand.
+3. Each craft:
+   - **Fill:** one item into every pattern cell, with predictable clicks (pick up a stack, place one
+     item per empty cell, put the rest back).
+   - **Sync:** a left-click on an empty slot with an empty cursor, claiming a stack that slot cannot
+     hold. The server rejects it and re-sends the window. Every slot must match the client's
+     prediction.
+   - **Check:** the result slot must show exactly the expected item and count, without NBT data.
+     Otherwise nothing is taken and the action fails with what the server showed, so the operator
+     learns the real recipe.
+   - **Take** the result with one click (cursor gets it; every grid slot −1), then **store** it in an
+     EMPTY slot. Results are never merged into other stacks, because their stack limits are unknown.
+4. Any failure first returns the grid and the cursor to the inventory: onto the stack an item came
+   from while that stays within a size the stack has already had, otherwise into an empty slot.
+   Then a sync confirms. A final sync confirms success too.
+5. The grid only ever holds one craft's worth of items. A table is closed afterwards, and never with
+   items in its grid or on the cursor. `outbound.closeWindow(0)` is refused outright: it would drop
+   the 2x2 grid.
+6. `disconnect()` first returns anything a crafting grid or the cursor still holds.
+
+`halt()` and the stop file stop crafting between crafts. Walking, chests and crafting exclude each
+other, and walking is refused while items are on the cursor or in a crafting grid: walking away
+closes a window server-side.
+
 ## Why code, not AI, enforces safety
 
 - **Determinism and auditability.** A rule like "never deposit a protected item" must hold every
@@ -208,7 +254,7 @@ So, in layers:
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) outside `src/bot/`.                                                                                                                                                                                                                                                                                                                                                                              |
-| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, and the chest packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; every other world-changing action returns `NOT_IMPLEMENTED`. |
+| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps and window packets: empty-hand activation, hotbar selection, clicks, confirmations, closing (not window 0)). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests `MC_ENABLE_CONTAINERS=true`; crafting `MC_ENABLE_CRAFTING=true`; other world-changing actions return `NOT_IMPLEMENTED`. |
 | Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                   |
 | Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                |
 | Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                       |
@@ -223,7 +269,7 @@ src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Kn
 src/safety       safety policy, boundaries, protected items, forbidden-action classifier
 src/system1      router, decision providers, action proposer
 src/planner      plan schema, validator, planner interface, mock planner
-src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk in a fence), Mineflayer skeleton
+src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk in a fence; chests; crafting), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/app          agent loop, mock scenarios, CLI

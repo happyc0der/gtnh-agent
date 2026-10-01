@@ -226,6 +226,39 @@ describe('rule 4: protected items', () => {
     expect(r.requiresUserPause).toBe(true);
   });
 
+  it('never crafts with a protected ingredient (any kind the recipe may use counts)', () => {
+    const ctx = safetyCtx(
+      defaultConfig({ safety: { protectedItems: ['minecraft:planks@3', 'minecraft:coal'] } }),
+    );
+    const craft = (recipe: 'sticks' | 'torch_charcoal' | 'planks_oak'): string[] =>
+      evaluateAction(
+        action({ type: 'CRAFT_ITEM', args: { recipe, times: 1, craftingTableId: null } }),
+        makeState(),
+        ctx,
+        emptyFailureHistory,
+      ).violations.map((v) => v.code);
+    // Sticks may use jungle planks (@3), which are protected: refused as a whole.
+    expect(craft('sticks')).toContain('PROTECTED_ITEM');
+    // Protecting minecraft:coal protects charcoal (minecraft:coal@1) too.
+    expect(craft('torch_charcoal')).toContain('PROTECTED_ITEM');
+    expect(craft('planks_oak')).toEqual([]);
+  });
+
+  it('refuses crafting at a crafting table the state does not know', () => {
+    expect(
+      codes({
+        type: 'CRAFT_ITEM',
+        args: { recipe: 'chest', times: 1, craftingTableId: 'table.unknown' },
+      }),
+    ).toContain('UNKNOWN_TARGET');
+    expect(
+      codes({
+        type: 'CRAFT_ITEM',
+        args: { recipe: 'chest', times: 1, craftingTableId: 'table.main' },
+      }),
+    ).toEqual([]);
+  });
+
   it('protects every metadata variant of a protected base id', () => {
     expect(isProtected('gregtech:gt.metaitem.01@32', new Set(['gregtech:gt.metaitem.01']))).toBe(
       true,

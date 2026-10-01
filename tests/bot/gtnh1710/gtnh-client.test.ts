@@ -105,7 +105,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     expect(state.power.availableEUt.known).toBe(false);
 
     const info = client.info();
-    expect(info.registry).toEqual({ items: 2005, blocks: 11 });
+    expect(info.registry).toEqual({ items: 2005, blocks: 12 });
     expect(info.identity).toEqual({
       motd: 'gtnh-agent-test (localhost only)',
       version: '1.7.10',
@@ -176,6 +176,10 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
       REFUEL_KNOWN_GENERATOR: {
         type: 'REFUEL_KNOWN_GENERATOR',
         args: { generatorId: 'g1', fuelItem: 'minecraft:coal', quantity: 1 },
+      },
+      CRAFT_ITEM: {
+        type: 'CRAFT_ITEM',
+        args: { recipe: 'planks_oak', times: 1, craftingTableId: null },
       },
       PAUSE_AND_ASK_USER: { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
     };

@@ -147,7 +147,7 @@ describe('planner request and mock planner', () => {
 
   it('the request carries the allowlist and constraints', () => {
     const r = request();
-    expect(r.allowedActions).toHaveLength(11);
+    expect(r.allowedActions).toHaveLength(12);
     expect(r.safetyConstraints.protectedItems).toEqual([
       'minecraft:diamond',
       'minecraft:nether_star',

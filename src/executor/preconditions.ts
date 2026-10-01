@@ -2,6 +2,12 @@ import type { Action } from '../domain/actions.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance } from '../domain/geometry.ts';
+import {
+  describeIngredient,
+  ingredientRequirements,
+  needsCraftingTable,
+  RECIPES,
+} from '../domain/recipes.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 
 export interface PreconditionResult {
@@ -111,6 +117,34 @@ export function checkPreconditions(
       const machine = state.machines.find((m) => m.id === action.args.machineId);
       if (machine === undefined) failures.push(`machine ${action.args.machineId} is not known`);
       else requireInReach(`machine ${machine.id}`, machine.position);
+      break;
+    }
+
+    case 'CRAFT_ITEM': {
+      requireInventory();
+      const recipe = RECIPES[action.args.recipe];
+      const times = action.args.times;
+      if (inventory !== null) {
+        for (const req of ingredientRequirements(recipe)) {
+          const need = req.perCraft * times;
+          const held = req.anyOf.reduce((n, item) => n + have(item), 0);
+          if (held < need) {
+            failures.push(
+              `inventory holds ${held} of ${describeIngredient(req.anyOf)}, need ${need} for ${times} x ${recipe.id}`,
+            );
+          }
+        }
+      }
+      const tableId = action.args.craftingTableId;
+      if (tableId === null) {
+        if (needsCraftingTable(recipe)) {
+          failures.push(`${recipe.id} needs a crafting table (its pattern does not fit 2x2)`);
+        }
+      } else {
+        const table = state.craftingTables.find((t) => t.id === tableId);
+        if (table === undefined) failures.push(`crafting table ${tableId} is not known`);
+        else requireInReach(`crafting table ${table.id}`, table.position);
+      }
       break;
     }
 
