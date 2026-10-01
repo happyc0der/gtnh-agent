@@ -97,6 +97,11 @@ Research note for the gtnh-agent team, 2026-09-30. Sources are cited inline. Cla
 
 **P1. Quest-book goals and the verifier: implement the BQ client.**
 
+_Status (2026-09-30): built and tested against the fake server, not run live yet. See
+[gtnh-compatibility.md, "Quest book"](../gtnh-compatibility.md#quest-book-better-questing-2026-09-30)
+and [architecture.md, "Quest goals"](../architecture.md#quest-goals). Held items are counted by a
+deterministic submit rather than a re-submit after every unlock._
+
 - Add `BQ_NET_CHAN` to the outbound allowlist in `src/bot/gtnh1710/packets.ts`, along with an NBT writer and gzip slicing.
 - Reply to `main_sync` at login. Parse `quest_sync`, `cache_sync` and `chapter_sync`. Send `task_checkbox`, `quest_action` 1 (submit), `choice_reward` and `quest_action` 0 (claim).
 - Score "Finish Age 0" only from BQ's own completion records.

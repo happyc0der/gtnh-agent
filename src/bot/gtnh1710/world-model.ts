@@ -37,6 +37,7 @@ import {
   type PlayPacket,
 } from './packets.ts';
 import { BLOCK_CODE, buildBlockCodeTable } from './block-hazards.ts';
+import { QuestBookModel, type BqMessage } from './better-questing.ts';
 import {
   GT_EVENT_CHANGE_COMMON_DATA,
   machineFlags,
@@ -385,6 +386,31 @@ export class WorldModel {
   /** Registry id -> interactable code (interact.ts); rebuilt with the registry or the patterns. */
   #interactTable: Uint8Array | null = null;
   #observePatterns: readonly string[] = [];
+  /** The server's quest book for this player (Better Questing), from its own sync messages. */
+  readonly #questBook = new QuestBookModel();
+  /** The quests GameState reports (the agent's Age 0 closure); none until it is set. */
+  #questScope: readonly string[] = [];
+
+  /** Read access for the client (it waits on the server's quest syncs). */
+  get questBook(): QuestBookModel {
+    return this.#questBook;
+  }
+
+  /** Which quests GameState.questBook lists, in this order. */
+  setQuestScope(ids: readonly string[]): void {
+    this.#questScope = [...ids];
+  }
+
+  /** A decoded Better Questing message from the server. */
+  applyQuestBook(message: BqMessage, at: Date): void {
+    this.touch(at);
+    this.#questBook.apply(message);
+  }
+
+  /** A Better Questing message could not be decoded: the quest book is unknown from now on. */
+  markQuestBookProblem(reason: string): void {
+    this.#questBook.markProblem(reason);
+  }
 
   setRegistry(registry: Registry): void {
     this.#registry = registry;
@@ -1382,6 +1408,9 @@ export class WorldModel {
       environmentHazards: this.#hazards(),
       nearbyBlocks: this.#nearbyBlocks(),
       time: this.#worldTime(now),
+      questBook: this.#modVersions.has('betterquesting')
+        ? this.#questBook.toState(this.#questScope)
+        : unknown('the server does not run Better Questing'),
       power: {
         availableEUt: unknown('GTNH EU is not observable through the protocol'),
         generators: [],

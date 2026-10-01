@@ -56,6 +56,9 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 | `TAKE_OUTPUT`             | furnace position, item                                          | furnace within reach; an empty inventory slot                    | a listed furnace (`NOT_INTERACTABLE`); item not protected; inside boundary; not allowed during danger                                                                                                                                                                          | Inventory + the count taken, exactly; nothing else changed.                                  |
 | `ATTACK_ENTITY`           | entity id (a Java int)                                          | position known; the entity listed and within 8 blocks            | listed (`TARGET_GONE`) and attackable (`NOT_ATTACKABLE`); inside boundary; a safe moment (`UNSAFE_ATTACK`); farm animals only for a task, never near hostiles; no protected weapon carried; in danger only when hostiles are the only danger                                   | Seen dying, health lower, or seen hurt (`ENTITY_ATTACKED`).                                  |
 | `PAUSE_AND_ASK_USER`      | question ≤ 500 chars                                            | none                                                             | always permitted                                                                                                                                                                                                                                                               | Client acknowledged. The loop marks the task `paused`.                                       |
+| `SUBMIT_QUEST`            | quest id (two signed 64-bit halves)                             | listed in the quest book, not completed; inventory known         | a quest of the Age 0 closure the server has (`UNKNOWN_TARGET`), active and unlocked there (`QUEST_NOT_ACTIVE`); no protected item could be handed in to a consume task, and none at all for an ore-dictionary entry (`PROTECTED_ITEM`); not allowed during danger              | The server records it completed; only consume items left (`QUEST_COMPLETED`).                |
+| `CHECK_QUEST_BOX`         | quest id, task index 0–1023                                     | an unticked checkbox task of a quest not completed               | a listed quest (`UNKNOWN_TARGET`), active and unlocked on the server (`QUEST_NOT_ACTIVE`); not allowed during danger                                                                                                                                                           | The server records the task, or the quest, as complete (`QUEST_TASK_CHECKED`).               |
+| `CLAIM_QUEST_REWARD`      | quest id, choice index or null                                  | completed, unclaimed; a valid choice; room for every reward      | a listed quest (`UNKNOWN_TARGET`); not allowed during danger                                                                                                                                                                                                                   | Claimed on the server; exactly the reward items arrived (`QUEST_REWARD_CLAIMED`).            |
 
 **Not in the allowlist, by design:** lava interaction, dropping items, breaking any block that
 is not on `DIG_BLOCK`'s allowlist, placing any block that is not on `PLACE_BLOCK`'s allowlist,
@@ -263,6 +266,24 @@ fence and presence ticks. The player never moves.
 - **Reports** swings, hits seen, kills, the target's health before and after, the damage the
   player took and the blows held back. With no hit landed it fails (`FAILED`).
 
+**The quest-book clicks** (`SUBMIT_QUEST`, `CHECK_QUEST_BOX`, `CLAIM_QUEST_REWARD`) are the
+GUI's own clicks in Better Questing's quest book (see
+[gtnh-compatibility: quest book](gtnh-compatibility.md#quest-book-better-questing-2026-09-30)).
+They need `MC_ENABLE_QUEST_BOOK=true` (otherwise `NOT_IMPLEMENTED`) and presence ticks, and
+are refused while a walk, chest operation, dig or placement runs, or under `halt()` or the stop
+file. Only the play loop chooses them, deterministically from the server's records (origin
+`deterministic-router`); the planner is not offered them and `validatePlan` refuses any plan
+step that is one. The client checks the server's quest book again just before it sends
+anything, and judges the click by the server's next sync:
+
+- **Refused** (`REFUSED`) when the quest is not one the agent tracks or the server has not
+  synced it, or (submit, checkbox) the server does not list it as active and unlocked, or
+  (claim) it is not completed or already claimed, the choice does not fit its rewards, or the
+  inventory has no room for them.
+- **Fails** (`FAILED`) when the server does not record the result in time: the quest completed
+  (8 s after a submit: its quest loop runs every 3 s of the player's ticks), the box ticked or
+  the rewards claimed (5 s), the choice acknowledged (3 s).
+
 The other world-changing actions return `NOT_IMPLEMENTED`. See
 [architecture: walking](architecture.md#walking), [digging](architecture.md#digging) and
 [combat](architecture.md#combat).
@@ -289,9 +310,11 @@ The other world-changing actions return `NOT_IMPLEMENTED`. See
    `environmentHazards.scanRadius`). If the entity scan is smaller than `hostileThreatRadius`, or
    the hazard scan smaller than `hazardAvoidanceRadius`, the state is treated as unknown (pause).
 5. **Protected items** can never be eaten, deposited, withdrawn, burned, smelted, taken from a
-   furnace, crafted with (every kind a recipe may use counts), placed or worn out as a weapon (no
-   fight while a protected allowlisted weapon is carried). `ns:item` also protects every
-   `ns:item@meta` variant. Config items are copied into the database and never silently removed.
+   furnace, crafted with (every kind a recipe may use counts), placed, handed in to a quest (a
+   submit is refused while any protected item could match a consume task) or worn out as a
+   weapon (no fight while a protected allowlisted weapon is carried). `ns:item` also protects
+   every `ns:item@meta` variant. Config items are copied into the database and never silently
+   removed.
 6. **Repeated failures.** Once an identical action (type + canonical args) chosen by the agent
    has failed `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is
    refused with `REPEATED_FAILURE` (pause) and the task is blocked until a human resumes it

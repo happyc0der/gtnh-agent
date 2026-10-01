@@ -32,8 +32,14 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
     // ATTACK_ENTITY wears the weapon it strikes with: the client picks it from the hotbar at
     // run time, so the policy checks every allowlisted weapon the player carries instead
     // (src/safety/combat-checks.ts).
+    // SUBMIT_QUEST may hand items in, but which depends on the quest book: the rule that
+    // keeps protected items out of a submit is in quest-book-rules.ts. A checkbox and a
+    // claim take nothing.
     case 'INTERACT_BLOCK':
     case 'ATTACK_ENTITY':
+    case 'SUBMIT_QUEST':
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
     case 'OBSERVE_STATE':
     case 'MOVE_TO':
     case 'EXPLORE':

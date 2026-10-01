@@ -166,6 +166,15 @@ export const CombatConfigSchema = z.strictObject({
 });
 export type CombatConfig = z.infer<typeof CombatConfigSchema>;
 
+/**
+ * Quest-book clicks (SUBMIT_QUEST, CHECK_QUEST_BOX, CLAIM_QUEST_REWARD on Better Questing's
+ * channel). Off by default: a submit can hand items in. Reading the quest book needs no switch.
+ */
+export const QuestBookConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+});
+export type QuestBookConfig = z.infer<typeof QuestBookConfigSchema>;
+
 export const MinecraftConfigSchema = z
   .strictObject({
     host: z.string().min(1).max(253).default('127.0.0.1'),
@@ -203,6 +212,7 @@ export const MinecraftConfigSchema = z
     crafting: CraftingConfigSchema.prefault({}),
     interact: InteractConfigSchema.prefault({}),
     combat: CombatConfigSchema.prefault({}),
+    questBook: QuestBookConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -391,6 +401,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_ENABLE_INTERACT'))) set(['minecraft', 'interact', 'enabled'], v === 'true');
   if ((v = e('MC_INTERACT_OBSERVE_ONLY'))) set(['minecraft', 'interact', 'observeOnly'], list(v));
   if ((v = e('MC_ENABLE_COMBAT'))) set(['minecraft', 'combat', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_QUEST_BOOK'))) set(['minecraft', 'questBook', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))
     set(['safety', 'boundary', 'min'], xyz('SAFETY_BOUNDARY_MIN', v));

@@ -10,6 +10,7 @@ import {
   RECIPES,
 } from '../domain/recipes.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
+import { questBookPreconditions } from './quest-book-checks.ts';
 
 export interface PreconditionResult {
   ok: boolean;
@@ -271,6 +272,12 @@ export function checkPreconditions(
       }
       break;
     }
+
+    case 'SUBMIT_QUEST':
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
+      failures.push(...questBookPreconditions(action, state));
+      break;
   }
   return { ok: failures.length === 0, failures, resolvedTarget };
 }

@@ -11,9 +11,12 @@ held-item durability are not observable (except for the agent's allowlisted tool
 Digging one allowlisted block (see "Digging"), with an empty hand or a verified tool (see
 "Tools"), placing one (see "Placing") and fighting one mob (see "Combat") are built on the
 server's own code, checked in its jars, and tested against the fake server. Digging sand has
-run live (2026-09-30, the play runs); placing and fighting have not yet. Mineflayer cannot
-connect at all. Every claim below is labelled as _verified_ (observed or checked in installed
-code) or _assumption_ (to be tested).
+run live (2026-09-30, the play runs); placing and fighting have not yet. The quest book is read
+from Better Questing's own channel, and its submit, checkbox and claim clicks are typed actions
+(see "Quest book"); built from the mod's bytecode and the world's quest database, tested
+against the fake server, not run live yet. Mineflayer cannot connect at all. Every claim below
+is labelled as _verified_ (observed or checked in installed code) or _assumption_ (to be
+tested).
 
 ## Test server results (2026-09-30)
 
@@ -1077,6 +1080,90 @@ _Assumptions, to check live:_
   included), so dense BOP ground blocks EXPLORE until those blocks are checked and allowed.
   Ores count only when seen; GregTech keeps an ore's material in a tile entity the client does
   not read, so the memory says "ore", never which.
+
+## Quest book (Better Questing) (2026-09-30)
+
+The "Finish Age 0" benchmark is scored from the quest book's OWN records: the quests Better
+Questing records as completed for the agent's player, exactly as when a player completes them
+through the GUI. The agent reads those records over Better Questing's own channel and makes the
+GUI's clicks (submit, checkbox, reward choice, claim) as typed actions. Everything below is
+_verified_ with `javap` in the test server's `mods/BetterQuesting-3.7.15-GTNH.jar` (it holds
+`bq_standard` too) and in the test world's quest database. It is tested against the fake server
+(`tests/bot/gtnh1710/fake-better-questing.ts`) and has **not** been run live yet.
+
+| Fact                                                                                                                                                                                                                                                                                                                  | Evidence (class, method)                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One Forge channel, `BQ_NET_CHAN`, with one message type, `PacketQuesting`, discriminator 0 in both directions.                                                                                                                                                                                                        | `betterquesting.core.BetterQuesting.preInit`: `newSimpleChannel("BQ_NET_CHAN")`, `registerMessage(PacketQuesting$HandleClient, PacketQuesting, 0, CLIENT)` and `(PacketQuesting$HandleServer, PacketQuesting, 0, SERVER)`.                                                                                     |
+| The body is one NBT compound written with `ByteBufUtils.writeTag` (i16 length, gzip'd NBT).                                                                                                                                                                                                                           | `PacketQuesting.toBytes` / `fromBytes`.                                                                                                                                                                                                                                                                        |
+| Every message is sliced: the gzip'd payload goes out in slices of at most 20,480 bytes, each `{size: int, index: int, end: byte, data: byte[]}`; the payload's String `ID` names the handler.                                                                                                                         | `PacketAssembly.bufSize = 20480`, `splitPacket`, `assemblePacket` (keys `size`, `index`, `end`, `data`); `PacketSender.sendTo*` put `ID`.                                                                                                                                                                      |
+| At login the server sends `betterquesting:main_sync {reset: true, respond: true}`. A client answers with an EMPTY main_sync, and only that answer makes the server send the database: settings, `quest_sync` (configs and this player's progress), `chapter_sync`, names, parties, and `cache_sync` (the active set). | `handlers.EventHandler.onPlayerJoin` → `NetBulkSync.sendReset(player, true, true)`; `NetBulkSync.onClient` (`respond` → `sendToServer(new QuestingPacket(ID, new NBTTagCompound()))`); `NetBulkSync.onServer` → `sendSync` → `NetQuestSync.sendSync`, `NetChapterSync.sendSync`, ..., `NetCacheSync.sendSync`. |
+| `betterquesting:quest_action {action, questIDs}`: 0 claims (if `canClaim`), 1 detects (the GUI's submit button), 2 claims "forced". No reach, GUI-open or rate check.                                                                                                                                                 | `NetQuestAction.onServer` (`tableswitch` 0-2 → `claimQuest` / `detectQuest` → `IQuest.detect` / `forceClaimQuest`).                                                                                                                                                                                            |
+| `bq_standard:task_checkbox {questID, taskID}` completes a checkbox task, with no unlock or active check (a locked quest's box can be ticked; the agent never does).                                                                                                                                                   | `bq_standard.network.handlers.NetTaskCheckbox.onServer`: `instanceof TaskCheckbox` → `ITask.setComplete`, `QuestCache.markQuestDirty`.                                                                                                                                                                         |
+| `bq_standard:choice_reward {questID, rewardID, selection}` sets a choice reward's selection; the server echoes it to the client.                                                                                                                                                                                      | `NetRewardChoice` (server and client handlers).                                                                                                                                                                                                                                                                |
+| Quests complete in the quest loop: every 60 of the player's ticks (3 s; `ticksExisted`, which only advances while the client sends movement packets), each quest in the player's ACTIVE set that is unlocked and can be submitted is updated, and completes when its tasks satisfy its task logic.                    | `handlers.EventHandler.onLivingUpdate`: `ticksExisted % 60`, `QuestCache.getActiveQuests`, `IQuest.isUnlocked`, `canSubmit`, `update`.                                                                                                                                                                         |
+| Prerequisites (`questLogic`) and tasks (`taskLogic`) combine by `EnumLogic.getResult(n, total)`: AND n ≥ total, NAND n < total, OR n > 0, NOR n = 0, XOR n = 1, XNOR n = total − 1.                                                                                                                                   | `api.enums.EnumLogic$1` (`tableswitch`), called from `QuestInstance.isUnlocked`, `update` and `detect`.                                                                                                                                                                                                        |
+| Retrieval: a detect counts the whole inventory; consume tasks take the items (`decrStackSize`); an inventory change re-detects only `!consume \|\| autoConsume` tasks. Optional retrieval is `ignored` (counts as done).                                                                                              | `bq_standard.tasks.TaskRetrieval.detect` and `$Detector.run`, `TaskRetrieval.onInventoryChange`, `TaskOptionalRetrieval.ignored` (returns true).                                                                                                                                                               |
+| Crafts and inventory changes reach only the player's active quests: crafting counts only while the quest is active, unless `allowCraftedFromStatistics` (2 of the 44 Age 0 crafting tasks) lets a detect read the player's craft statistics.                                                                          | `bq_standard.handlers.EventHandler.onItemCrafted` and `onServerTick` → `ParticipantInfo.getSharedQuests` → `TaskCrafting.onItemCraft` / `ITaskInventory.onInventoryChange`; `TaskCrafting.detect` (`allowCraftedFromStatistics`).                                                                              |
+| Rewards wait for a claim; reward items go into the inventory and what does not fit is DROPPED on the ground.                                                                                                                                                                                                          | `QuestInstance.claimReward`; `bq_standard.rewards.RewardItem.claimReward`: `InventoryPlayer.func_70441_a` (addItemStackToInventory), else `EntityPlayer.func_71019_a` (drop).                                                                                                                                  |
+| The world's `betterquesting/QuestDatabase.json` is what the server runs; `DefaultQuests` only seed a world that has none.                                                                                                                                                                                             | `handlers.SaveLoadHandler.loadConfig`.                                                                                                                                                                                                                                                                         |
+
+**What the agent reads** (`src/bot/gtnh1710/better-questing.ts`, `QuestBookModel`). When the
+server lists `betterquesting`, the client adds `BQ_NET_CHAN` to its REGISTER, reassembles the
+slices, decodes main_sync, quest_sync, cache_sync, chapter_sync and the choice echo, and answers
+main_sync exactly as the stock client does (an empty main_sync; the only quest-book message sent
+without `MC_ENABLE_QUEST_BOOK`). `GameState.questBook` lists the agent's Age 0 closure (106
+quests): completed, claimed, active and unlocked, each task with the server's completion and
+counts (while the quest is active), and the rewards still to claim. It is unknown until the full
+sync and the active set have arrived (live play waits up to 30 s after login), and for the rest
+of the connection once any message cannot be decoded.
+
+**What the agent may click** (`MC_ENABLE_QUEST_BOOK=true`, off by default): `SUBMIT_QUEST`
+(quest_action 1), `CHECK_QUEST_BOX` (task_checkbox) and `CLAIM_QUEST_REWARD` (choice_reward
+when the quest has a choice, then quest_action 0). The forced claim (quest_action 2, which
+picks a random choice) and every editing message cannot be expressed. The rules (code, not a
+model; see docs/action-contract.md):
+
+- only quests of the Age 0 closure that the server's quest book has;
+- submit and checkbox only while the server lists the quest as active and unlocked
+  (`QUEST_NOT_ACTIVE`); never while the player is walking, digging, placing or using a chest,
+  never without presence ticks (the quest loop runs on the player's ticks), never in danger;
+- a submit hands in items only for consume tasks, and is refused while a protected item could
+  be one of them: the same registry name, or ANY protected item when the task names an ore
+  dictionary entry, whose members the agent cannot list (`PROTECTED_ITEM`);
+- a claim only for a completed, unclaimed quest, with a valid choice, and only with room for
+  every reward (Σ⌈count/16⌉ + 2 free slots), because Better Questing drops what does not fit;
+- verified against the server's next sync: the quest completed (within 8 s: the loop runs every
+  3 s) and only consume items left the inventory; the box (or the quest) done; the rewards
+  claimed and exactly the reward items (the chosen one) in the inventory.
+
+The play loop makes these clicks itself, decided in code from the server's records
+(`questBookSteps`; see docs/architecture.md, "Quest goals"). Plans never contain them: the
+planner is not offered them and `validatePlan` refuses them.
+
+**The Age 0 chapter is not self-contained.** In the world's database, the 92 quests of
+"Tier 0 - Stone Age" need 14 quests from other chapters, all now in
+`src/goals/age0-quests.ts` (never assumed done):
+
+- the 10-quest "And So, It Begins" chain, from the very first quest, "Your First Night" (8 dirt):
+  "Sticks 'n Stones" (gravel and logs, then 2 logs handed in: a consume task), "Where's the
+  Flint?" (craft 3 flint), "Crafting Time" (craft a crafting table), "Main Quests and Secondary
+  Quests" (a checkbox), "Tools", "Monster Hunter", "Soft Mallet Adventure", "Fluffy and Red" (6
+  wool) and "SO...TIRED...MUST...SLEEP..." (a bed), which "Ready, Set, Go!" needs;
+- the smeltery, in "Multiblock Goals": "You Are Not Prepared!!!" (build it) and "You Are Not
+  Prepared... But They Are" (have its parts, and tick) are XOR with each other (completing one
+  locks the other), and "You Are Now Prepared, Hopefully!" accepts either (OR);
+- "Trigger: Loot Game", a hidden quest (no chapter) for LootGames dungeon blocks.
+
+Of the 44 crafting tasks in the closure, only 2 accept crafts from the player's statistics
+("Where's the Flint?", "Crafting Time"); 19 quests have `lockedProgress` (their tasks progress
+while locked). GTNH's gravel never drops flint (IguanaTweaks `removeFlintDrop`; see "Crafting"):
+flint comes from the 3-gravel recipe, which the agent does not have yet, so "Where's the
+Flint?" is the first quest it cannot do.
+
+**Not verified yet:** everything live (the sync's real size and timing, the server's answers to
+the clicks); parties (the agent assumes it plays alone, so `getSharedQuests` is its own active
+set); and that reward items arrive before the sync that records the claim (the client waits
+for both).
 
 ## What was verified (from installed packages, 2026-09-26)
 

@@ -317,6 +317,11 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
         else if (!target.attackable) bad(`${target.type} ${target.id} is not attackable`);
         break;
       }
+      case 'SUBMIT_QUEST':
+      case 'CHECK_QUEST_BOX':
+      case 'CLAIM_QUEST_REWARD':
+        bad(`${a.type} is a quest-book click (the play loop's, never a plan's)`);
+        break;
       case 'OBSERVE_STATE':
       case 'MOVE_TO':
       case 'EXPLORE':

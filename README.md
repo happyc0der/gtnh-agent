@@ -57,6 +57,15 @@ has seen per chunk (biome, logs, sand, gravel, clay, water, stone, ores; only wh
 see). The planner gets the known places, and play scouts the area once before the quests. See
 [Exploring and world memory](#exploring-and-world-memory).
 
+**Quest book (2026-09-30, fake server only so far):** the agent reads GTNH's quest book (Better
+Questing) over the mod's own channel, so the "Finish Age 0" benchmark (the 92-quest
+"Tier 0 - Stone Age" chapter) counts only what the SERVER records as completed, exactly as for a
+player using the quest book. Goals cover the chapter and the 14 quests it needs from other
+chapters, and follow Better Questing's rules (prerequisite logic incl. XOR, task logic OR,
+crafting counted only while a quest is active). With `MC_ENABLE_QUEST_BOOK=true`, play also
+submits finished quests, ticks checkboxes and claims rewards itself, decided in code. See
+[Quest book](#quest-book).
+
 ## Requirements
 
 - Node.js ≥ 22.18 (developed on 24.21). `.ts` files run directly via Node's type stripping.
@@ -108,7 +117,7 @@ cp agent.config.example.json agent.config.json
 | Stop all walking and chest use / allow again | `pnpm cli halt` / `pnpm cli unhalt`                                                       |
 | Add a live task with your plan / list tasks  | `pnpm cli task-add --task <id> --goal <text> --plan <file>` / `pnpm cli task-list`        |
 | Bounded auto-run of the current task         | `pnpm cli run --live [--max-cycles 20] [--max-minutes 10]`                                |
-| The agent's Age 0 quest book and next goal   | `pnpm cli quests [--live]`                                                                |
+| Age 0 quest book as the server records it    | `pnpm cli quests [--live]`                                                                |
 | Autonomous play (quests, or your own goal)   | `pnpm cli play --live [--needs minecraft:diamond=100] [--minutes 30]`                     |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
 | Open a block (furnace, Iron Chests chest...) | `pnpm cli interact --live --at=-6,200,-8`                                                 |
@@ -181,13 +190,14 @@ and [docs/action-contract.md](docs/action-contract.md).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6 (1.5 for cacti and other
   blocks that hurt only on contact); retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 19 action types exist. No dropping, lava, network/multiblock changes or rare-item use.
-  The one action that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs, leaves, dirt, grass,
-  sand, gravel and clay; the one that places blocks, `PLACE_BLOCK`, only places vanilla dirt,
-  cobblestone, sand, gravel, sandstone, planks and logs; `EXPLORE` only walks, in hops, inside
-  the boundary and only in daylight. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and
-  `TAKE_OUTPUT`, and only blocks with an interaction profile or on the observe-only list. The
-  only combat is `ATTACK_ENTITY`, on one listed hostile or farm animal.
+- Only 22 action types exist (3 of them quest-book clicks that only the play loop makes). No
+  dropping, lava, network/multiblock changes or rare-item use. The one action that breaks
+  blocks, `DIG_BLOCK`, only breaks vanilla logs, leaves, dirt, grass, sand, gravel and clay; the
+  one that places blocks, `PLACE_BLOCK`, only places vanilla dirt, cobblestone, sand, gravel,
+  sandstone, planks and logs; `EXPLORE` only walks, in hops, inside the boundary and only in
+  daylight. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT`, and only
+  blocks with an interaction profile or on the observe-only list. The only combat is
+  `ATTACK_ENTITY`, on one listed hostile or farm animal.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
 - Exploring is off unless walking is on **and** `MC_MOVEMENT_MODE=follow`; it never leaves the
@@ -215,6 +225,9 @@ and [docs/action-contract.md](docs/action-contract.md).
   creepers, endermen, pigmen or anything unidentified. It refuses with health below 14 or food
   below 8, more than 2 hostiles near, or anything that may explode within 16 blocks
   (`safety.combat`), and stops at the first damage it takes (see below).
+- Quest-book clicks are off unless `MC_ENABLE_QUEST_BOOK=true`. They are made only for the Age 0
+  quests the server lists as active (claims: completed), never hand in a protected item, and
+  claim rewards only with room for them in the inventory (Better Questing drops the rest).
 - Protected items are never consumed or moved.
 
 ## Project notes
@@ -530,6 +543,36 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#combat)):
   player too much.
 - Every tick it stops on any damage taken (System 1 decides again), a creeper or an unidentified
   mob appearing, the target leaving, the stop file, Ctrl+C or a server correction.
+
+### Quest book
+
+GTNH's quest book is Better Questing 3.7.15-GTNH. The agent reads it like the game's own client
+does (its `BQ_NET_CHAN` channel), so `pnpm cli quests --live` shows the Age 0 quest book as the
+server records it: chapter progress, completed and active quests, unclaimed rewards, the clicks
+that are due and the next goal. It clicks nothing. Without `--live` it shows the last
+observation. Tested against the fake server only; the live test is next.
+
+- Settings: `MC_ENABLE_QUEST_BOOK=true` lets `pnpm cli play --live` make the quest book's clicks
+  itself (off by default): submit a quest whose items are held (handing in the items of a
+  consume task), tick a checkbox when that finishes the quest, and claim the rewards of
+  completed quests (a choice reward takes the item an unfinished quest needs). Presence ticks
+  (`MC_PRESENCE_TICKS`) must be on: the server's quest loop runs on the player's ticks.
+- The goals: `src/goals/age0-quests.ts` is generated from the world's own quest database
+  (`node scripts/extract-quests.ts`, needs `TEST_SERVER_DIR`): the 92 chapter quests and the 14
+  they need from other chapters. The first quest is "Your First Night" (8 dirt); the first one
+  the agent cannot do yet is "Where's the Flint?" (flint is crafted from gravel in GTNH, a recipe
+  the agent does not have).
+
+How it stays safe (see [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#quest-book-better-questing-2026-09-30)):
+
+- Only four message types can be sent on the channel: the main_sync answer that reading needs,
+  quest_action (submit or claim), task_checkbox and choice_reward; editing messages and the
+  random "forced" claim cannot be expressed.
+- Each click is an ordinary action: validated by the safety policy (Age 0 quests only, active
+  and unlocked on the server, never a protected item handed in, never in danger), re-checked
+  by the client against the server's quest book, and verified by the server's next sync (the
+  quest completed, the box ticked, the rewards claimed and exactly those items received).
+- Plans never contain clicks: only the play loop chooses them, from the server's records.
 
 ### Live tasks
 

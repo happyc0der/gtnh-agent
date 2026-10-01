@@ -62,6 +62,9 @@ const oneOfEach: ActionSpec[] = [
   },
   { type: 'ATTACK_ENTITY', args: { entityId: 1234 } },
   { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
+  { type: 'SUBMIT_QUEST', args: { questId: '-2157870659866113684:-8191827436027574183' } },
+  { type: 'CHECK_QUEST_BOX', args: { questId: '0:4', taskIndex: 0 } },
+  { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:5', choice: 1 } },
 ];
 
 describe('action model', () => {
@@ -143,6 +146,17 @@ describe('action model', () => {
       { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 0, craftingTableId: null } },
     ],
     ['crafting without saying where', { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 1 } }],
+    ['a quest id that is not two longs', { type: 'SUBMIT_QUEST', args: { questId: '12' } }],
+    [
+      'a quest id half beyond 64 bits',
+      { type: 'SUBMIT_QUEST', args: { questId: '0:9223372036854775808' } },
+    ],
+    ['a negative task index', { type: 'CHECK_QUEST_BOX', args: { questId: '0:4', taskIndex: -1 } }],
+    ['a claim without saying the choice', { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:5' } }],
+    [
+      'a forced (random) claim',
+      { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:5', choice: null, force: true } },
+    ],
     ['exploring too far', { type: 'EXPLORE', args: { toward: 'north', maxDistance: 97 } }],
     ['exploring a few steps', { type: 'EXPLORE', args: { toward: 'north', maxDistance: 7 } }],
     ['an unknown direction', { type: 'EXPLORE', args: { toward: 'up', maxDistance: 32 } }],
@@ -235,6 +249,15 @@ describe('game state schema', () => {
     delete older['nearbyBlocks'];
     const parsed = GameStateSchema.parse(older);
     expect(parsed.nearbyBlocks).toEqual({
+      known: false,
+      reason: 'not reported by this observation',
+    });
+  });
+
+  it('reads a snapshot stored before questBook existed as "quest book unknown"', () => {
+    const older: Record<string, unknown> = { ...makeState() };
+    delete older['questBook'];
+    expect(GameStateSchema.parse(older).questBook).toEqual({
       known: false,
       reason: 'not reported by this observation',
     });

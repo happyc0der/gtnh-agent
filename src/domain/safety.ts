@@ -135,6 +135,8 @@ export const VIOLATION_CODES = [
   'UNSAFE_ATTACK',
   /** ATTACK_ENTITY on an entity the observation no longer lists (it died, left or despawned). */
   'TARGET_GONE',
+  /** SUBMIT_QUEST / CHECK_QUEST_BOX on a quest the server does not list as active and unlocked. */
+  'QUEST_NOT_ACTIVE',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

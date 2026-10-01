@@ -1,14 +1,21 @@
 import { AGE0_QUESTS } from '../goals/age0-quests.ts';
 import {
   BASE_ABILITIES,
-  missingItems,
   missingText,
+  questView,
+  serverQuests,
   type Abilities,
   type Quest,
+  type QuestBookStep,
   type QuestProgress,
 } from '../goals/quest-goals.ts';
 import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../domain/recipes.ts';
-import { TICKS_PER_DAY, TICKS_PER_SECOND, type WorldTime } from '../domain/game-state.ts';
+import {
+  TICKS_PER_DAY,
+  TICKS_PER_SECOND,
+  type GameState,
+  type WorldTime,
+} from '../domain/game-state.ts';
 import { describeShelter, type ShelterStatus } from '../goals/shelter.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
@@ -21,7 +28,7 @@ import {
   type SessionResult,
   type SessionStopKind,
 } from './live-session.ts';
-import { adoptGoal, updateQuests } from './quest-commands.ts';
+import { adoptGoal, freeSlotsOf, questTaskId, updateQuests } from './quest-commands.ts';
 import {
   adoptScoutTask,
   finishScoutTask,
@@ -33,13 +40,16 @@ import {
 
 /**
  * Autonomous play: the agent works through the Age 0 quest book by itself. Each round it
- * reads its inventory, records the quests that are now satisfied, takes the next quest as
- * its current task, and runs one bounded session on it. In the session the configured
- * decision maker and planner choose what to do; every action is still validated, executed
- * and verified exactly like any other. Between sessions it checks progress.
+ * reads the SERVER's quest book (Better Questing) and the inventory, records the quests the
+ * server now lists as completed, makes the quest-book clicks that are due (claims, checkbox
+ * ticks, submits: decided here in code, never by a model, each validated, executed and
+ * verified like any action), then takes the next quest as its current task and runs one
+ * bounded session on it. In the session the configured decision maker and planner choose
+ * what to do; every action is still validated, executed and verified exactly like any
+ * other. Between sessions it checks progress. Quests count only as the server records them.
  *
  * It stops, and says why, when:
- *  - no quest it can do is left, or its inventory cannot be read;
+ *  - no quest it can do is left, or its inventory or the server's quest book cannot be read;
  *  - a session asks for a human (an approval, a safety stop) or the quest's task was
  *    paused, blocked or closed by someone else (it never resumes those by itself), except
  *    a pause only for a mob near home: that it waits out (mobPause);
@@ -104,6 +114,20 @@ export interface PlayDeps {
    * Play pursues it like a quest (the planner gets its route) and ends when it is reached.
    */
   goal?: FreeGoal;
+  /**
+   * The server's quest book and the inventory, from one fresh observation. Quest goals need
+   * it: a quest counts only once the server's quest book records it.
+   */
+  questBook?: () => Promise<Pick<GameState, 'questBook' | 'inventory'>>;
+  /**
+   * Makes one quest-book click the play loop chose (runQuestBookAction: validated, executed
+   * and verified). Absent while quest-book clicks are off (MC_ENABLE_QUEST_BOOK).
+   */
+  questAction?: (
+    spec: QuestBookStep['spec'],
+    reason: string,
+    taskId: string,
+  ) => Promise<CycleResult>;
   /** Runs one bounded session on the current task (runSession on the live connection). */
   session: (
     limits: SessionLimits,
@@ -160,6 +184,14 @@ export type PlayEvent =
       detail: string | null;
     }
   | { kind: 'night'; message: string }
+  | {
+      /** A quest-book click play made itself (claim, checkbox, submit), and its outcome. */
+      kind: 'quest-book';
+      quest: string;
+      action: string;
+      ok: boolean;
+      detail: string;
+    }
   | {
       kind: 'session-end';
       session: number;
@@ -375,6 +407,37 @@ function nightReason(t: WorldTime): string {
 const total = (missing: Record<string, number>): number =>
   Object.values(missing).reduce((n, c) => n + c, 0);
 
+/**
+ * A quest-book click that failed (or was refused, e.g. in danger) this many times in a row is
+ * not tried again until a session has run. The executor's repeated-failure rule still caps
+ * clicks the server did not honour.
+ */
+const MAX_CLICK_FAILURES = 2;
+
+/**
+ * Better Questing completes a quest whose tasks are done in its quest loop, every 60 of the
+ * player's ticks (3 s): with nothing else to do, play waits this long for it, this many times.
+ */
+const QUEST_LOOP_WAIT_MS = 3_000;
+const MAX_QUEST_LOOP_WAITS = 5;
+
+const clickKey = (s: QuestBookStep): string => `${s.spec.type} ${JSON.stringify(s.spec.args)}`;
+
+/**
+ * By an observation: the quest is completed, or quest-book clicks finish it now (null when
+ * the observation does not show the quest book and the inventory).
+ */
+function questMet(quest: Quest, after: GameState, abilities: Abilities): boolean | null {
+  if (!after.questBook.known || !after.inventory.known) return null;
+  const view = questView(
+    quest,
+    serverQuests(after.questBook.value),
+    after.inventory.value.items,
+    abilities,
+  );
+  return view.completed || view.completableNow;
+}
+
 export async function runPlay(
   deps: PlayDeps,
   limits: PlayLimits,
@@ -400,6 +463,11 @@ export async function runPlay(
   let wakeNote: string | null = null;
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
   let last: { questId: string; missing: number; stuck: number } | null = null;
+  /** Quest-book clicks that failed, by click. */
+  const failedClicks = new Map<string, number>();
+  /** Waits in a row for the server's quest loop, with nothing else to do. */
+  let loopWaits = 0;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
   /** Ends play for a mob near home: the paused task is active again (see mobPause). */
   const waitOutMob = (taskId: string, reasons: string): PlayResult => {
@@ -560,19 +628,19 @@ export async function runPlay(
     }
     shelterTries = 0;
 
-    const inventory = await deps.inventory();
-    if (inventory === null) return done('the inventory is unknown, so progress is unknown');
-
     // What to work on this round: the player's own goal, or the next quest.
     let current: {
       id: string;
       name: string;
       text: string;
       missing: Record<string, number>;
-      missingWith: (inv: Readonly<Record<string, number>>) => number;
+      /** Met by the observation after a cycle (null: it does not tell). */
+      met: (after: GameState) => boolean | null;
       adopt: () => { taskId: string; created: boolean; status: string };
     };
     if (deps.goal !== undefined) {
+      const inventory = await deps.inventory();
+      if (inventory === null) return done('the inventory is unknown, so progress is unknown');
       const free = deps.goal;
       const missing = missingFor(free.requirements, inventory);
       if (total(missing) === 0) {
@@ -584,11 +652,34 @@ export async function runPlay(
         name: free.name,
         text: free.name,
         missing,
-        missingWith: (inv) => total(missingFor(free.requirements, inv)),
+        met: (after) =>
+          after.inventory.known
+            ? total(missingFor(free.requirements, after.inventory.value.items)) === 0
+            : null,
         adopt: () => adoptFreeGoal(deps.repos, free, missing),
       };
     } else {
-      const update = updateQuests(deps.repos, inventory, abilities, quests);
+      if (deps.questBook === undefined) {
+        return done("quest goals need the server's quest book (Better Questing), and none is read");
+      }
+      const observed = await deps.questBook();
+      if (!observed.questBook.known) {
+        return done(
+          `the server's quest book is unknown (${observed.questBook.reason}); quests count ` +
+            'only as the server records them',
+        );
+      }
+      if (!observed.inventory.known) {
+        return done('the inventory is unknown, so progress is unknown');
+      }
+      const update = updateQuests(
+        deps.repos,
+        observed.questBook.value,
+        { items: observed.inventory.value.items, freeSlots: freeSlotsOf(observed) },
+        abilities,
+        quests,
+        new Date(now()),
+      );
       progress = update.progress;
       for (const q of update.added) {
         questsCompleted.push(q.name);
@@ -600,14 +691,61 @@ export async function runPlay(
           total: update.progress.total,
         });
       }
+
+      // Quest-book clicks first, one per round: decided here from the server's records.
+      const act = deps.questAction;
+      const click = update.clicks.find(
+        (c) => (failedClicks.get(clickKey(c)) ?? 0) < MAX_CLICK_FAILURES,
+      );
+      if (act !== undefined && click !== undefined) {
+        const r = await act(click.spec, click.reason, questTaskId(click.quest.id));
+        const ok = r.status === 'succeeded';
+        if (!ok) failedClicks.set(clickKey(click), (failedClicks.get(clickKey(click)) ?? 0) + 1);
+        emit({
+          kind: 'quest-book',
+          quest: click.quest.name,
+          action: click.spec.type,
+          ok,
+          detail: r.outcome?.execution?.message ?? r.summary,
+        });
+        continue;
+      }
+
       const goal = update.next;
-      if (goal === null) return done('no quest the agent can do is left');
+      if (goal === null && update.pending.length > 0 && loopWaits < MAX_QUEST_LOOP_WAITS) {
+        // Tasks all done: the server's quest loop completes the quest within a few seconds.
+        loopWaits += 1;
+        await sleep(QUEST_LOOP_WAIT_MS);
+        continue;
+      }
+      loopWaits = 0;
+      if (goal === null) {
+        const due = update.clicks.map((c) => c.reason).slice(0, 3);
+        const notes =
+          due.length === 0
+            ? []
+            : act === undefined
+              ? [
+                  `${update.clicks.length} quest-book click(s) are due and quest-book clicks ` +
+                    `are off (MC_ENABLE_QUEST_BOOK): ${due.join('; ')}`,
+                ]
+              : [`quest-book clicks failed ${MAX_CLICK_FAILURES} times: ${due.join('; ')}`];
+        const waiting = update.waiting.map((w) => w.reason).slice(0, 3);
+        const pending = update.pending.map(
+          (q) => `the server has not completed "${q.name}" although its tasks are done`,
+        );
+        return done(
+          ['no quest the agent can do is left', ...notes, ...waiting, ...pending.slice(0, 3)].join(
+            '; ',
+          ),
+        );
+      }
       current = {
         id: goal.quest.id,
         name: goal.quest.name,
         text: goal.text,
         missing: goal.missing,
-        missingWith: (inv) => total(missingItems(goal.quest, inv)),
+        met: (after) => questMet(goal.quest, after, abilities),
         adopt: () => adoptGoal(deps.repos, goal),
       };
     }
@@ -680,9 +818,8 @@ export async function runPlay(
           detail: r.outcome?.execution?.message ?? null,
         });
         const after = r.outcome?.stateAfter;
-        if (after?.inventory.known === true) {
-          met = current.missingWith(after.inventory.value.items) === 0;
-        }
+        const metNow = after === undefined || after === null ? null : current.met(after);
+        if (metNow !== null) met = metNow;
         // Shelter time (or dark, without shelters) ends the session in time to act on it.
         if (
           after?.time.known === true &&
@@ -694,6 +831,8 @@ export async function runPlay(
     });
     sessions = session;
     lastStop = result.stopReason;
+    // The world has moved on (a mob gone, items gathered): failed clicks may be tried again.
+    failedClicks.clear();
     emit({
       kind: 'session-end',
       session,
@@ -756,5 +895,7 @@ export function describePlayEvent(e: PlayEvent): string {
       return `session ${e.session}: ${e.cycles} cycle(s); ${e.stopReason}`;
     case 'night':
       return `night: ${e.message}`;
+    case 'quest-book':
+      return `QUEST BOOK ${e.action} "${e.quest}": ${e.ok ? 'done' : 'FAILED'} (${e.detail})`;
   }
 }

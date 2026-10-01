@@ -4,6 +4,7 @@ import type { GameState, InteractableBlock } from '../domain/game-state.ts';
 import { distance, formatPosition } from '../domain/geometry.ts';
 import { COMPASS } from '../domain/world-memory.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
+import { verifyQuestBook } from './quest-book-checks.ts';
 
 export interface VerificationCheck {
   name: string;
@@ -443,6 +444,12 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
         execution.data['acknowledged'] === true,
         'client acknowledged the pause',
       );
+      break;
+
+    case 'QUEST_COMPLETED':
+    case 'QUEST_TASK_CHECKED':
+    case 'QUEST_REWARD_CLAIMED':
+      for (const c of verifyQuestBook(post, before, after)) check(c.name, c.passed, c.detail);
       break;
   }
   return done();

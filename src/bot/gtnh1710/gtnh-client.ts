@@ -78,6 +78,19 @@ import {
   lookAtPoint,
   playerEyes,
 } from './combat.ts';
+import {
+  BQ_CHANNEL,
+  BqAssembler,
+  choiceRewardOf,
+  claimRewardItems,
+  decodeBqMessage,
+  describeQuestTasks,
+  plainText,
+  questBookRequestProblem,
+  type BqOutbound,
+  type QuestBookRequest,
+} from './better-questing.ts';
+import { rewardSlotsNeeded } from '../../domain/quest-items.ts';
 import { checkDig, eyesOf, faceTowards, reachTo, standSpotFor, type DigArea } from './digging.ts';
 import { ARRIVED, chooseHop, exploreGoal } from './explore.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
@@ -207,6 +220,18 @@ interface Hand {
   note: string | null;
 }
 
+/**
+ * Better Questing completes quests in its quest loop, every 60 of the player's ticks (3 s at 20
+ * per second), and syncs changed quests every 20 ticks: a submit is judged after 8 s.
+ */
+const QUEST_SUBMIT_TIMEOUT_MS = 8_000;
+/** A ticked box or a claim is synced back within 20 player ticks (1 s); 5 s is generous. */
+const QUEST_SYNC_TIMEOUT_MS = 5_000;
+/** The server echoes a reward choice at once. */
+const QUEST_CHOICE_TIMEOUT_MS = 3_000;
+/** Reward items arrive as slot updates on the server's next tick. */
+const QUEST_REWARD_ITEMS_TIMEOUT_MS = 2_000;
+
 /** "2 x minecraft:sand, 1 x minecraft:flint" (at most 200 characters). */
 function describeGain(gained: ReadonlyArray<[string, number]>): string {
   return gained
@@ -258,6 +283,13 @@ export interface Gtnh1710ClientOptions {
    * play area never leaves it. Without it, 'follow' refuses all movement.
    */
   explorationBoundary?: PointBox | null;
+  /**
+   * The quests GameState.questBook reports (the agent's Age 0 closure, in order). Quest-book
+   * actions are possible only for these. None when absent.
+   */
+  questScope?: readonly string[];
+  /** Overrides how long a quest-book click waits for the server's verdict (tests). */
+  questBookTimeoutMs?: number;
 }
 
 /** EXPLORE's own limits, on top of maxDistance: hops, time, and the wait for chunks per hop. */
@@ -312,7 +344,9 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    steps, the window packets chests and crafting need (empty-hand block activation,
  *    hotbar selection, predictable clicks, confirmations, closing a window), digging
  *    start/cancel/finish, a block placement with the held block item, attacks on one checked
- *    entity (C02, attack only), and the cosmetic head look and arm swing;
+ *    entity (C02, attack only), the cosmetic head look and arm swing, and Better Questing's
+ *    four typed quest-book messages (the main_sync answer that reading the quest book needs,
+ *    and submit, checkbox, choice and claim when the quest book is enabled);
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
  *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
  *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
@@ -343,6 +377,8 @@ export class Gtnh1710Client implements MinecraftClient {
   readonly #opts: Gtnh1710ClientOptions;
   readonly #world = new WorldModel();
   readonly #multipart = new MultipartAssembler();
+  /** Better Questing's sliced messages from the server, reassembled. */
+  readonly #questBookSlices = new BqAssembler();
   readonly #outboundCounts = new Map<OutboundKind, number>();
   #socket: Socket | null = null;
   #phase: Phase = 'idle';
@@ -372,6 +408,8 @@ export class Gtnh1710Client implements MinecraftClient {
   #exploring = false;
   /** What the player has seen around it, for world memory (world-survey.ts). */
   readonly #surveys = new SurveyTracker();
+  /** A quest-book click is waiting for the server's verdict. */
+  #questBookBusy = false;
 
   constructor(opts: Gtnh1710ClientOptions) {
     this.#opts = opts;
@@ -426,6 +464,7 @@ export class Gtnh1710Client implements MinecraftClient {
     };
     this.#world.setChunkFormat({ neid: this.#decoding.neid });
     this.#world.setServerMods(this.#identity.mods);
+    this.#world.setQuestScope(this.#opts.questScope ?? []);
     this.#world.setContainers(
       Object.entries(cfg.containers.chests).map(([id, c]) => ({
         id,
@@ -640,6 +679,20 @@ export class Gtnh1710Client implements MinecraftClient {
         return this.#takeOutput(action.args);
       case 'ATTACK_ENTITY':
         return this.#attack(action.args.entityId);
+      case 'SUBMIT_QUEST':
+        return this.#questBookAction({ kind: 'submit', questId: action.args.questId });
+      case 'CHECK_QUEST_BOX':
+        return this.#questBookAction({
+          kind: 'check',
+          questId: action.args.questId,
+          taskIndex: action.args.taskIndex,
+        });
+      case 'CLAIM_QUEST_REWARD':
+        return this.#questBookAction({
+          kind: 'claim',
+          questId: action.args.questId,
+          choice: action.args.choice,
+        });
       case 'EAT_FOOD':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
@@ -2788,6 +2841,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#digging) return refused('the player is digging');
     if (this.#placing) return refused('the player is placing a block');
     if (this.#exploring) return refused('the player is exploring');
+    if (this.#questBookBusy) return refused('a quest-book action is running');
     if (this.#fighting) return refused('a fight is already in progress');
     return null;
   }
@@ -3025,6 +3079,194 @@ export class Gtnh1710Client implements MinecraftClient {
     if (stop?.hard === true) return craftFailed(`fight stopped: ${summary}`, 'FAILED', data);
     if (hits > 0 || killed) return ok(summary.slice(0, 500), data);
     return craftFailed(`no hit landed on ${what}: ${summary}`, 'FAILED', data);
+  }
+
+  // -------------------------------------------------------------------------
+  // The quest book (Better Questing; see better-questing.ts)
+
+  /** Why a quest-book click cannot be made now, or null. */
+  #questBookBlocker(): { reason: string; code: 'NOT_IMPLEMENTED' | 'REFUSED' } | null {
+    const cfg = this.#opts.config;
+    if (!cfg.questBook.enabled) {
+      return {
+        reason: 'quest-book actions are disabled (MC_ENABLE_QUEST_BOOK)',
+        code: 'NOT_IMPLEMENTED',
+      };
+    }
+    const refused = (reason: string) => ({ reason, code: 'REFUSED' as const });
+    // The server's quest loop runs on the player's own ticks: without them nothing completes.
+    if (!cfg.presenceTicks) {
+      return refused('quest-book actions need presence ticks (MC_PRESENCE_TICKS)');
+    }
+    if (this.#haltReason !== null) return refused(`halted: ${this.#haltReason}`);
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return refused(`the stop file ${cfg.movement.stopFile} exists`);
+    }
+    if (this.#walking || this.#exploring) return refused('the player is walking');
+    if (this.#digging) return refused('the player is digging');
+    if (this.#placing) return refused('the player is placing a block');
+    if (this.#usingContainer) return refused('a chest or crafting operation is running');
+    if (this.#fighting) return refused('the player is fighting');
+    if (this.#questBookBusy) return refused('a quest-book action is already running');
+    return null;
+  }
+
+  #sendQuestBook(message: BqOutbound): void {
+    for (const p of outbound.questBook(message)) this.#send(p);
+  }
+
+  /**
+   * SUBMIT_QUEST, CHECK_QUEST_BOX and CLAIM_QUEST_REWARD: the quest book's own clicks, sent
+   * only after re-checking the server's quest book as it is now, and judged by the server's
+   * next sync (the quest completed, the box ticked, the rewards claimed and in the inventory).
+   */
+  async #questBookAction(req: QuestBookRequest): Promise<ClientActionResult> {
+    const blocker = this.#questBookBlocker();
+    if (blocker !== null)
+      return failed(`not using the quest book: ${blocker.reason}`, blocker.code);
+    const book = this.#world.questBook;
+    const problem = questBookRequestProblem(book, this.#opts.questScope ?? [], req);
+    if (problem !== null) return failed(`not using the quest book: ${problem}`, 'REFUSED');
+    this.#questBookBusy = true;
+    try {
+      switch (req.kind) {
+        case 'submit':
+          return await this.#submitQuest(req.questId);
+        case 'check':
+          return await this.#checkQuestBox(req.questId, req.taskIndex);
+        case 'claim':
+          return await this.#claimQuest(req.questId, req.choice);
+      }
+    } finally {
+      this.#questBookBusy = false;
+    }
+  }
+
+  #questTimeout(ms: number): number {
+    return this.#opts.questBookTimeoutMs ?? ms;
+  }
+
+  #questName(id: string): string {
+    return `"${plainText(this.#world.questBook.config(id)?.name ?? id)}"`;
+  }
+
+  /** Inventory decreases since `before`, as "2 x minecraft:log". */
+  #handedIn(before: Readonly<Record<string, number>> | null): string {
+    const now = this.#world.inventoryItems();
+    if (before === null || now === null) return '';
+    return describeGain(
+      Object.entries(before)
+        .map(([item, n]): [string, number] => [item, n - (now[item] ?? 0)])
+        .filter(([, d]) => d > 0),
+    );
+  }
+
+  async #submitQuest(id: string): Promise<ClientActionResult> {
+    const book = this.#world.questBook;
+    const before = this.#world.inventoryItems();
+    this.#sendQuestBook({ kind: 'quest-action', action: 'detect', questIds: [id] });
+    await this.#waitFor(() => book.completed(id), this.#questTimeout(QUEST_SUBMIT_TIMEOUT_MS));
+    const handedIn = this.#handedIn(before);
+    if (!book.completed(id)) {
+      return failed(
+        `the server did not record ${this.#questName(id)} as completed within ` +
+          `${this.#questTimeout(QUEST_SUBMIT_TIMEOUT_MS) / 1000} s of the submit (tasks: ${describeQuestTasks(book, id)})` +
+          (handedIn === '' ? '' : `; handed in: ${handedIn}`),
+        'FAILED',
+        { questId: id, handedIn },
+      );
+    }
+    this.#log(`quest book: ${this.#questName(id)} completed after a submit`);
+    return ok(
+      `submitted ${this.#questName(id)}: the server records it as completed` +
+        (handedIn === '' ? '' : ` (handed in ${handedIn})`),
+      { questId: id, handedIn },
+    );
+  }
+
+  async #checkQuestBox(id: string, taskIndex: number): Promise<ClientActionResult> {
+    const book = this.#world.questBook;
+    this.#sendQuestBook({ kind: 'task-checkbox', questId: id, taskIndex });
+    const done = (): boolean => book.taskComplete(id, taskIndex) || book.completed(id);
+    await this.#waitFor(done, this.#questTimeout(QUEST_SYNC_TIMEOUT_MS));
+    if (!done()) {
+      return failed(
+        `the server did not record checkbox ${taskIndex} of ${this.#questName(id)} as ticked`,
+        'FAILED',
+        { questId: id, taskIndex },
+      );
+    }
+    return ok(`ticked checkbox ${taskIndex} of ${this.#questName(id)}`, { questId: id, taskIndex });
+  }
+
+  async #claimQuest(id: string, choice: number | null): Promise<ClientActionResult> {
+    const book = this.#world.questBook;
+    const config = book.config(id);
+    const expected = config === null ? 'unknown quest' : claimRewardItems(config, choice);
+    if (typeof expected === 'string') {
+      return failed(`not claiming ${this.#questName(id)}: ${expected}`, 'REFUSED');
+    }
+    if (config === null) return failed(`not claiming: unknown quest ${id}`, 'REFUSED');
+    // Rewards that do not fit are dropped into the world: refuse without room for them.
+    const storage = this.#world.playerStorage();
+    if (storage === null) return failed('not claiming: the inventory is not known', 'REFUSED');
+    const free = storage.filter((s) => s === null).length;
+    const needed = rewardSlotsNeeded([...expected.values()].map((count) => ({ count })));
+    if (free < needed) {
+      return failed(
+        `not claiming ${this.#questName(id)}: its rewards need ${needed} free slots, ${free} are free`,
+        'REFUSED',
+      );
+    }
+    const choiceReward = choiceRewardOf(config);
+    if (choice !== null && choiceReward !== null && typeof choiceReward !== 'string') {
+      const r = choiceReward.index;
+      if (book.selection(id, r) !== choice) {
+        this.#sendQuestBook({
+          kind: 'choice-reward',
+          questId: id,
+          rewardIndex: r,
+          selection: choice,
+        });
+        await this.#waitFor(
+          () => book.selection(id, r) === choice,
+          this.#questTimeout(QUEST_CHOICE_TIMEOUT_MS),
+        );
+        if (book.selection(id, r) !== choice) {
+          return failed(
+            `the server did not acknowledge choice ${choice} for ${this.#questName(id)}`,
+            'FAILED',
+            { questId: id },
+          );
+        }
+      }
+    }
+    const before = this.#world.inventoryItems() ?? {};
+    this.#sendQuestBook({ kind: 'quest-action', action: 'claim', questIds: [id] });
+    await this.#waitFor(() => book.claimed(id), this.#questTimeout(QUEST_SYNC_TIMEOUT_MS));
+    if (!book.claimed(id)) {
+      return failed(
+        `the server did not record the rewards of ${this.#questName(id)} as claimed`,
+        'FAILED',
+        { questId: id },
+      );
+    }
+    // The items arrive as slot updates (usually before the sync): wait for all of them.
+    const gains = (): Array<[string, number]> => {
+      const now = this.#world.inventoryItems() ?? {};
+      return [...new Set([...Object.keys(now), ...expected.keys()])]
+        .map((item): [string, number] => [item, (now[item] ?? 0) - (before[item] ?? 0)])
+        .filter(([, d]) => d !== 0);
+    };
+    const complete = (): boolean =>
+      [...expected].every(([item, n]) => gains().some(([g, d]) => g === item && d >= n));
+    await this.#waitFor(complete, this.#questTimeout(QUEST_REWARD_ITEMS_TIMEOUT_MS));
+    const gained = describeGain(gains());
+    this.#log(`quest book: claimed ${this.#questName(id)}: ${gained || 'no items'}`);
+    return ok(`claimed the rewards of ${this.#questName(id)}: ${gained || 'no items'}`, {
+      questId: id,
+      gained,
+    });
   }
 
   /**
@@ -3650,6 +3892,8 @@ export class Gtnh1710Client implements MinecraftClient {
           if (this.#identity === null) throw new Error('internal: identity missing at login');
           this.#phase = 'play';
           this.#handshake = new FmlClientHandshake(this.#identity.mods);
+          // Better Questing keys this player's progress by this UUID (GameProfile id).
+          this.#world.questBook.setPlayer(packet.uuid);
           this.#log(`logged in as ${packet.username}`);
           return;
         case 'unhandled':
@@ -3740,6 +3984,10 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       return;
     }
+    if (channel === BQ_CHANNEL) {
+      this.#onQuestBookMessage(data);
+      return;
+    }
     if (channel === 'FML') {
       // Forge runtime messages: this is how GTNH's modded mobs are spawned and moved.
       try {
@@ -3758,6 +4006,32 @@ export class Gtnh1710Client implements MinecraftClient {
       this.#send(outbound.pluginMessage(message.channel, message.data));
     if (this.#handshake.registry !== null && this.#world.registry === null) {
       this.#world.setRegistry(this.#handshake.registry);
+    }
+  }
+
+  /**
+   * Better Questing (BQ_NET_CHAN): reassemble the server's sliced message, fold it into the
+   * quest book, and answer main_sync {respond} exactly as the stock client does (an empty
+   * main_sync), which is what makes the server send the quest database. A message that
+   * cannot be decoded makes the quest book unknown for this connection.
+   */
+  #onQuestBookMessage(data: Buffer): void {
+    try {
+      const payload = this.#questBookSlices.push(data);
+      if (payload === null) return;
+      const message = decodeBqMessage(payload);
+      this.#world.applyQuestBook(message, this.#opts.clock.now());
+      if (message.type === 'main-sync' && message.respond) {
+        for (const p of outbound.questBook({ kind: 'main-sync-reply' })) this.#send(p);
+        this.#log('quest book: answered main_sync; waiting for the quest database');
+      }
+      if (message.type === 'quest-sync' && !message.merge) {
+        this.#log(`quest book: ${message.entries.length} quests from the server`);
+      }
+    } catch (error) {
+      if (!(error instanceof ProtocolError)) throw error;
+      this.#log(`could not decode a Better Questing message: ${error.message}`);
+      this.#world.markQuestBookProblem(`undecodable Better Questing message: ${error.message}`);
     }
   }
 

@@ -126,6 +126,7 @@ export class MineflayerClient implements MinecraftClient {
       environmentHazards: unknown('TODO: lava/void scan not implemented or verified for GTNH'),
       time: unknown('the Mineflayer adapter does not read the world clock'),
       nearbyBlocks: unknown('block scan not implemented for Mineflayer'),
+      questBook: unknown('the Mineflayer adapter does not read the quest book'),
       power: {
         availableEUt: unknown('GTNH EU is not observable via the vanilla protocol'),
         generators: [],
@@ -180,6 +181,9 @@ export class MineflayerClient implements MinecraftClient {
       case 'SMELT':
       case 'TAKE_OUTPUT':
       case 'ATTACK_ENTITY':
+      case 'SUBMIT_QUEST':
+      case 'CHECK_QUEST_BOX':
+      case 'CLAIM_QUEST_REWARD':
         return Promise.resolve(
           failed(`${action.type} is not implemented for Mineflayer yet`, 'NOT_IMPLEMENTED'),
         );

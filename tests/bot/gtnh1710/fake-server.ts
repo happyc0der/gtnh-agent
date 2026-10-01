@@ -10,6 +10,7 @@ import {
   i32,
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
+import { FakeQuestBookSim, type FakeQuestBookOptions } from './fake-better-questing.ts';
 import {
   encodeStack,
   FakeChestSim,
@@ -99,6 +100,8 @@ export interface FakeServerOptions {
   dig?: FakeDigOptions;
   /** How the server treats block placement (C08 with a held block); vanilla by default. */
   place?: FakePlaceOptions;
+  /** Better Questing on the server (adds the betterquesting mod to the mod list). */
+  questBook?: Omit<FakeQuestBookOptions, 'items'>;
   /** The world's blocks (blockOverrides still win); default: the flat test world. */
   world?: BlockFn;
   /** Each column's biome id; default 0 everywhere. */
@@ -295,6 +298,8 @@ export class FakeGtnhServer {
   readonly placeSim: FakePlaceSim;
   /** Fighting (C02): mobs with health, the attacks, kills, explosions, the player's health. */
   readonly combatSim: FakeCombatSim;
+  /** Better Questing, when the server runs it (questBook option). */
+  readonly questBookSim: FakeQuestBookSim | null;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -319,11 +324,15 @@ export class FakeGtnhServer {
   readonly #blocks: Map<string, number>;
 
   constructor(options: FakeServerOptions = {}) {
+    const mods = options.mods ?? DEFAULT_MODS;
     this.#opts = {
       motd: options.motd ?? 'gtnh-agent-test (localhost only)',
       versionName: options.versionName ?? '1.7.10',
       modinfoType: options.modinfoType ?? 'FML',
-      mods: options.mods ?? DEFAULT_MODS,
+      mods:
+        options.questBook !== undefined && !mods.some((m) => m.modid === 'betterquesting')
+          ? [...mods, { modid: 'betterquesting', version: '3.7.15-GTNH' }]
+          : mods,
       stillStartingPings: options.stillStartingPings ?? 0,
       onlineMode: options.onlineMode ?? false,
       kickOnLogin: options.kickOnLogin ?? null,
@@ -364,6 +373,7 @@ export class FakeGtnhServer {
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
       place: options.place ?? {},
+      questBook: options.questBook ?? { quests: [] },
       world: options.world ?? null,
       biomeAt: options.biomeAt ?? null,
       viewDistance: options.viewDistance ?? 3,
@@ -436,6 +446,10 @@ export class FakeGtnhServer {
       health: this.#opts.health.health,
       food: this.#opts.health.food,
     });
+    this.questBookSim =
+      options.questBook === undefined
+        ? null
+        : new FakeQuestBookSim({ ...options.questBook, items: this.#opts.items }, this.chestSim);
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
@@ -715,6 +729,7 @@ export class FakeGtnhServer {
           case 0x03:
             this.idleTicks += 1;
             this.digSim.onPlayerTick();
+            this.questBookSim?.onPlayerTick();
             if (!healthSent && this.confirmedPositions.length > 0) {
               healthSent = true;
               const h = this.#opts.health;
@@ -742,6 +757,7 @@ export class FakeGtnhServer {
             };
             this.confirmedPositions.push(p);
             this.digSim.onPlayerTick();
+            this.questBookSim?.onPlayerTick();
             const centre = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`;
             if (this.#opts.streamChunks && this.#views.get(socket)?.centre !== centre) {
               this.#sendView(socket, send, Math.floor(p.x / 16), Math.floor(p.z / 16));
@@ -752,6 +768,7 @@ export class FakeGtnhServer {
             const channel = r.string();
             const data = r.bytes(r.i16());
             if (channel === 'FML|HS') this.#onHandshake(data, send, socket);
+            if (channel === 'BQ_NET_CHAN') this.questBookSim?.handle(Buffer.from(data));
             break;
           }
           case 0x07:
@@ -863,6 +880,8 @@ export class FakeGtnhServer {
     }
     for (const entity of o.entities) send(spawnFrame(entity));
     this.combatSim.onJoin();
+    // FML fires PlayerLoggedInEvent last: Better Questing's main_sync comes after the join.
+    this.questBookSim?.onJoin(send);
     const timer = setInterval(
       () => send(encodeFrame(0x00, i32(Math.floor(Math.random() * 1e6)))),
       o.keepAliveEveryMs,
