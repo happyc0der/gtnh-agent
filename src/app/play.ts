@@ -7,6 +7,7 @@ import {
   type QuestProgress,
 } from '../goals/quest-goals.ts';
 import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../domain/recipes.ts';
+import type { WorldTime } from '../domain/game-state.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { CycleResult } from './agent-loop.ts';
 import {
@@ -76,6 +77,8 @@ export interface PlayDeps {
   repos: Repositories;
   /** Reads the live inventory now, or null when it is unknown. */
   inventory: () => Promise<Readonly<Record<string, number>> | null>;
+  /** Reads the world's clock now (null when unknown). Without it, play ignores the time. */
+  time?: () => Promise<WorldTime | null>;
   /** Runs one bounded session on the current task (runSession on the live connection). */
   session: (
     limits: SessionLimits,
@@ -127,6 +130,11 @@ export type PlayEvent =
 
 export interface PlayResult {
   stopReason: string;
+  /**
+   * Play stopped because it is getting dark: the agent cannot shelter yet (no block
+   * placing), so it leaves the surface before the mobs come. The clock at that moment.
+   */
+  night: WorldTime | null;
   sessions: number;
   /** Quests completed during this play, in order. */
   questsCompleted: string[];
@@ -172,6 +180,16 @@ export function liveAbilities(hasCraftingTable: boolean): Abilities {
   return { gather: BASE_ABILITIES.gather, craft: new Set(craft) };
 }
 
+/** Evening or night: hostile mobs come out, and the agent has no shelter yet. */
+export const isDark = (t: WorldTime): boolean => t.phase === 'evening' || t.phase === 'night';
+
+function nightReason(t: WorldTime): string {
+  return (
+    `it is ${t.phase} (${t.minutesUntilDay} min until sunrise): the agent cannot shelter yet ` +
+    '(no block placing), so it leaves before the mobs come'
+  );
+}
+
 const total = (missing: Record<string, number>): number =>
   Object.values(missing).reduce((n, c) => n + c, 0);
 
@@ -197,8 +215,9 @@ export async function runPlay(
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
   let last: { questId: string; missing: number; stuck: number } | null = null;
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
-  const done = (stopReason: string): PlayResult => ({
+  const done = (stopReason: string, night: WorldTime | null = null): PlayResult => ({
     stopReason,
+    night,
     sessions,
     questsCompleted,
     progress,
@@ -214,6 +233,9 @@ export async function runPlay(
     if (sessions >= limits.maxSessions) {
       return done(`reached the limit of ${limits.maxSessions} sessions`);
     }
+
+    const clock = (await deps.time?.()) ?? null;
+    if (clock !== null && isDark(clock)) return done(nightReason(clock), clock);
 
     const inventory = await deps.inventory();
     if (inventory === null) return done('the inventory is unknown, so quest progress is unknown');
@@ -265,10 +287,15 @@ export async function runPlay(
     // One session on this quest. It also ends as soon as an observation shows the quest's
     // items are all held, so the planner is never asked to do what is already done.
     let met = false;
+    let dark: WorldTime | null = null;
     const session = sessions + 1;
     const result = await deps.session(limits.session, {
       stopRequested: () =>
-        met ? `the quest "${goal.quest.name}" is satisfied` : hooks.stopRequested(),
+        met
+          ? `the quest "${goal.quest.name}" is satisfied`
+          : dark !== null
+            ? nightReason(dark)
+            : hooks.stopRequested(),
       onCycle: (r, index) => {
         emit({
           kind: 'cycle',
@@ -292,6 +319,7 @@ export async function runPlay(
         if (after?.inventory.known === true) {
           met = total(missingItems(goal.quest, after.inventory.value.items)) === 0;
         }
+        if (after?.time.known === true && isDark(after.time.value)) dark = after.time.value;
       },
     });
     sessions = session;
@@ -304,6 +332,7 @@ export async function runPlay(
       cycles: result.cycles.length,
     });
 
+    if (dark !== null) return done(nightReason(dark), dark);
     if (result.stopKind === 'stop-requested' && !met) return done(result.stopReason);
     if (!CONTINUE_AFTER.has(result.stopKind)) return done(result.stopReason);
   }

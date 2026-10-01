@@ -11,6 +11,7 @@ import {
   type Hazard,
   type KnownRecipeState,
   type MachineStatus,
+  worldTime,
 } from '../domain/game-state.ts';
 import { blockCentre, distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
 import { known, unknown } from '../domain/known.ts';
@@ -122,6 +123,8 @@ export interface MockWorld {
   reach: number;
   /** Movement speed used to advance the clock on moves. */
   blocksPerSecond: number;
+  /** Ticks into the Minecraft day (0 sunrise, 6000 noon, 18000 midnight); default noon. */
+  timeOfDay?: number;
 }
 
 type FailureMode =
@@ -250,6 +253,7 @@ export class MockMinecraftClient implements MinecraftClient {
             resources: resources.map((r) => ({ block: r.block, position: { ...r.position } })),
             removed: removed.map((p) => ({ ...p })),
           }),
+      time: known(worldTime(w.timeOfDay ?? 6000, true)),
       power: {
         availableEUt: unknown('mock: EU/t is not simulated'),
         generators: w.generators.map((g) => ({

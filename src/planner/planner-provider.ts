@@ -131,6 +131,14 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
           missingComponents: state.knownRecipeState.missingComponents,
         }
       : null,
+    time: state.time.known
+      ? {
+          phase: state.time.value.phase,
+          timeOfDay: state.time.value.timeOfDay,
+          minutesUntilNight: state.time.value.minutesUntilNight,
+          minutesUntilDay: state.time.value.minutesUntilDay,
+        }
+      : null,
     unknownFields,
   };
 }

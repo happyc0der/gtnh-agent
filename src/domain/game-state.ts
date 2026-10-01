@@ -202,6 +202,47 @@ export const LastActionSchema = z.strictObject({
   timestamp: TimestampSchema,
 });
 
+/** Minecraft ticks per real second, and per day (20 real minutes). */
+export const TICKS_PER_SECOND = 20;
+export const TICKS_PER_DAY = 24_000;
+
+export const DAY_PHASES = ['day', 'evening', 'night', 'dawn'] as const;
+
+/**
+ * The world's clock as a player sees it (the sun). 0 = sunrise, 6000 noon, 12000 sunset,
+ * 18000 midnight. Phases: day 0-11999; evening 12000-12999 (sunset: get to shelter);
+ * night 13000-22999 (hostile mobs spawn in the dark); dawn 23000-23999 (mobs burn soon).
+ */
+export const WorldTimeSchema = z.strictObject({
+  timeOfDay: z
+    .int()
+    .min(0)
+    .max(TICKS_PER_DAY - 1),
+  phase: z.enum(DAY_PHASES),
+  /** Real minutes until night starts (tick 13000); 0 during the night. */
+  minutesUntilNight: z.number().min(0),
+  /** Real minutes until sunrise (tick 0); 0 during the day. */
+  minutesUntilDay: z.number().min(0),
+  /** False when the server's daylight cycle is stopped (the time does not advance). */
+  daylightCycle: z.boolean(),
+});
+export type WorldTime = z.infer<typeof WorldTimeSchema>;
+
+/** The clock for `dayTicks` (any number of ticks; only the time of day matters). */
+export function worldTime(dayTicks: number, daylightCycle: boolean): WorldTime {
+  const t = ((Math.floor(dayTicks) % TICKS_PER_DAY) + TICKS_PER_DAY) % TICKS_PER_DAY;
+  const phase = t < 12_000 ? 'day' : t < 13_000 ? 'evening' : t < 23_000 ? 'night' : 'dawn';
+  const minutes = (ticks: number): number => Number((ticks / TICKS_PER_SECOND / 60).toFixed(1));
+  return {
+    timeOfDay: t,
+    phase,
+    minutesUntilNight:
+      phase === 'night' ? 0 : minutes((13_000 - t + TICKS_PER_DAY) % TICKS_PER_DAY),
+    minutesUntilDay: phase === 'day' ? 0 : minutes(TICKS_PER_DAY - t),
+    daylightCycle,
+  };
+}
+
 export const GameStateSchema = z.strictObject({
   schemaVersion: z.literal(GAME_STATE_SCHEMA_VERSION),
   /** When this state was observed. Used for staleness checks. */
@@ -216,6 +257,11 @@ export const GameStateSchema = z.strictObject({
    * read back as unknown.
    */
   nearbyBlocks: knownSchema(NearbyBlocksSchema).default({
+    known: false,
+    reason: 'not reported by this observation',
+  }),
+  /** The world's clock. Snapshots stored before this field existed read back as unknown. */
+  time: knownSchema(WorldTimeSchema).default({
     known: false,
     reason: 'not reported by this observation',
   }),

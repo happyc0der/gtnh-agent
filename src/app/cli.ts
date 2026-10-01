@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import { loadConfig } from '../config/env.ts';
@@ -314,25 +315,55 @@ async function main(argv: string[]): Promise<number> {
         `playing: decisions by ${providers.decisionProvider.name}, plans by ` +
           `${providers.planner?.name ?? 'nobody'}; stop with pnpm cli halt or Ctrl+C\n`,
       );
-      const out = await runLivePlay(
-        config,
-        dbPath,
-        {
-          limits,
-          ...providers,
-          abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
-          onEvent: (e) => process.stderr.write(`${describePlayEvent(e)}\n`),
-        },
-        log,
-      );
-      print({
-        stopReason: out.stopReason,
-        sessions: out.sessions,
-        questsCompleted: out.questsCompleted,
-        progress: out.progress,
-        minutes: Number((out.elapsedMs / 60_000).toFixed(1)),
-      });
-      return 0;
+      // Through the nights: play stops before the dark (no shelter yet), the agent is offline
+      // until sunrise, then plays on, all within the time limit. Ctrl+C or the stop file end it.
+      const started = Date.now();
+      const deadline = started + limits.maxMinutes * 60_000;
+      const stopFile = resolve(config.minecraft.movement.stopFile);
+      let interrupted = false;
+      const onInterrupt = (): void => void (interrupted = true);
+      process.on('SIGINT', onInterrupt);
+      try {
+        for (;;) {
+          const minutesLeft = (deadline - Date.now()) / 60_000;
+          const out = await runLivePlay(
+            config,
+            dbPath,
+            {
+              limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, minutesLeft)) },
+              ...providers,
+              abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
+              onEvent: (e) => process.stderr.write(`${describePlayEvent(e)}\n`),
+            },
+            log,
+          );
+          const summary = {
+            stopReason: out.stopReason,
+            sessions: out.sessions,
+            questsCompleted: out.questsCompleted,
+            progress: out.progress,
+            minutes: Number(((Date.now() - started) / 60_000).toFixed(1)),
+          };
+          const sleepMs = out.night === null ? 0 : (out.night.minutesUntilDay + 0.25) * 60_000;
+          if (out.night === null || Date.now() + sleepMs >= deadline) {
+            print(summary);
+            return 0;
+          }
+          process.stderr.write(
+            `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on\n`,
+          );
+          const wakeAt = Date.now() + sleepMs;
+          while (Date.now() < wakeAt) {
+            if (interrupted || existsSync(stopFile)) {
+              print({ ...summary, stopReason: 'stopped while waiting for sunrise' });
+              return 0;
+            }
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+        }
+      } finally {
+        process.removeListener('SIGINT', onInterrupt);
+      }
     }
     case 'run': {
       if (!values.live) {

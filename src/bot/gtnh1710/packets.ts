@@ -354,6 +354,11 @@ export type PlayPacket =
   | { type: 'chat'; json: string }
   | { type: 'spawn-position'; x: number; y: number; z: number }
   | { type: 'update-health'; health: number; food: number; saturation: number }
+  /**
+   * S03 Time Update: the world's age and its day time in ticks. A 1.7.10 server sends the
+   * day time negated (and -1 for 0) while the doDaylightCycle game rule is off.
+   */
+  | { type: 'time-update'; worldAge: number; dayTicks: number; daylightCycle: boolean }
   | { type: 'respawn'; dimension: number; difficulty: number; gamemode: number; levelType: string }
   | ({ type: 'server-position'; onGround: boolean } & ServerPosition)
   | { type: 'held-item'; slot: number }
@@ -524,6 +529,16 @@ export function decodePlay(
       };
     case 0x02:
       return { type: 'chat', json: r.string() };
+    case 0x03: {
+      const worldAge = Number(r.i64());
+      const dayTime = Number(r.i64());
+      return {
+        type: 'time-update',
+        worldAge,
+        dayTicks: Math.abs(dayTime),
+        daylightCycle: dayTime >= 0,
+      };
+    }
     case 0x05:
       return { type: 'spawn-position', x: r.i32(), y: r.i32(), z: r.i32() };
     case 0x06:

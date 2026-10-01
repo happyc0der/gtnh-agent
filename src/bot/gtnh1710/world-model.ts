@@ -2,6 +2,7 @@ import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
   MAX_REPORTED_REMOVED,
+  worldTime,
   type GameState,
 } from '../../domain/game-state.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
@@ -175,6 +176,8 @@ export class WorldModel {
   #dimension: number | null = null;
   #position: PlayerPosition | null = null;
   #health: { health: number; food: number } | null = null;
+  /** The last S03: the day time then, whether it advances, and when it arrived. */
+  #time: { dayTicks: number; daylightCycle: boolean; at: Date } | null = null;
   #heldSlot = 0;
   #window: Array<ItemStackData | null> | null = null;
   #containers: readonly ContainerDefinition[] = [];
@@ -757,6 +760,9 @@ export class WorldModel {
       case 'update-health':
         this.#health = { health: packet.health, food: packet.food };
         return;
+      case 'time-update':
+        this.#time = { dayTicks: packet.dayTicks, daylightCycle: packet.daylightCycle, at };
+        return;
       case 'held-item':
         if (packet.slot >= 0 && packet.slot <= 8) this.#heldSlot = packet.slot;
         return;
@@ -854,6 +860,7 @@ export class WorldModel {
       nearbyThreats: this.#threats(now),
       environmentHazards: this.#hazards(),
       nearbyBlocks: this.#nearbyBlocks(),
+      time: this.#worldTime(now),
       power: {
         availableEUt: unknown('GTNH EU is not observable through the protocol'),
         generators: [],
@@ -871,6 +878,19 @@ export class WorldModel {
       lastAction: null,
     };
     return GameStateSchema.parse(state);
+  }
+
+  /**
+   * The world's clock: the last S03 (the server sends one every second), advanced by the
+   * time since it arrived while the daylight cycle runs.
+   */
+  #worldTime(now: Date): GameState['time'] {
+    const t = this.#time;
+    if (t === null) return unknown('no time update from the server yet');
+    const elapsed = t.daylightCycle
+      ? Math.max(0, Math.floor((now.getTime() - t.at.getTime()) / 50))
+      : 0;
+    return known(worldTime(t.dayTicks + elapsed, t.daylightCycle));
   }
 
   /** Configured chests; contents are known only while the agent has that chest open. */

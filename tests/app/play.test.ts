@@ -10,6 +10,7 @@ import {
   type PlayEvent,
 } from '../../src/app/play.ts';
 import { completedQuests, questTaskId } from '../../src/app/quest-commands.ts';
+import { worldTime } from '../../src/domain/game-state.ts';
 import { TASK, type Quest } from '../../src/goals/quest-goals.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
 import { CURRENT_TASK_KEY } from '../../src/persistence/memory-repository.ts';
@@ -161,6 +162,18 @@ describe('autonomous play', () => {
       },
     );
     expect(stopped).toMatchObject({ stopReason: 'the stop file exists', sessions: 1 });
+  });
+
+  it('stops before the dark (no shelter yet) and says when the sun rises', async () => {
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const result = await runPlay(
+      { ...deps(open(), world), time: () => Promise.resolve(worldTime(12_400, true)) },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(result.stopReason).toMatch(/^it is evening \(9\.7 min until sunrise\)/);
+    expect(result.night).toMatchObject({ phase: 'evening' });
+    expect(world.calls).toBe(0);
   });
 
   it('checks its limits', () => {

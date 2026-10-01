@@ -61,6 +61,10 @@ export async function runLivePlay(
                 const state = await client.observe();
                 return state.inventory.known ? state.inventory.value.items : null;
               },
+              time: async () => {
+                const state = await client.observe();
+                return state.time.known ? state.time.value : null;
+              },
               session: (limits, hooks) =>
                 runSession(
                   {

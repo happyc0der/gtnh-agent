@@ -122,6 +122,7 @@ export class MineflayerClient implements MinecraftClient {
         : known({ items: counts, usedSlots: items.length, capacitySlots: 36 }),
       nearbyThreats: unknown('TODO: entity scan not implemented or verified for GTNH'),
       environmentHazards: unknown('TODO: lava/void scan not implemented or verified for GTNH'),
+      time: unknown('the Mineflayer adapter does not read the world clock'),
       nearbyBlocks: unknown('block scan not implemented for Mineflayer'),
       power: {
         availableEUt: unknown('GTNH EU is not observable via the vanilla protocol'),

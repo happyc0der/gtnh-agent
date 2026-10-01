@@ -11,6 +11,7 @@ import {
 import {
   MachineStatusSchema,
   CurrentTaskSchema,
+  DAY_PHASES,
   GENERATOR_STATUSES,
 } from '../domain/game-state.ts';
 
@@ -147,6 +148,15 @@ export const CompactStateSchema = z.strictObject({
     .max(32),
   knownRecipe: z
     .strictObject({ target: z.string(), missingComponents: ItemCountsSchema })
+    .nullable(),
+  /** The world's clock (null when unknown): phase day / evening / night / dawn. */
+  time: z
+    .strictObject({
+      phase: z.enum(DAY_PHASES),
+      timeOfDay: z.int(),
+      minutesUntilNight: z.number(),
+      minutesUntilDay: z.number(),
+    })
     .nullable(),
   /** Fields the adapter could not observe; the planner must not assume values for them. */
   unknownFields: z.array(z.string()),
