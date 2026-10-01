@@ -23,13 +23,13 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // Outbound: the ONLY packets this client can ever send. Anything that could change
 // the world (chat/commands, using items, attacking, dropping items) is intentionally
 // absent. The exceptions are walking ('player-move', only for steps walking.ts has
-// checked), vanilla chests and crafting ('activate-block', 'select-slot', 'click-window',
-// 'confirm-transaction', 'close-window', only as container.ts and crafting.ts plan them),
-// digging one block ('dig-block' with status start/cancel/finish only, for targets
-// digging.ts has checked) and placing one block ('place-block': C08 with the held block
-// item, against a neighbour placing.ts has checked); see Gtnh1710Client. 'player-look'
-// and 'swing-arm' only change what other players see: where the head points, and the arm
-// swinging while digging or placing.
+// checked), vanilla chests, crafting and block windows ('activate-block', 'select-slot',
+// 'click-window', 'confirm-transaction', 'close-window', only as container.ts, crafting.ts
+// and interact.ts plan them), digging one block ('dig-block' with status start/cancel/finish
+// only, for targets digging.ts has checked) and placing one block ('place-block': C08 with
+// the held block item, against a neighbour placing.ts has checked); see Gtnh1710Client.
+// 'player-look' and 'swing-arm' only change what other players see: where the head points,
+// and the arm swinging while digging or placing.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -436,6 +436,11 @@ export type PlayPacket =
       slotCount: number;
     }
   | { type: 'close-window'; windowId: number }
+  /**
+   * S31 Window Property (u8 window, i16 property, i16 value; verified in the server jar):
+   * e.g. a furnace's cook progress and burn time (src/domain/interactions.ts).
+   */
+  | { type: 'window-property'; windowId: number; property: number; value: number }
   | { type: 'confirm-transaction'; windowId: number; actionNumber: number; accepted: boolean }
   | { type: 'window-items'; windowId: number; items: Array<ItemStackData | null> }
   | { type: 'plugin-message'; channel: string; data: Buffer }
@@ -479,6 +484,16 @@ function fixedPointPosition(r: Reader): EntityPosition {
 export type FmlRuntimeMessage =
   | ({ type: 'fml-entity-spawn'; entityId: number; modId: string; typeId: number } & EntityPosition)
   | ({ type: 'fml-entity-adjust'; entityId: number } & EntityPosition)
+  /** A mod's GUI opened (FMLNetworkHandler.openGui): its window, mod, GUI id and block. */
+  | {
+      type: 'fml-open-gui';
+      windowId: number;
+      modId: string;
+      guiId: number;
+      x: number;
+      y: number;
+      z: number;
+    }
   | { type: 'fml-other'; discriminator: number };
 
 /**
@@ -487,11 +502,24 @@ export type FmlRuntimeMessage =
  * agent does not need). Layout verified against live GTNH traffic on 2026-09-30.
  *   2 EntitySpawnMessage:  int entityId, string modId, int modEntityTypeId, int x/y/z (1/32)
  *   3 EntityAdjustMessage: int entityId, int x/y/z (1/32)
+ *   1 OpenGui:             int windowId, string modId, int modGuiId, int x, int y, int z
+ *     (FMLMessage$OpenGui.toBytes and FMLRuntimeCodec in the Forge 10.13.4.1614 jar; the
+ *     server then sends the window's slots as S30 with that window id)
  */
 export function decodeFmlRuntimeMessage(data: Buffer): FmlRuntimeMessage {
   const r = new Reader(data);
   const discriminator = r.u8();
   switch (discriminator) {
+    case 1:
+      return {
+        type: 'fml-open-gui',
+        windowId: r.i32(),
+        modId: r.string(256),
+        guiId: r.i32(),
+        x: r.i32(),
+        y: r.i32(),
+        z: r.i32(),
+      };
     case 2: {
       const entityId = r.i32();
       const modId = r.string(256);
@@ -654,6 +682,8 @@ export function decodePlay(
     }
     case 0x2e:
       return { type: 'close-window', windowId: r.u8() };
+    case 0x31:
+      return { type: 'window-property', windowId: r.u8(), property: r.i16(), value: r.i16() };
     case 0x32:
       return {
         type: 'confirm-transaction',

@@ -12,6 +12,7 @@ import { isProtected } from '../safety/protected-items.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
   MAX_COMPACT_PLACEABLE,
+  MAX_COMPACT_INTERACTABLES,
   MAX_COMPACT_RESOURCES,
   MAX_COMPACT_TOOLS,
   PlannerRequestSchema,
@@ -19,6 +20,7 @@ import {
   type PlannerRequest,
   type PlannerResponse,
 } from './plan-schema.ts';
+import { estimateFurnace } from '../domain/interactions.ts';
 
 /**
  * High-level planner (a local LLM in the future; a fixture-driven mock today).
@@ -104,6 +106,7 @@ export function sanitizeStateForPlanner(
   const hazards = val('environmentHazards', state.environmentHazards);
   const blocks = val('nearbyBlocks', state.nearbyBlocks);
   val('power.availableEUt', state.power.availableEUt);
+  val('interactables', state.interactables);
 
   const inventoryTop = inventory
     ? Object.entries(inventory.items)
@@ -174,6 +177,7 @@ export function sanitizeStateForPlanner(
       name: t.name,
       position: t.position.known ? t.position.value : null,
     })),
+    interactables: compactInteractables(state, position),
     generators: state.power.generators.slice(0, 32).map((g) => ({
       id: g.id,
       name: g.name,
@@ -249,6 +253,53 @@ export function routeForPlanner(state: GameState): PlannerRequest['route'] {
   );
   const route = planRoute(goal, inventory, ROUTE_BOOK, placesInView(state), storage);
   return { stock: route.stock.slice(0, 32), steps: describeRoute(route).slice(0, 40) };
+}
+
+/**
+ * Interactable blocks for the planner, nearest first, with reach and, for furnaces, what is
+ * inside and how long until it is all smelted (from the furnace's last-seen contents and
+ * timers, minus the time since; null when it went out or was never seen).
+ */
+function compactInteractables(
+  state: GameState,
+  position: Position | null,
+): CompactState['interactables'] {
+  if (!state.interactables.known) return [];
+  const now = Date.parse(state.timestamp);
+  const stack = (s: { item: string; count: number } | null): string | null =>
+    s === null ? null : `${s.count} ${s.item}`;
+  return state.interactables.value.blocks.slice(0, MAX_COMPACT_INTERACTABLES).map((b) => {
+    let furnace: CompactState['interactables'][number]['furnace'] = null;
+    if (b.furnace !== undefined) {
+      const seen = b.furnace.seen;
+      const ago = seen === null ? null : Math.max(0, (now - Date.parse(seen.observedAt)) / 1000);
+      const estimate = seen === null ? null : estimateFurnace(seen);
+      const left =
+        estimate?.secondsToFinish == null || ago === null
+          ? null
+          : estimate.secondsToFinish === 0
+            ? 0
+            : b.furnace.burning
+              ? Math.max(0, estimate.secondsToFinish - ago)
+              : null;
+      furnace = {
+        burning: b.furnace.burning,
+        input: stack(seen?.input ?? null),
+        fuel: stack(seen?.fuel ?? null),
+        output: stack(seen?.output ?? null),
+        secondsLeft: left === null ? null : Number(left.toFixed(1)),
+        seenSecondsAgo: ago === null ? null : Number(ago.toFixed(1)),
+      };
+    }
+    return {
+      profile: b.profile,
+      block: b.block,
+      position: { ...b.position },
+      reach: position === null ? null : Number(eyeDistanceToBlock(position, b.position).toFixed(2)),
+      standAt: b.standAt ?? null,
+      furnace,
+    };
+  });
 }
 
 export function buildPlannerRequest(input: {

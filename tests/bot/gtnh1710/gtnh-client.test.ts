@@ -187,6 +187,21 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
         type: 'CRAFT_ITEM',
         args: { recipe: 'planks_oak', times: 1, craftingTableId: null },
       },
+      INTERACT_BLOCK: { type: 'INTERACT_BLOCK', args: { position: { x: -4, y: 106, z: -6 } } },
+      SMELT: {
+        type: 'SMELT',
+        args: {
+          position: { x: -4, y: 106, z: -6 },
+          input: 'minecraft:coal',
+          quantity: 1,
+          fuel: 'minecraft:coal',
+          fuelQuantity: 1,
+        },
+      },
+      TAKE_OUTPUT: {
+        type: 'TAKE_OUTPUT',
+        args: { position: { x: -4, y: 106, z: -6 }, item: 'minecraft:coal' },
+      },
       PAUSE_AND_ASK_USER: { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
     };
     expect(Object.keys(specs).sort()).toEqual([...ACTION_TYPES].sort());

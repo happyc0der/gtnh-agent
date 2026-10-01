@@ -63,7 +63,7 @@ You get one JSON PlannerRequest:
 - exploration (only when the agent can explore): places it has seen per resource (log, sand, gravel, clay, water, stone, ore; with x, z, distance, direction, count, biome), the biomes seen, and per direction how far it has seen (seen) and the room left to the boundary (room).
 
 Reply with ONLY one JSON object:
-- An escalation when the allowed actions cannot make real progress on the task (it needs something no action below does: mining stone or ores, smelting, placing anything but the listed plain blocks, fighting, wrenching or machine settings), when doing it would touch a protected item, or when the state is too unknown to plan:
+- An escalation when the allowed actions cannot make real progress on the task (it needs something no action below does: mining stone or ores, placing anything but the listed plain blocks, fighting, wrenching or machine settings), when doing it would touch a protected item, or when the state is too unknown to plan:
 {"kind":"escalation","escalation":{"reason":"OUT_OF_SCOPE","message":"...","questionForUser":"..."}}
   reason is one of UNKNOWN_RECIPE, INSUFFICIENT_STATE, UNSAFE, OUT_OF_SCOPE, OTHER.
 - Otherwise a plan:
@@ -84,6 +84,9 @@ Actions and their args (exactly these field names):
 - DIG_BLOCK {"position":{"x":0,"y":64,"z":0}} break ONE block from state.diggableBlocks, at exactly its listed position. It holds the best tool from state.tools for that block by itself (else an empty hand). Only when its reach is at most 4.5; otherwise MOVE_TO its standAt (tolerance 0.5) first. A block with standAt null cannot be dug now. The drop of a block next to the player is picked up by itself (the player may step down into the hole it leaves).
 - PLACE_BLOCK {"position":{"x":0,"y":64,"z":0},"item":"minecraft:dirt"} put ONE block the player carries into an empty cell from state.placeableCells, at exactly its listed position; item is one of safetyConstraints.placeableItems.
 - CRAFT_ITEM {"recipe":"planks_oak","times":1,"craftingTableId":null} craft a known recipe 1 to 64 times, in the player's own 2x2 grid (craftingTableId null) or, for 3x3 recipes, at a crafting table from state.craftingTables. Known recipes (one craft): ${RECIPE_LINES}.
+- INTERACT_BLOCK {"position":{"x":0,"y":64,"z":0}} open a block from state.interactables to see inside (a furnace's contents then show in its entry; profile null blocks are only looked at).
+- SMELT {"position":{"x":0,"y":64,"z":0},"input":"minecraft:cobblestone","quantity":8,"fuel":"minecraft:planks","fuelQuantity":6} put 1 to 64 items to smelt and an approved fuel into a furnace from state.interactables (fuelQuantity 0 adds none). One item takes 10 s; one fuel item smelts: coal or charcoal 8 items, planks or logs 1.5, a stick 0.5.
+- TAKE_OUTPUT {"position":{"x":0,"y":64,"z":0},"item":"minecraft:stone"} take everything in a furnace's output slot (the item its output shows).
 - PAUSE_AND_ASK_USER {"question":"..."}
 
 Rules:
@@ -102,7 +105,8 @@ Rules:
 12. Work in chunks: plan only the next one or two route steps (never the whole route); when they are done the agent checkpoints and asks you again with fresh stock. request.journal is the compact record of this task so far (plans made, done or failed and why, interruptions by mobs or night): continue from where it stopped, and never repeat a step that failed for the same reason.
 13. Tools: digging time in ticks: ${TOOL_TIMES}. A wooden tool lasts ${TOOLS['minecraft:wooden_shovel'].maxDamage} digs (state.tools shows durabilityLeft). Before gathering 32 or more of a block, if state.tools has no tool that digs it faster and a known recipe with the ingredients carried makes one (3x3 needs a table from state.craftingTables), craft the tool first.
 14. Placing: PLACE_BLOCK only with a listed plain block the player carries, into a listed placeable cell; never sand or gravel above the player's own head, and sand or gravel only into a cell whose takesFalling is true.
-15. Exploring. A good GTNH start has wood (logs) close by, gravel and sand near water, clay on riverbanks, and stone; do not keep working a poor spot. When the task needs a block that diggableBlocks does not list (or lists only a few; logs give wood, gravel gives flint, clay gives clay balls): if exploration.places has that resource, EXPLORE toward its x and z; otherwise EXPLORE toward a direction with little seen and room left (exploration.directions). Make EXPLORE the last step of its plan: the next plan starts from what it found. Never EXPLORE when state.time.phase is evening or night.`;
+15. Exploring. A good GTNH start has wood (logs) close by, gravel and sand near water, clay on riverbanks, and stone; do not keep working a poor spot. When the task needs a block that diggableBlocks does not list (or lists only a few; logs give wood, gravel gives flint, clay gives clay balls): if exploration.places has that resource, EXPLORE toward its x and z; otherwise EXPLORE toward a direction with little seen and room left (exploration.directions). Make EXPLORE the last step of its plan: the next plan starts from what it found. Never EXPLORE when state.time.phase is evening or night.
+16. Blocks in state.interactables: use one only when its reach is at most 4.5; otherwise MOVE_TO its standAt (tolerance 0.5) first. Smelting: one SMELT with enough fuel for every item, then do other steps or WAIT (its furnace.secondsLeft), then TAKE_OUTPUT. A furnace keeps its items when you leave. What a furnace makes is decided by the server: never assume a result you have not seen in its output.`;
 
 /** Rough characters per token for these JSON prompts (conservative). */
 const CHARS_PER_TOKEN = 3;

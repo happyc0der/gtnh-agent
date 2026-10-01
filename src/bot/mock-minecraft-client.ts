@@ -14,6 +14,7 @@ import {
   GameStateSchema,
   MAX_REPORTED_PLACEABLE,
   MAX_REPORTED_PLACED,
+  MAX_REPORTED_INTERACTABLES,
   MAX_REPORTED_REMOVED,
   MAX_REPORTED_RESOURCES,
   type CurrentTask,
@@ -42,6 +43,8 @@ import {
 import { bestTool, parseToolName, toolProblem, usesLeft } from '../domain/tools.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
 import { isProtected } from '../safety/protected-items.ts';
+import { FURNACE_COOK_TICKS, furnaceFuelTicks, type ProfileId } from '../domain/interactions.ts';
+import type { BlockWindow, FurnaceState, InteractableBlock } from '../domain/game-state.ts';
 import type { Clock, ManualClock } from '../util/clock.ts';
 import { bodyOverlaps, entityOverlaps } from './gtnh1710/placing.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from './minecraft-client.ts';
@@ -110,6 +113,36 @@ export interface MockMachine {
   lastInspectedAt: string | null;
 }
 
+/** A furnace in the mock world: its slots and the vanilla timers (ticks). */
+export interface MockFurnace {
+  position: BlockPosition;
+  input: { item: string; count: number } | null;
+  fuel: { item: string; count: number } | null;
+  output: { item: string; count: number } | null;
+  cookTicks: number;
+  burnTicksLeft: number;
+  fuelItemTicks: number;
+}
+
+/** Another block the agent may right-click (e.g. an observe-only modded GUI). */
+export interface MockInteractable {
+  position: BlockPosition;
+  block: string;
+  /** Its profile, or null for an observe-only block. */
+  profile: ProfileId | null;
+  /** Slots the window it opens has (observe-only blocks), and what is in them. */
+  windowSlots: number;
+  contents: Array<{ slot: number; item: string; count: number }>;
+}
+
+/** What the mock furnaces make (a placeholder table, not GTNH's). */
+const MOCK_SMELTING: Readonly<Record<string, { item: string; count: number }>> = {
+  'minecraft:cobblestone': { item: 'minecraft:stone', count: 1 },
+  'minecraft:iron_ore': { item: 'minecraft:iron_ingot', count: 1 },
+  'minecraft:sand': { item: 'minecraft:glass', count: 1 },
+  'minecraft:clay_ball': { item: 'minecraft:brick', count: 1 },
+};
+
 /** Fields the mock can pretend it cannot observe, to exercise fail-closed paths. */
 export type MockUnobservable =
   'position' | 'dimension' | 'health' | 'hunger' | 'inventory' | 'threats' | 'hazards' | 'blocks';
@@ -155,6 +188,10 @@ export interface MockWorld {
   blocksPerSecond: number;
   /** Ticks into the Minecraft day (0 sunrise, 6000 noon, 18000 midnight); default noon. */
   timeOfDay?: number;
+  /** Furnaces (they cook while the clock advances, 200 ticks per item). */
+  furnaces?: MockFurnace[];
+  /** Other blocks the agent may right-click (observe-only GUIs and the like). */
+  interactables?: MockInteractable[];
 }
 
 type FailureMode =
@@ -174,6 +211,14 @@ export class MockMinecraftClient implements MinecraftClient {
   readonly #clock: ManualClock;
   readonly #failures = new Map<ActionType, FailureMode>();
   #connected = false;
+  /** When the furnaces were last advanced (ms since the epoch); null before the first look. */
+  #furnacesAt: number | null = null;
+  /** The block whose window is open (INTERACT_BLOCK, SMELT, TAKE_OUTPUT), if any. */
+  #openBlock: BlockPosition | null = null;
+  /** The last block window seen (kept, closed, after the window closes). */
+  #lastWindow: BlockWindow | null = null;
+  /** What the agent last saw in each furnace, by "x,y,z". */
+  readonly #furnaceSeen = new Map<string, NonNullable<FurnaceState['seen']>>();
 
   constructor(world: MockWorld, clock: ManualClock) {
     this.world = world;
@@ -214,6 +259,7 @@ export class MockMinecraftClient implements MinecraftClient {
 
   /** Synchronous observation, handy in tests. */
   snapshot(): GameState {
+    this.#tickFurnaces();
     const w = this.world;
     const hidden = new Set(w.unobservable);
     const pos = w.player.position;
@@ -319,6 +365,10 @@ export class MockMinecraftClient implements MinecraftClient {
         name: t.name,
         position: known({ ...t.position }),
       })),
+      interactables: hidden.has('blocks')
+        ? unknown('mock: blocks hidden')
+        : known({ scanRadius: BLOCK_SCAN_RADIUS, blocks: this.#interactables() }),
+      blockWindow: this.#blockWindow(),
       openContainerId: w.openContainerId,
       currentTask: w.task === null ? null : { ...w.task },
       knownRecipeState: w.recipe === null ? null : structuredClone(w.recipe),
@@ -345,8 +395,251 @@ export class MockMinecraftClient implements MinecraftClient {
     if (action.type !== 'OBSERVE_STATE' && action.type !== 'OPEN_CONTAINER') {
       this.world.openContainerId = null;
     }
+    const windowAction =
+      action.type === 'INTERACT_BLOCK' || action.type === 'SMELT' || action.type === 'TAKE_OUTPUT';
+    if (!windowAction && action.type !== 'OBSERVE_STATE') this.#closeBlockWindow();
+    this.#tickFurnaces();
     this.#clock.advance(ACTION_OVERHEAD_MS);
     return Promise.resolve(this.#apply(validated));
+  }
+
+  // -------------------------------------------------------------------------
+  // Block windows (furnaces and observe-only blocks), like the live client
+
+  /** Advances every furnace to the clock: the vanilla timers, 200 ticks per item. */
+  #tickFurnaces(): void {
+    const now = this.#clock.now().getTime();
+    const from = this.#furnacesAt ?? now;
+    this.#furnacesAt = now;
+    const ticks = Math.max(0, Math.floor((now - from) / 50));
+    for (const f of this.world.furnaces ?? []) {
+      for (let t = 0; t < ticks; t++) {
+        if (f.burnTicksLeft === 0 && f.input === null) {
+          f.cookTicks = 0;
+          break; // nothing can change any more
+        }
+        const result = f.input === null ? undefined : MOCK_SMELTING[f.input.item];
+        const canSmelt =
+          result !== undefined &&
+          (f.output === null || (f.output.item === result.item && f.output.count < 64));
+        if (f.burnTicksLeft > 0) f.burnTicksLeft -= 1;
+        if (f.burnTicksLeft === 0 && canSmelt && f.fuel !== null) {
+          const burn = furnaceFuelTicks(f.fuel.item) ?? 0;
+          if (burn > 0) {
+            f.burnTicksLeft = burn;
+            f.fuelItemTicks = burn;
+            f.fuel = f.fuel.count > 1 ? { ...f.fuel, count: f.fuel.count - 1 } : null;
+          }
+        }
+        if (f.burnTicksLeft > 0 && canSmelt && result !== undefined && f.input !== null) {
+          f.cookTicks += 1;
+          if (f.cookTicks >= FURNACE_COOK_TICKS) {
+            f.cookTicks = 0;
+            f.input = f.input.count > 1 ? { ...f.input, count: f.input.count - 1 } : null;
+            f.output = { item: result.item, count: (f.output?.count ?? 0) + result.count };
+          }
+        } else {
+          f.cookTicks = 0;
+        }
+      }
+    }
+    // While its window is open, the agent sees a furnace change as it happens.
+    const open = this.#openBlock;
+    const furnace = open === null ? undefined : this.#furnaceAt(open);
+    if (open !== null && furnace !== undefined) this.#see(furnace);
+  }
+
+  #furnaceAt(p: BlockPosition): MockFurnace | undefined {
+    return (this.world.furnaces ?? []).find(
+      (f) => f.position.x === p.x && f.position.y === p.y && f.position.z === p.z,
+    );
+  }
+
+  #see(f: MockFurnace): void {
+    this.#furnaceSeen.set(`${f.position.x},${f.position.y},${f.position.z}`, {
+      observedAt: this.#clock.now().toISOString(),
+      input: f.input === null ? null : { ...f.input },
+      fuel: f.fuel === null ? null : { ...f.fuel },
+      output: f.output === null ? null : { ...f.output },
+      cookTicks: f.cookTicks,
+      burnTicksLeft: f.burnTicksLeft,
+      fuelItemTicks: f.fuelItemTicks,
+    });
+  }
+
+  #interactables(): InteractableBlock[] {
+    const pos = this.world.player.position;
+    const near = (b: BlockPosition): number => distance(pos, blockCentre(b));
+    const furnaces = (this.world.furnaces ?? []).map((f) => ({
+      profile: 'furnace' as const,
+      block: f.burnTicksLeft > 0 ? 'minecraft:lit_furnace' : 'minecraft:furnace',
+      position: { ...f.position },
+      furnace: {
+        burning: f.burnTicksLeft > 0,
+        seen: this.#furnaceSeen.get(`${f.position.x},${f.position.y},${f.position.z}`) ?? null,
+      },
+    }));
+    const others = (this.world.interactables ?? []).map((b) => ({
+      profile: b.profile,
+      block: b.block,
+      position: { ...b.position },
+    }));
+    return [...furnaces, ...others]
+      .filter((b) => near(b.position) <= BLOCK_SCAN_RADIUS)
+      .sort((a, b) => near(a.position) - near(b.position))
+      .slice(0, MAX_REPORTED_INTERACTABLES);
+  }
+
+  /** The open block window as the live client reports it (the furnace's slots live). */
+  #blockWindow(): BlockWindow | null {
+    const open = this.#openBlock;
+    const f = open === null ? undefined : this.#furnaceAt(open);
+    if (open === null || f === undefined) return this.#lastWindow;
+    const slots: BlockWindow['slots'] = [];
+    const add = (
+      slot: number,
+      s: { item: string; count: number } | null,
+      role: 'input' | 'fuel' | 'output',
+    ): void => {
+      if (s !== null) slots.push({ slot, item: s.item, count: s.count, role, nbt: false });
+    };
+    add(0, f.input, 'input');
+    add(1, f.fuel, 'fuel');
+    add(2, f.output, 'output');
+    this.#lastWindow = {
+      position: { ...open },
+      block: f.burnTicksLeft > 0 ? 'minecraft:lit_furnace' : 'minecraft:furnace',
+      profile: 'furnace',
+      opener: 'vanilla:2',
+      title: 'container.furnace',
+      slotCount: 39,
+      containerSlots: 3,
+      inventoryAt: 3,
+      slots,
+      properties: {
+        '0': f.cookTicks,
+        '1': Math.min(32767, f.burnTicksLeft),
+        '2': Math.min(32767, f.fuelItemTicks),
+      },
+      open: true,
+      observedAt: this.#clock.now().toISOString(),
+    };
+    return this.#lastWindow;
+  }
+
+  #closeBlockWindow(): void {
+    if (this.#openBlock === null) return;
+    const w = this.#blockWindow();
+    this.#lastWindow = w === null ? null : { ...w, open: false };
+    this.#openBlock = null;
+  }
+
+  /** Opens the block at `p` (it must be a furnace or a listed block within reach). */
+  #openAt(p: BlockPosition): ClientActionResult | null {
+    if (eyeDistanceToBlock(this.world.player.position, p) > this.world.reach) {
+      return failed(`${formatPosition(p)} is out of reach`);
+    }
+    const furnace = this.#furnaceAt(p);
+    if (furnace !== undefined) {
+      this.#openBlock = { ...p };
+      this.#see(furnace);
+      return null;
+    }
+    return failed(`no furnace at ${formatPosition(p)}`, 'REFUSED');
+  }
+
+  #interact(p: BlockPosition): ClientActionResult {
+    this.#closeBlockWindow();
+    const other = (this.world.interactables ?? []).find(
+      (b) => b.position.x === p.x && b.position.y === p.y && b.position.z === p.z,
+    );
+    if (other !== undefined) {
+      if (eyeDistanceToBlock(this.world.player.position, p) > this.world.reach) {
+        return failed(`${formatPosition(p)} is out of reach`);
+      }
+      // Observe-only: looked at and closed again, like the live client.
+      this.#lastWindow = {
+        position: { ...p },
+        block: other.block,
+        profile: other.profile,
+        opener: 'fml:mock:0',
+        title: null,
+        slotCount: other.windowSlots,
+        containerSlots: null,
+        inventoryAt: null,
+        slots: other.contents.map((c) => ({ ...c, role: null, nbt: false })),
+        properties: {},
+        open: false,
+        observedAt: this.#clock.now().toISOString(),
+      };
+      return ok(`looked at ${other.block} at ${formatPosition(p)}`, {
+        block: other.block,
+        profile: other.profile,
+        slots: other.windowSlots,
+      });
+    }
+    const opened = this.#openAt(p);
+    if (opened !== null) return opened;
+    return ok(`opened the furnace at ${formatPosition(p)}`, { profile: 'furnace' });
+  }
+
+  #smelt(args: {
+    position: BlockPosition;
+    input: string;
+    quantity: number;
+    fuel: string;
+    fuelQuantity: number;
+  }): ClientActionResult {
+    const w = this.world;
+    const opened = this.#openAt(args.position);
+    if (opened !== null) return opened;
+    const f = this.#furnaceAt(args.position);
+    if (f === undefined) return failed('internal: furnace vanished', 'ERROR');
+    const need = new Map([[args.input, args.quantity]]);
+    if (args.fuelQuantity > 0) need.set(args.fuel, (need.get(args.fuel) ?? 0) + args.fuelQuantity);
+    for (const [item, n] of need) {
+      if ((w.inventory.items[item] ?? 0) < n) return failed(`not enough ${item}`, 'REFUSED');
+    }
+    const fits = (
+      slot: { item: string; count: number } | null,
+      item: string,
+      n: number,
+    ): boolean =>
+      slot === null ? n <= STACK_SIZE : slot.item === item && slot.count + n <= STACK_SIZE;
+    if (!fits(f.input, args.input, args.quantity))
+      return failed('the input slot holds something else', 'REFUSED');
+    if (args.fuelQuantity > 0 && !fits(f.fuel, args.fuel, args.fuelQuantity)) {
+      return failed('the fuel slot holds something else', 'REFUSED');
+    }
+    for (const [item, n] of need) w.inventory.items[item] = (w.inventory.items[item] ?? 0) - n;
+    if (args.fuelQuantity > 0) {
+      f.fuel = { item: args.fuel, count: (f.fuel?.count ?? 0) + args.fuelQuantity };
+    }
+    f.input = { item: args.input, count: (f.input?.count ?? 0) + args.quantity };
+    this.#see(f);
+    return ok(`put ${args.quantity} ${args.input} into the furnace`, { clicks: 0 });
+  }
+
+  #takeOutput(args: { position: BlockPosition; item: string }): ClientActionResult {
+    const w = this.world;
+    const opened = this.#openAt(args.position);
+    if (opened !== null) return opened;
+    const f = this.#furnaceAt(args.position);
+    if (f === undefined) return failed('internal: furnace vanished', 'ERROR');
+    if (f.output === null) return failed("the furnace's output slot is empty", 'REFUSED');
+    if (f.output.item !== args.item) {
+      return failed(`the furnace's output is ${f.output.item}, not ${args.item}`, 'REFUSED');
+    }
+    const taken = f.output.count;
+    const after = {
+      ...w.inventory.items,
+      [args.item]: (w.inventory.items[args.item] ?? 0) + taken,
+    };
+    if (usedSlots(after) > w.inventory.capacitySlots) return failed('inventory full', 'REFUSED');
+    w.inventory.items[args.item] = after[args.item] ?? 0;
+    f.output = null;
+    this.#see(f);
+    return ok(`took ${taken} ${args.item} from the furnace`, { item: args.item, taken });
   }
 
   #apply(validated: ValidatedAction): ClientActionResult {
@@ -438,6 +731,12 @@ export class MockMinecraftClient implements MinecraftClient {
         return this.#place(action.args.position, action.args.item);
       case 'CRAFT_ITEM':
         return this.#craft(action.args);
+      case 'INTERACT_BLOCK':
+        return this.#interact(action.args.position);
+      case 'SMELT':
+        return this.#smelt(action.args);
+      case 'TAKE_OUTPUT':
+        return this.#takeOutput(action.args);
 
       case 'PAUSE_AND_ASK_USER':
         this.userMessages.push(action.args.question);

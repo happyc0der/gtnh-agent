@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ActionSpecSchema, ActionTypeSchema } from '../domain/actions.ts';
 import { DiggableBlockSchema, PlaceableItemSchema } from '../domain/blocks.ts';
+import { ProfileIdSchema } from '../domain/interactions.ts';
 import {
   BlockPositionSchema,
   DimensionSchema,
@@ -26,6 +27,8 @@ export const MAX_COMPACT_RESOURCES = 32;
 export const MAX_COMPACT_TOOLS = 8;
 /** Placeable cells passed to the planner (the nearest ones). */
 export const MAX_COMPACT_PLACEABLE = 16;
+/** Interactable blocks passed to the planner (the nearest ones). */
+export const MAX_COMPACT_INTERACTABLES = 16;
 
 export const PlanStepSchema = z.strictObject({
   /** 1-based, sequential. */
@@ -175,6 +178,36 @@ export const CompactStateSchema = z.strictObject({
       z.strictObject({ id: EntityIdSchema, name: z.string(), position: PositionSchema.nullable() }),
     )
     .max(32),
+  /**
+   * Blocks INTERACT_BLOCK / SMELT / TAKE_OUTPUT may target, nearest first: the profile
+   * (`furnace`, `crafting_table`, `chest`, ...; null = only to look at), `reach` from the
+   * eyes (at most 4.5 to use it), `standAt` (where to stand, or null) and, for furnaces,
+   * what is inside as last seen and how long until everything in it is smelted.
+   */
+  interactables: z
+    .array(
+      z.strictObject({
+        profile: ProfileIdSchema.nullable(),
+        block: z.string(),
+        position: BlockPositionSchema,
+        reach: z.number().min(0).nullable(),
+        standAt: PositionSchema.nullable(),
+        furnace: z
+          .strictObject({
+            burning: z.boolean(),
+            /** "8 minecraft:cobblestone", or null when empty or never seen. */
+            input: z.string().nullable(),
+            fuel: z.string().nullable(),
+            output: z.string().nullable(),
+            /** Seconds from now until the input is all smelted (null: unknown or out of fuel). */
+            secondsLeft: z.number().min(0).nullable(),
+            /** How old the contents above are (null: never seen; open INTERACT_BLOCK first). */
+            seenSecondsAgo: z.number().min(0).nullable(),
+          })
+          .nullable(),
+      }),
+    )
+    .max(MAX_COMPACT_INTERACTABLES),
   generators: z
     .array(
       z.strictObject({
