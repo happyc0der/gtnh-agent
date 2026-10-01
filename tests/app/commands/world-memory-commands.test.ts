@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parseExploreToward } from '../../src/app/live-agent.ts';
-import { describeKnownPlaces, parseMapPoint } from '../../src/app/world-memory-commands.ts';
-import { known } from '../../src/domain/known.ts';
-import { makeState, memoryRepos, testConfig } from '../fixtures/index.ts';
+import { parseExploreToward } from '../../../src/app/commands/live-commands.ts';
+import {
+  describeKnownPlaces,
+  parseMapPoint,
+} from '../../../src/app/commands/world-memory-commands.ts';
+import { known } from '../../../src/domain/known.ts';
+import { makeState, memoryRepos, testConfig } from '../../fixtures/index.ts';
 
 describe('the explore and places commands', () => {
   it('reads a direction or a point for EXPLORE, and a map point for places', () => {

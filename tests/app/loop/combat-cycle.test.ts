@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { runSingleCycle, runUserAction, syncConfigToDatabase } from '../../src/app/agent-loop.ts';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
-import { failed, ok } from '../../src/bot/minecraft-client.ts';
-import type { MockMob, MockWorld } from '../../src/bot/mock-minecraft-client.ts';
-import { defaultConfig } from '../../src/config/env.ts';
-import type { ActionSpec } from '../../src/domain/actions.ts';
-import type { GameState } from '../../src/domain/game-state.ts';
-import { unknown } from '../../src/domain/known.ts';
-import { verifyPostcondition } from '../../src/executor/action-verifier.ts';
-import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { action, makeState, makeWorld, memoryRepos, safetyCtx } from '../fixtures/index.ts';
+import {
+  runSingleCycle,
+  runUserAction,
+  syncConfigToDatabase,
+} from '../../../src/app/loop/agent-loop.ts';
+import { MOCK_CONFIG } from '../../../src/app/mock/scenarios.ts';
+import { failed, ok } from '../../../src/bot/minecraft-client.ts';
+import type { MockMob, MockWorld } from '../../../src/bot/mock-minecraft-client.ts';
+import { defaultConfig } from '../../../src/config/env.ts';
+import type { ActionSpec } from '../../../src/domain/actions.ts';
+import type { GameState } from '../../../src/domain/game-state.ts';
+import { unknown } from '../../../src/domain/known.ts';
+import { verifyPostcondition } from '../../../src/executor/action-verifier.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { action, makeState, makeWorld, memoryRepos, safetyCtx } from '../../fixtures/index.ts';
 
 const zombie = (id: number, x: number, z: number, health = 20): MockMob => ({
   id,

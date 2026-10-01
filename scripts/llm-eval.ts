@@ -19,8 +19,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
-import { previewCheck } from '../src/app/gather-step.ts';
-import { MOCK_CONFIG, SCENARIOS, baseWorld } from '../src/app/scenarios.ts';
+import { previewCheck } from '../src/app/loop/gather-step.ts';
+import { MOCK_CONFIG, SCENARIOS, baseWorld } from '../src/app/mock/scenarios.ts';
 import {
   MockMinecraftClient,
   type MockResourceBlock,

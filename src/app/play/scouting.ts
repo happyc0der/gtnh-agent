@@ -1,8 +1,8 @@
-import type { WorldTime } from '../domain/game-state.ts';
-import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
-import type { CycleResult } from './agent-loop.ts';
-import type { SessionLimits, SessionResult } from './live-session.ts';
+import type { WorldTime } from '../../domain/game-state.ts';
+import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import type { CycleResult } from '../loop/agent-loop.ts';
+import type { SessionLimits, SessionResult } from '../loop/live-session.ts';
 
 /**
  * Scouting, play's own first task. GTNH rewards a good starting spot ("You will have to travel

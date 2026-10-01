@@ -1,14 +1,14 @@
-import type { AgentConfig } from '../config/env.ts';
+import type { AgentConfig } from '../../config/env.ts';
 import {
   carriedFoodPoints,
   FOOD_TASK_ID,
   FOOD_TRIP_POINTS,
   MEAL_HISTORY_LENGTH,
-} from '../domain/food.ts';
-import type { GameState } from '../domain/game-state.ts';
-import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
-import { isProtected, mergeProtectedItems } from '../safety/protected-items.ts';
+} from '../../domain/food.ts';
+import type { GameState } from '../../domain/game-state.ts';
+import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import { isProtected, mergeProtectedItems } from '../../safety/protected-items.ts';
 
 /**
  * Food trips, play's own task when the agent is hungry and carries no food (approved

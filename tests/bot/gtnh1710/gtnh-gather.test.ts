@@ -6,8 +6,8 @@ import {
   runSingleCycle,
   syncConfigToDatabase,
   type CycleResult,
-} from '../../../src/app/agent-loop.ts';
-import { addTask } from '../../../src/app/task-commands.ts';
+} from '../../../src/app/loop/agent-loop.ts';
+import { addTask } from '../../../src/app/commands/task-commands.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig } from '../../../src/config/env.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';

@@ -5,23 +5,23 @@ import {
   runSingleCycle,
   syncConfigToDatabase,
   type CycleResult,
-} from '../../src/app/agent-loop.ts';
+} from '../../../src/app/loop/agent-loop.ts';
 import {
   approvePlan,
   rejectPlan,
   showPlans,
   type PlanCommandResult,
-} from '../../src/app/plan-commands.ts';
-import { findScenario } from '../../src/app/scenarios.ts';
-import { MockMinecraftClient } from '../../src/bot/mock-minecraft-client.ts';
+} from '../../../src/app/commands/plan-commands.ts';
+import { findScenario } from '../../../src/app/mock/scenarios.ts';
+import { MockMinecraftClient } from '../../../src/bot/mock-minecraft-client.ts';
 import {
   MockPlannerProvider,
   type PlannerFixture,
-} from '../../src/planner/mock-planner-provider.ts';
-import type { Plan } from '../../src/planner/plan-schema.ts';
-import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { memoryRepos, testClock, testConfig } from '../fixtures/index.ts';
+} from '../../../src/planner/mock-planner-provider.ts';
+import type { Plan } from '../../../src/planner/plan-schema.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { memoryRepos, testClock, testConfig } from '../../fixtures/index.ts';
 
 /** One world, one database and one planner, shared by several single cycles. */
 async function session(name: string, fixtures?: readonly PlannerFixture[]) {

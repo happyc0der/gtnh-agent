@@ -560,7 +560,7 @@ next.
 - **In the morning** it digs the roof and a staircase out (the upper block of each step first;
   the terrain walker climbs one block at a time), then walks onto open ground and plays on.
 - **Code plans both** with the live client's own rules (`src/bot/gtnh1710/night-pit.ts`) and
-  runs them as known safe steps (`src/app/known-steps.ts`): each step is still validated,
+  runs them as known safe steps (`src/app/loop/known-steps.ts`): each step is still validated,
   executed and verified by the executor; the planner is not asked. Code picks the player's
   column or one next to it, and refuses a spot unless the 3 x 3 columns around are natural
   ground down to y-3 (sand and gravel only on solid ground), every dig down passes the client's

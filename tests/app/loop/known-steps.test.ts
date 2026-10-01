@@ -4,16 +4,16 @@ import {
   runSingleCycle,
   syncConfigToDatabase,
   type AgentDeps,
-} from '../../src/app/agent-loop.ts';
-import { nextKnownStep, setKnownSteps } from '../../src/app/known-steps.ts';
-import type { ActionSpec } from '../../src/domain/actions.ts';
-import type { GameState } from '../../src/domain/game-state.ts';
-import { CURRENT_TASK_KEY } from '../../src/persistence/memory-repository.ts';
-import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
-import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
-import { MockDecisionProvider } from '../../src/system1/mock-decision-provider.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { makeWorld, memoryRepos, testConfig } from '../fixtures/index.ts';
+} from '../../../src/app/loop/agent-loop.ts';
+import { nextKnownStep, setKnownSteps } from '../../../src/app/loop/known-steps.ts';
+import type { ActionSpec } from '../../../src/domain/actions.ts';
+import type { GameState } from '../../../src/domain/game-state.ts';
+import { CURRENT_TASK_KEY } from '../../../src/persistence/memory-repository.ts';
+import type { PlannerProvider } from '../../../src/planner/planner-provider.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { MockDecisionProvider } from '../../../src/system1/mock-decision-provider.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { makeWorld, memoryRepos, testConfig } from '../../fixtures/index.ts';
 
 /**
  * Code-made blueprints (the night shelter, the way out of it) run as known safe steps:

@@ -5,7 +5,7 @@ import {
   describeQuests,
   questTaskId,
   updateQuests,
-} from '../../src/app/quest-commands.ts';
+} from '../../src/app/play/quest-progress.ts';
 import { ItemNameSchema } from '../../src/domain/common.ts';
 import type { GameState } from '../../src/domain/game-state.ts';
 import type { QuestBook, QuestBookQuest, QuestBookReward } from '../../src/domain/quest-book.ts';

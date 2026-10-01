@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runUserAction, syncConfigToDatabase } from '../../../src/app/agent-loop.ts';
+import { runUserAction, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
 import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';

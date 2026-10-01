@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { explorationFor } from '../../src/app/agent-loop.ts';
-import { readDeadEnds, rememberDeadEnd, withoutDeadEnds } from '../../src/app/dead-ends.ts';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
-import { defaultConfig } from '../../src/config/env.ts';
-import type { ExplorationSummary, SeenChunk } from '../../src/domain/world-memory.ts';
-import { makeState, memoryRepos, T0, testClock } from '../fixtures/index.ts';
+import { explorationFor } from '../../../src/app/loop/agent-loop.ts';
+import { readDeadEnds, rememberDeadEnd, withoutDeadEnds } from '../../../src/app/loop/dead-ends.ts';
+import { MOCK_CONFIG } from '../../../src/app/mock/scenarios.ts';
+import { defaultConfig } from '../../../src/config/env.ts';
+import type { ExplorationSummary, SeenChunk } from '../../../src/domain/world-memory.ts';
+import { makeState, memoryRepos, T0, testClock } from '../../fixtures/index.ts';
 
 const NO_WAY =
   'not exploring: no way further: no walkable spot in the play area gets closer to the target ' +

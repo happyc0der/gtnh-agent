@@ -10,7 +10,7 @@ import {
   emptyFailureHistory,
   evaluateAction,
 } from '../../src/safety/safety-policy.ts';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import { MOCK_CONFIG } from '../../src/app/mock/scenarios.ts';
 import { action, makeState, safetyCtx } from '../fixtures/index.ts';
 
 // The mock player stands at (1, 64, 1) with 20 health and food 18.

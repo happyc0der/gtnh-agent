@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { QUEST_BOOK_SYNC_PENDING } from '../bot/gtnh1710/better-questing.ts';
-import type { ConnectionInfo, Gtnh1710Client } from '../bot/gtnh1710/gtnh-client.ts';
+import { QUEST_BOOK_SYNC_PENDING } from '../../bot/gtnh1710/better-questing.ts';
+import type { ConnectionInfo, Gtnh1710Client } from '../../bot/gtnh1710/gtnh-client.ts';
 import {
   continueNightPit,
   enclosedIn,
@@ -11,23 +11,23 @@ import {
   walledIn,
   type PitOptions,
   type PitSite,
-} from '../bot/gtnh1710/night-pit.ts';
-import type { AgentConfig } from '../config/env.ts';
-import type { GameState } from '../domain/game-state.ts';
-import type { Abilities } from '../goals/quest-goals.ts';
-import { openDatabase } from '../persistence/database.ts';
-import { NIGHT_PIT_KEY } from '../persistence/memory-repository.ts';
-import { createRepositories, type Repositories } from '../persistence/repositories.ts';
-import type { PlannerProvider } from '../planner/planner-provider.ts';
-import type { DecisionProvider } from '../system1/decision-provider.ts';
-import { systemClock } from '../util/clock.ts';
-import { randomIds } from '../util/ids.ts';
-import { runQuestBookAction, syncConfigToDatabase, type AgentDeps } from './agent-loop.ts';
+} from '../../bot/gtnh1710/night-pit.ts';
+import type { AgentConfig } from '../../config/env.ts';
+import type { GameState } from '../../domain/game-state.ts';
+import type { Abilities } from '../../goals/quest-goals.ts';
+import { openDatabase } from '../../persistence/database.ts';
+import { NIGHT_PIT_KEY } from '../../persistence/memory-repository.ts';
+import { createRepositories, type Repositories } from '../../persistence/repositories.ts';
+import type { PlannerProvider } from '../../planner/planner-provider.ts';
+import type { DecisionProvider } from '../../system1/decision-provider.ts';
+import { systemClock } from '../../util/clock.ts';
+import { randomIds } from '../../util/ids.ts';
+import { runQuestBookAction, syncConfigToDatabase, type AgentDeps } from '../loop/agent-loop.ts';
 import { foodStatusOf } from './food.ts';
-import { runSession } from './live-session.ts';
-import { withLiveClient } from './live-agent.ts';
-import { passProblem } from '../bot/gtnh1710/passable.ts';
-import { shelterStatus, type ShelterStatus } from '../goals/shelter.ts';
+import { runSession } from '../loop/live-session.ts';
+import { withLiveClient } from '../commands/live-commands.ts';
+import { passProblem } from '../../bot/gtnh1710/passable.ts';
+import { shelterStatus, type ShelterStatus } from '../../goals/shelter.ts';
 import {
   runPlay,
   type FreeGoal,
@@ -156,7 +156,7 @@ export async function observeWithQuestBook(
 
 /**
  * Autonomous play against the live test server, on one connection: the play loop
- * (src/app/play.ts) with live inventory and quest-book reads and live sessions. The
+ * (src/app/play/play.ts) with live inventory and quest-book reads and live sessions. The
  * decision maker and planner are passed in (models or the deterministic rules); neither
  * executes anything. Quest-book clicks are play's own (runQuestBookAction), and only when
  * MC_ENABLE_QUEST_BOOK is on. Ctrl+C halts the current walk and stops after the current

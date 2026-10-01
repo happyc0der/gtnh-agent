@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { runMockScenario } from '../../src/app/mock-agent.ts';
+import { runMockScenario } from '../../src/app/mock/mock-agent.ts';
 import { createProviders } from '../../src/app/providers.ts';
-import { findScenario, type Scenario } from '../../src/app/scenarios.ts';
+import { findScenario, type Scenario } from '../../src/app/mock/scenarios.ts';
 import { defaultConfig, type AgentConfigInput } from '../../src/config/env.ts';
 import { OllamaPlannerProvider } from '../../src/llm/ollama-planner-provider.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';

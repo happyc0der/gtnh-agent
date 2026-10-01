@@ -371,7 +371,7 @@ See [architecture: GATHER](architecture.md#gather-gathering-in-one-plan-step).
 
 The night shelter (the pit's digs down and its roof, or the raised box's blocks) and the way
 out of it in the morning are planned by code, not by the planner, and run as **known safe
-steps** (`src/app/known-steps.ts`). The blueprint is a list of ordinary action specs kept in
+steps** (`src/app/loop/known-steps.ts`). The blueprint is a list of ordinary action specs kept in
 agent memory (`task_steps:<taskId>`) with how many are done.
 
 - Its next step becomes the state's `knownRecipeState.nextKnownSafeStep`, so System 1's rule 6

@@ -1,29 +1,29 @@
-import type { MinecraftClient } from '../bot/minecraft-client.ts';
-import type { AgentConfig } from '../config/env.ts';
+import type { MinecraftClient } from '../../bot/minecraft-client.ts';
+import type { AgentConfig } from '../../config/env.ts';
 import {
   createAction,
   isAllowlistedActionType,
   type Action,
   type ActionOrigin,
   type ActionSpec,
-} from '../domain/actions.ts';
-import type { BlockPosition } from '../domain/common.ts';
-import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.ts';
-import { GameStateSchema, LastActionSchema, type GameState } from '../domain/game-state.ts';
-import { MEAL_HISTORY_LENGTH } from '../domain/food.ts';
-import { distance } from '../domain/geometry.ts';
-import type { SafetyViolation } from '../domain/safety.ts';
-import { summarizeExploration, type ExplorationSummary } from '../domain/world-memory.ts';
+} from '../../domain/actions.ts';
+import type { BlockPosition } from '../../domain/common.ts';
+import { DecisionResultSchema, type DecisionResult } from '../../domain/decisions.ts';
+import { GameStateSchema, LastActionSchema, type GameState } from '../../domain/game-state.ts';
+import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
+import { distance } from '../../domain/geometry.ts';
+import type { SafetyViolation } from '../../domain/safety.ts';
+import { summarizeExploration, type ExplorationSummary } from '../../domain/world-memory.ts';
 import {
   ActionExecutor,
   validateCandidate,
   type ExecutionOutcome,
-} from '../executor/action-executor.ts';
-import { SqliteActionLog } from '../executor/action-log.ts';
-import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
-import type { StoredPlan } from '../persistence/plan-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
-import { DIG_YIELDS } from '../goals/route-book.ts';
+} from '../../executor/action-executor.ts';
+import { SqliteActionLog } from '../../executor/action-log.ts';
+import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import type { StoredPlan } from '../../persistence/plan-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import { DIG_YIELDS } from '../../goals/route-book.ts';
 import {
   chooseGatherAction,
   GATHER,
@@ -32,32 +32,32 @@ import {
   startGather,
   type GatherOptions,
   type GatherStep,
-} from '../planner/gather.ts';
+} from '../../planner/gather.ts';
 import {
   MAX_JOURNAL_LINE,
   PlannerResponseSchema,
   type Plan,
   type PlannerRequest,
   type PlannerResponse,
-} from '../planner/plan-schema.ts';
-import { trimStaleSteps, validatePlan } from '../planner/plan-validator.ts';
+} from '../../planner/plan-schema.ts';
+import { trimStaleSteps, validatePlan } from '../../planner/plan-validator.ts';
 import {
   buildPlannerRequest,
   rememberedPlacesOf,
   type PlannerProvider,
-} from '../planner/planner-provider.ts';
-import { mergeProtectedItems } from '../safety/protected-items.ts';
+} from '../../planner/planner-provider.ts';
+import { mergeProtectedItems } from '../../safety/protected-items.ts';
 import {
   actionFingerprint,
   assessStateReliability,
   type SafetyContext,
-} from '../safety/safety-policy.ts';
-import { proposeAction } from '../system1/action-proposer.ts';
-import type { DecisionProvider } from '../system1/decision-provider.ts';
-import type { PlanFacts, RouterContext } from '../system1/state-queries.ts';
-import type { Clock } from '../util/clock.ts';
-import type { IdGenerator } from '../util/ids.ts';
-import { errorMessage, stableStringify } from '../util/json.ts';
+} from '../../safety/safety-policy.ts';
+import { proposeAction } from '../../system1/action-proposer.ts';
+import type { DecisionProvider } from '../../system1/decision-provider.ts';
+import type { PlanFacts, RouterContext } from '../../system1/state-queries.ts';
+import type { Clock } from '../../util/clock.ts';
+import type { IdGenerator } from '../../util/ids.ts';
+import { errorMessage, stableStringify } from '../../util/json.ts';
 import {
   gatherAfterAction,
   gatherStopped,

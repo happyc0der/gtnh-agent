@@ -20,7 +20,7 @@ flowchart TD
     end
 
     subgraph Core["Agent core"]
-        LOOP["Agent loop<br/>(src/app/agent-loop.ts)<br/>ONE cycle, then stop"]
+        LOOP["Agent loop<br/>(src/app/loop/agent-loop.ts)<br/>ONE cycle, then stop"]
         SAFE["Safety policy<br/>(src/safety)<br/>pure code"]
         S1["System 1<br/>DeterministicRouter<br/>(src/system1)"]
         PROP["Decision → one action<br/>(action-proposer)"]
@@ -107,7 +107,7 @@ home was 100 blocks through a forest, and the pause there healed nothing (nothin
 offline).
 
 A retreat (`RETREAT_HOME`) from a creature goes back along the agent's own trail when that
-is nearer than home (`src/app/trail.ts`): the agent remembers where it stood out of danger
+is nearer than home (`src/app/loop/trail.ts`): the agent remembers where it stood out of danger
 lately (a point every 4 blocks, the last 48, never in a night task), and the newest point 8 to
 48 blocks back, on the far side of the player from the nearest creature and clear of every one
 by the threat radius plus 4, becomes the safe location `trail` for that cycle. Two failed
@@ -163,7 +163,7 @@ Every decision records which way it went in `factsUsed` (in the DECISION event):
 over 20 cycle(s): 1 model decision(s) (median 2.1 s), 19 continued without the model, 0 binding
 router decision(s)", and `cli play`'s summary has the total.
 
-Measured on the mock world with a fake model (`tests/app/decision-points.test.ts`): a GATHER of
+Measured on the mock world with a fake model (`tests/app/loop/decision-points.test.ts`): a GATHER of
 54 sand takes 61 cycles (54 digs, 7 walks) and asks the model once, at its start. With the two
 plans after it, that is 3 model decisions in 63 cycles; `every-cycle` makes 63.
 
@@ -194,7 +194,7 @@ The live server knows nothing about the agent's tasks, so they come from agent m
 
 ### Bounded auto-run
 
-`src/app/live-session.ts` (`cli run --live`) runs ordinary cycles back to back on one connection
+`src/app/loop/live-session.ts` (`cli run --live`) runs ordinary cycles back to back on one connection
 for the current task. It adds no decision logic and no checks of its own. It only decides whether
 to start another cycle, and it continues only while each cycle:
 
@@ -313,10 +313,10 @@ journal says the walls are open again. Walled in with no way out, play stops and
 `UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand
 the pause to a person: it sets the task active again, notes it in the journal, and `cli play`
 waits offline for 30 s (an offline player cannot be hurt) and plays on, at most 6 times in a
-row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play.ts`). Every new session re-checks the
+row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play/play.ts`). Every new session re-checks the
 state from scratch, so a mob that is still there pauses it again.
 
-**Food** (`src/app/food.ts`, `src/domain/food.ts`; approved 2026-10-01). Seen live: food 9/20
+**Food** (`src/app/play/food.ts`, `src/domain/food.ts`; approved 2026-10-01). Seen live: food 9/20
 with nothing to eat, its only apple eaten. Below food 6 with no food System 1 retreats or
 pauses, so within a game day or two the agent would starve its own play. GTNH's quest "Sticks
 'n Stones" sends a new player to Pam's HarvestCraft gardens. So, as play turns to a shelter at
@@ -379,7 +379,7 @@ journal instead of a raw log, continues where the task stopped and avoids repeat
 Interruptions (mobs, hunger, lava, night) are still handled first by System 1's reflexes;
 a step that no longer fits the world is refused and replanned.
 
-`src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the server's quest book and
+`src/app/play/play.ts` (`runPlay`) is the play loop. Each round it reads the server's quest book and
 the inventory, records the quests the server now lists as completed (closing their tasks), and
 makes the quest-book clicks that are due, one per round. Each click is an ordinary action run by
 the executor (`runQuestBookAction`: schema, safety policy, preconditions, execution, and
@@ -550,7 +550,7 @@ Gathering used to be planned block by block: the planner wrote an 8-step plan of
 (and `MOVE_TO`) steps every 8 blocks, about 16 s per plan with qwen3:14b. Now it writes ONE
 step, `{"type":"GATHER","args":{"block":"minecraft:sand","count":54}}`, and code expands it,
 one cycle at a time, into the same checked actions. `src/planner/gather.ts` chooses each
-action; `src/app/gather-step.ts` keeps the step's progress. The idea is Baritone's mine process
+action; `src/app/loop/gather-step.ts` keeps the step's progress. The idea is Baritone's mine process
 (pick the nearest known target, walk to it, mine it, repeat until the count is held), written
 anew: no code was taken from Baritone (LGPL-3.0).
 
@@ -632,7 +632,7 @@ is validated before anything is dropped, so an unsafe step anywhere still reject
 human wrote (`cli task-add --plan`) is never trimmed.
 
 Then code dry-runs the plan's start on the current observation (`refusedFirstStep` in
-`src/app/agent-loop.ts`): its leading `GATHER` steps as they will run (one with nothing to dig
+`src/app/loop/agent-loop.ts`): its leading `GATHER` steps as they will run (one with nothing to dig
 is skipped), and the first other step through the executor's own checks (`validateCandidate`:
 schema, safety policy, preconditions, the repeated-failure rule). When that step would be
 refused for a reason a new plan can change, or every `GATHER` would find nothing to dig, the
@@ -648,7 +648,7 @@ offers (see [The planner and play](#the-planner-and-play)).
 
 Some work is planned by code, not by the planner: the night shelter and the way out of it in
 the morning (see [Nights](#routes-nights-and-the-play-loop)). Code writes the steps as
-ordinary action specs, with one line each; `src/app/known-steps.ts` keeps them in agent memory
+ordinary action specs, with one line each; `src/app/loop/known-steps.ts` keeps them in agent memory
 (`task_steps:<taskId>`, with how many are done), and the play loop stores them when it starts
 the session (the lines also stay the task's blueprint, the planner's route, as before).
 
@@ -1343,7 +1343,7 @@ grid) can be applied later.
   it. A remembered place the current resource scan covers (its sphere, at or above the feet) is
   left out of the route and of `exploration.places`: it is in view already, with a stand spot a
   walk reaches, or out of reach from here. A point an `EXPLORE` found "no way further" toward is
-  a dead end (`src/app/dead-ends.ts`): while the player is within 24 blocks of where that
+  a dead end (`src/app/loop/dead-ends.ts`): while the player is within 24 blocks of where that
   happened, places and biome patches within 12 blocks of the point are left out too. A compass
   direction that led nowhere (from where it could not start, or from where it stopped short) is
   a dead end the same way: near there it shows no room left, so the "new ground" hint names
@@ -1352,7 +1352,7 @@ grid) can be applied later.
   hint never names the patch the player stands in: it names one farther away, or says to
   explore on through it. Seen live: the model planned `EXPLORE` toward remembered logs it could
   not reach, again and again, even when told it would be refused.
-- Play (`src/app/scouting.ts`): when the agent can explore and world memory holds fewer than 50
+- Play (`src/app/play/scouting.ts`): when the agent can explore and world memory holds fewer than 50
   chunks seen near, play begins with ONE bounded session on a `scout-area` task ("explore two or
   three directions..."), before the quests. It ends once 100 chunks are seen near, at the
   session's limits, or when anything needs a human, and it is done once: a completed scouting
@@ -1530,5 +1530,9 @@ src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
-src/app          agent loop, sessions, play loop (with scouting), quest book, provider factory, mock scenarios, CLI
+src/app          cli.ts (the CLI) and providers.ts (the decision-provider and planner factory), plus:
+  loop/          one agent cycle (agent-loop.ts) and a session of them; GATHER steps, dead ends, the trail, known steps
+  play/          the play loop: quest goals and quest-book clicks, night shelters, food trips, scouting
+  commands/      what the CLI runs: live commands (observe, move, dig, ...), plans, tasks, world memory
+  mock/          the mock agent and its scenarios
 ```

@@ -2,7 +2,7 @@ import { MockMinecraftClient, type MockWorld } from '../../src/bot/mock-minecraf
 import { defaultConfig, type AgentConfig } from '../../src/config/env.ts';
 import { createAction, type Action, type ActionSpec } from '../../src/domain/actions.ts';
 import type { GameState } from '../../src/domain/game-state.ts';
-import { MOCK_CONFIG, baseWorld } from '../../src/app/scenarios.ts';
+import { MOCK_CONFIG, baseWorld } from '../../src/app/mock/scenarios.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
 import { createRepositories, type Repositories } from '../../src/persistence/repositories.ts';
 import type { SafetyContext } from '../../src/safety/safety-policy.ts';

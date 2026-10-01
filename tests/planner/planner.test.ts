@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import { MOCK_CONFIG } from '../../src/app/mock/scenarios.ts';
 import { defaultConfig } from '../../src/config/env.ts';
 import type { PlaceableItem } from '../../src/domain/blocks.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';

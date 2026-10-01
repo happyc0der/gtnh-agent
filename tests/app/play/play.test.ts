@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CycleResult } from '../../src/app/agent-loop.ts';
-import type { SessionResult, SessionStopKind } from '../../src/app/live-session.ts';
+import type { CycleResult } from '../../../src/app/loop/agent-loop.ts';
+import type { SessionResult, SessionStopKind } from '../../../src/app/loop/live-session.ts';
 import {
   checkPlayLimits,
   DEFAULT_PLAY_LIMITS,
@@ -12,23 +12,23 @@ import {
   SHELTER_LEAD_MINUTES,
   type PlayDeps,
   type PlayEvent,
-} from '../../src/app/play.ts';
-import type { DecisionResult } from '../../src/domain/decisions.ts';
-import { FOOD_TASK_ID } from '../../src/domain/food.ts';
-import { NIGHT_PIT_WINDOW_MINUTES, nightPitTime } from '../../src/domain/night-shelter.ts';
-import { completedQuests, questTaskId } from '../../src/app/quest-commands.ts';
-import { nextKnownStep } from '../../src/app/known-steps.ts';
-import type { ShelterStep } from '../../src/domain/night-shelter.ts';
-import type { ShelterStatus } from '../../src/goals/shelter.ts';
-import { SCOUT_TASK_ID } from '../../src/app/scouting.ts';
-import { worldTime, type GameState } from '../../src/domain/game-state.ts';
-import type { QuestBook } from '../../src/domain/quest-book.ts';
-import { TASK, type Quest, type QuestBookStep } from '../../src/goals/quest-goals.ts';
-import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
-import { CURRENT_TASK_KEY } from '../../src/persistence/memory-repository.ts';
-import { createRepositories, type Repositories } from '../../src/persistence/repositories.ts';
-import { systemClock } from '../../src/util/clock.ts';
-import { makeState } from '../fixtures/index.ts';
+} from '../../../src/app/play/play.ts';
+import type { DecisionResult } from '../../../src/domain/decisions.ts';
+import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
+import { NIGHT_PIT_WINDOW_MINUTES, nightPitTime } from '../../../src/domain/night-shelter.ts';
+import { completedQuests, questTaskId } from '../../../src/app/play/quest-progress.ts';
+import { nextKnownStep } from '../../../src/app/loop/known-steps.ts';
+import type { ShelterStep } from '../../../src/domain/night-shelter.ts';
+import type { ShelterStatus } from '../../../src/goals/shelter.ts';
+import { SCOUT_TASK_ID } from '../../../src/app/play/scouting.ts';
+import { worldTime, type GameState } from '../../../src/domain/game-state.ts';
+import type { QuestBook } from '../../../src/domain/quest-book.ts';
+import { TASK, type Quest, type QuestBookStep } from '../../../src/goals/quest-goals.ts';
+import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
+import { CURRENT_TASK_KEY } from '../../../src/persistence/memory-repository.ts';
+import { createRepositories, type Repositories } from '../../../src/persistence/repositories.ts';
+import { systemClock } from '../../../src/util/clock.ts';
+import { makeState } from '../../fixtures/index.ts';
 
 const quest = (
   id: string,

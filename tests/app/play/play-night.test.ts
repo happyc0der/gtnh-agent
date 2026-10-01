@@ -2,25 +2,29 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { syncConfigToDatabase, type AgentDeps } from '../../src/app/agent-loop.ts';
-import { DEFAULT_SESSION_LIMITS, runSession } from '../../src/app/live-session.ts';
-import { liveShelter } from '../../src/app/live-play.ts';
+import { syncConfigToDatabase, type AgentDeps } from '../../../src/app/loop/agent-loop.ts';
+import { DEFAULT_SESSION_LIMITS, runSession } from '../../../src/app/loop/live-session.ts';
+import { liveShelter } from '../../../src/app/play/live-play.ts';
 import {
   DEFAULT_PLAY_LIMITS,
   describePlayEvent,
   runPlay,
   type PlayEvent,
-} from '../../src/app/play.ts';
-import { Gtnh1710Client } from '../../src/bot/gtnh1710/gtnh-client.ts';
-import { defaultConfig } from '../../src/config/env.ts';
-import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
-import { NIGHT_PIT_KEY } from '../../src/persistence/memory-repository.ts';
-import { createRepositories } from '../../src/persistence/repositories.ts';
-import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
-import { systemClock } from '../../src/util/clock.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { BLOCK, PLACE_TEST_BLOCK_REGISTRY, type BlockFn } from '../bot/gtnh1710/chunk-fixtures.ts';
-import { FakeGtnhServer } from '../bot/gtnh1710/fake-server.ts';
+} from '../../../src/app/play/play.ts';
+import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
+import { defaultConfig } from '../../../src/config/env.ts';
+import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
+import { NIGHT_PIT_KEY } from '../../../src/persistence/memory-repository.ts';
+import { createRepositories } from '../../../src/persistence/repositories.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { systemClock } from '../../../src/util/clock.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import {
+  BLOCK,
+  PLACE_TEST_BLOCK_REGISTRY,
+  type BlockFn,
+} from '../../bot/gtnh1710/chunk-fixtures.ts';
+import { FakeGtnhServer } from '../../bot/gtnh1710/fake-server.ts';
 
 /** Bedrock at 0, stone at 100, dirt at 101-104, grass at 105: the fake player stands at y=106. */
 const solidGround: BlockFn = (_x, y) =>

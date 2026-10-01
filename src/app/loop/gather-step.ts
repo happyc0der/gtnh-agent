@@ -1,11 +1,11 @@
-import { createAction, type ActionSpec } from '../domain/actions.ts';
-import type { BlockPosition, Position } from '../domain/common.ts';
-import type { GameState } from '../domain/game-state.ts';
-import { formatPosition } from '../domain/geometry.ts';
-import { known } from '../domain/known.ts';
-import { validateCandidate, type ExecutionOutcome } from '../executor/action-executor.ts';
-import { TASK_GATHER_PREFIX } from '../persistence/memory-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
+import { createAction, type ActionSpec } from '../../domain/actions.ts';
+import type { BlockPosition, Position } from '../../domain/common.ts';
+import type { GameState } from '../../domain/game-state.ts';
+import { formatPosition } from '../../domain/geometry.ts';
+import { known } from '../../domain/known.ts';
+import { validateCandidate, type ExecutionOutcome } from '../../executor/action-executor.ts';
+import { TASK_GATHER_PREFIX } from '../../persistence/memory-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
 import {
   chooseGatherAction,
   gatherBound,
@@ -26,8 +26,8 @@ import {
   type GatherOptions,
   type GatherProgress,
   type GatherStep,
-} from '../planner/gather.ts';
-import type { FailureHistory, SafetyContext } from '../safety/safety-policy.ts';
+} from '../../planner/gather.ts';
+import type { FailureHistory, SafetyContext } from '../../safety/safety-policy.ts';
 
 /**
  * The agent loop's side of a GATHER plan step (src/planner/gather.ts chooses the actions):

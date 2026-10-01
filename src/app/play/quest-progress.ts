@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AGE0_CHAPTER, AGE0_QUESTS } from '../goals/age0-quests.ts';
+import { AGE0_CHAPTER, AGE0_QUESTS } from '../../goals/age0-quests.ts';
 import {
   BASE_ABILITIES,
   completedIds,
@@ -12,12 +12,12 @@ import {
   type Quest,
   type QuestBookStep,
   type QuestProgress,
-} from '../goals/quest-goals.ts';
-import type { GameState } from '../domain/game-state.ts';
-import type { QuestBook } from '../domain/quest-book.ts';
-import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
-import type { TaskStatus } from '../domain/tasks.ts';
+} from '../../goals/quest-goals.ts';
+import type { GameState } from '../../domain/game-state.ts';
+import type { QuestBook } from '../../domain/quest-book.ts';
+import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import type { TaskStatus } from '../../domain/tasks.ts';
 
 /**
  * The Age 0 quest book as the SERVER records it (Better Questing, GameState.questBook), and

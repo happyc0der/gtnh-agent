@@ -1,9 +1,9 @@
-import type { AgentConfig } from '../config/env.ts';
-import { EntityIdSchema } from '../domain/common.ts';
-import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
-import { validatePlan } from '../planner/plan-validator.ts';
-import { buildSafetyContext, OPERATOR_PLANNER } from './agent-loop.ts';
+import type { AgentConfig } from '../../config/env.ts';
+import { EntityIdSchema } from '../../domain/common.ts';
+import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import { validatePlan } from '../../planner/plan-validator.ts';
+import { buildSafetyContext, OPERATOR_PLANNER } from '../loop/agent-loop.ts';
 
 /**
  * Human-in-the-loop task commands (the CLI's task-add / task-complete / task-list). A task

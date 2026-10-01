@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import { MOCK_CONFIG } from '../../src/app/mock/scenarios.ts';
 import type { MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import { defaultConfig } from '../../src/config/env.ts';
 import {

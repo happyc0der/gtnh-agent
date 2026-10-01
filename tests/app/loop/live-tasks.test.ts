@@ -6,33 +6,33 @@ import {
   runSingleCycle,
   syncConfigToDatabase,
   type CycleResult,
-} from '../../src/app/agent-loop.ts';
-import { runMockScenario } from '../../src/app/mock-agent.ts';
-import { findScenario } from '../../src/app/scenarios.ts';
-import { addTask, completeTask, listTasks } from '../../src/app/task-commands.ts';
+} from '../../../src/app/loop/agent-loop.ts';
+import { runMockScenario } from '../../../src/app/mock/mock-agent.ts';
+import { findScenario } from '../../../src/app/mock/scenarios.ts';
+import { addTask, completeTask, listTasks } from '../../../src/app/commands/task-commands.ts';
 import {
   checkLimits,
   DEFAULT_SESSION_LIMITS,
   runSession,
   type SessionLimits,
-} from '../../src/app/live-session.ts';
-import { Gtnh1710Client } from '../../src/bot/gtnh1710/gtnh-client.ts';
-import { defaultConfig, type AgentConfig } from '../../src/config/env.ts';
-import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
-import { CURRENT_TASK_KEY } from '../../src/persistence/memory-repository.ts';
-import { createRepositories, type Repositories } from '../../src/persistence/repositories.ts';
-import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
-import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
-import { systemClock } from '../../src/util/clock.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { BLOCK } from '../bot/gtnh1710/chunk-fixtures.ts';
-import type { FakeStack } from '../bot/gtnh1710/fake-chests.ts';
+} from '../../../src/app/loop/live-session.ts';
+import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
+import { defaultConfig, type AgentConfig } from '../../../src/config/env.ts';
+import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
+import { CURRENT_TASK_KEY } from '../../../src/persistence/memory-repository.ts';
+import { createRepositories, type Repositories } from '../../../src/persistence/repositories.ts';
+import { MockPlannerProvider } from '../../../src/planner/mock-planner-provider.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { systemClock } from '../../../src/util/clock.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { BLOCK } from '../../bot/gtnh1710/chunk-fixtures.ts';
+import type { FakeStack } from '../../bot/gtnh1710/fake-chests.ts';
 import {
   FakeGtnhServer,
   gtBlockEventsMessage,
   gtTileEntityMessage,
   spawnFrame,
-} from '../bot/gtnh1710/fake-server.ts';
+} from '../../bot/gtnh1710/fake-server.ts';
 
 // The fake world: a grass floor at y=105, the player at (-4.5, 106, -7.5), a chest at
 // (-5, 106, -6) with 128 cobblestone, a walking fence around both.

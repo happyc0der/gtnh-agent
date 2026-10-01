@@ -1,5 +1,5 @@
-import type { StoredPlan } from '../persistence/plan-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
+import type { StoredPlan } from '../../persistence/plan-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
 
 /**
  * Human-in-the-loop plan commands (the CLI's plan-show / plan-approve / plan-reject).

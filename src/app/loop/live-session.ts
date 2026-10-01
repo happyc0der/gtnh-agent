@@ -1,7 +1,7 @@
-import type { Decision, DecisionResult } from '../domain/decisions.ts';
-import type { GameState } from '../domain/game-state.ts';
-import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
-import { system1Stats, type System1Stats } from '../system1/model-cadence.ts';
+import type { Decision, DecisionResult } from '../../domain/decisions.ts';
+import type { GameState } from '../../domain/game-state.ts';
+import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import { system1Stats, type System1Stats } from '../../system1/model-cadence.ts';
 import { runSingleCycle, type AgentDeps, type CycleResult } from './agent-loop.ts';
 
 /**

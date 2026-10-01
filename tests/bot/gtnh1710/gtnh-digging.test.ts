@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runUserAction, syncConfigToDatabase } from '../../../src/app/agent-loop.ts';
+import { runUserAction, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
 import { digWaitTicks } from '../../../src/domain/dig-time.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type DiggingConfig } from '../../../src/config/env.ts';

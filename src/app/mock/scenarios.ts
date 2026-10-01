@@ -1,11 +1,11 @@
-import type { MockMinecraftClient, MockWorld } from '../bot/mock-minecraft-client.ts';
-import type { AgentConfigInput } from '../config/env.ts';
-import type { ActionType } from '../domain/actions.ts';
-import type { PlaceableItem } from '../domain/blocks.ts';
-import type { Decision } from '../domain/decisions.ts';
-import { FOOD_TASK_ID } from '../domain/food.ts';
-import type { PlannerFixture } from '../planner/mock-planner-provider.ts';
-import type { CycleStatus } from './agent-loop.ts';
+import type { MockMinecraftClient, MockWorld } from '../../bot/mock-minecraft-client.ts';
+import type { AgentConfigInput } from '../../config/env.ts';
+import type { ActionType } from '../../domain/actions.ts';
+import type { PlaceableItem } from '../../domain/blocks.ts';
+import type { Decision } from '../../domain/decisions.ts';
+import { FOOD_TASK_ID } from '../../domain/food.ts';
+import type { PlannerFixture } from '../../planner/mock-planner-provider.ts';
+import type { CycleStatus } from '../loop/agent-loop.ts';
 
 /**
  * Named, deterministic mock situations for the CLI and the integration tests.
@@ -152,7 +152,7 @@ const placeStep =
   };
 
 /**
- * Hungry with nothing to eat, on the play loop's food task (src/app/food.ts), by day: food
+ * Hungry with nothing to eat, on the play loop's food task (src/app/play/food.ts), by day: food
  * `food`/20 (9 unless given), no bread, the task get-food active with no known step (the
  * planner plans it from the food route).
  */

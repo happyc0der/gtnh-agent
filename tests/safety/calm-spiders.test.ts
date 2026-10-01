@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { trailRetreat } from '../../src/app/trail.ts';
+import { trailRetreat } from '../../src/app/loop/trail.ts';
 import type { MockMob, MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import { GameStateSchema, type GameState } from '../../src/domain/game-state.ts';
 import { known } from '../../src/domain/known.ts';

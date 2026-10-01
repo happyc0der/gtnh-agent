@@ -4,18 +4,18 @@ import {
   runSingleCycle,
   syncConfigToDatabase,
   type CycleResult,
-} from '../../src/app/agent-loop.ts';
-import type { MockResourceBlock, MockWorld } from '../../src/bot/mock-minecraft-client.ts';
-import type { ActionSpec } from '../../src/domain/actions.ts';
-import type { DiggableBlock } from '../../src/domain/blocks.ts';
-import type { BlockPosition } from '../../src/domain/common.ts';
-import { FOOD_TASK_ID } from '../../src/domain/food.ts';
-import type { Plan, PlannerRequest, PlannerResponse } from '../../src/planner/plan-schema.ts';
-import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
-import { actionFingerprint } from '../../src/safety/safety-policy.ts';
-import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { makeWorld, memoryRepos, testClock, testConfig } from '../fixtures/index.ts';
+} from '../../../src/app/loop/agent-loop.ts';
+import type { MockResourceBlock, MockWorld } from '../../../src/bot/mock-minecraft-client.ts';
+import type { ActionSpec } from '../../../src/domain/actions.ts';
+import type { DiggableBlock } from '../../../src/domain/blocks.ts';
+import type { BlockPosition } from '../../../src/domain/common.ts';
+import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
+import type { Plan, PlannerRequest, PlannerResponse } from '../../../src/planner/plan-schema.ts';
+import type { PlannerProvider } from '../../../src/planner/planner-provider.ts';
+import { actionFingerprint } from '../../../src/safety/safety-policy.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { makeWorld, memoryRepos, testClock, testConfig } from '../../fixtures/index.ts';
 
 // The mock player starts at (1, 64, 1). The sand lies in rows at y 64 along z = 5 and z = 6,
 // from x = 0; each block's stand spot is on the north side of its column (z 4.5), as the

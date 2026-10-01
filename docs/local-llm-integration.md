@@ -152,7 +152,7 @@ is a pure function (`decisionPoint`), tested case by case.
 
 On the mock world with a fake model, a 54-sand GATHER (61 cycles: 54 digs, 7 walks) asks the
 model once, at its start; with the two plans after it, 3 model decisions in 63 cycles, against
-63 with `every-cycle` (`tests/app/decision-points.test.ts`). Not yet measured live.
+63 with `every-cycle` (`tests/app/loop/decision-points.test.ts`). Not yet measured live.
 
 ### Slow models and stale observations
 
@@ -299,7 +299,7 @@ markdown-fenced and outdated decision replies, timeouts, HTTP and connection err
 private-host guard, safety decisions overriding the model, router pauses, and full mock cycles
 through the provider factory. The decision-point cadence is tested the same way: the pure
 check case by case (`tests/system1/model-cadence.test.ts`), and runs of many agent-loop cycles
-that count the fake model's calls (`tests/app/decision-points.test.ts`: a 54-sand GATHER, a mob
+that count the fake model's calls (`tests/app/loop/decision-points.test.ts`: a 54-sand GATHER, a mob
 mid-plan, a failed dig, the evening, sessions, and `every-cycle`). `pnpm check` never contacts a
 model.
 

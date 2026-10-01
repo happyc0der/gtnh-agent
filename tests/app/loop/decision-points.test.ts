@@ -3,27 +3,27 @@ import {
   runSingleCycle,
   syncConfigToDatabase,
   type CycleResult,
-} from '../../src/app/agent-loop.ts';
-import { runSession } from '../../src/app/live-session.ts';
-import { describePlayEvent, type PlayEvent } from '../../src/app/play.ts';
-import { createProviders } from '../../src/app/providers.ts';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
-import type { MockResourceBlock } from '../../src/bot/mock-minecraft-client.ts';
-import { defaultConfig, type ModelCadence } from '../../src/config/env.ts';
-import type { DiggableBlock } from '../../src/domain/blocks.ts';
-import type { GameState } from '../../src/domain/game-state.ts';
-import { CURRENT_TASK_KEY } from '../../src/persistence/memory-repository.ts';
-import type { Plan, PlannerResponse } from '../../src/planner/plan-schema.ts';
-import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
+} from '../../../src/app/loop/agent-loop.ts';
+import { runSession } from '../../../src/app/loop/live-session.ts';
+import { describePlayEvent, type PlayEvent } from '../../../src/app/play/play.ts';
+import { createProviders } from '../../../src/app/providers.ts';
+import { MOCK_CONFIG } from '../../../src/app/mock/scenarios.ts';
+import type { MockResourceBlock } from '../../../src/bot/mock-minecraft-client.ts';
+import { defaultConfig, type ModelCadence } from '../../../src/config/env.ts';
+import type { DiggableBlock } from '../../../src/domain/blocks.ts';
+import type { GameState } from '../../../src/domain/game-state.ts';
+import { CURRENT_TASK_KEY } from '../../../src/persistence/memory-repository.ts';
+import type { Plan, PlannerResponse } from '../../../src/planner/plan-schema.ts';
+import type { PlannerProvider } from '../../../src/planner/planner-provider.ts';
 import {
   describeSystem1Stats,
   NO_SYSTEM1_STATS,
   system1Stats,
   type System1Stats,
-} from '../../src/system1/model-cadence.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { fakeOllama, golden } from '../fixtures/fake-ollama.ts';
-import { makeWorld, memoryRepos, testClock } from '../fixtures/index.ts';
+} from '../../../src/system1/model-cadence.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { fakeOllama, golden } from '../../fixtures/fake-ollama.ts';
+import { makeWorld, memoryRepos, testClock } from '../../fixtures/index.ts';
 
 /**
  * System 1 with a model at decision points, over many cycles of the agent loop. The model is

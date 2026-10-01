@@ -17,7 +17,7 @@ import {
 } from '../system1/model-cadence.ts';
 import { systemClock } from '../util/clock.ts';
 import { errorMessage } from '../util/json.ts';
-import { syncConfigToDatabase, type CycleResult } from './agent-loop.ts';
+import { syncConfigToDatabase, type CycleResult } from './loop/agent-loop.ts';
 import {
   movementStatus,
   parseBlockPosition,
@@ -35,12 +35,12 @@ import {
   summarizeObservation,
   watchLive,
   withLiveClient,
-} from './live-agent.ts';
-import { describeKnownPlaces, parseMapPoint } from './world-memory-commands.ts';
-import { runMockScenario } from './mock-agent.ts';
-import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
-import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
-import { observeWithQuestBook, runLivePlay } from './live-play.ts';
+} from './commands/live-commands.ts';
+import { describeKnownPlaces, parseMapPoint } from './commands/world-memory-commands.ts';
+import { runMockScenario } from './mock/mock-agent.ts';
+import { approvePlan, rejectPlan, showPlans } from './commands/plan-commands.ts';
+import { checkLimits, DEFAULT_SESSION_LIMITS } from './loop/live-session.ts';
+import { observeWithQuestBook, runLivePlay } from './play/live-play.ts';
 import {
   checkPlayLimits,
   DEFAULT_PLAY_LIMITS,
@@ -50,11 +50,11 @@ import {
   MAX_MOB_WAITS,
   MOB_WAIT_MS,
   untilSunrise,
-} from './play.ts';
+} from './play/play.ts';
 import { createProviders } from './providers.ts';
-import { describeQuests, freeSlotsOf, updateQuests } from './quest-commands.ts';
-import { addTask, completeTask, listTasks } from './task-commands.ts';
-import { findScenario, SCENARIOS } from './scenarios.ts';
+import { describeQuests, freeSlotsOf, updateQuests } from './play/quest-progress.ts';
+import { addTask, completeTask, listTasks } from './commands/task-commands.ts';
+import { findScenario, SCENARIOS } from './mock/scenarios.ts';
 
 const USAGE = `gtnh-agent (single cycle, no autonomy; the live client only observes unless walking,
 chests, crafting, digging, placing, block windows or fighting are explicitly enabled)

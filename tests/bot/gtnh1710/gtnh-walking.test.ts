@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildSafetyContext, syncConfigToDatabase } from '../../../src/app/agent-loop.ts';
+import { buildSafetyContext, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
 import { sweptColumns } from '../../../src/bot/gtnh1710/walking.ts';

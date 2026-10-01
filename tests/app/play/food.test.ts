@@ -7,11 +7,11 @@ import {
   foodStatusOf,
   foodTripDone,
   foodTripOngoing,
-} from '../../src/app/food.ts';
-import { FOOD_TASK_ID, FOOD_TRIP_POINTS } from '../../src/domain/food.ts';
-import { CURRENT_TASK_KEY } from '../../src/persistence/memory-repository.ts';
-import type { Repositories } from '../../src/persistence/repositories.ts';
-import { makeState, memoryRepos, testConfig } from '../fixtures/index.ts';
+} from '../../../src/app/play/food.ts';
+import { FOOD_TASK_ID, FOOD_TRIP_POINTS } from '../../../src/domain/food.ts';
+import { CURRENT_TASK_KEY } from '../../../src/persistence/memory-repository.ts';
+import type { Repositories } from '../../../src/persistence/repositories.ts';
+import { makeState, memoryRepos, testConfig } from '../../fixtures/index.ts';
 
 const ate = (repos: Repositories, items: readonly string[]): void => {
   items.forEach((item, i) => {

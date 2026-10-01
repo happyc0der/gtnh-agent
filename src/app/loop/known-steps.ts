@@ -1,15 +1,15 @@
 import { z } from 'zod';
-import { ActionSpecSchema, toSpec, type Action, type ActionSpec } from '../domain/actions.ts';
-import type { ShelterStep } from '../domain/night-shelter.ts';
-import type { ExecutionOutcome } from '../executor/action-executor.ts';
-import { TASK_STEPS_PREFIX } from '../persistence/memory-repository.ts';
-import type { Repositories } from '../persistence/repositories.ts';
-import { stableStringify } from '../util/json.ts';
+import { ActionSpecSchema, toSpec, type Action, type ActionSpec } from '../../domain/actions.ts';
+import type { ShelterStep } from '../../domain/night-shelter.ts';
+import type { ExecutionOutcome } from '../../executor/action-executor.ts';
+import { TASK_STEPS_PREFIX } from '../../persistence/memory-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import { stableStringify } from '../../util/json.ts';
 
 /**
  * A code-made blueprint for a task: actions code chose, run in order as known safe steps,
  * never through the planner. Today the night shelter (the pit's digs down and its roof, or
- * the box) and the way out of it in the morning (src/app/play.ts). Kept in agent memory
+ * the box) and the way out of it in the morning (src/app/play/play.ts). Kept in agent memory
  * (`task_steps:<taskId>`) with how many are done:
  *  - overlayAgentMemory makes the next step the state's knownRecipeState.nextKnownSafeStep,
  *    so System 1's rule 6 decides EXECUTE_KNOWN_SAFE_STEP and the proposer runs it (origin

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { runSingleCycle, syncConfigToDatabase } from '../../../src/app/agent-loop.ts';
+import { runSingleCycle, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type MinecraftConfig } from '../../../src/config/env.ts';
 import type { GameState } from '../../../src/domain/game-state.ts';

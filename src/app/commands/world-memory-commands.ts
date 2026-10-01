@@ -1,6 +1,6 @@
-import type { AgentConfig } from '../config/env.ts';
-import { summarizeExploration } from '../domain/world-memory.ts';
-import type { Repositories } from '../persistence/repositories.ts';
+import type { AgentConfig } from '../../config/env.ts';
+import { summarizeExploration } from '../../domain/world-memory.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
 
 export type PlacesResult =
   { ok: true; value: Record<string, unknown> } | { ok: false; error: string };

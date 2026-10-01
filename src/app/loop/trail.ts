@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { CALM_SPIDER_MIN_DISTANCE } from '../domain/combat.ts';
-import { DimensionSchema, PositionSchema } from '../domain/common.ts';
-import type { GameState } from '../domain/game-state.ts';
-import { distance } from '../domain/geometry.ts';
-import { LEAVE_SHELTER_TASK_ID, NIGHT_SHELTER_TASK_ID } from '../domain/night-shelter.ts';
-import type { NamedLocation } from '../domain/safety.ts';
-import type { MemoryRepository } from '../persistence/memory-repository.ts';
-import { assessDangers, type SafetyContext } from '../safety/safety-policy.ts';
+import { CALM_SPIDER_MIN_DISTANCE } from '../../domain/combat.ts';
+import { DimensionSchema, PositionSchema } from '../../domain/common.ts';
+import type { GameState } from '../../domain/game-state.ts';
+import { distance } from '../../domain/geometry.ts';
+import { LEAVE_SHELTER_TASK_ID, NIGHT_SHELTER_TASK_ID } from '../../domain/night-shelter.ts';
+import type { NamedLocation } from '../../domain/safety.ts';
+import type { MemoryRepository } from '../../persistence/memory-repository.ts';
+import { assessDangers, type SafetyContext } from '../../safety/safety-policy.ts';
 
 /**
  * The trail: where the player stood lately, out of danger, newest last. A person who meets a

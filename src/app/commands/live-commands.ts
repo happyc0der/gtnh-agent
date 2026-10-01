@@ -1,28 +1,28 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { Gtnh1710Client, type ConnectionInfo } from '../bot/gtnh1710/gtnh-client.ts';
-import type { HazardScan } from '../bot/gtnh1710/hazard-scan.ts';
-import type { MachineFlags } from '../bot/gtnh1710/gregtech.ts';
-import type { NearbyEntity, TrackedMachine } from '../bot/gtnh1710/world-model.ts';
-import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
-import type { AgentConfig } from '../config/env.ts';
+import { Gtnh1710Client, type ConnectionInfo } from '../../bot/gtnh1710/gtnh-client.ts';
+import type { HazardScan } from '../../bot/gtnh1710/hazard-scan.ts';
+import type { MachineFlags } from '../../bot/gtnh1710/gregtech.ts';
+import type { NearbyEntity, TrackedMachine } from '../../bot/gtnh1710/world-model.ts';
+import type { WalkPlan } from '../../bot/gtnh1710/walking.ts';
+import type { AgentConfig } from '../../config/env.ts';
 import {
   ExploreDirectionSchema,
   ExploreTowardSchema,
   type ActionSpec,
   type ExploreToward,
-} from '../domain/actions.ts';
-import type { PlaceableItem } from '../domain/blocks.ts';
-import { attackRefusal } from '../domain/combat.ts';
-import type { BlockPosition, Position } from '../domain/common.ts';
-import type { GameState } from '../domain/game-state.ts';
-import type { ExplorationSummary } from '../domain/world-memory.ts';
-import { AGE0_QUESTS } from '../goals/age0-quests.ts';
-import { openDatabase } from '../persistence/database.ts';
-import { createRepositories } from '../persistence/repositories.ts';
-import { DeterministicDecisionProvider } from '../system1/decision-provider.ts';
-import { systemClock } from '../util/clock.ts';
-import { randomIds } from '../util/ids.ts';
+} from '../../domain/actions.ts';
+import type { PlaceableItem } from '../../domain/blocks.ts';
+import { attackRefusal } from '../../domain/combat.ts';
+import type { BlockPosition, Position } from '../../domain/common.ts';
+import type { GameState } from '../../domain/game-state.ts';
+import type { ExplorationSummary } from '../../domain/world-memory.ts';
+import { AGE0_QUESTS } from '../../goals/age0-quests.ts';
+import { openDatabase } from '../../persistence/database.ts';
+import { createRepositories } from '../../persistence/repositories.ts';
+import { DeterministicDecisionProvider } from '../../system1/decision-provider.ts';
+import { systemClock } from '../../util/clock.ts';
+import { randomIds } from '../../util/ids.ts';
 import {
   buildSafetyContext,
   explorationFor,
@@ -30,9 +30,9 @@ import {
   runUserAction,
   syncConfigToDatabase,
   type CycleResult,
-} from './agent-loop.ts';
-import { runSession, type SessionLimits, type SessionResult } from './live-session.ts';
-import { createProviders } from './providers.ts';
+} from '../loop/agent-loop.ts';
+import { runSession, type SessionLimits, type SessionResult } from '../loop/live-session.ts';
+import { createProviders } from '../providers.ts';
 
 /**
  * Connects the READ-ONLY GTNH client, runs `fn`, and always disconnects afterwards.

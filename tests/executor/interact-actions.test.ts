@@ -8,7 +8,7 @@ import { ActionExecutor } from '../../src/executor/action-executor.ts';
 import { SqliteActionLog } from '../../src/executor/action-log.ts';
 import { checkPreconditions } from '../../src/executor/preconditions.ts';
 import { verifyPostcondition } from '../../src/executor/action-verifier.ts';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import { MOCK_CONFIG } from '../../src/app/mock/scenarios.ts';
 import { emptyFailureHistory, evaluateAction } from '../../src/safety/safety-policy.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
 import { action, makeWorld, memoryRepos, safetyCtx } from '../fixtures/index.ts';

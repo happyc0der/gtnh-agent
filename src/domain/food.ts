@@ -343,7 +343,7 @@ export function carriedFoodPoints(
 // ---------------------------------------------------------------------------
 
 /**
- * The task the play loop gets food under (src/app/food.ts): hungry with no food carried, in
+ * The task the play loop gets food under (src/app/play/food.ts): hungry with no food carried, in
  * daylight, play turns to it as it turns to the night shelter at dusk, and goes back to the
  * quest once enough food is carried.
  */

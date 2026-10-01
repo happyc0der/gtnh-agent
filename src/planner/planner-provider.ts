@@ -498,7 +498,7 @@ function placeText(p: KnownPlace): string {
 }
 
 /**
- * The food task's route (FOOD_TASK_ID: src/app/food.ts), calculated in code like any route:
+ * The food task's route (FOOD_TASK_ID: src/app/play/food.ts), calculated in code like any route:
  * the food carried against what the trip brings back (hunger points, approved foods only, with
  * Spice of Life's diminishing returns: food.ts carriedFoodPoints), then the food sources, each
  * with the GATHER step that gets it:

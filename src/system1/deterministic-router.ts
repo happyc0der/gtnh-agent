@@ -186,7 +186,7 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     facts['approvedFood'] = food;
     if (food !== null) return decide('EAT', CONFIDENCE.vitals, ['HUNGRY']);
     if (hunger < ctx.safety.config.minHunger) {
-      // Getting food is the cure: in daylight, the play loop's food task (src/app/food.ts)
+      // Getting food is the cure: in daylight, the play loop's food task (src/app/play/food.ts)
       // goes on with its steps instead of retreating to a home that has no food, or pausing
       // for a person (nothing heals offline, and a pause only starves). Health below
       // minHealth still retreats or pauses above (rule 2's health part).

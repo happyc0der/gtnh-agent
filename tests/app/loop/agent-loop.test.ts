@@ -1,25 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { runSingleCycle, syncConfigToDatabase } from '../../src/app/agent-loop.ts';
-import { readDeadEnds } from '../../src/app/dead-ends.ts';
-import { runMockScenario } from '../../src/app/mock-agent.ts';
-import { findScenario, MOCK_CONFIG, SCENARIOS, type Scenario } from '../../src/app/scenarios.ts';
-import type { MockMinecraftClient } from '../../src/bot/mock-minecraft-client.ts';
-import { defaultConfig } from '../../src/config/env.ts';
-import type { SeenChunk } from '../../src/domain/world-memory.ts';
-import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
-import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
+import { runSingleCycle, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
+import { readDeadEnds } from '../../../src/app/loop/dead-ends.ts';
+import { runMockScenario } from '../../../src/app/mock/mock-agent.ts';
+import {
+  findScenario,
+  MOCK_CONFIG,
+  SCENARIOS,
+  type Scenario,
+} from '../../../src/app/mock/scenarios.ts';
+import type { MockMinecraftClient } from '../../../src/bot/mock-minecraft-client.ts';
+import { defaultConfig } from '../../../src/config/env.ts';
+import type { SeenChunk } from '../../../src/domain/world-memory.ts';
+import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
+import { MockPlannerProvider } from '../../../src/planner/mock-planner-provider.ts';
 import {
   PlannerRequestSchema,
   type PlannerRequest,
   type PlannerResponse,
-} from '../../src/planner/plan-schema.ts';
-import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
-import type { DecisionProvider } from '../../src/system1/decision-provider.ts';
-import { MockDecisionProvider } from '../../src/system1/mock-decision-provider.ts';
-import type { ManualClock } from '../../src/util/clock.ts';
-import { actionFingerprint } from '../../src/safety/safety-policy.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { makeWorld, memoryRepos, T0, testClock, testConfig } from '../fixtures/index.ts';
+} from '../../../src/planner/plan-schema.ts';
+import type { PlannerProvider } from '../../../src/planner/planner-provider.ts';
+import type { DecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { MockDecisionProvider } from '../../../src/system1/mock-decision-provider.ts';
+import type { ManualClock } from '../../../src/util/clock.ts';
+import { actionFingerprint } from '../../../src/safety/safety-policy.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { makeWorld, memoryRepos, T0, testClock, testConfig } from '../../fixtures/index.ts';
 
 const scenario = (name: string): Scenario => {
   const s = findScenario(name);

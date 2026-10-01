@@ -10,11 +10,11 @@
  */
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
-import { buildSafetyContext, overlayAgentMemory } from '../src/app/agent-loop.ts';
-import { observeWithQuestBook } from '../src/app/live-play.ts';
-import { liveAbilities } from '../src/app/play.ts';
+import { buildSafetyContext, overlayAgentMemory } from '../src/app/loop/agent-loop.ts';
+import { observeWithQuestBook } from '../src/app/play/live-play.ts';
+import { liveAbilities } from '../src/app/play/play.ts';
 import { createProviders } from '../src/app/providers.ts';
-import { adoptGoal, freeSlotsOf, updateQuests } from '../src/app/quest-commands.ts';
+import { adoptGoal, freeSlotsOf, updateQuests } from '../src/app/play/quest-progress.ts';
 import { Gtnh1710Client } from '../src/bot/gtnh1710/gtnh-client.ts';
 import { loadConfig } from '../src/config/env.ts';
 import { AGE0_QUESTS } from '../src/goals/age0-quests.ts';

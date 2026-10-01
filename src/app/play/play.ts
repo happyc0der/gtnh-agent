@@ -1,4 +1,4 @@
-import { AGE0_QUESTS } from '../goals/age0-quests.ts';
+import { AGE0_QUESTS } from '../../goals/age0-quests.ts';
 import {
   BASE_ABILITIES,
   missingText,
@@ -8,34 +8,34 @@ import {
   type Quest,
   type QuestBookStep,
   type QuestProgress,
-} from '../goals/quest-goals.ts';
-import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../domain/recipes.ts';
+} from '../../goals/quest-goals.ts';
+import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../../domain/recipes.ts';
 import {
   TICKS_PER_DAY,
   TICKS_PER_SECOND,
   type GameState,
   type WorldTime,
-} from '../domain/game-state.ts';
-import { describeShelter, describeShelterExit, type ShelterStatus } from '../goals/shelter.ts';
+} from '../../domain/game-state.ts';
+import { describeShelter, describeShelterExit, type ShelterStatus } from '../../goals/shelter.ts';
 import {
   LEAVE_SHELTER_TASK_ID,
   NIGHT_SHELTER_TASK_ID,
   type ShelterStep,
-} from '../domain/night-shelter.ts';
-import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
-import { setKnownSteps } from './known-steps.ts';
-import type { Repositories } from '../persistence/repositories.ts';
-import type { DecisionResult } from '../domain/decisions.ts';
-import { describeSystem1Stats, type System1Stats } from '../system1/model-cadence.ts';
-import type { CycleResult } from './agent-loop.ts';
+} from '../../domain/night-shelter.ts';
+import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import { setKnownSteps } from '../loop/known-steps.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import type { DecisionResult } from '../../domain/decisions.ts';
+import { describeSystem1Stats, type System1Stats } from '../../system1/model-cadence.ts';
+import type { CycleResult } from '../loop/agent-loop.ts';
 import {
   checkLimits,
   DEFAULT_SESSION_LIMITS,
   type SessionLimits,
   type SessionResult,
   type SessionStopKind,
-} from './live-session.ts';
-import { adoptGoal, freeSlotsOf, questTaskId, updateQuests } from './quest-commands.ts';
+} from '../loop/live-session.ts';
+import { adoptGoal, freeSlotsOf, questTaskId, updateQuests } from './quest-progress.ts';
 import {
   adoptScoutTask,
   finishScoutTask,
@@ -52,7 +52,7 @@ import {
   foodTripOngoing,
   type FoodStatus,
 } from './food.ts';
-import { FOOD_TASK_ID, FOOD_TRIP_POINTS } from '../domain/food.ts';
+import { FOOD_TASK_ID, FOOD_TRIP_POINTS } from '../../domain/food.ts';
 
 /**
  * Autonomous play: the agent works through the Age 0 quest book by itself. Each round it
@@ -64,7 +64,7 @@ import { FOOD_TASK_ID, FOOD_TRIP_POINTS } from '../domain/food.ts';
  * what to do; every action is still validated, executed and verified exactly like any
  * other. Between sessions it checks progress. Quests count only as the server records them.
  *
- * Hungry with nothing to eat, by day, it first goes and gets food (src/app/food.ts), as it
+ * Hungry with nothing to eat, by day, it first goes and gets food (src/app/play/food.ts), as it
  * turns to a shelter at dusk; the quest goes on once about a day of food is carried.
  *
  * It stops, and says why, when:
@@ -164,7 +164,7 @@ export interface PlayDeps {
   now?: () => number;
   /**
    * Given when the agent can explore: play then begins by scouting the area once, while world
-   * memory has seen little (src/app/scouting.ts).
+   * memory has seen little (src/app/play/scouting.ts).
    */
   scouting?: Scouting;
   /**

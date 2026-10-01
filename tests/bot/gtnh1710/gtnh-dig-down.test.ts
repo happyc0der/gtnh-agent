@@ -7,8 +7,8 @@ import {
   runUserAction,
   syncConfigToDatabase,
   type AgentDeps,
-} from '../../../src/app/agent-loop.ts';
-import { nextKnownStep, setKnownSteps } from '../../../src/app/known-steps.ts';
+} from '../../../src/app/loop/agent-loop.ts';
+import { nextKnownStep, setKnownSteps } from '../../../src/app/loop/known-steps.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type AgentConfig } from '../../../src/config/env.ts';
 import { createAction, type ActionSpec } from '../../../src/domain/actions.ts';

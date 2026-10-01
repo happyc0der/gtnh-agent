@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MockMob } from '../../src/bot/mock-minecraft-client.ts';
 import { defaultConfig } from '../../src/config/env.ts';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import { MOCK_CONFIG } from '../../src/app/mock/scenarios.ts';
 import { PLANNER_SYSTEM_PROMPT } from '../../src/llm/ollama-planner-provider.ts';
 import { PlannerRequestSchema, type Plan } from '../../src/planner/plan-schema.ts';
 import { validatePlan } from '../../src/planner/plan-validator.ts';

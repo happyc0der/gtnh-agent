@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { ExploreDirectionSchema } from '../domain/actions.ts';
-import { PositionSchema, type Position } from '../domain/common.ts';
-import type { ExplorationSummary } from '../domain/world-memory.ts';
-import type { MemoryRepository } from '../persistence/memory-repository.ts';
+import { ExploreDirectionSchema } from '../../domain/actions.ts';
+import { PositionSchema, type Position } from '../../domain/common.ts';
+import type { ExplorationSummary } from '../../domain/world-memory.ts';
+import type { MemoryRepository } from '../../persistence/memory-repository.ts';
 
 /**
  * Dead ends: points an EXPLORE could not get one block closer to ("no way further": water, a

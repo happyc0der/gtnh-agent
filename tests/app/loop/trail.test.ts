@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { runSingleCycle, syncConfigToDatabase } from '../../src/app/agent-loop.ts';
-import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import { runSingleCycle, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
+import { MOCK_CONFIG } from '../../../src/app/mock/scenarios.ts';
 import {
   readTrail,
   recordTrail,
   TRAIL_KEY,
   TRAIL_LOCATION,
   trailRetreat,
-} from '../../src/app/trail.ts';
-import { defaultConfig } from '../../src/config/env.ts';
-import { NIGHT_SHELTER_TASK_ID } from '../../src/domain/night-shelter.ts';
-import { actionFingerprint } from '../../src/safety/safety-policy.ts';
-import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
-import { sequentialIds } from '../../src/util/ids.ts';
-import { makeState, makeWorld, memoryRepos, safetyCtx, testClock } from '../fixtures/index.ts';
+} from '../../../src/app/loop/trail.ts';
+import { defaultConfig } from '../../../src/config/env.ts';
+import { NIGHT_SHELTER_TASK_ID } from '../../../src/domain/night-shelter.ts';
+import { actionFingerprint } from '../../../src/safety/safety-policy.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
+import { makeState, makeWorld, memoryRepos, safetyCtx, testClock } from '../../fixtures/index.ts';
 
 const point = (x: number, z: number) => ({ dimension: 'overworld', position: { x, y: 64, z } });
 const standing = (x: number, z: number) => ({ x, y: 64, z });

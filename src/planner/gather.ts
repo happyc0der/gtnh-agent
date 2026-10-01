@@ -34,7 +34,7 @@ import { DIG_YIELDS } from '../goals/route-book.ts';
  *
  * This file is pure: the step's schema, its bounds, and the choice of the next action from
  * an observation. The agent loop keeps the step's progress between cycles
- * (src/app/gather-step.ts).
+ * (src/app/loop/gather-step.ts).
  */
 export const GATHER = 'GATHER';
 
