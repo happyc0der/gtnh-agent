@@ -204,6 +204,35 @@ describe('GATHER: one plan step, many checked actions', () => {
     ]);
   });
 
+  it('a GATHER with nothing to dig is skipped when the plan goes on: the next GATHER runs', async () => {
+    // Seen live: GATHER 9 gravel (none in view), then GATHER 7 logs (66 in view).
+    const both: PlannerResponse = {
+      kind: 'plan',
+      plan: plan(
+        [
+          { type: 'GATHER', args: { block: 'minecraft:gravel', count: 9 } },
+          { type: 'GATHER', args: { block: 'minecraft:sand', count: 2 } },
+        ],
+        'Gravel and sand',
+      ),
+    };
+    const g = await gathering(sandRows(2), both);
+    const first = await g.cycle();
+    expect(first).toMatchObject({
+      status: 'succeeded',
+      summary: 'REQUEST_PLANNER -> GATHER:no-target, skipped -> succeeded',
+    });
+    expect(g.repos.plans.get(1)).toMatchObject({ status: 'active', nextStep: 1 });
+    expect(g.journal()).toContainEqual(
+      expect.stringMatching(/^plan #1 step 1 GATHER skipped \(no minecraft:gravel left in view/),
+    );
+    // The sand GATHER runs next (a walk to the sand first), with no new plan.
+    const second = await g.cycle();
+    expect(['MOVE_TO', 'DIG_BLOCK']).toContain(g.performed()[0]?.type);
+    expect(second.planner).toMatchObject({ kind: 'plan-step', planId: 1 });
+    expect(g.requests).toHaveLength(1);
+  });
+
   it('ends at 64 actions for a checkpoint: the next cycle asks the planner with fresh stock', async () => {
     const g = await gathering(
       sandRows(60),

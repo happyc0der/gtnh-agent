@@ -750,6 +750,24 @@ function gatherEnded(
   outcome: PlannerOutcome,
 ): Consulted {
   const step = stored.nextStep + 1;
+  if (turn.end === 'no-target' && step < stored.plan.steps.length) {
+    // Nothing of it to dig here, but the plan goes on: skip to its next step (seen live:
+    // GATHER gravel with none in view, before GATHER logs with 66 in view). The next plan
+    // sees the item still missing in the route, and can EXPLORE for it.
+    repos.memory.appendJournal(
+      stored.taskId,
+      `plan #${stored.id} step ${step} GATHER skipped (${turn.why}); on to step ${step + 1}`.slice(
+        0,
+        300,
+      ),
+    );
+    repos.plans.advance(stored.id);
+    return {
+      chosen: null,
+      outcome,
+      ended: { status: 'succeeded', label: 'GATHER:no-target, skipped', why: turn.why },
+    };
+  }
   if (turn.end === 'done') {
     stepVerified(repos, stored.id);
   } else {

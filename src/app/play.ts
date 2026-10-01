@@ -463,6 +463,8 @@ export async function runPlay(
   let exitTries = 0;
   /** A note for the next goal's journal (e.g. how to leave the night shelter). */
   let wakeNote: string | null = null;
+  /** The last session saw chunks world memory had not seen before. */
+  let explored = false;
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
   let last: { questId: string; missing: number; stuck: number } | null = null;
   /** Quest-book clicks that failed, by click. */
@@ -812,7 +814,8 @@ export async function runPlay(
     // from what a session claims); moving to another goal resets the count.
     const missingNow = total(current.missing);
     if (last !== null && last.questId === current.id) {
-      last.stuck = missingNow < last.missing ? 0 : last.stuck + 1;
+      // Seeing new ground is progress too: exploring for a block not seen yet gathers none.
+      last.stuck = missingNow < last.missing || explored ? 0 : last.stuck + 1;
       last.missing = missingNow;
       if (last.stuck >= limits.maxStuckSessions) {
         return done(
@@ -848,6 +851,7 @@ export async function runPlay(
     let met = false;
     let dark: WorldTime | null = null;
     const session = sessions + 1;
+    const seenBefore = deps.scouting?.chunksSeen() ?? null;
     const result = await deps.session(limits.session, {
       stopRequested: () =>
         met
@@ -889,6 +893,7 @@ export async function runPlay(
     });
     sessions = session;
     lastStop = result.stopReason;
+    explored = seenBefore !== null && (deps.scouting?.chunksSeen() ?? 0) > seenBefore;
     // The world has moved on (a mob gone, items gathered): failed clicks may be tried again.
     failedClicks.clear();
     emit({

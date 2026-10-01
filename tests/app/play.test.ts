@@ -595,6 +595,25 @@ describe('autonomous play', () => {
     expect(result.night).toBeNull();
   });
 
+  it('counts sessions that see new ground as progress (exploring for a block gathers none)', async () => {
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const base = deps(open(), world);
+    let chunks = 100; // scouting is done; each session sees 5 more chunks
+    const result = await runPlay(
+      {
+        ...base,
+        scouting: { chunksSeen: () => chunks },
+        session: (limits, hooks) => {
+          chunks += 5;
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxStuckSessions: 2, maxSessions: 4 },
+      noStop,
+    );
+    expect(result.stopReason).toBe('reached the limit of 4 sessions');
+  });
+
   it('leaves before the dark when a shelter step stops for a person (a refusal)', async () => {
     const repos = open();
     const world: World = {
