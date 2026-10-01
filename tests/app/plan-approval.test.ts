@@ -175,7 +175,7 @@ describe('stored plans advance one verified step per cycle', () => {
     expect(s.repos.tasks.get(s.taskId)?.status).toBe('blocked');
   });
 
-  it('a step the executor rejects fails the plan and blocks the task', async () => {
+  it('a step that is not feasible now fails the plan; the task goes on and the planner is asked again', async () => {
     const plan = twoStepPlan({
       steps: [
         {
@@ -191,10 +191,31 @@ describe('stored plans advance one verified step per cycle', () => {
     const s = await session('needs-planner', fixture(plan));
     const result = await s.cycle();
     expect(result.status).toBe('rejected');
-    expect(result.needsUserAttention).toBe(true);
     expect(s.client.performed).toHaveLength(0);
     expect(s.repos.plans.get(1)?.status).toBe('failed');
     expect(s.repos.plans.get(1)?.statusReason).toMatch(/^step 1 rejected: /);
+    // Only a precondition failed (no safety rule): a stale plan, not an unsafe one.
+    expect(result.needsUserAttention).toBe(false);
+    expect(s.repos.tasks.get(s.taskId)?.status).toBe('active');
+    expect((await s.cycle()).planner).toMatchObject({ kind: 'plan-accepted', planId: 2 });
+  });
+
+  it('a step the safety policy rejects fails the plan and blocks the task', async () => {
+    const plan = twoStepPlan({
+      steps: [
+        {
+          step: 1,
+          action: { type: 'OPEN_CONTAINER', args: { containerId: 'chest.nope' } },
+          rationale: 'A container the agent does not know.',
+        },
+      ],
+    });
+    const s = await session('needs-planner', fixture(plan));
+    const result = await s.cycle();
+    expect(result.status).toBe('rejected');
+    expect(result.needsUserAttention).toBe(true);
+    expect(s.client.performed).toHaveLength(0);
+    expect(s.repos.plans.get(1)?.status).toBe('failed');
     expect(s.repos.tasks.get(s.taskId)?.status).toBe('blocked');
   });
 });

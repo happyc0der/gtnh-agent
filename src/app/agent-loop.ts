@@ -415,19 +415,21 @@ export async function runSingleCycle(
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
   const planHalted = planStep === null ? false : updatePlanProgress(repos, planStep, outcome);
 
-  // Task bookkeeping: pauses, rejections and failed plans halt the task until a human resumes it.
+  // Task bookkeeping: pauses, rejections and failed plans halt the task until a human resumes
+  // it. A stale planner step (see isStaleRejection) only fails its plan: the task goes on.
   const paused = action.type === 'PAUSE_AND_ASK_USER' && outcome.status === 'succeeded';
   const status: CycleStatus = paused ? 'paused' : outcome.status;
+  const blockingRejection = outcome.status === 'rejected' && !isStaleRejection(planStep, outcome);
   const needsUserAttention =
     paused ||
     planHalted ||
-    outcome.status === 'rejected' ||
+    blockingRejection ||
     decision.requiresHumanConfirmation ||
     status === 'verification_failed';
   if (taskId !== null) {
     repos.transaction(() => {
       if (paused) repos.tasks.setStatus(taskId, 'paused');
-      else if (outcome.status === 'rejected') repos.tasks.setStatus(taskId, 'blocked');
+      else if (blockingRejection) repos.tasks.setStatus(taskId, 'blocked');
       else if (planHalted) repos.tasks.setStatus(taskId, 'paused');
       repos.checkpoints.add(
         taskId,
@@ -510,6 +512,8 @@ interface PlanStepRef {
   /** 0-based index of the step being executed. */
   stepIndex: number;
   failureHandling: Plan['failureHandling'];
+  /** Who wrote the plan (OPERATOR_PLANNER for a human's plan). */
+  planner: string;
 }
 
 const reviewHint = (taskId: string, planId: number): string =>
@@ -546,14 +550,35 @@ function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'):
       planId: stored.id,
       stepIndex: stored.nextStep,
       failureHandling: stored.plan.failureHandling,
+      planner: stored.planner,
     },
   };
 }
 
 /**
+ * A planner's step rejected only because it is not feasible NOW (preconditions: out of
+ * reach, too few items, the block already gone), with no safety violation and no pause: the
+ * player moved or the world changed since the plan was made. That is a stale plan, not an
+ * unsafe one. A human's plan is never treated this way.
+ */
+export function isStaleRejection(ref: PlanStepRef | null, outcome: ExecutionOutcome): boolean {
+  const v = outcome.validation;
+  return (
+    ref !== null &&
+    ref.planner !== OPERATOR_PLANNER &&
+    outcome.status === 'rejected' &&
+    v.violations.length === 0 &&
+    !v.requiresUserPause &&
+    v.preconditionFailures.length > 0
+  );
+}
+
+/**
  * After a plan step ran: advance on success; on failure count it against the plan's retry
  * budget and, once exhausted, fail the plan. Returns true if the task must now wait for a
- * human (a rejected step, or a failure policy other than REPLAN).
+ * human (a rejected step, or a failure policy other than REPLAN). A stale rejection fails
+ * the plan but lets the task go on: the next cycle asks the planner again, with the
+ * rejection in its recent history.
  */
 function updatePlanProgress(
   repos: Repositories,
@@ -578,7 +603,7 @@ function updatePlanProgress(
           500,
         ),
       );
-      return true;
+      return !isStaleRejection(ref, outcome);
     case 'failed':
     case 'verification_failed': {
       const failures = repos.plans.recordStepFailure(ref.planId);
