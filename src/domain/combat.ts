@@ -41,6 +41,10 @@ const VANILLA_TACTICS: ReadonlyMap<string, HostileTactic> = new Map<string, Host
   // Et Futurum's backports (src/bot/gtnh1710/entity-types.ts): a husk is a zombie that does
   // not burn by day, a stray a skeleton, an endermite bites.
   ['etfuturum.husk', 'melee'],
+  // EnderZoo (entity-types.ts): the concussion creeper explodes like a creeper (its blast
+  // confuses and throws rather than breaks blocks); the fallen knight fights with a sword.
+  ['enderzoo.ConcussionCreeper', 'explodes'],
+  ['enderzoo.FallenKnight', 'melee'],
   ['etfuturum.stray', 'ranged'],
   ['etfuturum.endermite', 'melee'],
   ['minecraft:Spider', 'melee'],

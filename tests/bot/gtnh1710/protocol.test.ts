@@ -266,7 +266,11 @@ describe('entity packets', () => {
     // Seen live: "EnderZoo#6" stopped a walk unidentified; every EnderZoo entity is a monster
     // (or its primed charge), whatever number the load order gave it.
     expect(classifyModded('EnderZoo', 6, '1.3.3')).toEqual({
-      name: 'EnderZoo#6',
+      name: 'enderzoo.ConcussionCreeper',
+      category: 'hostile',
+    });
+    expect(classifyModded('EnderZoo', 12, '1.3.3')).toEqual({
+      name: 'EnderZoo#12',
       category: 'hostile',
     });
   });

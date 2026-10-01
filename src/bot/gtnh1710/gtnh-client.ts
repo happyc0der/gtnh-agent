@@ -382,6 +382,8 @@ const MIN_HOP_LENGTH = 2;
  */
 const MAX_RETREAT_WALK = 768;
 const MAX_RETREAT_HOPS = 48;
+/** A threat this close stops a walk whichever way it goes (#walkInterruption). */
+const CLOSE_THREAT_RADIUS = 6;
 /** A flee (#flee) walks at most this far, to a spot at least FLEE_MIN_GAIN farther from the threats. */
 const FLEE_MAX_PATH = 32;
 const FLEE_MIN_GAIN = 6;
@@ -4156,7 +4158,7 @@ export class Gtnh1710Client implements MinecraftClient {
       terrain: boolean;
     },
   ): string | null {
-    const interrupted = this.#walkInterruption(guard);
+    const interrupted = this.#walkInterruption(guard, { from, to });
     if (interrupted !== null) return interrupted;
     // Terrain steps change height (steps up, drops), so check the body where it will be,
     // at that height; the flat walker checks the whole swept stretch.
@@ -4172,11 +4174,14 @@ export class Gtnh1710Client implements MinecraftClient {
    * file, halt()...), a server correction or a health drop since it started, and with
    * `stopForThreats` a hostile (not a calm spider) or unidentified entity within threatRadius.
    */
-  #walkInterruption(guard: {
-    placementsAtStart: number;
-    healthAtStart: number | null;
-    stopForThreats: boolean;
-  }): string | null {
+  #walkInterruption(
+    guard: {
+      placementsAtStart: number;
+      healthAtStart: number | null;
+      stopForThreats: boolean;
+    },
+    step?: { from: Vec3; to: Vec3 },
+  ): string | null {
     if (this.#phase !== 'play') return 'the connection closed';
     const blocker = this.#movementBlocker();
     if (blocker !== null) return blocker;
@@ -4196,9 +4201,21 @@ export class Gtnh1710Client implements MinecraftClient {
         return 'the entities around the player are not fully known';
       }
       const radius = this.#opts.config.movement.threatRadius;
+      // A step that takes the player away from a threat that is not close goes on: a person
+      // walks on away from a creeper nine blocks behind (seen live: a concussion creeper
+      // standing 10 blocks from the way to the gravel stopped every walk there, even the
+      // walks away from it). Close, or a step toward it, stops the walk.
+      const away = (e: { position: { x: number; z: number } }): boolean =>
+        step !== undefined &&
+        Math.hypot(e.position.x - step.to.x, e.position.z - step.to.z) >
+          Math.hypot(e.position.x - step.from.x, e.position.z - step.from.z);
       const threat = this.#world
         .nearbyEntities(radius, now)
-        .find((e) => (e.category === 'hostile' && !e.calm) || e.category === 'unclassified');
+        .find(
+          (e) =>
+            ((e.category === 'hostile' && !e.calm) || e.category === 'unclassified') &&
+            (e.distance <= CLOSE_THREAT_RADIUS || !away(e)),
+        );
       if (threat !== undefined) {
         return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
       }

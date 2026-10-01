@@ -147,6 +147,32 @@ export const MODDED_ENTITY_TABLE: readonly ModdedEntityEntry[] = [
     fromCode: 'CommonProxy: registerEntity(EntityStray.class, "stray", 5, ...)',
     modVersion: '2.6.2.25-GTNH',
   },
+  // EnderZoo 1.3.3 numbers its mobs with EntityRegistry.findGlobalUniqueEntityId() in its
+  // MobInfo order (Enderminy, ConcussionCreeper, FallenKnight, FallenMount, WitherWitch,
+  // WitherCat, DireWolf, DireSlime), so the numbers depend on the other mods' ids; on this
+  // pack they start at 5. Seen live: "EnderZoo#6" at (-19, 92, 99) with health 22 was the
+  // enderzoo.ConcussionCreeper the server saved there (region file, health 22), and the
+  // next number, #7, met with health 22, the Fallen Knight. Hostile either way (the mod is).
+  {
+    modId: 'EnderZoo',
+    typeId: 6,
+    name: 'enderzoo.ConcussionCreeper',
+    category: 'hostile',
+    votes: 1,
+    total: 1,
+    fromCode: 'EnderZoo.preInit: MobInfo order, findGlobalUniqueEntityId (first id 5 here)',
+    modVersion: '1.3.3',
+  },
+  {
+    modId: 'EnderZoo',
+    typeId: 7,
+    name: 'enderzoo.FallenKnight',
+    category: 'hostile',
+    votes: 0,
+    total: 0,
+    fromCode: 'EnderZoo.preInit: MobInfo order, findGlobalUniqueEntityId (first id 5 here)',
+    modVersion: '1.3.3',
+  },
   {
     modId: 'SpecialMobs',
     typeId: 18,

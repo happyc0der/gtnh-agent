@@ -255,11 +255,15 @@ describe('Gtnh1710Client walking', () => {
     const options = { light: openSkyLight(flatWorld()), entities: [spider] };
     const day = await start({ ...options, dayTicks: 6000 });
     expect(await perform(day.client, moveTo(-8.5, -11.5))).toMatchObject({ ok: true, code: 'OK' });
+    // At night it is a threat: a walk away from it, beyond 6 blocks, goes on (a person walks
+    // on away from a mob); a walk toward it stops at once.
     const night = await start({ ...options, dayTicks: 18_000 });
-    const result = await perform(night.client, moveTo(-8.5, -11.5));
+    expect(await perform(night.client, moveTo(-8.5, -11.5))).toMatchObject({ ok: true });
+    const toward = await start({ ...options, dayTicks: 18_000 });
+    const result = await perform(toward.client, moveTo(-1.5, -7.5));
     expect(result).toMatchObject({ ok: false, code: 'FAILED' });
     expect(result.message).toMatch(/hostile entity minecraft:Spider 6\.5 blocks away/);
-  });
+  }, 20_000);
 
   it('stops before lava that appears next to the way ahead', async () => {
     const { server, client } = await start();
