@@ -5,6 +5,7 @@ import {
   ChunkStore,
   decodeChunkBulk,
   decodeChunkColumnWithBiomes,
+  type ColumnSections,
 } from '../../../src/bot/gtnh1710/chunk-data.ts';
 import type { Registry } from '../../../src/bot/gtnh1710/registry.ts';
 import {
@@ -12,6 +13,7 @@ import {
   clearLine,
   describeSightings,
   dominantBiome,
+  FAR_SIGHT_RANGE,
   namesAnOre,
   SIGHT,
   sightOf,
@@ -23,6 +25,7 @@ import {
 } from '../../../src/bot/gtnh1710/world-survey.ts';
 import { worldTime } from '../../../src/domain/game-state.ts';
 import { BLOCK, DIG_TEST_BLOCK_REGISTRY, neidColumn, type BlockFn } from './chunk-fixtures.ts';
+import { surveyTerrain } from './survey-terrain.ts';
 
 const ORE = 2711; // gregtech:gt.blockores in the test world
 const registry: Registry = {
@@ -60,7 +63,6 @@ function worldOf(store: ChunkStore, dayTicks = 6000): TrackedWorld {
     dimension: 'overworld',
     worldTimeAt: () => worldTime(dayTicks, true),
     chunkColumn: (cx, cz) => store.column(cx, cz),
-    blockAt: (x, y, z) => store.blockAt(x, y, z),
   };
 }
 
@@ -76,6 +78,41 @@ function ground(overrides: Record<string, number>): BlockFn {
     return y === GROUND ? BLOCK.grass : BLOCK.air;
   };
 }
+
+/**
+ * The grass world held out to `radius` chunks around chunk (0, 0) (as far as far sight looks),
+ * written straight into a store: encoding hundreds of chunks as packets would take seconds.
+ * `extra` decides a block first (undefined: grass at y=63 over stone).
+ */
+function farStore(
+  extra: (x: number, y: number, z: number) => number | undefined,
+  radius = Math.ceil(FAR_SIGHT_RANGE / 16),
+): ChunkStore {
+  const store = new ChunkStore();
+  for (let cx = -radius; cx <= radius; cx++) {
+    for (let cz = -radius; cz <= radius; cz++) {
+      const sections: ColumnSections = new Array<Uint16Array | null>(16).fill(null);
+      for (let i = 0; i < 256; i++) {
+        const x = cx * 16 + (i & 15);
+        const z = cz * 16 + (i >> 4);
+        for (let y = 0; y < 96; y++) {
+          const id =
+            extra(x, y, z) ??
+            (y === 0 ? BLOCK.bedrock : y < GROUND ? BLOCK.stone : y === GROUND ? BLOCK.grass : 0);
+          if (id === 0) continue;
+          const s = (sections[y >> 4] ??= new Uint16Array(4096));
+          s[((y & 15) << 8) | i] = id;
+        }
+      }
+      store.setColumn(cx, cz, sections, 0, new Uint8Array(256).fill(211));
+    }
+  }
+  return store;
+}
+
+/** A pond (water at the ground's level) 62-71 blocks east of EYE, in chunk (4, 0). */
+const pond = (x: number, y: number, z: number): number | undefined =>
+  x >= 70 && x <= 79 && z >= 0 && z <= 15 && y === GROUND ? BLOCK.water : undefined;
 
 describe('what a survey counts', () => {
   it('names kinds, ores and what a line of sight passes through', () => {
@@ -166,6 +203,9 @@ describe('what a survey counts', () => {
       { x: 11, y: 63, z: 8 },
     ]);
     expect(s.biome).toEqual({ id: 230, name: 'Hot Desert', share: 1 });
+    expect(s.near).toBe(true);
+    // Within SURVEY_RANGE far sight changes nothing: the near rules alone decide.
+    expect(surveyChunk(worldOf(store), tables, 0, 0, EYE, false)).toEqual(s);
     // With x-ray, the cave ores would count: both are exposed to cave air.
     const xray = surveyChunk(worldOf(store), tables, 0, 0, { x: 13.5, y: 46.5, z: 13.5 });
     expect(xray?.counts.ore).toBe(1); // standing in the cave, the near one is seen
@@ -192,6 +232,8 @@ describe('what a survey counts', () => {
     const store = storeOf(ground({}), () => 2, 1);
     const w = worldOf(store);
     const far = { x: 8.5, y: EYE.y, z: 8.5 + 16 + SURVEY_RANGE + 1 };
+    expect(surveyChunk(w, tables, 0, 0, far, false)).toBeNull();
+    // Far sight finds nothing in plain grass to make out: no sighting either.
     expect(surveyChunk(w, tables, 0, 0, far)).toBeNull();
     expect(surveyChunk(w, tables, 5, 5, EYE)).toBeNull();
   });
@@ -223,7 +265,120 @@ describe('what a survey counts', () => {
   });
 });
 
+describe('far sight', () => {
+  it('sees water far across open ground, where the near look does not reach', () => {
+    const w = worldOf(farStore(pond));
+    const s = surveyChunk(w, tables, 4, 0, EYE);
+    expect(s).toMatchObject({ chunkX: 4, chunkZ: 0, near: false, biome: { name: 'River Oasis' } });
+    expect(s?.counts).toEqual({ water: 160 }); // every column of it: its top faces are in view
+    expect(s?.examples.water).toEqual([
+      { x: 70, y: GROUND, z: 0 },
+      { x: 71, y: GROUND, z: 0 },
+      { x: 72, y: GROUND, z: 0 },
+    ]);
+    expect(surveyChunk(w, tables, 4, 0, EYE, false)).toBeNull();
+  });
+
+  it('does not see it behind a hill, through a wood, under a canopy, or past unloaded chunks', () => {
+    const behind = (wall: number) => (x: number, y: number, z: number) =>
+      x >= 40 && x <= 44 && y > GROUND && y <= GROUND + 7 ? wall : pond(x, y, z);
+    expect(surveyChunk(worldOf(farStore(behind(BLOCK.stone))), tables, 4, 0, EYE)).toBeNull();
+    // Five leaves deep: more than a line of sight crosses (MAX_FOLIAGE_CELLS).
+    expect(surveyChunk(worldOf(farStore(behind(BLOCK.leaves))), tables, 4, 0, EYE)).toBeNull();
+    // A canopy over it: its top blocks are leaves, nothing to make out from afar.
+    const shaded = (x: number, y: number, z: number) =>
+      x >= 69 && x <= 80 && y === GROUND + 4 ? BLOCK.leaves : pond(x, y, z);
+    expect(surveyChunk(worldOf(farStore(shaded)), tables, 4, 0, EYE)).toBeNull();
+    // A chunk not (yet) loaded on the way blocks every line through it.
+    const store = farStore(pond);
+    store.unload(2, 0);
+    store.unload(2, 1);
+    store.unload(2, -1);
+    expect(surveyChunk(worldOf(store), tables, 4, 0, EYE)).toBeNull();
+  });
+
+  it('sees the face a player sees: tops from above, open sides turned toward it from below', () => {
+    // A gravel ledge two blocks wide, its top above the eyes: from the ground only its near
+    // side shows; from up high both tops do.
+    const ledge = (x: number, y: number) =>
+      x >= 70 && x <= 71 && y > GROUND && y <= GROUND + 3
+        ? y === GROUND + 3
+          ? BLOCK.gravel
+          : BLOCK.stone
+        : undefined;
+    const w = worldOf(farStore(ledge));
+    const low = surveyChunk(w, tables, 4, 0, EYE);
+    expect(low?.counts.gravel).toBe(16);
+    expect(low?.examples.gravel?.every((p) => p.x === 70)).toBe(true);
+    const high = surveyChunk(w, tables, 4, 0, { ...EYE, y: GROUND + 12 });
+    expect(high?.counts.gravel).toBe(32);
+    // Water shows only by its top: a pond above the eyes is out of view.
+    const tarn = (x: number, y: number) =>
+      x >= 70 && x <= 79 && y > GROUND && y <= GROUND + 3
+        ? y === GROUND + 3 && x > 70 && x < 79
+          ? BLOCK.water
+          : BLOCK.stone
+        : undefined;
+    expect(surveyChunk(worldOf(farStore(tarn)), tables, 4, 0, EYE)?.counts.water).toBeUndefined();
+  });
+
+  it('looks at sand and stone on every second column each way, and at every gravel top', () => {
+    const tops = (x: number, y: number, z: number) =>
+      y === GROUND && x >= 64 && x < 80 ? (z < 16 ? BLOCK.sand : BLOCK.gravel) : undefined;
+    const w = worldOf(farStore(tops));
+    const sand = surveyChunk(w, tables, 4, 0, EYE);
+    expect(sand?.counts.sand).toBe(64); // a lower bound: a quarter of the 256 in view
+    expect(sand?.examples.sand?.every((p) => p.x % 2 === 0 && p.z % 2 === 0)).toBe(true);
+    expect(surveyChunk(w, tables, 4, 1, EYE)?.counts.gravel).toBe(256);
+  });
+});
+
 describe('the survey tracker', () => {
+  it('looks far on entering a chunk and when asked; again in the same chunk, near only', () => {
+    const w = worldOf(farStore(pond));
+    const tracker = new SurveyTracker();
+    const feet = { x: 8.5, y: GROUND + 1, z: 8.5 };
+    const t0 = new Date('2026-09-30T12:00:00Z');
+    const first = tracker.update(w, feet, t0);
+    // The near look covers every chunk within SURVEY_RANGE: the 5 x 5 square, and (3, 0) and
+    // (0, 3), 39.5 blocks away. Far sight adds the pond's chunk; plain grass beyond the near
+    // look is not recorded.
+    const near = first.filter((c) => c.near);
+    expect(near).toHaveLength(27);
+    expect(near.some((c) => c.chunkX === 3 && c.chunkZ === 0)).toBe(true);
+    expect(first.filter((c) => !c.near)).toEqual([
+      expect.objectContaining({ chunkX: 4, chunkZ: 0, counts: { water: 160 } }),
+    ]);
+    const again = tracker.update(w, feet, new Date(t0.getTime() + 31_000));
+    expect(again).toHaveLength(27);
+    expect(again.every((c) => c.near)).toBe(true);
+    const asked = tracker.update(w, feet, new Date(t0.getTime() + 32_000), true);
+    expect(asked.some((c) => !c.near)).toBe(true);
+    const drained = tracker.drain();
+    expect(drained.find((c) => c.chunkX === 4)?.near).toBe(false);
+    expect(describeSightings(drained)).toMatch(
+      /^28 chunk\(s\), 1 only from afar \(River Oasis 28\); dirt \d+, water 160$/,
+    );
+  });
+
+  it('surveys realistic terrain, far sight and all, in well under 20 ms (loose bound)', () => {
+    const { store, column } = surveyTerrain();
+    const w = worldOf(store);
+    const c = column(8, 8);
+    const feet = { x: 8.5, y: c.ground + 1, z: 8.5 };
+    const t0 = new Date('2026-09-30T12:00:00Z');
+    const times: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const tracker = new SurveyTracker();
+      const start = performance.now();
+      tracker.update(w, feet, t0, true);
+      times.push(performance.now() - start);
+    }
+    // About 9 ms at this spot (scripts/survey-bench.ts). The bound catches a return to a map
+    // lookup per cell (the near look alone took 50-80 ms so), not a busy test machine.
+    expect(times.sort((a, b) => a - b)[3]).toBeLessThan(60);
+  });
+
   it('surveys on entering a chunk, every 30 s, or when asked; never in the dark', () => {
     const store = storeOf(ground({ '10,63,8': BLOCK.sand }), () => 230);
     const tracker = new SurveyTracker();

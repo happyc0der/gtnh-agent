@@ -20,6 +20,7 @@ const chunk = (
   dimension: 'overworld',
   chunkX,
   chunkZ,
+  near: true,
   biome: biome === null ? null : { id: 230, name: biome, share: 1 },
   counts,
   examples: Object.fromEntries(
@@ -47,6 +48,50 @@ describe('world memory', () => {
     expect(SeenChunkSchema.safeParse(merged).success).toBe(true);
     expect(mergeSeen(newer, { ...older, biome: null }).biome?.name).toBe('River Oasis');
     expect(mergeSeen({ ...newer, biome: null }, older).biome?.name).toBe('Hot Desert');
+  });
+
+  it('a near look refines what far sight saw, and far sight never lowers it', () => {
+    const afar = { ...chunk(6, 0, { water: 12, sand: 4 }), near: false };
+    const close = chunk(
+      6,
+      0,
+      { water: 40, sand: 90, dirt: 30 },
+      'River Oasis',
+      '2026-09-30T12:05:00.000Z',
+    );
+    const refined = mergeSeen(afar, close);
+    expect(refined).toMatchObject({ near: true, counts: { water: 40, sand: 90, dirt: 30 } });
+    // Seen from afar again later: still near, still the counts of the near look.
+    const later = { ...afar, seenAt: '2026-09-30T12:10:00.000Z' };
+    expect(mergeSeen(refined, later)).toMatchObject({ near: true, counts: { water: 40 } });
+    expect(mergeSeen(afar, later).near).toBe(false);
+  });
+
+  it('offers what far sight saw as places, and counts its chunks toward how far a way is seen', () => {
+    // Water far sight saw 104 blocks east, and nothing else that way.
+    const lake = {
+      ...chunk(7, 0, { water: 20 }, 'River Oasis'),
+      near: false,
+      examples: { water: [{ x: 115, y: 62, z: 9 }] },
+    };
+    const summary = summarizeExploration({
+      chunks: [chunk(0, 0, { sand: 200 }), lake],
+      from: { x: 8, y: 64, z: 8 },
+      boundary: BOX,
+      now: new Date('2026-09-30T12:03:00.000Z'),
+    });
+    expect(summary.places.find((p) => p.resource === 'water')).toMatchObject({
+      x: 115,
+      y: 62,
+      z: 9,
+      distance: 107,
+      direction: 'east',
+      count: 20,
+      biome: 'River Oasis',
+    });
+    expect(summary.directions.east.seen).toBe(120);
+    expect(summary.directions.west.seen).toBeLessThan(20);
+    expect(summary.chunksSeen).toBe(2);
   });
 
   it('names directions (north is -z) and measures the room left to the boundary', () => {

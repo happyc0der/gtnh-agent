@@ -4,6 +4,7 @@ import { migration003LiveTasks } from './003-live-tasks.ts';
 import { migration004TaskMachines } from './004-task-machines.ts';
 import { migration005WorldMemory } from './005-world-memory.ts';
 import { migration006WindowLayouts } from './006-window-layouts.ts';
+import { migration007WorldMemoryNear } from './007-world-memory-near.ts';
 
 export interface Migration {
   version: number;
@@ -22,4 +23,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration004TaskMachines,
   migration005WorldMemory,
   migration006WindowLayouts,
+  migration007WorldMemoryNear,
 ];

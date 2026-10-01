@@ -267,28 +267,77 @@ const LIKELY_BIOMES: ReadonlyArray<{ blocks: readonly string[]; biomes: RegExp }
  */
 const BIOME_HERE = 16;
 
-/**
- * The nearest seen biome where one of `blocks` is common, as a route hint; or null. Not the
- * patch the player stands in: what it has in view is listed already, or out of reach from
- * here (seen live: "EXPLORE toward x 24, z 40", 1.6 blocks away, three sessions running).
- * When that patch is the only one, the hint says to explore on through it.
- */
-function likelyBiome(blocks: readonly string[], exploration: ExplorationSummary): string | null {
+/** The seen biomes where one of `blocks` is common, nearest first; empty when none is known. */
+function likelyBiomes(
+  blocks: readonly string[],
+  exploration: ExplorationSummary,
+): ExplorationSummary['biomes'] {
   const rule = LIKELY_BIOMES.find((r) => r.blocks.some((b) => blocks.includes(b)));
-  if (rule === undefined) return null;
-  const matching = exploration.biomes.filter((b) => rule.biomes.test(b.biome));
-  const away = matching.find((b) => b.distance > BIOME_HERE);
-  if (away !== undefined) {
-    return (
-      `the ${away.biome} at x ${away.x}, z ${away.z}, ${away.distance} m ${away.direction} ` +
-      `(seen, ${away.chunks} chunk(s)): it is common there; EXPLORE toward that x and z`
-    );
-  }
-  const here = matching[0];
+  return rule === undefined ? [] : exploration.biomes.filter((b) => rule.biomes.test(b.biome));
+}
+
+/**
+ * The nearest seen biome where one of `blocks` is common, away from where the player stands, as
+ * a route hint; or null. Not the patch the player stands in: what it has in view is listed
+ * already, or out of reach from here (seen live: "EXPLORE toward x 24, z 40", 1.6 blocks
+ * away, three sessions running); biomeHere names that one, last.
+ */
+function biomeAway(blocks: readonly string[], exploration: ExplorationSummary): string | null {
+  const away = likelyBiomes(blocks, exploration).find((b) => b.distance > BIOME_HERE);
+  if (away === undefined) return null;
+  return (
+    `the ${away.biome} at x ${away.x}, z ${away.z}, ${away.distance} m ${away.direction} ` +
+    `(seen, ${away.chunks} chunk(s)): it is common there; EXPLORE toward that x and z`
+  );
+}
+
+/** When the only likely biome seen is the patch the player stands in: explore on through it. */
+function biomeHere(blocks: readonly string[], exploration: ExplorationSummary): string | null {
+  const here = likelyBiomes(blocks, exploration)[0];
   if (here === undefined) return null;
   return (
     `the ${here.biome} the player stands in (seen, ${here.chunks} chunk(s)), beyond what it can ` +
     'reach from here: EXPLORE on through it, toward a direction with little seen'
+  );
+}
+
+/** Raw materials that lie on river and lake beds and shores: remembered water points to them. */
+const BY_WATER: ReadonlySet<string> = new Set([
+  'minecraft:gravel',
+  'minecraft:clay',
+  'minecraft:sand',
+]);
+
+/**
+ * The nearest remembered water away from the player, as a route hint for gravel, clay or sand;
+ * or null. In 1.7.10 they generate mostly as disks around water: BiomeDecorator's gravel, sand
+ * and clay generators start only where a column's top is water, and turn the dirt and grass up
+ * to 2 levels above or below it into gravel or sand (clay: the dirt, 1 level), so the disks lie
+ * on beds and reach the banks. Seen live: 94 chunks of desert and forest around spawn held no
+ * gravel, water or clay, and a player after gravel heads for water. Water the resource scan
+ * covers (`covered`), or as close as a biome patch the player stands in, is left out: its
+ * shore here is in view already (the scan lists sand, gravel and clay down to a level below
+ * the feet), and what lies under it cannot be dug (the agent does not wade).
+ */
+function waterNear(
+  blocks: readonly string[],
+  exploration: ExplorationSummary,
+  covered: (b: BlockPosition) => boolean,
+): string | null {
+  if (!blocks.some((b) => BY_WATER.has(b))) return null;
+  const water = exploration.places
+    .filter(
+      (p) =>
+        p.resource === 'water' &&
+        p.distance > BIOME_HERE &&
+        (p.y === null || !covered({ x: p.x, y: p.y, z: p.z })),
+    )
+    .sort((a, b) => a.distance - b.distance)[0];
+  if (water === undefined) return null;
+  return (
+    `the shore of the water at x ${water.x}, z ${water.z}, ${water.distance} m ` +
+    `${water.direction} (seen ${water.seenMinutesAgo} min ago): gravel, clay and sand lie on ` +
+    'river and lake shores and beds; EXPLORE toward that x and z'
   );
 }
 
@@ -381,7 +430,7 @@ function placesInView(state: GameState): PlaceLookup {
 /**
  * The route for the current task's required items, as the planner reads it. With world
  * memory (`exploration`), remembered places count as known places, and a raw material with
- * none known gets the nearest seen biome where it is common as its hint.
+ * none known gets where to look as its hint (routeAndChangesForPlanner).
  */
 export function routeForPlanner(
   state: GameState,
@@ -393,6 +442,12 @@ export function routeForPlanner(
 /**
  * The route (as routeForPlanner) and the GTNH-vs-vanilla changes that concern it and what
  * the player holds (request.gtnhChanges), from one route calculation.
+ *
+ * A gather leg with no known place gets where to look, the surest first: a seen biome where
+ * the material is common, away from here (it is common there, all of it); remembered water,
+ * for gravel, clay and sand (they lie on its shores, if not everywhere along them); the biome
+ * patch the player stands in, explored on through (what it holds within reach is in view
+ * already); and last, new ground in the direction with the most room left unseen.
  */
 export function routeAndChangesForPlanner(
   state: GameState,
@@ -430,9 +485,14 @@ export function routeAndChangesForPlanner(
       : [],
   );
   const route = planRoute(goal, inventory, ROUTE_BOOK, knownPlaces(state, exploration), storage);
+  const covered = scanCovers(state);
   const legs = route.legs.map((leg) => {
     if (leg.kind !== 'gather' || leg.places.length > 0 || exploration === undefined) return leg;
-    const where = likelyBiome(leg.blocks, exploration) ?? unexploredDirection(exploration);
+    const where =
+      biomeAway(leg.blocks, exploration) ??
+      waterNear(leg.blocks, exploration, covered) ??
+      biomeHere(leg.blocks, exploration) ??
+      unexploredDirection(exploration);
     if (where === null) return leg;
     return { ...leg, hint: leg.hint === null ? where : `${where}; ${leg.hint}` };
   });
