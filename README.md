@@ -291,8 +291,10 @@ ground is within range, and mobs cannot spawn on glass).
 
 1. The test server has RCON on `127.0.0.1:25571` (`server.properties`: `enable-rcon=true`,
    `rcon.port`, `rcon.password`). GTNH's Hodgepodge runs RCON commands on the main server thread
-   (`fixRconThreading`), so they are as safe as console commands. `allow-flight=false`, so the
-   server itself would kick a player that floats.
+   (`fixRconThreading`), so they are as safe as console commands. Since 2026-10-01 the world's
+   settings are a single-player world's (survival, Hard, `allow-flight=true`, no spawn
+   protection), so the server no longer kicks a player that floats; the agent's own gravity
+   check keeps it on the ground.
 2. Settings in `.env`: `TEST_SERVER_DIR` (the server folder; the RCON password is read from its
    `server.properties` and is not stored here), `TEST_PEN_CENTER=-5,200,-8` and `TEST_PEN_RADIUS=4`.
 3. `node scripts/test-server-admin.ts pen build` builds (or resets) the pen, and
