@@ -2579,7 +2579,7 @@ export class Gtnh1710Client implements MinecraftClient {
         code: 'REFUSED',
       };
     }
-    const empty = this.#emptyHotbarSlot();
+    const empty = this.#emptyHotbarSlot() ?? this.#plainHotbarSlot();
     if (empty === null) {
       return {
         ok: false,
@@ -2590,6 +2590,28 @@ export class Gtnh1710Client implements MinecraftClient {
       };
     }
     return { ok: true, slot: empty, tool: null, damage: 0, note };
+  }
+
+  /**
+   * With no empty hotbar slot: one holding a plain block item (sand, dirt, a log, a sapling;
+   * not a tool, no NBT), the held one first. Digging with it is digging with a bare hand: in
+   * 1.7.10 a non-tool item's dig speed is 1 (Item.getDigSpeed), it harvests what a hand
+   * harvests, and nothing of it wears or is used (a left click places nothing). Seen live:
+   * the hotbar full of sand, dirt, logs and saplings, and every dig of the gravel it had
+   * walked to refused: "no empty hotbar slot". Null when none holds such an item.
+   */
+  #plainHotbarSlot(): number | null {
+    const registry = this.#world.registry;
+    if (registry === null) return null;
+    const blocks = new Set(registry.blocks.values());
+    const held = this.#world.heldSlot;
+    for (const j of [held, ...[0, 1, 2, 3, 4, 5, 6, 7, 8].filter((k) => k !== held)]) {
+      const s = this.#hotbar(j);
+      if (s == null || s.hasNbt) continue;
+      const name = registry.items.get(s.id) ?? registry.blocks.get(s.id);
+      if (name !== undefined && blocks.has(name) && toolInfo(name) === null) return j;
+    }
+    return null;
   }
 
   /**

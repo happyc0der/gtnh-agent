@@ -286,6 +286,21 @@ describe('Gtnh1710Client digging', () => {
     expect(blocksOf(await client.observe()).removed[0]).toEqual(AT.dirt);
   }, 10_000);
 
+  it('with a full hotbar, digs holding a plain block item, as with a bare hand', async () => {
+    // Seen live: the hotbar full of sand, dirt, logs and saplings, and every dig refused.
+    const { server, client } = await start({
+      inventory: Array.from({ length: 9 }, (_, j) => ({
+        slot: 36 + j,
+        id: BLOCK.sand,
+        count: 10,
+        damage: 0,
+      })),
+    });
+    const result = await perform(client, dig(AT.dirt));
+    expect(result, result.message).toMatchObject({ ok: true, data: { block: 'minecraft:dirt' } });
+    expect(server.digSim.digs.map((d) => d.status)).toEqual([0, 2]);
+  });
+
   it('digs with an empty hand: start, the dig time, finish; the block turns to air and the drop is picked up', async () => {
     const { server, client } = await start({
       // Bread in the selected hotbar slot: the client must switch to an empty one first.
