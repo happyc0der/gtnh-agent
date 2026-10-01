@@ -9,7 +9,12 @@ import {
 } from '../domain/actions.ts';
 import { parseObservedStorageId, profileForBlock } from '../domain/interactions.ts';
 import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
-import { hostileTactic } from '../domain/combat.ts';
+import {
+  calmSpiderBlocker,
+  HURT_DANGER_MS,
+  hostileTactic,
+  recentHurtMs,
+} from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import { MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
 import {
@@ -239,7 +244,9 @@ function findInconsistencies(state: GameState): string[] {
 /**
  * The entity details must agree with the threat counts they explain: same scan, unique ids,
  * nothing listed beyond the scan, and (when the list is complete) the same numbers of
- * hostile and unidentified entities.
+ * hostile (not calm) and unidentified entities. An entity marked calm must be one that can
+ * be (calmSpiderBlocker: a vanilla spider, beyond its leap, the player not hurt lately); the
+ * light at it only the adapter can judge.
  */
 function entityInconsistencies(state: GameState): string[] {
   if (!state.nearbyEntities.known) return [];
@@ -258,7 +265,12 @@ function entityInconsistencies(state: GameState): string[] {
   if (entities.some((e) => e.distance > scanRadius)) {
     problems.push('nearbyEntities lists an entity beyond its scan radius');
   }
-  const hostile = entities.filter((e) => e.category === 'hostile').length;
+  const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp);
+  for (const e of entities) {
+    const why = e.calm ? calmSpiderBlocker(e, hurt) : null;
+    if (why !== null) problems.push(`nearbyEntities marks ${e.type} #${e.id} calm, but ${why}`);
+  }
+  const hostile = entities.filter((e) => e.category === 'hostile' && !e.calm).length;
   const unclassified = entities.filter((e) => e.category === 'unclassified').length;
   const complete = entities.length < MAX_REPORTED_ENTITIES;
   if (complete ? hostile !== t.hostileCount : hostile > t.hostileCount) {
@@ -584,25 +596,22 @@ function exploreTimeChecks(state: GameState): SafetyViolation[] {
 }
 
 /**
- * Violations for an action type that is not allowed while dangers are present. Only a
- * retreat (and eating, when only the vitals are low) restores safety. PLACE_BLOCK is
- * deliberately not an escape: one block does not make a shelter, sealing one with a mob
- * within reach can wall the agent in with it, and a creeper's blast opens it again. Shelters
- * are built before dark, while the state is safe (docs/action-contract.md).
+ * Being hurt this recently (ms) with a hostile about counts as being attacked (and no spider
+ * counts as calm then). Defined with the spider rules in src/domain/combat.ts.
  */
-/** Being hurt this recently (ms) with a hostile about counts as being attacked. */
-export const HURT_DANGER_MS = 15_000;
+export { HURT_DANGER_MS };
 
 /**
  * The nearest hostile that shoots (a skeleton, a witch, a blaze, Special Mobs ones too:
  * hostileTactic), anywhere in the entity scan: their reach is the scan's, not the threat
- * radius. Null when none, or the entities are not known.
+ * radius. Null when none, or the entities are not known. (Spiders fight in melee; a calm one
+ * is skipped all the same, like everywhere a hostile counts.)
  */
 function rangedHostileInView(state: GameState): { type: string; distance: number } | null {
   if (!state.nearbyEntities.known) return null;
   let best: { type: string; distance: number } | null = null;
   for (const e of state.nearbyEntities.value.entities) {
-    if (e.category !== 'hostile' || hostileTactic(e.type) !== 'ranged') continue;
+    if (e.category !== 'hostile' || e.calm || hostileTactic(e.type) !== 'ranged') continue;
     if (best === null || e.distance < best.distance) best = { type: e.type, distance: e.distance };
   }
   return best;
@@ -610,12 +619,16 @@ function rangedHostileInView(state: GameState): { type: string; distance: number
 
 /** How long ago (ms) the player was last hurt, when within HURT_DANGER_MS of the observation. */
 function hurtLately(state: GameState): number | null {
-  const at = state.player.lastHurtAt;
-  if (at === null) return null;
-  const ago = Date.parse(state.timestamp) - Date.parse(at);
-  return ago >= 0 && ago <= HURT_DANGER_MS ? ago : null;
+  return recentHurtMs(state.player.lastHurtAt, state.timestamp);
 }
 
+/**
+ * Violations for an action type that is not allowed while dangers are present. Only a
+ * retreat (and eating, when only the vitals are low) restores safety. PLACE_BLOCK is
+ * deliberately not an escape: one block does not make a shelter, sealing one with a mob
+ * within reach can wall the agent in with it, and a creeper's blast opens it again. Shelters
+ * are built before dark, while the state is safe (docs/action-contract.md).
+ */
 function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolation[] {
   if (dangers.length === 0) return [];
   const codes = new Set(dangers.map((d) => d.code));

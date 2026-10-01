@@ -1,6 +1,7 @@
 import type { Action } from '../domain/actions.ts';
 import {
   attackRefusal,
+  calmRefusal,
   hostileTactic,
   mayExplode,
   WEAPON_DAMAGE,
@@ -28,16 +29,27 @@ export interface FightProblem {
   message: string;
 }
 
-/** Hostile creatures (not objects such as fireballs) within `radius`, nearest first. */
+/**
+ * Hostile creatures (not objects such as fireballs) within `radius`, nearest first: the ones
+ * that may fight the player, so not calm spiders (a spider in the light leaves the player
+ * alone unless provoked).
+ */
 export function hostilesWithin(entities: readonly NearbyEntity[], radius: number): NearbyEntity[] {
   return entities.filter(
-    (e) => e.category === 'hostile' && e.kind !== 'object' && e.distance <= radius,
+    (e) => e.category === 'hostile' && e.kind !== 'object' && !e.calm && e.distance <= radius,
   );
 }
 
-/** The candidate view of an observed entity (what attackRefusal needs). */
+/** The candidate view of an observed entity (what attackRefusal and calmRefusal need). */
 export function candidateOf(e: NearbyEntity): AttackCandidate {
-  return { type: e.type, category: e.category, kind: e.kind, owned: e.owned, baby: e.baby };
+  return {
+    type: e.type,
+    category: e.category,
+    kind: e.kind,
+    owned: e.owned,
+    baby: e.baby,
+    calm: e.calm,
+  };
 }
 
 /**
@@ -46,7 +58,8 @@ export function candidateOf(e: NearbyEntity): AttackCandidate {
  *  - within combat.creeperFleeRadius, a creeper, primed TNT, an exploding projectile, or
  *    anything unidentified (an unidentified hostile could be a creeper variant, an unidentified
  *    mob a modded exploding one): back off instead;
- *  - more hostiles within the threat radius than combat.maxHostilesToFight: flee instead;
+ *  - more hostiles within the threat radius than combat.maxHostilesToFight (calm spiders do
+ *    not count: hostilesWithin): flee instead;
  *  - an unidentified entity within the threat radius;
  *  - health or food below the fighting thresholds.
  */
@@ -114,6 +127,8 @@ export function fightProblems(state: GameState, config: SafetyConfig): FightProb
  * moment and its reach every tick of the burst (src/bot/gtnh1710/combat.ts).
  *  - The target must be listed, and be an entity the agent may ever attack (attackRefusal):
  *    an identified melee or ranged hostile, or an unowned, grown farm animal.
+ *  - Never a calm spider (calmRefusal): it leaves the player alone, and a blow would make it
+ *    fight. Not a pause: once it is no longer calm (dark, near), it may be fought.
  *  - Farm animals only for a task or a person's own request, and never while hostiles are
  *    near (hunting is no defence).
  *  - Inside the work area.
@@ -155,6 +170,16 @@ export function attackChecks(
       code: 'NOT_ATTACKABLE',
       severity: 'pause',
       message: `Entity ${id} may never be attacked: ${refusal}`,
+      details,
+    });
+    return v;
+  }
+  const calm = calmRefusal(target);
+  if (calm !== null) {
+    v.push({
+      code: 'NOT_ATTACKABLE',
+      severity: 'block',
+      message: `Entity ${id} is not attacked now: ${calm}`,
       details,
     });
     return v;

@@ -33,6 +33,7 @@ import {
   vanillaColumn,
   type BiomeFn,
   type BlockFn,
+  type LightFn,
   type MetaFn,
 } from './chunk-fixtures.ts';
 
@@ -118,6 +119,11 @@ export interface FakeServerOptions {
   world?: BlockFn;
   /** Each column's biome id; default 0 everywhere. */
   biomeAt?: BiomeFn;
+  /**
+   * The light the chunk data carries (e.g. openSkyLight); default none at all, a dark world
+   * in which no spider is ever calm.
+   */
+  light?: LightFn;
   /** Columns sent around the player: this many chunks each way (default 3, a 7 x 7 square). */
   viewDistance?: number;
   /**
@@ -318,11 +324,12 @@ export class FakeGtnhServer {
   logins = 0;
   handshakeHosts: string[] = [];
   readonly #opts: Required<
-    Omit<FakeServerOptions, 'kickOnLogin' | 'world' | 'biomeAt' | 'dayTicks'>
+    Omit<FakeServerOptions, 'kickOnLogin' | 'world' | 'biomeAt' | 'dayTicks' | 'light'>
   > & {
     kickOnLogin: string | null;
     world: BlockFn | null;
     biomeAt: BiomeFn | null;
+    light: LightFn | undefined;
   };
   /** The time of day the server reports (null: it sends no time updates). */
   #dayTicks: number | null;
@@ -392,6 +399,7 @@ export class FakeGtnhServer {
       questBook: options.questBook ?? { quests: [] },
       world: options.world ?? null,
       biomeAt: options.biomeAt ?? null,
+      light: options.light,
       viewDistance: options.viewDistance ?? 3,
       streamChunks: options.streamChunks ?? false,
       combat: options.combat ?? {},
@@ -592,6 +600,14 @@ export class FakeGtnhServer {
     this.broadcast(this.#timeFrame(dayTicks));
   }
 
+  /**
+   * S2B weather, as WorldServer.updateWeather sends it: 1 it starts raining, 2 it stops, 7 the
+   * rain strength, 8 the thunder strength (0-1).
+   */
+  sendWeather(reason: 1 | 2 | 7 | 8, value: number): void {
+    this.broadcast(encodeFrame(0x2b, Buffer.concat([Buffer.from([reason]), f32(value)])));
+  }
+
   /** Columns not yet sent within the view distance of chunk (cx, cz), nearest first. */
   #sendView(socket: Socket, send: (frame: Buffer) => void, cx: number, cz: number): void {
     const view = this.#views.get(socket) ?? { sent: new Set<string>(), centre: '' };
@@ -609,10 +625,11 @@ export class FakeGtnhServer {
     const world = this.#worldNow();
     const meta = this.#metaNow();
     const biomeAt = this.#opts.biomeAt ?? undefined;
+    const light = this.#opts.light;
     const column = (x: number, z: number) =>
       this.#neid
-        ? neidColumn(x, z, world, true, true, biomeAt, meta)
-        : vanillaColumn(x, z, world, true, true, biomeAt, meta);
+        ? neidColumn(x, z, world, true, true, biomeAt, meta, light)
+        : vanillaColumn(x, z, world, true, true, biomeAt, meta, light);
     for (let i = 0; i < wanted.length; i += 5) {
       const batch = wanted.slice(i, i + 5);
       send(

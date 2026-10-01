@@ -26,9 +26,11 @@ import {
   BLOCK,
   flatWorld,
   neidColumn,
+  openSkyLight,
   TEST_BLOCK_REGISTRY,
   vanillaColumn,
   type BlockFn,
+  type LightFn,
   type MetaFn,
 } from './chunk-fixtures.ts';
 
@@ -53,15 +55,21 @@ const codes = buildBlockCodeTable(registryOf(TEST_BLOCK_REGISTRY));
 
 /**
  * A chunk store holding the columns within `radius` chunks of (0,0), built from a world
- * function (and its metadata), sent in NEID's or vanilla's layout.
+ * function (and its metadata and light), sent in NEID's or vanilla's layout.
  */
-function storeOf(world: BlockFn, radius = 3, meta?: MetaFn, neid = true): ChunkStore {
+function storeOf(
+  world: BlockFn,
+  radius = 3,
+  meta?: MetaFn,
+  neid = true,
+  light?: LightFn,
+): ChunkStore {
   const store = new ChunkStore();
   const columns = [];
   for (let cx = -radius; cx <= radius; cx++) {
     for (let cz = -radius; cz <= radius; cz++) {
       const column = neid ? neidColumn : vanillaColumn;
-      columns.push(column(cx, cz, world, true, true, undefined, meta));
+      columns.push(column(cx, cz, world, true, true, undefined, meta, light));
     }
   }
   const decoded = decodeChunkBulk(
@@ -71,7 +79,7 @@ function storeOf(world: BlockFn, radius = 3, meta?: MetaFn, neid = true): ChunkS
     neid ? NEID : VANILLA,
   );
   for (const c of decoded) {
-    store.setColumn(c.header.chunkX, c.header.chunkZ, c.sections, 0, c.biomes, c.meta);
+    store.setColumn(c.header.chunkX, c.header.chunkZ, c.sections, 0, c.biomes, c.meta, c.light);
   }
   return store;
 }
@@ -255,6 +263,111 @@ describe('chunk data decoding', () => {
       BLOCK.bopFoliage,
       undefined,
     ]);
+  });
+
+  it.each([
+    ['NotEnoughIDs', true],
+    ['vanilla', false],
+  ])('keeps block light and sky light, a nibble per block (%s layout)', (_layout, neid) => {
+    // Open sky over the grass floor (y 105), and light from a torch beside (2, 106, 3).
+    const world = flatWorld();
+    const sky = openSkyLight(world);
+    const glow = new Map([
+      ['2,106,3', 14],
+      ['3,106,3', 13],
+      ['2,107,3', 12],
+    ]);
+    const light: LightFn = (x, y, z) => ({
+      ...sky(x, y, z),
+      block: glow.get(`${x},${y},${z}`) ?? 0,
+    });
+    const store = storeOf(world, 1, undefined, neid, light);
+    expect(store.lightAt(2, 106, 3)).toEqual({ block: 14, sky: 15 }); // even index: low nibble
+    expect(store.lightAt(3, 106, 3)).toEqual({ block: 13, sky: 15 }); // odd: high nibble
+    expect(store.lightAt(2, 107, 3)).toEqual({ block: 12, sky: 15 });
+    expect(store.lightAt(-5, 105, 7)).toEqual({ block: 0, sky: 0 }); // inside the grass
+    expect(store.lightAt(0, 2, 0)).toEqual({ block: 0, sky: 0 }); // the bedrock section
+    expect(store.lightAt(0, 50, 0)).toBeNull(); // an all-air section: not sent, no light
+    expect(store.lightAt(100, 64, 100)).toBeUndefined(); // column not loaded
+  });
+
+  it('packs a section whose blocks all have the same light into that one value', () => {
+    const world = flatWorld();
+    const c = neidColumn(0, 0, world, true, true, undefined, undefined, openSkyLight(world));
+    const [decoded] = decodeChunkBulk([c.header], true, deflateSync(c.data), NEID);
+    // Section 0 (bedrock at y 0) has no light at all; section 6 (the grass at 105) sky light
+    // above the grass only.
+    expect(decoded?.light.sky).toBe(true);
+    expect(decoded?.light.sections[0]).toEqual({ block: 0, sky: 0 });
+    expect(decoded?.light.sections[6]?.block).toBe(0);
+    expect(decoded?.light.sections[6]?.sky).toBeInstanceOf(Uint8Array);
+    expect(decoded?.light.sections[3]).toBeNull(); // not sent
+  });
+
+  it('reads light as Chunk.getBlockLightValue: sky light less the darkness, or block light', () => {
+    // A block high above column (4, 4), in section 8; nothing else above the floor.
+    const world = flatWorld(new Map([['4,130,4', BLOCK.stone]]));
+    const sky = openSkyLight(world);
+    const light: LightFn = (x, y, z) => ({
+      ...sky(x, y, z),
+      block: x === 2 && y === 106 && z === 3 ? 9 : 0,
+    });
+    const store = storeOf(world, 1, undefined, true, light);
+    expect(store.lightValue(1, 106, 1, 0)).toBe(15);
+    expect(store.lightValue(1, 106, 1, 11)).toBe(4); // midnight
+    expect(store.lightValue(2, 106, 3, 11)).toBe(9); // the torch's light is the brighter
+    expect(store.lightValue(4, 131, 4, 0)).toBe(15); // above the block, in its sent section
+    // Sections not sent (only air): full sky light (less the darkness) where nothing is above
+    // in the column, not known under something.
+    expect(store.lightValue(5, 115, 4, 0)).toBe(15);
+    expect(store.lightValue(5, 115, 4, 4)).toBe(11);
+    expect(store.lightValue(4, 115, 4, 0)).toBeUndefined(); // under the block at 130
+    expect(store.lightValue(1, 60, 1, 0)).toBeUndefined(); // under the grass floor
+
+    // A world without a sky sends no sky light: only block light counts.
+    const noSky = neidColumn(0, 0, world, false, true, undefined, undefined, light);
+    const one = decodeChunkColumnWithBiomes(noSky.header, true, deflateSync(noSky.data), NEID);
+    expect(one.light.sky).toBe(false);
+    const nether = new ChunkStore();
+    nether.setColumn(0, 0, one.sections, 0, one.biomes, one.meta, one.light);
+    expect(nether.lightAt(2, 106, 3)).toEqual({ block: 9, sky: null });
+    expect(nether.lightValue(2, 106, 3, 11)).toBe(9);
+    expect(nether.lightValue(1, 106, 1, 0)).toBe(0);
+    expect(nether.lightValue(5, 115, 4, 0)).toBe(0); // not sent, and no sky
+  });
+
+  it('partial updates replace their sections light; block changes keep it (none comes with them)', () => {
+    const world = flatWorld();
+    const store = storeOf(world, 1, undefined, true, openSkyLight(world));
+    expect(store.lightValue(2, 106, 3, 0)).toBe(15);
+    store.setBlock(2, 107, 3, BLOCK.stone, 0); // shade above: the light stays as last sent
+    expect(store.lightAt(2, 106, 3)).toEqual({ block: 0, sky: 15 });
+    store.setBlock(-5, 150, 7, BLOCK.stone, 0); // a new section: its light was never sent
+    expect(store.lightAt(-5, 151, 7)).toBeUndefined();
+    expect(store.lightValue(-5, 151, 7, 0)).toBeUndefined();
+
+    const dark: LightFn = () => ({ block: 0, sky: 0 });
+    const c = neidColumn(0, 0, world, true, false, undefined, undefined, dark);
+    const update = decodeChunkColumnWithBiomes(c.header, false, deflateSync(c.data), NEID);
+    store.updateSections(
+      0,
+      0,
+      update.sections,
+      c.header.primaryBitMask,
+      1,
+      update.meta,
+      update.light,
+    );
+    expect(store.lightAt(2, 106, 3)).toEqual({ block: 0, sky: 0 });
+    // An update without light makes the column's light unknown.
+    store.updateSections(0, 0, update.sections, c.header.primaryBitMask, 2, update.meta);
+    expect(store.lightAt(2, 106, 3)).toBeUndefined();
+    // Unusable columns, and columns sent without light, have none.
+    store.markBad(1, 1, 'test', 3);
+    expect(store.lightAt(17, 106, 17)).toBeUndefined();
+    const bare = new ChunkStore();
+    bare.setColumn(0, 0, update.sections, 0);
+    expect(bare.lightValue(2, 106, 3, 0)).toBeUndefined();
   });
 
   it('applies block changes, partial updates, unusable columns and unloads', () => {

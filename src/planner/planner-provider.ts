@@ -1,7 +1,7 @@
 import { ACTION_TYPES, isAllowlistedActionType, isCodeOnlyActionType } from '../domain/actions.ts';
 import { isQuestBookActionType } from '../domain/quest-book.ts';
 import { DIGGABLE_BLOCKS, nearestOfEachKind, PLACEABLE_ITEMS } from '../domain/blocks.ts';
-import { attackRefusal } from '../domain/combat.ts';
+import { attackRefusal, calmRefusal } from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
@@ -202,7 +202,8 @@ export function sanitizeStateForPlanner(
           missingComponents: state.knownRecipeState.missingComponents,
         }
       : null,
-    // Creatures only: names from the agent's own tables, never name tags or player names.
+    // Creatures only: names from the agent's own tables, never name tags or player names. A
+    // calm spider is listed as such, and not attackable (a blow would provoke it).
     entities: (entities?.entities ?? [])
       .filter((e) => e.kind === 'mob')
       .slice(0, MAX_COMPACT_ENTITIES)
@@ -212,7 +213,8 @@ export function sanitizeStateForPlanner(
         category: e.category,
         distance: Number(e.distance.toFixed(1)),
         health: e.health,
-        attackable: attackRefusal(candidateOf(e)) === null,
+        calm: e.calm,
+        attackable: attackRefusal(candidateOf(e)) === null && calmRefusal(e) === null,
       })),
     weapon: state.player.weapon.known ? { ...state.player.weapon.value } : null,
     fightProblems: fightProblems(state, config).map((p) => p.code),

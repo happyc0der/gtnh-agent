@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CALM_SPIDER_MIN_DISTANCE } from '../domain/combat.ts';
 import { DimensionSchema, PositionSchema } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance } from '../domain/geometry.ts';
@@ -73,7 +74,9 @@ export function recordTrail(memory: MemoryRepository, state: GameState, ctx: Saf
  * Where to retreat along the trail from the creatures that threaten the player now: the
  * newest point RETREAT_MIN to RETREAT_REACH blocks away, on the far side of the player from
  * the nearest of them (the walk heads away from it), and clear of every one of them by the
- * threat radius and RETREAT_CLEARANCE. Null when none is, or nothing threatens.
+ * threat radius and RETREAT_CLEARANCE. A calm spider threatens nobody, but a point within
+ * its leap would make it count again (CALM_SPIDER_MIN_DISTANCE), so points stay that far
+ * and RETREAT_CLEARANCE from calm spiders too. Null when none is, or nothing threatens.
  */
 export function trailRetreat(
   trail: readonly TrailPoint[],
@@ -83,9 +86,11 @@ export function trailRetreat(
   const { position, dimension } = state.player;
   if (!position.known || !dimension.known || !state.nearbyEntities.known) return null;
   const at = position.value;
-  const threats = state.nearbyEntities.value.entities.filter(
-    (e) => e.kind !== 'object' && (e.category === 'hostile' || e.category === 'unclassified'),
+  const creatures = state.nearbyEntities.value.entities.filter((e) => e.kind !== 'object');
+  const threats = creatures.filter(
+    (e) => (e.category === 'hostile' && !e.calm) || e.category === 'unclassified',
   );
+  const calm = creatures.filter((e) => e.calm);
   const nearest = threats.reduce<(typeof threats)[number] | null>(
     (best, e) => (best === null || e.distance < best.distance ? e : best),
     null,
@@ -104,6 +109,8 @@ export function trailRetreat(
       0;
     if (!away) continue;
     if (threats.some((e) => distance(e.position, p.position) < clear)) continue;
+    const calmClear = CALM_SPIDER_MIN_DISTANCE + RETREAT_CLEARANCE;
+    if (calm.some((e) => distance(e.position, p.position) < calmClear)) continue;
     return {
       dimension: p.dimension,
       position: { ...p.position },

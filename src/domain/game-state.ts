@@ -104,6 +104,14 @@ export const NearbyEntitySchema = z.strictObject({
   baby: z.boolean().nullable(),
   /** When this connection last saw it take a hit (the server's hurt status), or null. */
   lastHurtAt: TimestampSchema.nullable(),
+  /**
+   * A vanilla spider that leaves the player alone now (src/domain/combat.ts,
+   * LIGHT_SHY_SPIDERS): the light at it is at least SPIDER_CALM_LIGHT, it is farther than
+   * CALM_SPIDER_MIN_DISTANCE, and the player was not hurt in the last HURT_DANGER_MS. It is
+   * listed, but not counted in `nearbyThreats`, and never attacked (that would provoke it).
+   * False in snapshots stored before it existed (they counted every spider).
+   */
+  calm: z.boolean().default(false),
 });
 export type NearbyEntity = z.infer<typeof NearbyEntitySchema>;
 
@@ -124,8 +132,8 @@ export const NearbyEntitiesSchema = z.strictObject({
   /**
    * The nearest entities within `scanRadius` (hostile, passive and unclassified creatures,
    * dangerous objects and players; dropped items and the like are left out), nearest first.
-   * With fewer than MAX_REPORTED_ENTITIES listed the list is complete: its hostile and
-   * unclassified entries then match the `nearbyThreats` counts.
+   * With fewer than MAX_REPORTED_ENTITIES listed the list is complete: its hostile entries
+   * that are not calm, and its unclassified ones, then match the `nearbyThreats` counts.
    */
   entities: z.array(NearbyEntitySchema).max(MAX_REPORTED_ENTITIES),
   /** Entities seen dying recently (ATTACK_ENTITY's kills are verified against this). */
@@ -135,6 +143,8 @@ export type NearbyEntities = z.infer<typeof NearbyEntitiesSchema>;
 
 /**
  * Entities near the player (within the adapter's scan radius).
+ * `hostile` counts hostile creatures and dangerous objects, but not calm spiders
+ * (NearbyEntitySchema.calm: a spider in the light leaves the player alone).
  * `unclassified` counts entities whose type the agent cannot identify (e.g. a modded mob
  * type not in the classification table). The safety policy treats them like hostiles.
  */

@@ -24,6 +24,15 @@ const mobs: MockMob[] = [
   },
   { id: 3, type: 'player', category: 'player', position: at(1, 4), health: 20 },
   { id: 4, type: 'minecraft:Villager', category: 'passive', position: at(1, 6), health: 20 },
+  // A spider in daylight, 9 blocks away: calm, so no threat and never provoked.
+  {
+    id: 5,
+    type: 'minecraft:Spider',
+    category: 'hostile',
+    position: at(10, 1),
+    health: 16,
+    calm: true,
+  },
 ];
 
 describe('what the planner sees of creatures', () => {
@@ -36,6 +45,7 @@ describe('what the planner sees of creatures', () => {
         category: 'passive',
         distance: 2,
         health: 10,
+        calm: false,
         attackable: true,
       },
       {
@@ -44,6 +54,7 @@ describe('what the planner sees of creatures', () => {
         category: 'passive',
         distance: 3,
         health: 10,
+        calm: false,
         attackable: false,
       },
       {
@@ -52,9 +63,20 @@ describe('what the planner sees of creatures', () => {
         category: 'passive',
         distance: 5,
         health: 20,
+        calm: false,
+        attackable: false,
+      },
+      {
+        id: 5,
+        type: 'minecraft:Spider',
+        category: 'hostile',
+        distance: 9,
+        health: 16,
+        calm: true,
         attackable: false,
       },
     ]);
+    expect(compact.threats).toEqual({ hostileCount: 0, unclassifiedCount: 0 });
     expect(compact.weapon).toEqual({ item: null, damage: 1 });
     expect(compact.fightProblems).toEqual([]);
     const hungry = sanitizeStateForPlanner(makeState((w) => void (w.player.hunger = 6)));

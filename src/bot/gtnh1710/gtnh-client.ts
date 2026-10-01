@@ -60,6 +60,7 @@ import {
 import {
   attackRefusal,
   BARE_HAND,
+  calmRefusal,
   ENGAGE_RADIUS,
   killStrikeAllowed,
   MAX_BURST_MS,
@@ -2588,8 +2589,8 @@ export class Gtnh1710Client implements MinecraftClient {
   /**
    * Why work on a block (a dig, a placement) must stop or not start now, or null: the
    * connection, halt(), the stop file, a server correction or a health drop since `guard`
-   * was taken, an incomplete entity picture, or a hostile or unidentified entity within
-   * threatRadius.
+   * was taken, an incomplete entity picture, or a hostile (not a calm spider) or unidentified
+   * entity within threatRadius.
    */
   #interruption(guard: { placementsAtStart: number; healthAtStart: number | null }): string | null {
     if (this.#phase !== 'play') return 'the connection closed';
@@ -2605,12 +2606,13 @@ export class Gtnh1710Client implements MinecraftClient {
     if (guard.healthAtStart !== null && health !== null && health < guard.healthAtStart) {
       return `health dropped from ${guard.healthAtStart} to ${health}`;
     }
-    if (!this.#world.entitiesReady(this.#opts.clock.now())) {
+    const now = this.#opts.clock.now();
+    if (!this.#world.entitiesReady(now)) {
       return 'the entities around the player are not fully known';
     }
     const threat = this.#world
-      .nearbyEntities(cfg.movement.threatRadius)
-      .find((e) => e.category === 'hostile' || e.category === 'unclassified');
+      .nearbyEntities(cfg.movement.threatRadius, now)
+      .find((e) => (e.category === 'hostile' && !e.calm) || e.category === 'unclassified');
     if (threat !== undefined) {
       return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
     }
@@ -3093,11 +3095,11 @@ export class Gtnh1710Client implements MinecraftClient {
     return null;
   }
 
-  /** Why this target cannot be engaged (never, or not from here), or null. */
+  /** Why this target cannot be engaged (never, not now, or not from here), or null. */
   #targetProblem(entityId: number, fence: Fence): string | null {
-    const t = this.#world.combatEntity(entityId);
+    const t = this.#world.combatEntity(entityId, this.#opts.clock.now());
     if (t === null) return `entity ${entityId} is not tracked near the player`;
-    const refusal = attackRefusal(t);
+    const refusal = attackRefusal(t) ?? calmRefusal(t);
     if (refusal !== null) return refusal;
     if (!insideFence(t.position, fence)) return `the ${t.type} is outside the fence`;
     if (t.distance > ENGAGE_RADIUS) {
@@ -3112,17 +3114,18 @@ export class Gtnh1710Client implements MinecraftClient {
    * anything unidentified) is within the scan. Checked before the burst and every tick of it.
    */
   #fightMomentProblem(): string | null {
-    if (!this.#world.entitiesReady(this.#opts.clock.now())) {
+    const now = this.#opts.clock.now();
+    if (!this.#world.entitiesReady(now)) {
       return 'the entities around the player are not fully known';
     }
     const unidentified = this.#world
-      .nearbyEntities(this.#opts.config.movement.threatRadius)
+      .nearbyEntities(this.#opts.config.movement.threatRadius, now)
       .find((e) => e.category === 'unclassified');
     if (unidentified !== undefined) {
       return `unidentified entity ${unidentified.name} ${unidentified.distance.toFixed(1)} blocks away`;
     }
     const explosive = this.#world
-      .nearbyEntities(ENTITY_SCAN_RADIUS)
+      .nearbyEntities(ENTITY_SCAN_RADIUS, now)
       .find(
         (e) =>
           (e.category === 'hostile' || e.category === 'unclassified') &&
@@ -3667,9 +3670,9 @@ export class Gtnh1710Client implements MinecraftClient {
       };
     }
     const plan = target === null ? null : planWalk(world, fence, from, target, m.maxPathLength);
-    const entities = this.#world.nearbyEntities(64).map((e) => ({
+    const entities = this.#world.nearbyEntities(64, this.#opts.clock.now()).map((e) => ({
       id: e.entityId,
-      threat: e.category === 'hostile' || e.category === 'unclassified',
+      threat: (e.category === 'hostile' && !e.calm) || e.category === 'unclassified',
     }));
     const positions = new Map(this.#world.trackedEntities().map((e) => [e.entityId, e]));
     const map = renderWalkMap(world, fence, {
@@ -3974,7 +3977,7 @@ export class Gtnh1710Client implements MinecraftClient {
    * Why a walk must stop now, whatever the way ahead, or null; checked before every step and
    * every block it breaks on its way: the connection, anything that blocks walking (the stop
    * file, halt()...), a server correction or a health drop since it started, and with
-   * `stopForThreats` a hostile or unidentified entity within threatRadius.
+   * `stopForThreats` a hostile (not a calm spider) or unidentified entity within threatRadius.
    */
   #walkInterruption(guard: {
     placementsAtStart: number;
@@ -3992,13 +3995,14 @@ export class Gtnh1710Client implements MinecraftClient {
       return `health dropped from ${guard.healthAtStart} to ${health}`;
     }
     if (guard.stopForThreats) {
-      if (!this.#world.entitiesReady(this.#opts.clock.now())) {
+      const now = this.#opts.clock.now();
+      if (!this.#world.entitiesReady(now)) {
         return 'the entities around the player are not fully known';
       }
       const radius = this.#opts.config.movement.threatRadius;
       const threat = this.#world
-        .nearbyEntities(radius)
-        .find((e) => e.category === 'hostile' || e.category === 'unclassified');
+        .nearbyEntities(radius, now)
+        .find((e) => (e.category === 'hostile' && !e.calm) || e.category === 'unclassified');
       if (threat !== undefined) {
         return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
       }
@@ -4515,6 +4519,7 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'spawn-position':
       case 'update-health':
       case 'time-update':
+      case 'change-game-state':
       case 'respawn':
       case 'held-item':
       case 'set-slot':

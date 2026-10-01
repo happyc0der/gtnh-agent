@@ -134,6 +134,8 @@ export interface AttackCandidate {
   owned: boolean | null;
   /** A baby animal; null when not known. */
   baby: boolean | null;
+  /** A calm spider (see LIGHT_SHY_SPIDERS); absent or null: not calm. */
+  calm?: boolean | null;
 }
 
 /**
@@ -177,6 +179,94 @@ export function attackRefusal(e: AttackCandidate): string | null {
           return `${e.type} is a hostile of unknown kind (it might explode)`;
       }
   }
+}
+
+/**
+ * Why this entity may not be attacked NOW although it may be at other times, or null: a calm
+ * spider leaves the player alone, and a blow would make it fight (EntityMob.attackEntityFrom
+ * makes the attacker its target, in any light).
+ */
+export function calmRefusal(e: Pick<AttackCandidate, 'type' | 'calm'>): string | null {
+  return e.calm === true
+    ? `the ${e.type} is calm (a spider in the light leaves a player alone): striking it would provoke it`
+    : null;
+}
+
+// ---------------------------------------------------------------------------
+// Spiders in the light
+// ---------------------------------------------------------------------------
+
+/**
+ * Being hurt this recently (ms) with a hostile about counts as being attacked (the safety
+ * policy), and makes no spider count as calm: the bite may have been a spider's.
+ */
+export const HURT_DANGER_MS = 15_000;
+
+/**
+ * How long ago (ms) the player was last hurt, when that was at most HURT_DANGER_MS before
+ * `at` (the observation's time), else null.
+ */
+export function recentHurtMs(lastHurtAt: string | null, at: string | Date): number | null {
+  if (lastHurtAt === null) return null;
+  const ago = (typeof at === 'string' ? Date.parse(at) : at.getTime()) - Date.parse(lastHurtAt);
+  return ago >= 0 && ago <= HURT_DANGER_MS ? ago : null;
+}
+
+/**
+ * Vanilla spiders, which look for a player only in the dark, by type, with their height
+ * (Entity.setSize: EntitySpider 1.4 x 0.9, EntityCaveSpider 0.7 x 0.5). Verified in the 1.7.10
+ * server jar with Forge's patches (docs/gtnh-compatibility.md, "Spiders in the light"):
+ * EntitySpider.findPlayerToAttack targets the closest player within 16 blocks only while
+ * getBrightness(1.0F) < 0.5F, and EntityCaveSpider overrides neither that nor attackEntity.
+ * Special Mobs' spiders are NOT here: they roll "hostile" at spawn (10% of spiders, every cave
+ * spider on this server) and then fake darkness to target in any light, which the client
+ * cannot see; other mods' spiders were not checked.
+ */
+export const LIGHT_SHY_SPIDERS: ReadonlyMap<string, { height: number }> = new Map([
+  ['minecraft:Spider', { height: 0.9 }],
+  ['minecraft:CaveSpider', { height: 0.5 }],
+]);
+
+/**
+ * From this light level a spider does not look for a player: the overworld's brightness
+ * table (WorldProvider.generateLightBrightnessTable) gives 0.41 for level 11 and 0.50000006
+ * for 12, and the spider targets only below 0.5.
+ */
+export const SPIDER_CALM_LIGHT = 12;
+
+/** EntitySpider.findPlayerToAttack takes the closest player within 16 blocks. */
+export const SPIDER_TARGET_RANGE = 16;
+
+/**
+ * Within this distance (feet to feet) a spider counts as a threat whatever the light. One
+ * that has the player as its target keeps it in the light (it drops it with a 1% chance per
+ * tick, and only while it can see the player: EntitySpider.attackEntity), and from 2 to 6
+ * blocks it leaps at the player (one chance in 10 per tick): the client cannot see a target,
+ * so a spider within its leap counts as attacking.
+ */
+export const CALM_SPIDER_MIN_DISTANCE = 6;
+
+/**
+ * Why an entity cannot count as a calm spider now, whatever the light, or null: it is not a
+ * vanilla spider (LIGHT_SHY_SPIDERS, a hostile mob), it is within CALM_SPIDER_MIN_DISTANCE,
+ * or the player was hurt in the last HURT_DANGER_MS (`hurtMsAgo`, from recentHurtMs). The
+ * rest of the rule (the light at the spider) only the adapter can judge. Shared by the live
+ * client, the mock and the safety policy's consistency check, so all three agree.
+ */
+export function calmSpiderBlocker(
+  e: { type: string; category: EntityCategory; kind: AttackCandidate['kind']; distance: number },
+  hurtMsAgo: number | null,
+): string | null {
+  if (e.kind !== 'mob' || e.category !== 'hostile' || !LIGHT_SHY_SPIDERS.has(e.type)) {
+    return `${e.type} is not a vanilla spider (only those leave a player alone in the light)`;
+  }
+  if (e.distance <= CALM_SPIDER_MIN_DISTANCE) {
+    return `the ${e.type} is ${e.distance.toFixed(1)} blocks away, within its leap (${CALM_SPIDER_MIN_DISTANCE})`;
+  }
+  if (hurtMsAgo !== null) {
+    return `the player was hurt ${(hurtMsAgo / 1000).toFixed(0)} s ago (it may have been a spider)`;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

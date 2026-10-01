@@ -246,7 +246,8 @@ export const CompactStateSchema = z.strictObject({
    * Creatures near the player, nearest first (players and objects are left out).
    * ATTACK_ENTITY may target only one with `attackable` true (a melee or ranged hostile, or an
    * unowned, grown farm animal), and only when `fightProblems` is empty. `distance` is blocks
-   * from feet to feet; `health` is null when not known.
+   * from feet to feet; `health` is null when not known. `calm`: a spider in the light that
+   * leaves the player alone (no threat, and never attacked: that would provoke it).
    */
   entities: z
     .array(
@@ -256,6 +257,7 @@ export const CompactStateSchema = z.strictObject({
         category: z.enum(ENTITY_CATEGORIES),
         distance: z.number().min(0),
         health: z.number().nullable(),
+        calm: z.boolean(),
         attackable: z.boolean(),
       }),
     )

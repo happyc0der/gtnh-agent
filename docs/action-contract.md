@@ -74,8 +74,10 @@ multiblock changes, and rare-item consumption.
   witches, and their Special Mobs variants), or a cow, pig, sheep or chicken whose metadata says
   it is grown and has no name tag (or saddle). Never a player, villager, golem, wolf, horse, any
   other animal, anything unidentified, a creeper or anything else that explodes, an enderman,
-  zombie pigman, silverfish or boss (`NOT_ATTACKABLE`, pause). An entity no longer listed is a
-  stale step (`TARGET_GONE`): a planner's plan is re-made, not halted.
+  zombie pigman, silverfish or boss (`NOT_ATTACKABLE`, pause). Never a calm spider (a vanilla
+  spider in the light: `nearbyEntities[].calm`), since a blow would make it fight
+  (`NOT_ATTACKABLE`, block: it may be fought once it is not calm). An entity no longer listed
+  is a stale step (`TARGET_GONE`): a planner's plan is re-made, not halted.
 - **When** (`UNSAFE_ATTACK`, block; the same rules System 1 uses for DEFEND): health at least
   `safety.combat.minHealthToFight` (14) and food at least `minHungerToFight` (8, the server's
   HungerOverhaul heals no lower); at most `maxHostilesToFight` (2) hostiles within the threat
@@ -164,7 +166,7 @@ fails the action (`FAILED`) after the cursor has been emptied back into the wind
 player); without them they return `NOT_IMPLEMENTED`. A walk is
 refused (`REFUSED`, nothing sent) when the target is off the fence's level, outside the fence or
 unreachable over walkable blocks. It stops (`FAILED`) on a server correction, a health drop, a
-hostile or unidentified entity within `threatRadius` (`MOVE_TO` only), a blocked or dangerous way
+hostile (not a calm spider) or unidentified entity within `threatRadius` (`MOVE_TO` only), a blocked or dangerous way
 ahead, the stop file, `halt()` or a lost connection. See [architecture: walking](architecture.md#walking).
 In `MC_MOVEMENT_MODE=follow`, a `RETURN_TO_SAFE_LOCATION` beyond the play area travels in hops
 first, like `EXPLORE` but not stopped by threats and at any time of day (it is the escape).

@@ -66,6 +66,15 @@ gave up on the forest). Each break is checked and dug like `DIG_BLOCK` and costs
 dig time, so it still walks round a bush when that is only a little longer. See
 [Digging](#digging).
 
+**Spiders in daylight (2026-10-01, fake server only so far):** a vanilla spider looks for a
+player only in the dark (light 11 or less), so a person ignores one in daylight (seen live:
+one sent the agent 108 blocks back to its spawn). The client now keeps the light the chunk data
+carries and the weather, and computes the light at a spider as the server does: in light 12 or
+more, farther than its 6-block leap, with the player not hurt in the last 15 s, and never seen
+in the dark near the player (or hurt) on this connection, a spider is **calm**: listed, but no
+threat, and never attacked. Special Mobs' spiders never are (some are rolled always hostile).
+See [Combat](docs/architecture.md#combat).
+
 **Night pit (2026-10-01, fake server only so far):** at dusk, play digs a pit three blocks
 straight down under the player (`DIG_DOWN`, the only dig of the ground underfoot, allowed only
 as code's own night-shelter step) and roofs it in the ground layer it dug through; in the
@@ -258,7 +267,7 @@ and [docs/action-contract.md](docs/action-contract.md).
 - Combat is off unless `MC_ENABLE_COMBAT=true` **and** the fence is set. It strikes only
   identified zombies, spiders, skeletons and witches (and their Special Mobs variants), or a
   grown, unnamed cow, pig, sheep or chicken for a task. Never players, villagers, golems, pets,
-  creepers, endermen, pigmen or anything unidentified. It refuses with health below 14 or food
+  creepers, endermen, pigmen, a calm spider or anything unidentified. It refuses with health below 14 or food
   below 8, more than 2 hostiles near, or anything that may explode within 16 blocks
   (`safety.combat`), and stops at the first damage it takes (see below).
 - Quest-book clicks are off unless `MC_ENABLE_QUEST_BOOK=true`. They are made only for the Age 0
@@ -319,7 +328,8 @@ A* inside the fence and re-checks every 0.2-block step just before sending it. A
 
 - a server correction (the server moved the player back);
 - a health drop;
-- a hostile or unidentified entity within 10 blocks (for `MOVE_TO`; a retreat keeps going);
+- a hostile (not a calm spider, one in daylight) or unidentified entity within 10 blocks (for
+  `MOVE_TO`; a retreat keeps going);
 - anything blocked, unloaded, floorless or dangerous touching the way ahead;
 - the stop file (`pnpm cli halt`, which also works from another terminal or over SSH);
 - Ctrl+C;
@@ -571,7 +581,7 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and
 
 - Every hop is an ordinary walk: planned on the server's blocks, every 0.2-block step re-checked
   just before it is sent, never into water, lava, unloaded chunks or next to a hazard, drops of at
-  most 2 blocks; a hostile or unidentified entity within 10 blocks stops it.
+  most 2 blocks; a hostile (not a calm spider) or unidentified entity within 10 blocks stops it.
 - The body passes only through air and plants checked in the code the server runs (2026-10-01):
   vanilla grass, flowers, sugar cane, vines and a single snow layer; Biomes O' Plenty's
   foliage, flowers, plants, mushrooms and vines; Natura's wild crops; HarvestCraft's gardens.
