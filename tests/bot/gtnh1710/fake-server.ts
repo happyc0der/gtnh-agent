@@ -30,8 +30,10 @@ import {
   multiBlockChangeFrame,
   neidColumn,
   TEST_BLOCK_REGISTRY,
+  vanillaColumn,
   type BiomeFn,
   type BlockFn,
+  type MetaFn,
 } from './chunk-fixtures.ts';
 
 /**
@@ -75,6 +77,8 @@ export interface FakeServerOptions {
   entities?: FakeEntity[];
   /** Blocks that differ from the flat test world ("x,y,z" -> id). */
   blockOverrides?: ReadonlyMap<string, number>;
+  /** Block metadata that is not 0 ("x,y,z" -> metadata), e.g. a BOP foliage variant. */
+  blockMeta?: ReadonlyMap<string, number>;
   /** Columns ("x,z") with no blocks at all (holes to the void). */
   voidColumns?: ReadonlySet<string>;
   /** Send chunk bulks whose data does not inflate. */
@@ -322,6 +326,8 @@ export class FakeGtnhServer {
   readonly #playSockets = new Set<Socket>();
   /** The world's blocks that differ from the flat world ("x,y,z" -> id); changes as blocks break. */
   readonly #blocks: Map<string, number>;
+  /** Block metadata that is not 0 ("x,y,z" -> metadata); a changed block takes its new one. */
+  readonly #metas: Map<string, number>;
 
   constructor(options: FakeServerOptions = {}) {
     const mods = options.mods ?? DEFAULT_MODS;
@@ -361,6 +367,7 @@ export class FakeGtnhServer {
       entities: options.entities ?? [],
       sendChunks: options.sendChunks ?? true,
       blockOverrides: options.blockOverrides ?? new Map(),
+      blockMeta: options.blockMeta ?? new Map(),
       voidColumns: options.voidColumns ?? new Set(),
       corruptChunks: options.corruptChunks ?? false,
       chests: options.chests ?? [],
@@ -402,12 +409,13 @@ export class FakeGtnhServer {
       if (id !== undefined) this.setBlock(x, y, z, id);
     };
     this.#blocks = new Map(this.#opts.blockOverrides);
+    this.#metas = new Map(this.#opts.blockMeta);
     const world = this.#worldNow();
     const blockNames = new Map(this.#opts.blocks);
     this.digSim = new FakeDigSim(
       {
         blockAt: world,
-        setBlock: (x, y, z, id) => this.#blocks.set(`${x},${y},${z}`, id),
+        setBlock: (x, y, z, id) => this.#put(x, y, z, id, 0),
         blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
         // 1.7.10 block items share their block's id.
         itemId: (name) =>
@@ -427,7 +435,7 @@ export class FakeGtnhServer {
     this.placeSim = new FakePlaceSim(
       {
         blockAt: world,
-        setBlock: (x, y, z, id) => this.#blocks.set(`${x},${y},${z}`, id),
+        setBlock: (x, y, z, id) => this.#put(x, y, z, id, 0),
         blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
         playerFeet: () => {
           const p = this.confirmedPositions.at(-1);
@@ -521,6 +529,27 @@ export class FakeGtnhServer {
     return (x, y, z) => this.#blocks.get(`${x},${y},${z}`) ?? base(x, y, z);
   }
 
+  /** The world's block metadata now (0 where none was set). */
+  #metaNow(): MetaFn {
+    return (x, y, z) => this.#metas.get(`${x},${y},${z}`) ?? 0;
+  }
+
+  /** A block changes in the world, with its metadata. */
+  #put(x: number, y: number, z: number, id: number, meta: number): void {
+    const key = `${x},${y},${z}`;
+    this.#blocks.set(key, id);
+    if (meta === 0) this.#metas.delete(key);
+    else this.#metas.set(key, meta);
+  }
+
+  /**
+   * The block format the server sends: NotEnoughIDs' when its mod list has `neid` (as the
+   * real server's does), else vanilla's. The digging and placing sims send NEID frames only.
+   */
+  get #neid(): boolean {
+    return this.#opts.mods.some((m) => m.modid === 'neid');
+  }
+
   /** S03 at the server's time of day (the daylight cycle running). */
   #timeFrame(dayTicks: number): Buffer {
     const b = Buffer.alloc(16);
@@ -550,12 +579,17 @@ export class FakeGtnhServer {
     wanted.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cz) - Math.hypot(b[0] - cx, b[1] - cz));
     // Nearest first, 5 columns per Map Chunk Bulk, like the real server.
     const world = this.#worldNow();
+    const meta = this.#metaNow();
     const biomeAt = this.#opts.biomeAt ?? undefined;
+    const column = (x: number, z: number) =>
+      this.#neid
+        ? neidColumn(x, z, world, true, true, biomeAt, meta)
+        : vanillaColumn(x, z, world, true, true, biomeAt, meta);
     for (let i = 0; i < wanted.length; i += 5) {
       const batch = wanted.slice(i, i + 5);
       send(
         chunkBulkFrame(
-          batch.map(([x, z]) => neidColumn(x, z, world, true, true, biomeAt)),
+          batch.map(([x, z]) => column(x, z)),
           true,
           this.#opts.corruptChunks,
         ),
@@ -573,24 +607,24 @@ export class FakeGtnhServer {
     }
   }
 
-  /** A single block change (NEID format), e.g. lava appearing next to the player. */
-  setBlock(x: number, y: number, z: number, id: number): void {
-    this.#blocks.set(`${x},${y},${z}`, id);
-    this.broadcast(blockChangeFrame(x, y, z, id));
+  /** A single block change, with its metadata, e.g. lava appearing next to the player. */
+  setBlock(x: number, y: number, z: number, id: number, meta = 0): void {
+    this.#put(x, y, z, id, meta);
+    this.broadcast(blockChangeFrame(x, y, z, id, meta, this.#neid));
   }
 
   /** A block change the client is never told about (as if the update had been lost). */
-  setBlockSilently(x: number, y: number, z: number, id: number): void {
-    this.#blocks.set(`${x},${y},${z}`, id);
+  setBlockSilently(x: number, y: number, z: number, id: number, meta = 0): void {
+    this.#put(x, y, z, id, meta);
   }
 
   setBlocks(
     chunkX: number,
     chunkZ: number,
-    records: Array<{ x: number; y: number; z: number; id: number }>,
+    records: Array<{ x: number; y: number; z: number; id: number; meta?: number }>,
   ): void {
-    for (const r of records) this.#blocks.set(`${r.x},${r.y},${r.z}`, r.id);
-    this.broadcast(multiBlockChangeFrame(chunkX, chunkZ, records));
+    for (const r of records) this.#put(r.x, r.y, r.z, r.id, r.meta ?? 0);
+    this.broadcast(multiBlockChangeFrame(chunkX, chunkZ, records, this.#neid));
   }
 
   /** 1.7.10 chunk unload: Chunk Data, ground-up continuous, no sections, empty data. */

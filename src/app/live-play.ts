@@ -25,7 +25,7 @@ import { randomIds } from '../util/ids.ts';
 import { runQuestBookAction, syncConfigToDatabase, type AgentDeps } from './agent-loop.ts';
 import { runSession } from './live-session.ts';
 import { withLiveClient } from './live-agent.ts';
-import { passProblem } from '../bot/gtnh1710/terrain.ts';
+import { passProblem } from '../bot/gtnh1710/passable.ts';
 import { shelterStatus, type ShelterStatus } from '../goals/shelter.ts';
 import {
   runPlay,

@@ -27,8 +27,10 @@ const ID = {
   log: 17,
   sandstone: 24,
   tallgrass: 31,
+  foliage: 1102,
 } as const;
 const NAMES = new Map<number, string>([
+  [ID.foliage, 'BiomesOPlenty:foliage'],
   [ID.stone, 'minecraft:stone'],
   [ID.grass, 'minecraft:grass'],
   [ID.dirt, 'minecraft:dirt'],
@@ -46,15 +48,21 @@ const k = (x: number, y: number, z: number): string => `${x},${y},${z}`;
 
 /**
  * Flat land: `top` at y=63 (grass), `under` at y=60-62 (dirt), stone below, air above,
- * plus `blocks`; columns in `unloaded` are not loaded.
+ * plus `blocks`; columns in `unloaded` are not loaded. With `metas`, the world reports block
+ * metadata (0 where not listed); without, none.
  */
 function land(
   blocks: Record<string, number> = {},
-  opts: { top?: number; under?: number; unloaded?: Array<[number, number]> } = {},
+  opts: {
+    top?: number;
+    under?: number;
+    unloaded?: Array<[number, number]>;
+    metas?: Record<string, number>;
+  } = {},
 ): WalkWorld {
   const overrides = new Map(Object.entries(blocks));
   const missing = new Set((opts.unloaded ?? []).map(([x, z]) => `${x},${z}`));
-  return {
+  const world: WalkWorld = {
     blockAt(x, y, z) {
       if (missing.has(`${x},${z}`)) return undefined;
       const o = overrides.get(k(x, y, z));
@@ -70,6 +78,12 @@ function land(
         : id === 0 || NAMES.has(id)
           ? BLOCK_CODE.safe
           : BLOCK_CODE.unknown,
+  };
+  const metas = opts.metas;
+  if (metas === undefined) return world;
+  return {
+    ...world,
+    metaAt: (x, y, z) => (missing.has(`${x},${z}`) ? undefined : (metas[k(x, y, z)] ?? 0)),
   };
 }
 
@@ -140,6 +154,20 @@ describe('checkDigDown: the block under the feet, exactly one block down', () =>
     expect(reasonOf(r)).toMatch(reason);
   });
 
+  it('allows BOP foliage the walker passes around it, but not poison ivy or unknown variants', () => {
+    // Short grass east of the feet and a bush north-west of them, at feet level.
+    const plants = { [k(1, 64, 0)]: ID.foliage, [k(-1, 64, 1)]: ID.foliage };
+    const meadow = land(plants, { metas: { [k(1, 64, 0)]: 1, [k(-1, 64, 1)]: 4 } });
+    expect(checkDigDown(meadow, AREA, FEET, UNDER)).toMatchObject({ ok: true });
+    const ivy = land(plants, { metas: { [k(1, 64, 0)]: 7, [k(-1, 64, 1)]: 4 } });
+    expect(reasonOf(checkDigDown(ivy, AREA, FEET, UNDER))).toMatch(
+      /BiomesOPlenty:foliage@7 at \(1, 64, 0\) is near it/,
+    );
+    expect(reasonOf(checkDigDown(land(plants), AREA, FEET, UNDER))).toMatch(
+      /BiomesOPlenty:foliage at \(-1, 64, 1\) is near it/,
+    );
+  });
+
   it('refuses unloaded blocks around it, another block than the one underfoot, and a player not centred', () => {
     // The column east of the player is not loaded (a chunk border).
     expect(reasonOf(checkDigDown(land({}, { unloaded: [[1, 0]] }), AREA, FEET, UNDER))).toMatch(
@@ -204,6 +232,20 @@ describe('the night pit plan', () => {
       { type: 'DIG_BLOCK', args: { position: { x: 2, y: 63, z: 0 } } },
       { type: 'MOVE_TO', args: { target: { x: 3.5, y: 64, z: 0.5 }, tolerance: 0.5 } },
     ]);
+  });
+
+  it('digs in its own column on a meadow of BOP foliage, reading the metadata of the plants', () => {
+    const plants = { [k(1, 64, 0)]: ID.foliage, [k(-1, 64, 1)]: ID.foliage };
+    const meadow = land(plants, { metas: { [k(1, 64, 0)]: 1, [k(-1, 64, 1)]: 4 } });
+    const plan = planNightPit(meadow, FEET, {}, OPTS);
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.site).toEqual({ x: 0, z: 0, groundY: 63 });
+    expect(specs(plan.steps).slice(0, 3)).toEqual([
+      { type: 'DIG_DOWN', args: { position: { x: 0, y: 63, z: 0 } } },
+      { type: 'DIG_DOWN', args: { position: { x: 0, y: 62, z: 0 } } },
+      { type: 'DIG_DOWN', args: { position: { x: 0, y: 61, z: 0 } } },
+    ]);
+    expect(plan.exit.length).toBeGreaterThan(0);
   });
 
   it('prefers a roof block it carries: dirt, then logs (both dug again in the morning)', () => {

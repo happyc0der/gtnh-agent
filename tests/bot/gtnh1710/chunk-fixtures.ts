@@ -37,7 +37,12 @@ export const BLOCK = {
   sandstone: 24,
   deadbush: 32,
   yellowFlower: 37,
+  // Walking through plants (a modded id: the registry names it per world).
+  bopFoliage: 1102,
 } as const;
+
+/** BiomesOPlenty:foliage metadata the walking tests use. */
+export const FOLIAGE = { shortgrass: 1, bush: 4, poisonIvy: 7, berryBush: 8 } as const;
 
 export const TEST_BLOCK_REGISTRY: Array<[number, string]> = [
   [BLOCK.stone, 'minecraft:stone'],
@@ -82,6 +87,9 @@ export const PLACE_TEST_BLOCK_REGISTRY: Array<[number, string]> = [
 ];
 
 export type BlockFn = (x: number, y: number, z: number) => number;
+/** Block metadata of a position (world x, y, z). */
+export type MetaFn = (x: number, y: number, z: number) => number;
+const NO_META: MetaFn = () => 0;
 
 /** Bedrock at y=0 and a grass floor at y=105 (the fake spawn stands on it at y=106). */
 export function flatWorld(
@@ -106,9 +114,25 @@ export interface ColumnBytes {
 /** Biome id of a column (world x, z). */
 export type BiomeFn = (x: number, z: number) => number;
 
+/** A ground-up column's biome bytes: one per column, index z << 4 | x, from `biomeAt` or 0. */
+function biomeBytesOf(cx: number, cz: number, biomes: boolean, biomeAt?: BiomeFn): Buffer {
+  const bytes = Buffer.alloc(biomes ? 256 : 0);
+  if (biomes && biomeAt !== undefined) {
+    for (let i = 0; i < 256; i++) bytes[i] = biomeAt(cx * 16 + (i & 15), cz * 16 + (i >> 4));
+  }
+  return bytes;
+}
+
+/** World coordinates of block `i` (index y<<8 | z<<4 | x) of section `sec` of column (cx, cz). */
+const cellOf = (cx: number, cz: number, sec: number, i: number): [number, number, number] => [
+  cx * 16 + (i & 15),
+  sec * 16 + (i >> 8),
+  cz * 16 + ((i >> 4) & 15),
+];
+
 /**
- * One column in NotEnoughIDs layout (u16 ids, u16 metadata, block light, sky light, biomes:
- * one byte per column, index z << 4 | x, from `biomeAt`, or all 0).
+ * One column in NotEnoughIDs layout (u16 ids, u16 metadata from `meta`, block light, sky
+ * light, biomes: one byte per column, index z << 4 | x, from `biomeAt`, or all 0).
  */
 export function neidColumn(
   cx: number,
@@ -117,37 +141,101 @@ export function neidColumn(
   skyLight = true,
   biomes = true,
   biomeAt?: BiomeFn,
+  meta: MetaFn = NO_META,
 ): ColumnBytes {
   let mask = 0;
   const idArrays: Buffer[] = [];
+  const metaArrays: Buffer[] = [];
   for (let sec = 0; sec < 16; sec++) {
     const ids = Buffer.alloc(8192);
+    const metas = Buffer.alloc(8192);
     let any = false;
     for (let i = 0; i < 4096; i++) {
-      const id = block(cx * 16 + (i & 15), sec * 16 + (i >> 8), cz * 16 + ((i >> 4) & 15));
+      const [x, y, z] = cellOf(cx, cz, sec, i);
+      const id = block(x, y, z);
       if (id !== 0) {
         any = true;
         ids.writeUInt16BE(id, i * 2);
+        metas.writeUInt16BE(meta(x, y, z), i * 2);
       }
     }
     if (any) {
       mask |= 1 << sec;
       idArrays.push(ids);
+      metaArrays.push(metas);
     }
   }
   const n = idArrays.length;
-  const biomeBytes = Buffer.alloc(biomes ? 256 : 0);
-  if (biomes && biomeAt !== undefined) {
-    for (let i = 0; i < 256; i++) biomeBytes[i] = biomeAt(cx * 16 + (i & 15), cz * 16 + (i >> 4));
-  }
   const data = Buffer.concat([
     ...idArrays,
-    Buffer.alloc(8192 * n), // metadata
+    ...metaArrays,
     Buffer.alloc(2048 * n), // block light
     Buffer.alloc(skyLight ? 2048 * n : 0),
-    biomeBytes,
+    biomeBytesOf(cx, cz, biomes, biomeAt),
   ]);
   return { header: { chunkX: cx, chunkZ: cz, primaryBitMask: mask, addBitMask: 0 }, data };
+}
+
+/**
+ * One column in vanilla 1.7.10 layout (S21PacketChunkData): the sent sections' id low bytes,
+ * their metadata (a nibble per block, the low one for an even index), block light, sky light,
+ * the add arrays (id high nibbles) of the sections holding an id above 255, biomes. The
+ * arguments are neidColumn's.
+ */
+export function vanillaColumn(
+  cx: number,
+  cz: number,
+  block: BlockFn,
+  skyLight = true,
+  biomes = true,
+  biomeAt?: BiomeFn,
+  meta: MetaFn = NO_META,
+): ColumnBytes {
+  let mask = 0;
+  let addMask = 0;
+  const lows: Buffer[] = [];
+  const metas: Buffer[] = [];
+  const adds: Buffer[] = [];
+  for (let sec = 0; sec < 16; sec++) {
+    const low = Buffer.alloc(4096);
+    const nibbles = Buffer.alloc(2048);
+    const add = Buffer.alloc(2048);
+    let any = false;
+    let high = false;
+    for (let i = 0; i < 4096; i++) {
+      const [x, y, z] = cellOf(cx, cz, sec, i);
+      const id = block(x, y, z);
+      if (id === 0) continue;
+      const m = meta(x, y, z);
+      if (id > 4095 || m > 15) throw new Error(`vanilla cannot send id ${id} with metadata ${m}`);
+      any = true;
+      const shift = (i & 1) === 0 ? 0 : 4;
+      low[i] = id & 255;
+      nibbles[i >> 1] = (nibbles[i >> 1] as number) | (m << shift);
+      if (id > 255) {
+        high = true;
+        add[i >> 1] = (add[i >> 1] as number) | ((id >> 8) << shift);
+      }
+    }
+    if (!any) continue;
+    mask |= 1 << sec;
+    lows.push(low);
+    metas.push(nibbles);
+    if (high) {
+      addMask |= 1 << sec;
+      adds.push(add);
+    }
+  }
+  const n = lows.length;
+  const data = Buffer.concat([
+    ...lows,
+    ...metas,
+    Buffer.alloc(2048 * n), // block light
+    Buffer.alloc(skyLight ? 2048 * n : 0),
+    ...adds,
+    biomeBytesOf(cx, cz, biomes, biomeAt),
+  ]);
+  return { header: { chunkX: cx, chunkZ: cz, primaryBitMask: mask, addBitMask: addMask }, data };
 }
 
 /** Map Chunk Bulk (0x26) frame for the given columns. */
@@ -181,8 +269,18 @@ export function chunkBulkFrame(
   );
 }
 
-/** NEID Block Change (0x23): int x, ubyte y, int z, varint id, short metadata. */
-export function blockChangeFrame(x: number, y: number, z: number, id: number): Buffer {
+/**
+ * Block Change (0x23): int x, ubyte y, int z, varint id, then the metadata: a short with
+ * NEID (the default), a byte in vanilla.
+ */
+export function blockChangeFrame(
+  x: number,
+  y: number,
+  z: number,
+  id: number,
+  meta = 0,
+  neid = true,
+): Buffer {
   const varint: number[] = [];
   let n = id;
   do {
@@ -193,26 +291,42 @@ export function blockChangeFrame(x: number, y: number, z: number, id: number): B
   } while (n !== 0);
   return encodeFrame(
     0x23,
-    Buffer.concat([i32(x), Buffer.from([y]), i32(z), Buffer.from(varint), Buffer.from([0, 0])]),
+    Buffer.concat([
+      i32(x),
+      Buffer.from([y]),
+      i32(z),
+      Buffer.from(varint),
+      neid ? u16(meta) : Buffer.from([meta]),
+    ]),
   );
 }
 
-/** NEID Multi Block Change (0x22): 6-byte records (u16 position, u16 id, u16 metadata). */
+/**
+ * Multi Block Change (0x22): NEID's 6-byte records (u16 position, u16 id, u16 metadata, the
+ * default), or vanilla's 4-byte ones (u16 position, u16 id << 4 | metadata).
+ */
 export function multiBlockChangeFrame(
   chunkX: number,
   chunkZ: number,
-  records: Array<{ x: number; y: number; z: number; id: number }>,
+  records: Array<{ x: number; y: number; z: number; id: number; meta?: number }>,
+  neid = true,
 ): Buffer {
+  const size = neid ? 6 : 4;
   const body = records.map((r) => {
-    const b = Buffer.alloc(6);
+    const b = Buffer.alloc(size);
     b.writeUInt16BE(((r.x & 15) << 12) | ((r.z & 15) << 8) | (r.y & 255), 0);
-    b.writeUInt16BE(r.id, 2);
+    if (neid) {
+      b.writeUInt16BE(r.id, 2);
+      b.writeUInt16BE(r.meta ?? 0, 4);
+    } else {
+      b.writeUInt16BE((r.id << 4) | ((r.meta ?? 0) & 15), 2);
+    }
     return b;
   });
   const count = Buffer.alloc(2);
   count.writeUInt16BE(records.length);
   return encodeFrame(
     0x22,
-    Buffer.concat([i32(chunkX), i32(chunkZ), count, i32(records.length * 6), ...body]),
+    Buffer.concat([i32(chunkX), i32(chunkZ), count, i32(records.length * size), ...body]),
   );
 }
