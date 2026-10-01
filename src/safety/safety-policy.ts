@@ -5,6 +5,7 @@ import {
   type Action,
   type ActionSpec,
   type ActionType,
+  type ExploreToward,
 } from '../domain/actions.ts';
 import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition } from '../domain/common.ts';
@@ -330,6 +331,9 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
       v.push(...outside.map((x) => ({ ...x, severity: 'block' as const })));
       break;
     }
+    case 'EXPLORE':
+      v.push(...exploreTargetChecks(spec.args.toward, config));
+      break;
     case 'DIG_BLOCK':
     case 'PLACE_BLOCK': {
       // The whole block must lie inside the work area, not just a corner of it.
@@ -385,6 +389,60 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
       break;
   }
   return v;
+}
+
+/**
+ * EXPLORE toward a point: the point (x, z) must lie inside the boundary, which is the
+ * exploration area. A compass direction always passes: the walk is pulled in to stay inside
+ * the boundary, and the client never leaves it.
+ */
+function exploreTargetChecks(toward: ExploreToward, config: SafetyConfig): SafetyViolation[] {
+  if (typeof toward === 'string') return [];
+  const b = config.boundary;
+  if (toward.x >= b.min.x && toward.x <= b.max.x && toward.z >= b.min.z && toward.z <= b.max.z) {
+    return [];
+  }
+  return [
+    {
+      code: 'OUT_OF_BOUNDS',
+      severity: 'block',
+      message: `EXPLORE target (${toward.x}, ${toward.z}) is outside the configured boundary`,
+      details: {
+        x: toward.x,
+        z: toward.z,
+        min: formatPosition(b.min),
+        max: formatPosition(b.max),
+      },
+    },
+  ];
+}
+
+/**
+ * EXPLORE leads the player away from known ground, so only in daylight: refused in the
+ * evening and at night (hostile mobs; the agent cannot shelter yet), and when the time of day
+ * is unknown. Escapes are not affected: a retreat is RETURN_TO_SAFE_LOCATION, never EXPLORE.
+ */
+function exploreTimeChecks(state: GameState): SafetyViolation[] {
+  if (!state.time.known) {
+    return [
+      {
+        code: 'STATE_UNKNOWN',
+        severity: 'block',
+        message: `EXPLORE needs daylight, and the time of day is unknown (${state.time.reason})`,
+        details: { field: 'time' },
+      },
+    ];
+  }
+  const t = state.time.value;
+  if (t.phase !== 'evening' && t.phase !== 'night') return [];
+  return [
+    {
+      code: 'NOT_DAYTIME',
+      severity: 'block',
+      message: `EXPLORE only in daylight: it is ${t.phase} (${t.minutesUntilDay} min until sunrise)`,
+      details: { phase: t.phase, timeOfDay: t.timeOfDay },
+    },
+  ];
 }
 
 /**
@@ -460,6 +518,12 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
       }
       break;
     }
+    case 'EXPLORE':
+      // The target is checked against the boundary in evaluateStaticSpec; the walk's length
+      // is bounded by its schema (MAX_EXPLORE_DISTANCE). Unscanned ground is the point of
+      // exploring: the client checks every step on the blocks the server sends.
+      v.push(...exploreTimeChecks(state));
+      break;
     case 'RETURN_TO_SAFE_LOCATION': {
       const location = ctx.locations.get(action.args.locationName);
       if (location === undefined) break; // reported by evaluateStaticSpec

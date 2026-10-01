@@ -16,6 +16,14 @@ const BlockPositionSchema = z.strictObject({
 export const MAX_FENCE_SIDE = 64;
 /** Largest height range of a terrain fence (feet levels). A single level walks the flat way. */
 export const MAX_FENCE_HEIGHT = 32;
+/**
+ * Largest exploration area (the safety boundary, blocks per side) the 'follow' movement mode
+ * accepts: exploring stays within a bounded area around the base.
+ */
+export const MAX_EXPLORATION_SIDE = 2048;
+
+/** Where walks and digs may go: one fixed fence, or a play area that moves with the player. */
+export const MOVEMENT_MODES = ['fixed', 'follow'] as const;
 
 /**
  * Walking (the only world-changing ability of the live client). Off by default: the
@@ -24,6 +32,19 @@ export const MAX_FENCE_HEIGHT = 32;
 export const MovementConfigSchema = z
   .strictObject({
     enabled: z.boolean().default(false),
+    /**
+     * 'fixed': every walk and dig stays inside `fence` (the test pen). 'follow': inside a play
+     * area that moves with the player (`area`, centred on its feet, a terrain fence), clipped to
+     * the exploration boundary (safety.boundary); `fence` is not used. EXPLORE needs 'follow'.
+     */
+    mode: z.enum(MOVEMENT_MODES).default('fixed'),
+    /** The moving play area of mode 'follow': blocks per side, and its height range (levels). */
+    area: z
+      .strictObject({
+        side: z.int().min(16).max(MAX_FENCE_SIDE).default(MAX_FENCE_SIDE),
+        height: z.int().min(4).max(MAX_FENCE_HEIGHT).default(MAX_FENCE_HEIGHT),
+      })
+      .prefault({}),
     /**
      * Blocks the player's feet may be in (inclusive). One level (min.y === max.y) walks the
      * flat pen way; a height range walks terrain (steps up, drops of up to 2).
@@ -243,7 +264,7 @@ export const MemoryConfigSchema = z.strictObject({
 });
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 
-export const AgentConfigSchema = z.strictObject({
+const AgentConfigFields = z.strictObject({
   minecraft: MinecraftConfigSchema.prefault({}),
   database: z.strictObject({ path: z.string().min(1).default('./data/agent.sqlite') }).prefault({}),
   safety: SafetyConfigSchema.prefault({}),
@@ -253,6 +274,22 @@ export const AgentConfigSchema = z.strictObject({
   llm: LlmConfigSchema.prefault({}),
   memory: MemoryConfigSchema.prefault({}),
   locations: z.record(LocationNameSchema, NamedLocationSchema).default({}),
+});
+
+/**
+ * The whole configuration. With movement mode 'follow' the safety boundary is the exploration
+ * area: it must stay bounded.
+ */
+export const AgentConfigSchema = AgentConfigFields.superRefine((c, ctx) => {
+  if (c.minecraft.movement.mode !== 'follow') return;
+  const { min, max } = c.safety.boundary;
+  if (max.x - min.x > MAX_EXPLORATION_SIDE || max.z - min.z > MAX_EXPLORATION_SIDE) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['safety', 'boundary'],
+      message: `with movement mode 'follow' the boundary is the exploration area: at most ${MAX_EXPLORATION_SIDE} blocks per side`,
+    });
+  }
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 export type AgentConfigInput = z.input<typeof AgentConfigSchema>;
@@ -324,6 +361,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_ENABLE_LIVE_CONNECTION')))
     set(['minecraft', 'enableLiveConnection'], v === 'true');
   if ((v = e('MC_ENABLE_MOVEMENT'))) set(['minecraft', 'movement', 'enabled'], v === 'true');
+  if ((v = e('MC_MOVEMENT_MODE'))) set(['minecraft', 'movement', 'mode'], v);
   if ((v = e('MC_MOVEMENT_FENCE_MIN')))
     set(['minecraft', 'movement', 'fence', 'min'], xyz('MC_MOVEMENT_FENCE_MIN', v));
   if ((v = e('MC_MOVEMENT_FENCE_MAX')))

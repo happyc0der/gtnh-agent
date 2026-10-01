@@ -68,6 +68,16 @@ export function checkPreconditions(
       resolvedTarget = action.args.target;
       break;
 
+    case 'EXPLORE': {
+      const p = requirePosition();
+      const toward = action.args.toward;
+      if (p !== null && typeof toward !== 'string') {
+        const d = Math.hypot(toward.x - p.x, toward.z - p.z);
+        if (d < 2) failures.push(`the EXPLORE target is only ${d.toFixed(1)} blocks away`);
+      }
+      break;
+    }
+
     case 'RETURN_TO_SAFE_LOCATION': {
       requirePosition();
       const location = ctx.locations.get(action.args.locationName);

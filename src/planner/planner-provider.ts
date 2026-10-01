@@ -7,6 +7,7 @@ import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
 import { ROUTE_BOOK } from '../goals/route-book.ts';
 import { describeRoute, planRoute, type PlaceLookup } from '../goals/route.ts';
 import { parseToolName, usesLeft } from '../domain/tools.ts';
+import type { ExplorationSummary } from '../domain/world-memory.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import { isProtected } from '../safety/protected-items.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
@@ -259,13 +260,19 @@ export function buildPlannerRequest(input: {
   recentFailures: RecentFailureSummary[];
   /** The task's compact journal (checkpoints so far), oldest first. */
   journal?: readonly string[];
+  /** World memory's summary, only when the agent can explore; EXPLORE is offered only then. */
+  exploration?: ExplorationSummary;
 }): PlannerRequest {
   const { config } = input.safety;
+  const { exploration } = input;
   return PlannerRequestSchema.parse({
     state: sanitizeStateForPlanner(input.state, input.safety.protectedItems),
     task: input.state.currentTask,
     // Quest-book clicks are the play loop's, never a plan's (plan-validator.ts refuses them).
-    allowedActions: ACTION_TYPES.filter((t) => !isQuestBookActionType(t)),
+    allowedActions: ACTION_TYPES.filter(
+      (t) => !isQuestBookActionType(t) && (t !== 'EXPLORE' || exploration !== undefined),
+    ),
+    ...(exploration === undefined ? {} : { exploration }),
     safetyConstraints: {
       boundaryMin: config.boundary.min,
       boundaryMax: config.boundary.max,

@@ -2,6 +2,7 @@ import type { Action, Postcondition } from '../domain/actions.ts';
 import type { ClientActionResult } from '../bot/minecraft-client.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, formatPosition } from '../domain/geometry.ts';
+import { COMPASS } from '../domain/world-memory.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import { verifyQuestBook } from './quest-book-checks.ts';
 
@@ -88,6 +89,38 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
         'player-near-target',
         d <= tolerance,
         `${d.toFixed(2)} blocks from ${formatPosition(target)} (tolerance ${tolerance})`,
+      );
+      break;
+    }
+
+    case 'EXPLORED': {
+      // Progress along the heading: toward the point (from where the player started), or in
+      // the compass direction. The walk itself is bounded by maxDistance.
+      if (!before.player.position.known || !after.player.position.known) {
+        check('explored-progress', false, 'player position unknown before or after exploring');
+        break;
+      }
+      const b = before.player.position.value;
+      const a = after.player.position.value;
+      const heading =
+        typeof post.toward === 'string'
+          ? COMPASS[post.toward]
+          : { x: post.toward.x - b.x, z: post.toward.z - b.z };
+      const length = Math.hypot(heading.x, heading.z);
+      const progress =
+        length < 1e-9 ? 0 : ((a.x - b.x) * heading.x + (a.z - b.z) * heading.z) / length;
+      const moved = Math.hypot(a.x - b.x, a.z - b.z);
+      const where =
+        typeof post.toward === 'string' ? post.toward : `(${post.toward.x}, ${post.toward.z})`;
+      check(
+        'explored-progress',
+        progress >= 1,
+        `${progress.toFixed(1)} blocks farther toward ${where} (at least 1)`,
+      );
+      check(
+        'explored-bounded',
+        moved <= post.maxDistance + 0.5,
+        `${moved.toFixed(1)} blocks from the start (maxDistance ${post.maxDistance})`,
       );
       break;
     }

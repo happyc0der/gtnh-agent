@@ -95,6 +95,8 @@ export const VIOLATION_CODES = [
   'NOT_PLACEABLE',
   /** PLACE_BLOCK that could hurt the player (its own body, sand or gravel that would fall). */
   'UNSAFE_PLACE',
+  /** EXPLORE in the evening or at night (hostile mobs; the agent has no shelter yet). */
+  'NOT_DAYTIME',
   /** SUBMIT_QUEST / CHECK_QUEST_BOX on a quest the server does not list as active and unlocked. */
   'QUEST_NOT_ACTIVE',
 ] as const;

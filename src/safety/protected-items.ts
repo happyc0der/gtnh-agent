@@ -30,6 +30,7 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
     case 'CLAIM_QUEST_REWARD':
     case 'OBSERVE_STATE':
     case 'MOVE_TO':
+    case 'EXPLORE':
     case 'WAIT':
     case 'RETURN_TO_SAFE_LOCATION':
     case 'OPEN_CONTAINER':

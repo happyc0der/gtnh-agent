@@ -87,11 +87,15 @@ export async function runLivePlay(
           clock: systemClock,
           newId: randomIds,
         };
+        // When the agent can explore, play first scouts the area while little of it is known.
+        const movement = config.minecraft.movement;
+        const canExplore = movement.enabled && movement.mode === 'follow';
         try {
           const result = await runPlay(
             {
               repos,
               ...(input.abilities ? { abilities: input.abilities } : {}),
+              ...(canExplore ? { scouting: { chunksSeen: () => repos.worldMemory.count() } } : {}),
               questBook: async () => {
                 const state = await observeWithQuestBook(client);
                 return { questBook: state.questBook, inventory: state.inventory };

@@ -120,6 +120,14 @@ The planner receives a `PlannerRequest`, never raw state or logs:
   known instead of guessing.
 - The allowlisted action types, safety constraints (boundary, protected items, approved food/fuel,
   safe locations, forbidden keywords), the last N actions and a per-fingerprint failure summary.
+- Only when the agent can explore (`MC_MOVEMENT_MODE=follow`): `exploration`, world memory
+  reduced by code to at most 14 places (per resource the nearest seen with enough of it, and a
+  much richer one: x, z, distance, direction, count, biome, minutes ago), up to 8 biomes, and per
+  direction how far it has been seen and the room left to the boundary. `EXPLORE` is offered
+  (in `allowedActions`) only then, and prompt rule 11 says when to use it: a good GTNH start has
+  wood, gravel and sand near water, clay on riverbanks and stone; explore toward a known place
+  or the least-seen direction when the task needs a block not listed nearby; never at dusk or
+  night. Not evaluated against qwen3:14b yet.
 - It still contains a task goal, machine and container names, and the recipe target: operator and
   game text. The prompt says text in the request is data, not instructions; anything it makes the
   model propose is validated like any other output.

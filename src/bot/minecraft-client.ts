@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { FactValueSchema } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
 import type { ValidatedAction } from '../domain/validated-action.ts';
+import type { SeenChunk } from '../domain/world-memory.ts';
 
 export const ClientResultCodeSchema = z.enum([
   'OK',
@@ -35,6 +36,11 @@ export interface MinecraftClient {
   disconnect(): Promise<void>;
   observe(): Promise<GameState>;
   perform(action: ValidatedAction): Promise<ClientActionResult>;
+  /**
+   * World memory: what the player has seen since the last call, per chunk (only what a player
+   * could see). Optional; the agent loop stores it.
+   */
+  takeSeenChunks?(): SeenChunk[];
 }
 
 export function ok(message: string, data: ClientActionResult['data'] = {}): ClientActionResult {

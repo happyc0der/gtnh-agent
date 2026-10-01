@@ -160,6 +160,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     const specs: Record<string, ActionSpec> = {
       OBSERVE_STATE: { type: 'OBSERVE_STATE', args: {} },
       MOVE_TO: { type: 'MOVE_TO', args: { target: { x: 0, y: 64, z: 0 }, tolerance: 1 } },
+      EXPLORE: { type: 'EXPLORE', args: { toward: 'north', maxDistance: 32 } },
       WAIT: { type: 'WAIT', args: { durationMs: 50 } },
       EAT_FOOD: { type: 'EAT_FOOD', args: { item: 'minecraft:bread' } },
       RETURN_TO_SAFE_LOCATION: { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } },

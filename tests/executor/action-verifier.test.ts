@@ -37,6 +37,28 @@ describe('verifyPostcondition', () => {
     expect(verify(spec, before, later(before)).verified).toBe(false);
   });
 
+  it('EXPLORED: at least a block farther along the heading, and no farther than maxDistance', () => {
+    // The player starts at (1, 64, 1).
+    const moved = (x: number, z: number): GameState =>
+      later({ ...before, player: { ...before.player, position: known({ x, y: 64, z }) } });
+    const north: ActionSpec = { type: 'EXPLORE', args: { toward: 'north', maxDistance: 32 } };
+    expect(verify(north, before, moved(3, -20)).verified).toBe(true);
+    expect(verify(north, before, moved(1, 0.5)).verified).toBe(false); // half a block
+    expect(verify(north, before, moved(1, 30)).verified).toBe(false); // the wrong way
+    expect(verify(north, before, moved(1, -40)).verified).toBe(false); // too far
+    const point: ActionSpec = {
+      type: 'EXPLORE',
+      args: { toward: { x: 41, z: 1 }, maxDistance: 64 },
+    };
+    const r = verify(point, before, moved(20, 5));
+    expect(r.verified).toBe(true);
+    expect(r.checks.find((c) => c.name === 'explored-progress')?.detail).toMatch(
+      /^19\.0 blocks farther toward \(41, 1\)/,
+    );
+    const blind = later({ ...before, player: { ...before.player, position: unknown('lost') } });
+    expect(verify(point, before, blind).verified).toBe(false);
+  });
+
   it('fails closed when the post-state value is unknown', () => {
     const spec: ActionSpec = {
       type: 'MOVE_TO',

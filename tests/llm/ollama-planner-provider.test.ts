@@ -85,6 +85,17 @@ describe('OllamaPlannerProvider', () => {
     expect(request().state.tools).toEqual([]);
   });
 
+  it('tells the model about EXPLORE, its arguments and when to explore (GTNH start)', () => {
+    expect(PLANNER_SYSTEM_PROMPT).toContain('EXPLORE {"toward":"north","maxDistance":64}');
+    expect(PLANNER_SYSTEM_PROMPT).toContain('{"toward":{"x":40,"z":120},"maxDistance":64}');
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/15. Exploring. A good GTNH start has wood/);
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(
+      /Never EXPLORE when state\.time\.phase is evening or night/,
+    );
+    expect(PLANNER_SYSTEM_PROMPT).not.toMatch(/exploring is not possible yet/);
+    expect(JSON.stringify(plannerFormat(8))).toContain('"EXPLORE"');
+  });
+
   it('returns a recorded valid plan, which then passes validatePlan', async () => {
     const { provider } = planner({ body: golden('planner-plan.qwen3-14b') });
     const response = await provider.plan(request());
