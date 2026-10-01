@@ -152,7 +152,8 @@ order (ingredients before what they make), the best known place for each materia
 nearest with enough seen), where a player would look when no place is known, and a rough
 time. The planner gets the route in its request and plans along it; the model still makes
 every decision. The route is general: smelting, tools, mob drops and exported recipe data
-are new book entries, not new planner logic.
+are new book entries, not new planner logic. The book holds GTNH's real recipes, ore veins
+and harvest levels (see [Knowledge base](#knowledge-base)).
 
 **Storage in the stocktake.** Containers whose contents the agent knows (seen now, or
 remembered) count as "stored": the route fetches from them, nearest first, before it
@@ -184,6 +185,91 @@ validated, executed and verified like any other. Play stops, and says why, when:
 A failed action or a safe detour (retreating, eating) does not stop play by itself: that is part
 of playing, and the planner sees it in its recent history. Play is still started by a human and
 bounded in time (at most 8 hours).
+
+## Knowledge base
+
+Routes can only plan what the book knows. The book is built from a **generated GTNH 2.8.4
+knowledge base**: `src/goals/knowledge/gtnh-2.8.4.json.gz` (about 700 KiB, 6.3 MiB of JSON),
+loaded once on first use by `src/goals/knowledge.ts`. Item names follow the inventory's naming
+(registry name, `@damage` when not 0). What it holds, and where each part comes from (details
+and evidence in [GTNH compatibility: knowledge base](gtnh-compatibility.md#knowledge-base-2026-09-30)):
+
+| Part                      | Count    | Source on the test server                                                                                                                                         |
+| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Crafting recipes          | 53,821   | CraftTweaker's `/minetweaker recipes` dump: shaped and shapeless, ore-dictionary ingredients, 2x2 or 3x3, crafting tools marked                                   |
+| Output counts             | 3,237    | Not in the dump: read from GTNewHorizonsCoreMod's recipe scripts (its jar) and matched to the dumped recipes. Other counts are unknown (`0`; the route assumes 1) |
+| Furnace recipes           | 6,128    | `/minetweaker recipes furnace` (output counts not dumped: 1 assumed)                                                                                              |
+| Ore dictionary            | 22,006   | `/minetweaker oredict` (`:*` wildcards expanded to every damage value seen)                                                                                       |
+| Item names                | 27,050   | Every name is checked against `/minetweaker names` (the item registry) and the agent's `ItemName` format                                                          |
+| GT ore veins / small ores | 79 / 55  | GregTech's jar (`OreMixes`, `SmallOres`): heights, weights, density, size, dimensions, the four ores of each vein                                                 |
+| GT materials              | 801      | GregTech's jar (`MaterialsInit1`): id and tool quality, which set an ore's harvest level                                                                          |
+| Ore drops                 |          | GT's code: a vein ore drops its raw ore (`FortuneItem` in `GregTech.cfg`); a small ore drops a weighted mix of gems, crushed ore and impure dust                  |
+| Harvest levels, tools     | 60 / 199 | `config/IguanaTinkerTweaks` (block levels, tool levels, Tinkers' material levels, level names); GT ores use GT's own rule                                         |
+
+**Regenerating it** (the server must be running; the dump commands are read-only lists):
+
+```sh
+node scripts/test-server-admin.ts rcon minetweaker oredict
+node scripts/test-server-admin.ts rcon minetweaker recipes        # replies "timed out": it keeps running
+node scripts/test-server-admin.ts rcon minetweaker recipes furnace
+node scripts/test-server-admin.ts rcon minetweaker names
+node scripts/test-server-admin.ts rcon minetweaker mods
+node scripts/build-knowledge.ts            # needs TEST_SERVER_DIR (or --server, --log, --out)
+```
+
+Each dump appends to the server's `minetweaker.log`; the build reads the last of each. A full
+recipe dump pauses the server for a few seconds. `scripts/build-knowledge.ts` reads only files in
+the server folder: the log, `config/GregTech/*.cfg`, `config/IguanaTinkerTweaks/*.cfg` and two
+jars, which it parses itself (`scripts/knowledge/jvm.ts`: a zip reader, a class-file parser and
+a symbolic interpreter for the straight-line code of GT's data tables; the lint forbids
+spawning `javap`). The data records each source file's size and SHA-256 (`sources`) and the
+caveats (`notes`). `tests/goals/knowledge.test.ts` checks its integrity and known facts.
+
+**How routes use it.** `src/goals/route-book.ts` builds the book once (`ROUTE_BOOK` is lazy;
+`HAND_BOOK` is the hand-verified book alone):
+
+- Recipes: the generated crafting recipes (station `2x2` or `crafting_table`; ore-dictionary
+  ingredients as `anyOf` lists; `ore:craftingTool*` ingredients as tools, used but not consumed),
+  furnace recipes (station `furnace`) and the hand-verified recipes of `src/domain/recipes.ts`.
+  A hand-verified recipe replaces the generated recipe it matches (same output and ingredient
+  sets), keeping its verified count and taking the wider ingredient lists.
+- Sources: bare-hand digs (`DIG_YIELDS`), digs that need a tool (stone gives cobblestone, with
+  the IguanaTweaks level), and GT ores that generate in the Overworld: a vein ore gives its raw
+  ore (pickaxe level from GT's rule, where: the vein and its height range), a small ore gives
+  its average drops.
+- Tools (item, kind, level) and the item that provides each station.
+
+`src/goals/route.ts` stays general (nothing in it is GTNH-specific):
+
+- **Fast with thousands of recipes.** Recipes are indexed by output, and the book becomes an
+  AND/OR graph once. Per route, a cost table estimates every item's cheapest way (seconds of
+  digging, crafting and smelting) with Knuth's generalization of Dijkstra: items settle cheapest
+  first, an option counts once each of its requirements is met, and cycles (ingot to plate to
+  ingot) cannot make an item look impossible. A deep GTNH route takes well under a second.
+- **Choosing.** For each item the route weighs every way to get it with what is held: a held
+  ingredient is free, a missing crafting tool or dig tool is a one-time cost, a station nobody
+  knows of costs a little, and a machine station (no item to make it) rules a recipe out. Ties go
+  to hand-verified recipes. Output counts the data does not know are taken as 1 and shown as
+  `>=N`.
+- **Tools.** A gather leg whose blocks need a tool the inventory lacks gets the cheapest fitting
+  tool first, expanding its recipe tree; its steps are marked `[for: tool: ...]`. If the tool
+  needs the item it will dig (a pickaxe made of what it mines), the route gets those items
+  another way first. Held tools match by kind and level (worn vanilla tools by base name);
+  Tinkers' Construct tools take their level from NBT, so they count as fitting with a warning.
+- **Stations.** `planRoute(..., stations)` takes the stations the agent can use; each needed one
+  is listed as available, held (place it), missing (with how to make its item), or, when the
+  caller does not say, as needed. The route never places anything.
+- **What it cannot do.** Unresolved items carry a reason, e.g. "digging
+  gregtech:gt.blockores@16500 (GT small ore Diamond: y 5-15) needs a pickaxe level >= 3: none
+  held, none known to make". When nothing completes, the route still expands the recipe that
+  gets closest, so the planner sees what it can already do and exactly what is missing.
+
+Not in the knowledge base (open gaps): GT machine recipes (no read-only dump exists; recipes
+whose station is a machine would simply be skipped), Tinkers' Construct tool building (Part
+Builder and Tool Station are not crafting-table recipes, yet they make GTNH's early pickaxes),
+the output counts of recipes not registered by the coremod scripts, mob drops, and where GT ores
+are in the world (the agent's chunk scan sees `gregtech:gt.blockores` with the harvest level as
+metadata; the ore's material lives in its tile entity).
 
 ## Plans across cycles
 
@@ -412,6 +498,6 @@ src/llm          Ollama client, model decision provider, model planner (opt-in)
 src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, chests, crafting, dig in a fence), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
-src/goals        the Age 0 quest book (generated) and goal selection
+src/goals        the Age 0 quest book (generated) and goal selection; routes and the GTNH knowledge base (generated)
 src/app          agent loop, sessions, play loop, quest book, provider factory, mock scenarios, CLI
 ```

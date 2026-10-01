@@ -249,13 +249,13 @@ server was not used. The sources:
 
 **GTNH 2.8.4 recipes** (from the jars; the agent still checks every result against the server):
 
-| Recipe            | On this server                                                                                                                                                          |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Planks from a log | Shapeless, **2** planks (GregTech `ProcessingLog`; `nerfedWoodPlank=true` in the test server's `GregTech.cfg`). Vanilla gives 4; a saw in the grid gives 4.             |
-| Torch             | Coal above a stick: **3**; charcoal: **2** (NewHorizonsCoreMod `ScriptMinecraft`, `ShapedUniversalRecipe`).                                                             |
-| Chest             | 3x3: logs in the corners, planks on the sides, **flint** in the middle (`ScriptMinecraft`).                                                                             |
-| Crafting table    | Every recipe that outputs `minecraft:crafting_table` is removed (`RecipeRemover`). The replacement was not identified; the agent's vanilla pattern is expected to fail. |
-| Sticks            | Not verified (the agent's table keeps vanilla's 4).                                                                                                                     |
+| Recipe            | On this server                                                                                                                                                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Planks from a log | Shapeless, **2** planks (GregTech `ProcessingLog`; `nerfedWoodPlank=true` in the test server's `GregTech.cfg`). Vanilla gives 4; a saw in the grid gives 4.                                                                                                                                 |
+| Torch             | Coal above a stick: **3**; charcoal: **2** (NewHorizonsCoreMod `ScriptMinecraft`, `ShapedUniversalRecipe`).                                                                                                                                                                                 |
+| Chest             | 3x3: logs in the corners, planks on the sides, **flint** in the middle (`ScriptMinecraft`).                                                                                                                                                                                                 |
+| Crafting table    | Every vanilla recipe that outputs `minecraft:crafting_table` is removed (`RecipeRemover`). GTNH's replacement: 2 flint above 2 logs, **1** table, fits the 2x2 grid (`ScriptMinecraft`; see [Knowledge base](#knowledge-base-2026-09-30)). The agent's vanilla pattern is expected to fail. |
+| Sticks            | Not verified (the agent's table keeps vanilla's 4). The dump shows the ore-dictionary 2-plank recipe (Forge's replacement of vanilla's) and a saw recipe, without counts.                                                                                                                   |
 
 **Mods that touch crafting** (checked; none changes the behaviour above on this server):
 
@@ -272,6 +272,91 @@ server was not used. The sources:
 **Not verified:** a live run (crafting has only run against the fake server, which simulates the
 behaviour above). As with chests, spawn protection would stop a non-operator from opening a
 crafting table near spawn.
+
+## Knowledge base (2026-09-30)
+
+The route planner's GTNH data ([architecture: knowledge base](architecture.md#knowledge-base))
+comes from the running test server, read-only: four CraftTweaker list commands over RCON, two
+mod jars and the configs. Everything below is _verified_ in those files unless marked otherwise.
+
+**CraftTweaker 3.4.2 dumps** (`/minetweaker oredict`, `recipes`, `recipes furnace`, `names`,
+`mods`; their code checked in `MineTweakerImplementationAPI`, `MCRecipeManager`,
+`RecipeConverter` and `MCItemStack`). Each appends to the server's `minetweaker.log` and replies
+to the sender (RCON works: `RconPlayer`).
+
+- `recipes` writes every `IRecipe` as ZenScript: 53,822 recipes (47,873 shaped, 5,951 shapeless).
+  2,781 are "unknown recipe type" (custom recipe classes: 2,304 are Et Futurum's shulker-box
+  dyeing, the rest AE2, Blood Magic, BartWorks and the like) and 2 have an unknown ingredient.
+- **Output stack sizes are never written** (`MCItemStack.toString` prints `<id:damage>` and the
+  NBT only), in either dump.
+- For a Forge `ShapedOreRecipe` the width is taken as floor(sqrt(size)), so 2x1, 3x1 and 3x2
+  recipes are dumped as 1x2, 1x3 and 2x3 with cells moved. Ingredients, counts per craft and the
+  2x2-or-3x3 decision stay right; the data flags these shapes.
+- GTNH pads many recipes to 3x3 with empty cells (torches: coal above a stick in the top-left
+  of a 3x3 grid). Forge matches a 3x3 recipe only at the grid's top-left, so such a recipe fits
+  the player's 2x2 grid exactly when its filled cells are in the first two rows and columns.
+- `oredict`: 22,006 entries (`*` = any damage); `recipes furnace`: 6,132 recipes; `names`:
+  10,987 registered items (every name in the data is checked against it).
+
+**Output counts** come from GTNewHorizonsCoreMod 2.7.268's recipe scripts
+(`com/dreammaster/scripts/Script*.class`): each `addShapedRecipe`, `addShapelessRecipe` or
+`GTModHandler.addCraftingRecipe` whose output is `getModItem(mod, name, count, meta)`. 3,128
+such recipes; 3,096 match a dumped recipe (same output, same ingredients as multisets), which
+gives 3,237 dumped recipes their count. Examples: crafting table 1, furnace 1 (6 cobblestone,
+3 flint, 3x3), chest 1, torches 3 (coal), 2 (charcoal), 1 (lignite), 5 (coke), ladders 2/4/8
+(by screw), Natura sticks 2 (4 with a saw). Other recipes' counts are unknown.
+
+**GT ore generation** (`gregtech-5.09.51.482.jar`: `OreMixes` and `SmallOres`, builder chains
+read from their static initializers; `config/GregTech/WorldGeneration.cfg` holds only the
+general switches, so the code's values generate):
+
+- 79 vein types, all enabled; 56 small ores. **Vanilla ore generation is disabled**
+  (`disableVanillaOres=true`): no vanilla iron, coal or diamond ore in new chunks.
+- Diamond: vein `ore.mix.diamond`, y 5-20, weight 40, density 1, size 16, Overworld and the
+  Twilight Forest (plus space bodies): graphite (primary, secondary), **diamond (in-between)**,
+  coal (sporadic). Small diamond ore: y 5-15, 2 per chunk, Overworld.
+- Iron: vein `ore.mix.iron`, y 10-40: brown limonite, yellow limonite, banded iron (in-between),
+  malachite (sporadic). Coal: vein y 30-80; small coal ore y 120-250.
+
+**Ore drops** (`TileEntityOres.getDrops`; `GregTech.cfg` `oredropbehavior=FortuneItem`):
+
+- A world-generated vein ore drops its **raw ore** (`rawOre<Material>`, e.g. raw diamond ore
+  `gregtech:gt.metaitem.03@5500`): 1 without fortune (doubled for nether and end ores). Silk
+  touch drops the ore block. Raw ores smelt (raw diamond ore -> diamond, raw iron ore -> iron
+  ingot).
+- A small ore drops max(1, m + rand(1 + m)/2) items (m: the material's ore multiplier, mostly 1),
+  each picked from a weighted list: exquisite gem 1, flawless gem 2, gem 12, flawed gem 5 (else
+  crushed ore), crushed ore 10, chipped gem 5 (else impure dust), impure dust 10. A small diamond
+  ore gives a plain diamond 12 times in 45.
+
+**Harvest levels:**
+
+- GT ores (`TileEntityOres.getHarvestData` and `BlockOresAbstract.getHarvestLevel`,
+  `activateHarvestLevelChange=false`): the block's world metadata is max(base, min(7, tool
+  quality, minus 1 for a small ore)), base 3 in black and red granite and 0 elsewhere; the
+  harvest level (a pickaxe) is that metadata, except 5 and 6 give 2. Tool quality comes from
+  `MaterialsInit1`: diamond 4 (vein ore 4, small ore 3), coal 1 (1 / 0), brown limonite 1,
+  yellow limonite and banded iron 2, copper 1, tin 3. IguanaTweaks' `BlockDefaults.cfg` lists
+  `gt.blockores` metas 5 and 6 as levels 5 and 6 (defaults Forge's config keeps), but Forge asks
+  GT's method.
+- IguanaTweaks (`HarvestLevelTweaks=true`): stone and cobblestone pickaxe 0, obsidian 5. Tools:
+  wooden, stone and golden pickaxe 0, **iron 3**, diamond 5. Tinkers' Construct tools take the
+  level of their head material: wood and stone 0, flint and bone 1, copper 2, iron 3,
+  **bronze 4**, steel 5. Level names: Stone, Copper, Iron, Bronze, Steel, Obsidian, Ardite,
+  Cobalt, Manyullyn.
+- GTNH's GregTech has no pickaxe, shovel or axe (`IDMetaTool01` starts at the saw).
+
+**What follows for planning** (from the data): with crafting-table recipes alone, a wooden
+pickaxe (level 0) digs stone, lignite (vein ore) and the small ores of copper (y 60-180), zinc
+(y 80-210), coal (y 120-250) and lapis (y 10-50): enough for brass tools (a hammer, a file) by way
+of the flint mortar. Iron ores need level 1 or 2 (small iron, gold, silver, nickel and redstone
+ores level 1), and the craftable pickaxes above level 0 (vanilla iron 3, AE2 quartz 3) need iron
+or quartz; the diamond pickaxe needs a diamond plate, which no crafting recipe makes. GTNH's
+early pickaxes are Tinkers' Construct tools (Part Builder and Tool Station), which are not in the
+data.
+
+_Assumptions:_ furnace outputs are 1 item; crafting counts the scripts do not give are at least 1;
+stone drops cobblestone (vanilla; no GTNH drop handler checked); dig-time estimates.
 
 ## Digging (2026-09-30)
 

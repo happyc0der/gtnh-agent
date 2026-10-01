@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ROUTE_BOOK } from '../../src/goals/route-book.ts';
+import { HAND_BOOK, ROUTE_BOOK } from '../../src/goals/route-book.ts';
 import { describeRoute, planRoute, type RouteBook } from '../../src/goals/route.ts';
 import { routeForPlanner } from '../../src/planner/planner-provider.ts';
 import { makeState } from '../fixtures/index.ts';
@@ -74,7 +74,8 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
   });
 
   it('mixes kinds a recipe accepts, starting with what is held, and needs a table for 3x3', () => {
-    const route = planRoute({ 'minecraft:chest': 1 }, { 'minecraft:planks@2': 3 }, ROUTE_BOOK);
+    // The hand-verified book alone (no generated GTNH data): exact, small numbers.
+    const route = planRoute({ 'minecraft:chest': 1 }, { 'minecraft:planks@2': 3 }, HAND_BOOK);
     // 4 logs + 4 planks + 1 flint: 3 birch planks held, 1 more plank from a log.
     expect(route.raw).toEqual({ 'minecraft:log': 5, 'minecraft:flint': 1 });
     expect(route.fromInventory).toEqual({ 'minecraft:planks@2': 3 });
@@ -85,10 +86,14 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
     ).toMatchObject({ actions: 10, blocks: ['minecraft:gravel'] });
   });
 
-  it('reports what nothing it knows can make', () => {
-    const route = planRoute({ 'minecraft:torch': 6 }, { 'minecraft:coal': 1 }, ROUTE_BOOK);
+  it('reports what nothing it knows can make, and why', () => {
+    const route = planRoute({ 'minecraft:torch': 6 }, { 'minecraft:coal': 1 }, HAND_BOOK);
     expect(route.unresolved).toEqual({ 'minecraft:coal': 1 });
-    expect(describeRoute(route).at(-1)).toBe('no known way to get: 1 minecraft:coal');
+    expect(route.why).toEqual({ 'minecraft:coal': 'no recipe or source known' });
+    expect(describeRoute(route).slice(-2)).toEqual([
+      'no known way to get: 1 minecraft:coal',
+      '  minecraft:coal: no recipe or source known',
+    ]);
   });
 
   it('survives a recipe loop', () => {
