@@ -14,7 +14,13 @@ import { runSession } from './live-session.ts';
 import { withLiveClient } from './live-agent.ts';
 import { passProblem } from '../bot/gtnh1710/terrain.ts';
 import { shelterStatus } from '../goals/shelter.ts';
-import { runPlay, type PlayEvent, type PlayLimits, type PlayResult } from './play.ts';
+import {
+  runPlay,
+  type FreeGoal,
+  type PlayEvent,
+  type PlayLimits,
+  type PlayResult,
+} from './play.ts';
 
 /**
  * Autonomous play against the live test server, on one connection: the play loop
@@ -30,6 +36,8 @@ export async function runLivePlay(
     decisionProvider: DecisionProvider;
     planner: PlannerProvider | null;
     abilities?: Abilities;
+    /** A goal outside the quest book (`play --needs`); play pursues it instead of the quests. */
+    goal?: FreeGoal;
     onEvent: (event: PlayEvent) => void;
   },
   log?: (line: string) => void,
@@ -62,6 +70,7 @@ export async function runLivePlay(
             {
               repos,
               ...(input.abilities ? { abilities: input.abilities } : {}),
+              ...(input.goal ? { goal: input.goal } : {}),
               ...(canExplore ? { scouting: { chunksSeen: () => repos.worldMemory.count() } } : {}),
               inventory: async () => {
                 const state = await client.observe();
