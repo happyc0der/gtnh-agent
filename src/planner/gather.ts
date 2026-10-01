@@ -90,6 +90,16 @@ export function gatherDrops(block: DiggableBlock): string[] {
   return DIG_YIELDS[block].map((y) => y.item);
 }
 
+/**
+ * Whether digging `candidate` gives what digging `block` gives: grass gives dirt, so a
+ * GATHER of dirt digs grass too (seen live: the floor around the player was all grass).
+ */
+export function givesSame(candidate: DiggableBlock, block: DiggableBlock): boolean {
+  if (candidate === block) return true;
+  const wanted = new Set(gatherDrops(block));
+  return gatherDrops(candidate).some((item) => wanted.has(item));
+}
+
 /** How many of `block`'s drops `items` holds. */
 export function heldDrops(block: DiggableBlock, items: Readonly<Record<string, number>>): number {
   return gatherDrops(block).reduce((n, item) => n + (items[item] ?? 0), 0);
@@ -225,7 +235,9 @@ export function chooseGatherAction(
   const skip: BlockPosition[] = [];
   const candidates: Array<{ position: BlockPosition; walkTo: Position | null; cost: number }> = [];
   for (const r of state.nearbyBlocks.value.resources) {
-    if (r.block !== block || r.standAt === null || skipped.has(key(r.position))) continue;
+    if (!givesSame(r.block, block) || r.standAt === null || skipped.has(key(r.position))) {
+      continue;
+    }
     const reach = eyeDistanceToBlock(feet, r.position);
     if (reach <= opts.reach) {
       candidates.push({ position: r.position, walkTo: null, cost: reach });

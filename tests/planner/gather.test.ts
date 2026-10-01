@@ -6,6 +6,7 @@ import type { Position } from '../../src/domain/common.ts';
 import {
   chooseGatherAction,
   gatherDrops,
+  givesSame,
   GATHER_MAX_ACTIONS,
   GATHER_MAX_MS,
   recordGatherAction,
@@ -214,6 +215,20 @@ describe('GATHER ends', () => {
     expect(gatherDrops('minecraft:log')).toContain('minecraft:log@2');
     // Every block DIG_BLOCK may break has drops to count.
     for (const block of DIGGABLE_BLOCKS) expect(gatherDrops(block).length).toBeGreaterThan(0);
+  });
+
+  it('digs any listed block that gives the item: a GATHER of dirt digs the grass floor', () => {
+    // Seen live: GATHER 8 dirt found "no-target" on a floor of grass.
+    const grassy = makeState((w) => {
+      w.resourceBlocks = [{ block: 'minecraft:grass', position: { x: 2, y: 64, z: 1 } }];
+    });
+    const fresh = startGather(1, 0, gather('minecraft:dirt', 8), grassy, NOW);
+    expect(chooseGatherAction(gather('minecraft:dirt', 8), fresh, grassy, opts())).toMatchObject({
+      kind: 'act',
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 2, y: 64, z: 1 } } },
+    });
+    expect(givesSame('minecraft:grass', 'minecraft:dirt')).toBe(true);
+    expect(givesSame('minecraft:sand', 'minecraft:dirt')).toBe(false);
   });
 
   it('at 64 actions or 5 minutes, for a checkpoint', () => {
