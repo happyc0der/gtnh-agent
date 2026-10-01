@@ -18,10 +18,8 @@ import type { ActionType } from './actions.ts';
  * The window model (a player-inventory range after the block's own slots, plus a result
  * slot) follows prismarine-windows (MIT); every number here was checked in the 1.7.10 and
  * GTNH jars, not taken from it (its furnace properties, for one, are 1.8's, not 1.7.10's).
+ * Verified against GTNH 2.8.4 (Minecraft 1.7.10, Forge 10.13.4.1614).
  */
-
-/** The server these profiles were verified against. */
-export const INTERACTION_PROFILES_VERSION = 'GTNH 2.8.4 (Minecraft 1.7.10, Forge 10.13.4.1614)';
 
 export const PROFILE_IDS = [
   'crafting_table',

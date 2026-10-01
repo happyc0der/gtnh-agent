@@ -21,7 +21,3 @@ export function known<T>(value: T): Known<T> {
 export function unknown(reason: string): { known: false; reason: string } {
   return { known: false, reason };
 }
-
-export function valueOrNull<T>(k: Known<T>): T | null {
-  return k.known ? k.value : null;
-}

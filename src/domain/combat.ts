@@ -20,9 +20,6 @@ import { z } from 'zod';
  *  - SpecialMobs creepers explode with power 3 to 5 (10 when charged).
  */
 
-/** Ticks per second on a server running at full speed. */
-const TICKS_PER_SECOND = 20;
-
 // ---------------------------------------------------------------------------
 // Who may be attacked
 // ---------------------------------------------------------------------------
@@ -340,11 +337,6 @@ export function hitsToKill(targetHealth: number, weapon: Weapon): number {
   return weapon.damage <= 0 ? Infinity : Math.max(1, Math.ceil(targetHealth / weapon.damage));
 }
 
-/** Seconds a fight of `hits` full hits takes at one hit per SWING_INTERVAL_TICKS. */
-export function fightSeconds(hits: number): number {
-  return ((hits - 1) * SWING_INTERVAL_TICKS) / TICKS_PER_SECOND;
-}
-
 // ---------------------------------------------------------------------------
 // Explosions: creepers, and the kill explosions of GTNH's AngerMod
 // ---------------------------------------------------------------------------
@@ -366,9 +358,8 @@ export function explosionDamage(power: number, distance: number): number {
   return Math.floor(((impact * impact + impact) / 2) * 8 * radius + 1) * HARD_DIFFICULTY_SCALE;
 }
 
-/** AngerMod: anything a player kills explodes (10%) with this power, at the body. */
+/** AngerMod: anything a player kills explodes (one kill in ten) with this power, at the body. */
 export const KILL_EXPLOSION_POWER = 1.5;
-export const KILL_EXPLOSION_CHANCE = 0.1;
 /** Health the player keeps after the worst-case kill explosion for a blow that may kill. */
 export const KILL_EXPLOSION_MARGIN = 4;
 
@@ -384,10 +375,3 @@ export function mayKill(targetHealth: number | null, weapon: Weapon): boolean {
 export function killStrikeAllowed(playerHealth: number, distance: number): boolean {
   return playerHealth - explosionDamage(KILL_EXPLOSION_POWER, distance) >= KILL_EXPLOSION_MARGIN;
 }
-
-/**
- * Creeper explosion power: vanilla 3; Special Mobs' Death and Gravity creepers explode at
- * 3 + 2 = 5; any creeper doubles it when charged. Its damage reaches 2 x power blocks.
- */
-export const CREEPER_POWER = 3;
-export const STRONG_CREEPER_POWER = 5;

@@ -1,6 +1,6 @@
 import type { RoutingConfig } from '../config/env.ts';
 import type { Position } from '../domain/common.ts';
-import { bestMeal, carriedFoodPoints } from '../domain/food.ts';
+import { bestMeal } from '../domain/food.ts';
 import type { GameState, Generator, StorageContainer } from '../domain/game-state.ts';
 import { distance } from '../domain/geometry.ts';
 import type { NamedLocation } from '../domain/safety.ts';
@@ -43,7 +43,7 @@ export interface RouterContext {
   plan?: PlanFacts | null;
   /**
    * A safe location nearer than home that RETREAT_HOME walks to instead, away from what
-   * threatens the player (the trail: src/app/trail.ts); left out, home.
+   * threatens the player (the trail: src/app/loop/trail.ts); left out, home.
    */
   retreatTo?: string;
   /**
@@ -102,22 +102,6 @@ export function availableApprovedFood(state: GameState, ctx: RouterContext): str
     bestMeal(inventoryItems(state), ctx.safety.config.approvedFoods, ctx.recentMeals ?? [], (f) =>
       isProtected(f, ctx.safety.protectedItems),
     )?.item ?? null
-  );
-}
-
-/**
- * Hunger points the approved, unprotected food the player carries would restore, eaten meal
- * by meal (food.ts carriedFoodPoints, Spice of Life included), up to `cap`; 0 when eating is
- * off.
- */
-export function carriedFood(state: GameState, ctx: RouterContext, cap = 40): number {
-  if (ctx.eatingEnabled === false) return 0;
-  return carriedFoodPoints(
-    inventoryItems(state),
-    ctx.safety.config.approvedFoods,
-    ctx.recentMeals ?? [],
-    (f) => isProtected(f, ctx.safety.protectedItems),
-    cap,
   );
 }
 
