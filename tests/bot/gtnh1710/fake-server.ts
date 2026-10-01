@@ -79,6 +79,11 @@ export interface FakeServerOptions {
    * hand is eaten after EAT_TICKS (vanilla ItemFood: 32), as the server does it.
    */
   edible?: Array<[number, number]>;
+  /**
+   * GTNH's AngerMod spawn protection: the player joins invulnerable (S39 flag 1), cannot eat
+   * meanwhile (EntityPlayer.canEat), and a right-click on a block ends it (S39 flag 0).
+   */
+  spawnProtection?: boolean;
   keepAliveEveryMs?: number;
   /** Send a truncated inventory packet (the client must degrade, not disconnect). */
   corruptInventory?: boolean;
@@ -243,6 +248,11 @@ function bodyOf(e: FakeEntity): FakeBody[] {
   return [{ x: e.x, y: e.y, z: e.z, width: 0.6, height: 1.8 }];
 }
 
+/** S39 Player Abilities with these flags (1: invulnerable), and vanilla's speeds. */
+function abilitiesFrame(flags: number): Buffer {
+  return encodeFrame(0x39, Buffer.concat([Buffer.from([flags]), f32(0.05), f32(0.1)]));
+}
+
 /** Encodes an entity spawn exactly as a 1.7.10 Forge server would. */
 export function spawnFrame(e: FakeEntity): Buffer {
   switch (e.kind) {
@@ -378,6 +388,7 @@ export class FakeGtnhServer {
       windowSlots: options.windowSlots ?? 46,
       health: options.health ?? { health: 20, food: 18, saturation: 5 },
       edible: options.edible ?? [],
+      spawnProtection: options.spawnProtection ?? false,
       keepAliveEveryMs: options.keepAliveEveryMs ?? 100,
       corruptInventory: options.corruptInventory ?? false,
       entities: options.entities ?? [],
@@ -476,7 +487,17 @@ export class FakeGtnhServer {
         ? null
         : new FakeQuestBookSim({ ...options.questBook, items: this.#opts.items }, this.chestSim);
     const edible = new Map(options.edible ?? []);
+    this.placeSim.onBlockClick = () => {
+      if (!this.spawnProtected) return;
+      this.spawnProtected = false;
+      this.broadcast(abilitiesFrame(0));
+    };
     this.placeSim.onUseInAir = (held) => {
+      if (this.spawnProtected) {
+        // canEat() is false: tryUseItem sends the inventory back, nothing is eaten.
+        this.chestSim.sendHeldSlot();
+        return;
+      }
       const points = held === null ? undefined : edible.get(held.id);
       if (held === null || points === undefined || this.combatSim.food >= 20) return;
       this.eatsStarted += 1;
@@ -496,6 +517,8 @@ export class FakeGtnhServer {
 
   /** Eats the server started (a C08 in the air with an edible stack in hand). */
   eatsStarted = 0;
+  /** The player is under spawn protection (options.spawnProtection, until a block click). */
+  spawnProtected = false;
 
   listen(): Promise<number> {
     return new Promise((resolve) => {
@@ -938,6 +961,12 @@ export class FakeGtnhServer {
       ),
     );
     send(encodeFrame(0x09, Buffer.from([0])));
+    // The join's abilities; AngerMod's spawn protection then makes the player invulnerable.
+    send(abilitiesFrame(0));
+    if (o.spawnProtection) {
+      this.spawnProtected = true;
+      send(abilitiesFrame(1));
+    }
     const player = this.chestSim.playerSlots();
     const modularUi = o.mods.some((m) => m.modid === 'modularui');
     const slots = Array.from({ length: o.windowSlots }, (_, s) =>

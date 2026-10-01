@@ -188,6 +188,26 @@ import {
 } from './world-model.ts';
 import { describeSightings, SurveyTracker } from './world-survey.ts';
 
+/**
+ * Blocks a right-click with an empty hand does nothing to (no window, no state change, no
+ * teleport), so clicking one only ends the spawn protection (#endSpawnProtection).
+ */
+const PLAIN_GROUND: ReadonlySet<string> = new Set([
+  'minecraft:grass',
+  'minecraft:dirt',
+  'minecraft:mycelium',
+  'minecraft:sand',
+  'minecraft:gravel',
+  'minecraft:clay',
+  'minecraft:stone',
+  'minecraft:cobblestone',
+  'minecraft:mossy_cobblestone',
+  'minecraft:sandstone',
+  'minecraft:hardened_clay',
+  'minecraft:stained_hardened_clay',
+  'minecraft:snow',
+  'minecraft:netherrack',
+]);
 /** Longest wait for the server to finish eating (vanilla 32 ticks; HungerOverhaul longer). */
 const EAT_TIMEOUT_MS = 8_000;
 /** Vanilla clients send one "player" packet per tick (20 per second). */
@@ -440,6 +460,8 @@ export class Gtnh1710Client implements MinecraftClient {
   #closedReason: string | null = null;
   #connectedAt: Date | null = null;
   #confirmedPositions = 0;
+  /** Where the last server position packet put the player, in words (#noteCorrection). */
+  #lastCorrection: string | null = null;
   #listeners: Array<() => void> = [];
   #walking = false;
   #lastYaw = 0;
@@ -2599,9 +2621,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (existsSync(resolvePath(cfg.movement.stopFile))) {
       return `the stop file ${cfg.movement.stopFile} exists`;
     }
-    if (this.#confirmedPositions !== guard.placementsAtStart) {
-      return 'the server corrected the position';
-    }
+    if (this.#confirmedPositions !== guard.placementsAtStart) return this.#corrected();
     const health = this.#world.health;
     if (guard.healthAtStart !== null && health !== null && health < guard.healthAtStart) {
       return `health dropped from ${guard.healthAtStart} to ${health}`;
@@ -3233,7 +3253,7 @@ export class Gtnh1710Client implements MinecraftClient {
           hard: true,
         };
       } else if (this.#confirmedPositions !== placementsAtStart) {
-        stop = { reason: 'the server corrected the position', hard: true };
+        stop = { reason: this.#corrected(), hard: true };
       }
       if (stop !== null) break;
       const t = this.#world.combatEntity(entityId);
@@ -3590,6 +3610,16 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       slot = free;
     }
+    // GTNH's AngerMod protects a player after each join (angermod.cfg ProtectionEnabled:
+    // invulnerable for up to 90 s, until it walks 5 blocks, attacks or right-clicks a block),
+    // and EntityPlayer.canEat() is false while it is: the server answers the use with the
+    // inventory as it was, and nothing is eaten (seen live: every EAT right after joining
+    // failed). A click in the air does not end it; a click on a block does, as for a player
+    // whose right-click with food in hand first lands on the ground.
+    if (this.#world.damageDisabled === true) {
+      const still = await this.#endSpawnProtection();
+      if (still !== null) return refuse(still);
+    }
     // Always (re)select it: the server eats what it thinks is in hand.
     this.#send(outbound.selectHotbarSlot(slot));
     this.#world.setHeldSlot(slot);
@@ -3628,6 +3658,44 @@ export class Gtnh1710Client implements MinecraftClient {
     } finally {
       this.#eating = false;
     }
+  }
+
+  /**
+   * Ends the server's spawn protection (see #eat) with a right-click on the plain ground
+   * underfoot with an empty hand, which uses, places and opens nothing. Null once it has
+   * ended, else why it is still on.
+   */
+  async #endSpawnProtection(): Promise<string | null> {
+    const on =
+      'the server still protects the player after it joined (a protected player cannot eat; ' +
+      'it ends after 90 s or a 5-block walk)';
+    const feet = this.#world.ownPosition;
+    const registry = this.#world.registry;
+    if (feet === null || registry === null) return `${on}, and the ground underfoot is not known`;
+    // The first block below the feet: the server may have put the player a little above the
+    // ground at login (seen live: saved mid-jump, at y 92.42 over sand at 91).
+    const x = Math.floor(feet.x);
+    const z = Math.floor(feet.z);
+    let y = Math.floor(feet.y - 0.01);
+    let id = this.#world.blockAt(x, y, z);
+    while (id === 0 && y > Math.floor(feet.y) - 3) id = this.#world.blockAt(x, --y, z);
+    const ground =
+      id === undefined ? undefined : id === 0 ? 'minecraft:air' : registry.blocks.get(id);
+    if (ground === undefined || !PLAIN_GROUND.has(ground)) {
+      return `${on}, and the block underfoot (${ground ?? 'unknown'}) is not plain ground to click`;
+    }
+    const hand = this.#emptyHotbarSlot();
+    if (hand === null) return `${on}, and no hotbar slot is empty to click the ground with`;
+    if (hand !== this.#world.heldSlot) {
+      this.#send(outbound.selectHotbarSlot(hand));
+      this.#world.setHeldSlot(hand);
+    }
+    this.#log(`clicking the ${ground} underfoot with an empty hand: it ends the spawn protection`);
+    this.#send(outbound.activateBlock(x, y, z, 1));
+    await this.#waitFor(() => this.#world.damageDisabled === false, 1_000);
+    return this.#world.damageDisabled === false
+      ? null
+      : `${on}: a click on the ground did not end it`;
   }
 
   /** Stops a walk in progress at its next step and refuses new walks (e.g. on Ctrl+C). */
@@ -3987,9 +4055,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#phase !== 'play') return 'the connection closed';
     const blocker = this.#movementBlocker();
     if (blocker !== null) return blocker;
-    if (this.#confirmedPositions !== guard.placementsAtStart) {
-      return 'the server corrected the position';
-    }
+    if (this.#confirmedPositions !== guard.placementsAtStart) return this.#corrected();
     const health = this.#world.health;
     if (guard.healthAtStart !== null && health !== null && health < guard.healthAtStart) {
       return `health dropped from ${guard.healthAtStart} to ${health}`;
@@ -4492,6 +4558,7 @@ export class Gtnh1710Client implements MinecraftClient {
       this.#emit();
       return;
     }
+    if (packet.type === 'server-position') this.#noteCorrection(packet);
     this.#world.apply(packet, at);
     switch (packet.type) {
       case 'keep-alive':
@@ -4522,6 +4589,7 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'change-game-state':
       case 'respawn':
       case 'held-item':
+      case 'player-abilities':
       case 'set-slot':
       case 'window-items':
       case 'spawn-player':
@@ -4614,6 +4682,35 @@ export class Gtnh1710Client implements MinecraftClient {
    * Acknowledge the server's placement (exact echo) and start idle ticks, if presence is
    * enabled. A placement during a walk stops the walk (its step check sees the count change).
    */
+  /**
+   * A server position packet (S08) moves the player: at login, on a teleport, or to correct a
+   * move the server did not accept. Where it put the player, against where the client had it,
+   * goes into the reason a walk or a dig stops (seen live: a retreat stopped with only "the
+   * server corrected the position", and nothing said where).
+   */
+  #noteCorrection(to: ServerPosition): void {
+    const was = this.#world.ownPosition;
+    if (was === null) {
+      this.#lastCorrection = null;
+      return;
+    }
+    const feetY = to.eyeY - PLAYER_EYE_HEIGHT;
+    const at = (x: number, y: number, z: number) =>
+      `(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`;
+    const moved = Math.hypot(to.x - was.x, feetY - was.y, to.z - was.z);
+    this.#lastCorrection =
+      `to ${at(to.x, feetY, to.z)}, ${moved.toFixed(2)} blocks from where the client had it ` +
+      at(was.x, was.y, was.z);
+    this.#log(`the server moved the player ${this.#lastCorrection}`);
+  }
+
+  /** The stop reason for a server correction, with where it put the player (#noteCorrection). */
+  #corrected(): string {
+    return this.#lastCorrection === null
+      ? 'the server corrected the position'
+      : `the server corrected the position ${this.#lastCorrection}`;
+  }
+
   #onServerPosition(position: ServerPosition): void {
     if (!this.#opts.config.presenceTicks) return;
     this.#send(outbound.confirmServerPosition(position, ON_GROUND));

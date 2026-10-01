@@ -513,6 +513,12 @@ export type PlayPacket =
   | { type: 'spawn-position'; x: number; y: number; z: number }
   | { type: 'update-health'; health: number; food: number; saturation: number }
   /**
+   * S39 Player Abilities (u8 flags, f32 flying speed, f32 walking speed). Flags: 1
+   * invulnerable (capabilities.disableDamage), 2 flying, 4 may fly, 8 creative. GTNH's
+   * AngerMod makes a player invulnerable for a while after each join (spawn protection).
+   */
+  | { type: 'player-abilities'; flags: number; flyingSpeed: number; walkingSpeed: number }
+  /**
    * S03 Time Update: the world's age and its day time in ticks. A 1.7.10 server sends the
    * day time negated (and -1 for 0) while the doDaylightCycle game rule is off.
    */
@@ -856,6 +862,13 @@ export function decodePlay(
       };
     case 0x09:
       return { type: 'held-item', slot: r.i8() };
+    case 0x39:
+      return {
+        type: 'player-abilities',
+        flags: r.u8(),
+        flyingSpeed: r.f32(),
+        walkingSpeed: r.f32(),
+      };
     case 0x2f:
       return { type: 'set-slot', windowId: r.i8(), slot: r.i16(), item: readItemStack(r, options) };
     case 0x30: {

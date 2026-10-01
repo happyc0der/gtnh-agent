@@ -106,6 +106,38 @@ describe('Gtnh1710Client eating', () => {
     expect(await apples(client)).toBe(0);
   });
 
+  it('ends the spawn protection with an empty-handed click on the ground, then eats', async () => {
+    // Seen live: right after joining, AngerMod's spawn protection kept every EAT from working.
+    const { server, client } = await start({
+      spawnProtection: true,
+      inventory: [{ slot: hotbar(2), id: APPLE, count: 3, damage: 0 }],
+    });
+    expect(server.spawnProtected).toBe(true);
+    const r = await eat(client, 'minecraft:apple');
+    expect(r, r.message).toMatchObject({ ok: true, data: { foodBefore: 12, foodAfter: 16 } });
+    expect(server.spawnProtected).toBe(false);
+    // One click, on the grass underfoot (y 105), with nothing in hand; then the use in the air.
+    const clicks = server.placeSim.placements.filter((p) => p.face !== 255);
+    expect(clicks).toMatchObject([{ x: -5, y: 105, z: -8, face: 1, claimed: null, held: null }]);
+    expect(server.eatsStarted).toBe(1);
+    expect(await apples(client)).toBe(2);
+  });
+
+  it('refuses while protected when no hotbar slot is free to click the ground with', async () => {
+    const full = Array.from({ length: 9 }, (_, j) => ({
+      slot: hotbar(j),
+      id: j === 0 ? APPLE : 3,
+      count: 5,
+      damage: 0,
+    }));
+    const { server, client } = await start({ spawnProtection: true, inventory: full });
+    const r = await eat(client, 'minecraft:apple');
+    expect(r).toMatchObject({ ok: false, code: 'REFUSED' });
+    expect(r.message).toMatch(/protects the player after it joined.*no hotbar slot is empty/);
+    expect(server.placeSim.placements).toHaveLength(0);
+    expect(server.eatsStarted).toBe(0);
+  });
+
   it('refuses at full food, without the food, or when the server never finishes', async () => {
     const full = await start({
       health: { health: 20, food: 20, saturation: 5 },

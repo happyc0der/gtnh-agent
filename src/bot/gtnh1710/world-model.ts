@@ -374,6 +374,8 @@ export class WorldModel {
   #dimension: number | null = null;
   #position: PlayerPosition | null = null;
   #health: { health: number; food: number } | null = null;
+  /** The last S39's flags (1: invulnerable), or null before the server sent one. */
+  #abilityFlags: number | null = null;
   /** When an update last showed the player's health going down. */
   #lastHurtAt: Date | null = null;
   /** The last S03: the day time then, whether it advances, and when it arrived. */
@@ -1012,6 +1014,9 @@ export class WorldModel {
       case 0x06:
         this.#health = null;
         return;
+      case 0x39:
+        this.#abilityFlags = null;
+        return;
       case 0x07:
       case 0x08:
         this.#position = null;
@@ -1609,6 +1614,9 @@ export class WorldModel {
       case 'held-item':
         if (packet.slot >= 0 && packet.slot <= 8) this.#heldSlot = packet.slot;
         return;
+      case 'player-abilities':
+        this.#abilityFlags = packet.flags;
+        return;
       case 'window-items':
         if (packet.windowId === 0) {
           this.#window = [...packet.items];
@@ -2105,6 +2113,15 @@ export class WorldModel {
 
   get health(): number | null {
     return this.#health?.health ?? null;
+  }
+
+  /**
+   * Whether the server keeps the player from taking damage (S39 flag 1), or null before it
+   * said. GTNH's AngerMod does so for up to 90 s after each join (spawn protection), and a
+   * player that cannot be hurt cannot eat either (EntityPlayer.canEat).
+   */
+  get damageDisabled(): boolean | null {
+    return this.#abilityFlags === null ? null : (this.#abilityFlags & 1) !== 0;
   }
 
   /** The food level (0-20), or null before the server sent it. */

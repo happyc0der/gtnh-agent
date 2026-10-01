@@ -22,6 +22,7 @@ import {
   encodeString,
   encodeVarInt,
   encodeVarShort,
+  f32,
   FrameDecoder,
   i32,
   ProtocolError,
@@ -261,6 +262,22 @@ describe('entity packets', () => {
     expect(classifyModded('etfuturum', 4, '2.6.2.25-GTNH')).toEqual({
       name: 'etfuturum.husk',
       category: 'hostile',
+    });
+    // Seen live: "EnderZoo#6" stopped a walk unidentified; every EnderZoo entity is a monster
+    // (or its primed charge), whatever number the load order gave it.
+    expect(classifyModded('EnderZoo', 6, '1.3.3')).toEqual({
+      name: 'EnderZoo#6',
+      category: 'hostile',
+    });
+  });
+
+  it('decodes the player abilities: invulnerable while the spawn protection lasts', () => {
+    const body = Buffer.concat([Buffer.from([1]), f32(0.05), f32(0.1)]);
+    expect(decodePlay(0x39, new Reader(body))).toEqual({
+      type: 'player-abilities',
+      flags: 1,
+      flyingSpeed: expect.closeTo(0.05, 6) as number,
+      walkingSpeed: expect.closeTo(0.1, 6) as number,
     });
   });
 

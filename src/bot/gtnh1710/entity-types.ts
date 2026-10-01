@@ -66,7 +66,13 @@ export const VANILLA_OBJECTS: ReadonlyMap<number, Classification> = new Map<numb
  * Mods whose every entity is a hostile monster (or its projectile). Marking them hostile
  * does not weaken safety (unclassified is treated the same way); it only makes reports clearer.
  */
-export const HOSTILE_MODS: ReadonlySet<string> = new Set(['SpecialMobs']);
+export const HOSTILE_MODS: ReadonlySet<string> = new Set(['SpecialMobs', 'EnderZoo']);
+// EnderZoo 1.3.3, read in its code (javap): EnderZoo.preInit registers its MobInfo values
+// (Enderminy, Concussion Creeper, Fallen Knight, Fallen Mount, Wither Witch, Wither Cat, Dire
+// Wolf, Dire Slime: all monsters), and BlockConfusingCharge its primed explosive charge;
+// nothing else. Their type numbers come from EntityRegistry.findGlobalUniqueEntityId() at
+// load, so they depend on the other mods and are not named here. Seen live: "EnderZoo#6" by
+// day in the Hot Desert stopped a walk as an unidentified entity.
 
 export interface ModdedEntityEntry {
   modId: string;

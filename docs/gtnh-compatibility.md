@@ -1363,6 +1363,34 @@ method above, and providers that replace dimension 0's):
   so **Special Mobs spiders are never calm**. Other mods' spiders (Twilight Forest's,
   Thaumcraft's, BOP's jungle spider...) were not checked and are never calm either.
 
+## Eating after a join: AngerMod's spawn protection (2026-10-01)
+
+Seen live: every `EAT_FOOD` right after the agent joined failed. The server answered the use
+with the inventory as it was (S30 for window 0, then the cursor) and never started eating.
+Read in the installed code (javap) and config:
+
+- `config/GTNewHorizons/angermod.cfg` has `ProtectionEnabled=true`, `SpawnProtectionTimeout=90`
+  and `SpawnProtectionMoveTolerance=5`. On every join, respawn and dimension change, AngerMod's
+  `PlayerSpawnProtection` calls YAMCore's `PlayerHelper.GiveProtection`: it sets
+  `capabilities.disableDamage`, sends S39 Player Abilities with flag 1 and says "A magic bubble
+  of protection appears..." in chat.
+- The protection ends after 90 s, after a walk of more than 5 blocks, after an attack, or on a
+  right-click (`PlayerInteractEvent`), except `RIGHT_CLICK_AIR` and `LEFT_CLICK_BLOCK`: using
+  food in the air never ends it.
+- `EntityPlayer.canEat` is `(ignoreHunger || needFood()) && !capabilities.disableDamage`, so
+  no food can be eaten while the protection lasts; `ItemFood.onItemRightClick` then skips
+  `setItemInUse`, and `tryUseItem` sends the inventory back.
+- A player rarely notices: a right-click with food while looking at a block first sends a click
+  on the block, which ends the protection.
+
+The client reads S39 (`WorldModel.damageDisabled`). When it is on, `EAT_FOOD` first clicks the
+block underfoot with an empty hand (C08 face 1, only on plain ground such as grass, dirt, sand
+or stone, and only with an empty hotbar slot), waits for the S39 that ends it, and eats. Ruled
+out on the way: AppleCore, HungerOverhaul (`modifyFoodEatingSpeed=false`), Nutrition,
+Hodgepodge, Backhand, Battlegear2 and Et Futurum. Spice of Life (`food.eating.speed.modifier=1`)
+does lengthen the use of a food eaten often lately (up to 128 ticks for 4 recent eats), within
+the client's 8 s wait.
+
 ## Quest book (Better Questing) (2026-09-30)
 
 The "Finish Age 0" benchmark is scored from the quest book's OWN records: the quests Better

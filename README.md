@@ -270,6 +270,11 @@ and [docs/action-contract.md](docs/action-contract.md).
   creepers, endermen, pigmen, a calm spider or anything unidentified. It refuses with health below 14 or food
   below 8, more than 2 hostiles near, or anything that may explode within 16 blocks
   (`safety.combat`), and stops at the first damage it takes (see below).
+- Eating is off unless `MC_ENABLE_EATING=true`. `EAT_FOOD` eats only an approved food
+  (`safety.approvedFoods`), moved into the hotbar if need be and used in the air. Right after a
+  join, GTNH's AngerMod keeps the player invulnerable, and an invulnerable player cannot eat;
+  the client ends that protection first with one empty-handed right-click on the plain ground
+  underfoot (grass, dirt, sand, stone...), which uses, places and opens nothing.
 - Quest-book clicks are off unless `MC_ENABLE_QUEST_BOOK=true`. They are made only for the Age 0
   quests the server lists as active (claims: completed), never hand in a protected item, and
   claim rewards only with room for them in the inventory (Better Questing drops the rest).

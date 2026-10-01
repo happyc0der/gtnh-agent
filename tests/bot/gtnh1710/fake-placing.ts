@@ -121,6 +121,11 @@ export class FakePlaceSim {
   #send: (frame: Buffer) => void = () => undefined;
   #broadcast: (frame: Buffer) => void = () => undefined;
 
+  /**
+   * A C08 on a block in reach, before the block or the item does anything: where Forge fires
+   * PlayerInteractEvent RIGHT_CLICK_BLOCK (AngerMod ends its spawn protection there).
+   */
+  onBlockClick: ((x: number, y: number, z: number, face: number) => void) | null = null;
   /** C08 with face 255 (use the held item in the air), with the held stack. */
   onUseInAir: ((held: FakeStack | null) => void) | null = null;
 
@@ -171,6 +176,7 @@ export class FakePlaceSim {
         feet !== null &&
         (feet.x - (x + 0.5)) ** 2 + (feet.y - (y + 0.5)) ** 2 + (feet.z - (z + 0.5)) ** 2 <
           reach * reach;
+      if (inReach) this.onBlockClick?.(x, y, z, face);
       if (inReach && !this.#activateOrPlace(x, y, z, face, record)) placeResult = false;
     }
     // Either way (face 255 aside), both blocks are sent as they are now.
