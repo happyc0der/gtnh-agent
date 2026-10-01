@@ -4171,7 +4171,19 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       const maxLength = Math.min(this.#opts.config.movement.maxPathLength, budget);
       const choice = chooseHop(world, fence, here, goal, maxLength, tried);
-      if (!choice.ok) return done(`no way further: ${choice.reason}`, true);
+      if (!choice.ok) {
+        // When a hop as long as the walker allows would get closer, what was left of
+        // maxDistance was too short, not the way: no dead end (seen live: nearly every EXPLORE
+        // ended "no way further" a few blocks short of 64, each remembered as a dead end).
+        const full = this.#opts.config.movement.maxPathLength;
+        if (maxLength < full && chooseHop(world, fence, here, goal, full, tried).ok) {
+          return done(
+            `walked nearly the whole maxDistance (${walked.toFixed(1)} of ${opts.maxDistance} blocks)`,
+            true,
+          );
+        }
+        return done(`no way further: ${choice.reason}`, true);
+      }
       let walk: ClientActionResult | null = null;
       for (const c of choice.candidates) {
         const r = await this.#walkTo(c.target, { stopForThreats: opts.stopForThreats });
