@@ -382,6 +382,12 @@ export class WorldModel {
   #seeThrough: Uint8Array | null = null;
   /** Where the server turned a diggable block into air, most recent first. */
   #removed: Array<{ x: number; y: number; z: number }> = [];
+  /**
+   * Blocks the agent dug itself, most recent first. They come first in the reported
+   * `removed`: seen live, a tree's leaves decaying after its log was chopped pushed the log's
+   * own dig out of the list, and DIG_BLOCK's verification failed with the log in hand.
+   */
+  #dug: Array<{ x: number; y: number; z: number }> = [];
   /** Where the server turned an empty cell into a placeable block, most recent first. */
   #placed: PlacedRecord[] = [];
   readonly #watches = new Set<BlockWatch>();
@@ -419,6 +425,14 @@ export class WorldModel {
   /** A Better Questing message could not be decoded: the quest book is unknown from now on. */
   markQuestBookProblem(reason: string): void {
     this.#questBook.markProblem(reason);
+  }
+
+  /** The client dug the block at `p` (the server confirmed it): see #dug. */
+  noteDug(p: { x: number; y: number; z: number }): void {
+    this.#dug = [
+      { x: p.x, y: p.y, z: p.z },
+      ...this.#dug.filter((d) => d.x !== p.x || d.y !== p.y || d.z !== p.z),
+    ].slice(0, MAX_REPORTED_REMOVED);
   }
 
   setRegistry(registry: Registry): void {
@@ -1132,6 +1146,7 @@ export class WorldModel {
         this.#machines.clear();
         this.#store.clear();
         this.#removed = [];
+        this.#dug = [];
         this.#placed = [];
         this.#blockWindows.clear();
         this.#lastBlockWindowKey = null;
@@ -1737,7 +1752,10 @@ export class WorldModel {
     const near = (p: { x: number; y: number; z: number }): boolean =>
       Math.hypot(p.x + 0.5 - feet.x, p.y + 0.5 - feet.y, p.z + 0.5 - feet.z) <=
       RESOURCE_SCAN_RADIUS;
-    const removed = this.#removed
+    const others = this.#removed.filter(
+      (p) => !this.#dug.some((d) => d.x === p.x && d.y === p.y && d.z === p.z),
+    );
+    const removed = [...this.#dug, ...others]
       .filter((p) => this.#store.blockAt(p.x, p.y, p.z) === 0 && near(p))
       .slice(0, MAX_REPORTED_REMOVED);
     const placed = this.#placed

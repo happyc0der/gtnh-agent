@@ -271,6 +271,21 @@ describe('Gtnh1710Client digging', () => {
     expect(all.resources.filter((r) => !notFloor(r)).length).toBeLessThanOrEqual(8);
   });
 
+  it('keeps its own dig first in `removed` when many blocks turn to air after it', async () => {
+    // Seen live: a chopped tree's leaves decayed, pushed the log's own dig out of `removed`,
+    // and DIG_BLOCK's verification failed with the log in hand.
+    const { server, client } = await start();
+    const result = await perform(client, { type: 'DIG_BLOCK', args: { position: AT.dirt } });
+    expect(result, result.message).toMatchObject({ ok: true });
+    const records: Array<{ x: number; y: number; z: number; id: number }> = [];
+    for (const z of [-11, -10])
+      for (let x = -9; x <= -1; x++) records.push({ x, y: 105, z, id: 0 });
+    records.push({ x: -9, y: 105, z: -5, id: 0 }, { x: -8, y: 105, z: -5, id: 0 });
+    server.setBlocks(-1, -1, records);
+    await vi.waitFor(async () => expect(blocksOf(await client.observe()).removed.length).toBe(16));
+    expect(blocksOf(await client.observe()).removed[0]).toEqual(AT.dirt);
+  }, 10_000);
+
   it('digs with an empty hand: start, the dig time, finish; the block turns to air and the drop is picked up', async () => {
     const { server, client } = await start({
       // Bread in the selected hotbar slot: the client must switch to an empty one first.

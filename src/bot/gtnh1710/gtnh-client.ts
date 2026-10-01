@@ -2426,6 +2426,7 @@ export class Gtnh1710Client implements MinecraftClient {
       this.#world.unwatch(watch);
     }
     if (!verdict.ok) return done(verdict.result);
+    this.#world.noteDug(target);
     return { ok: true, world, check, hand, held, itemsBefore, ticks, guard };
   }
 
@@ -3829,7 +3830,13 @@ export class Gtnh1710Client implements MinecraftClient {
         const rule = (w: WalkWorld, feet: Vec3): DigCheck =>
           checkWalkBreak(w, area, feet, cell, boundary);
         const dug = await this.#digChecked(cell, rule, protectedItems, 'digging', guard);
-        if (!dug.ok) return `breaking ${where} out of the way failed: ${dug.result.message}`;
+        if (!dug.ok) {
+          // A leaf that decayed while it was dug (its log was just chopped) is out of the way
+          // all the same (seen live: "the server sent the block again while digging (id 0)").
+          const now = this.#world.walkWorld();
+          if (now !== null && passProblem(now, cell.x, cell.y, cell.z) === null) continue;
+          return `breaking ${where} out of the way failed: ${dug.result.message}`;
+        }
         broken.push({ x: cell.x, y: cell.y, z: cell.z });
         this.#log(`broke the ${dug.check.block} at ${where} out of the way`);
       } finally {
