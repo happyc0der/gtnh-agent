@@ -200,6 +200,25 @@ describe('stored plans advance one verified step per cycle', () => {
     expect((await s.cycle()).planner).toMatchObject({ kind: 'plan-accepted', planId: 2 });
   });
 
+  it('a dig of a block no longer listed is refused as stale: the planner is asked again', async () => {
+    const plan = twoStepPlan({
+      steps: [
+        {
+          step: 1,
+          action: { type: 'DIG_BLOCK', args: { position: { x: 9, y: 64, z: 9 } } },
+          rationale: 'A block that was listed when the plan was made, but is not now.',
+        },
+      ],
+    });
+    const s = await session('needs-planner', fixture(plan));
+    const result = await s.cycle();
+    expect(result.status).toBe('rejected');
+    expect(result.outcome?.validation.violations.map((v) => v.code)).toEqual(['NOT_DIGGABLE']);
+    expect(s.client.performed).toHaveLength(0);
+    expect(result.needsUserAttention).toBe(false);
+    expect(s.repos.tasks.get(s.taskId)?.status).toBe('active');
+  });
+
   it('a step the safety policy rejects fails the plan and blocks the task', async () => {
     const plan = twoStepPlan({
       steps: [

@@ -556,10 +556,19 @@ function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'):
 }
 
 /**
- * A planner's step rejected only because it is not feasible NOW (preconditions: out of
- * reach, too few items, the block already gone), with no safety violation and no pause: the
- * player moved or the world changed since the plan was made. That is a stale plan, not an
- * unsafe one. A human's plan is never treated this way.
+ * Safety refusals that only say a step no longer matches what is observed, not that it is
+ * dangerous: NOT_DIGGABLE means the block is not in the current list of observed diggable
+ * blocks (already dug, or out of the scan since the player moved). The step is still
+ * refused; only the reaction differs (see isStaleRejection).
+ */
+const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set(['NOT_DIGGABLE']);
+
+/**
+ * A planner's step rejected only because it no longer fits the world NOW: preconditions
+ * (out of reach, too few items, the block gone) and/or a stale-observation refusal
+ * (STALE_VIOLATION_CODES), and nothing else. The player moved or the world changed since
+ * the plan was made: a stale plan, not an unsafe one. A human's plan is never treated this
+ * way, and any other safety violation still halts the task.
  */
 export function isStaleRejection(ref: PlanStepRef | null, outcome: ExecutionOutcome): boolean {
   const v = outcome.validation;
@@ -567,9 +576,8 @@ export function isStaleRejection(ref: PlanStepRef | null, outcome: ExecutionOutc
     ref !== null &&
     ref.planner !== OPERATOR_PLANNER &&
     outcome.status === 'rejected' &&
-    v.violations.length === 0 &&
-    !v.requiresUserPause &&
-    v.preconditionFailures.length > 0
+    v.violations.every((x) => STALE_VIOLATION_CODES.has(x.code)) &&
+    (v.violations.length > 0 || v.preconditionFailures.length > 0)
   );
 }
 
