@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   chooseWeapon,
+  dropSpot,
   insideFence,
   lineOfSightClear,
   listedCategory,
   lookAtPoint,
   vitalsOf,
+  withinPickup,
   type HotbarSlot,
 } from '../../../src/bot/gtnh1710/combat.ts';
 import { classifyModded, MODDED_ENTITY_TABLE } from '../../../src/bot/gtnh1710/entity-types.ts';
@@ -106,6 +108,54 @@ describe('entity metadata', () => {
     expect(listedCategory('modded', { name: 'SpecialMobs#3', category: 'hostile' })).toBe(
       'hostile',
     );
+  });
+});
+
+describe("a killed animal's drops", () => {
+  // Grass at y=63 (feet level 64) everywhere, a stone wall at x = 5 (y 64-65), lava at
+  // (-5, 64, 0), water at (0, 64, -5).
+  const ids = { air: 0, stone: 1, grass: 2, water: 9, lava: 11 } as const;
+  const names = new Map<number, string>([
+    [ids.stone, 'minecraft:stone'],
+    [ids.grass, 'minecraft:grass'],
+    [ids.water, 'minecraft:water'],
+    [ids.lava, 'minecraft:lava'],
+  ]);
+  const world: WalkWorld = {
+    blockAt: (x, y, z) =>
+      y === 63
+        ? ids.grass
+        : y < 63
+          ? ids.stone
+          : x === 5 && y <= 65
+            ? ids.stone
+            : x === -5 && y === 64 && z === 0
+              ? ids.lava
+              : x === 0 && y === 64 && z === -5
+                ? ids.water
+                : ids.air,
+    blockName: (id) => names.get(id),
+    hazardCode: (id) => (id === ids.lava ? 2 : 0),
+  };
+  const fence = { min: { x: -10, y: 60, z: -10 }, max: { x: 10, y: 70, z: 10 } };
+
+  it("are picked up within the player's box grown by 1 sideways, 0.5 up and down", () => {
+    const feet = { x: 0.5, y: 64, z: 0.5 };
+    expect(withinPickup(feet, { x: 1.6, y: 64, z: 0.5 })).toBe(true);
+    expect(withinPickup(feet, { x: 1.8, y: 64, z: 0.5 })).toBe(false);
+    expect(withinPickup(feet, { x: 0.5, y: 63.6, z: 0.5 })).toBe(true);
+    expect(withinPickup(feet, { x: 0.5, y: 66.3, z: 0.5 })).toBe(false);
+  });
+
+  it('are walked to: the cell where it died, else the nearest one beside it a player may stand in', () => {
+    expect(dropSpot(world, fence, { x: 2.3, y: 64, z: 2.7 })).toEqual({ x: 2.5, y: 64, z: 2.5 });
+    // Against the wall: its own cell is fine (a wall is no hazard).
+    expect(dropSpot(world, fence, { x: 4.9, y: 64, z: 0.5 })).toEqual({ x: 4.5, y: 64, z: 0.5 });
+    // Its own cell is next to lava: the cell beside it, away from the lava, still in reach.
+    expect(dropSpot(world, fence, { x: -3.5, y: 64, z: 0.5 })).toEqual({ x: -2.5, y: 64, z: 0.5 });
+    // In the lava, or outside the fence: no spot at all.
+    expect(dropSpot(world, fence, { x: -4.5, y: 64, z: 0.5 })).toBeNull();
+    expect(dropSpot(world, fence, { x: 12.5, y: 64, z: 0.5 })).toBeNull();
   });
 });
 

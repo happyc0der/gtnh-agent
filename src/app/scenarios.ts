@@ -3,6 +3,7 @@ import type { AgentConfigInput } from '../config/env.ts';
 import type { ActionType } from '../domain/actions.ts';
 import type { PlaceableItem } from '../domain/blocks.ts';
 import type { Decision } from '../domain/decisions.ts';
+import { FOOD_TASK_ID } from '../domain/food.ts';
 import type { PlannerFixture } from '../planner/mock-planner-provider.ts';
 import type { CycleStatus } from './agent-loop.ts';
 
@@ -150,6 +151,45 @@ const placeStep =
     }
   };
 
+/**
+ * Hungry with nothing to eat, on the play loop's food task (src/app/food.ts), by day: food
+ * `food`/20 (9 unless given), no bread, the task get-food active with no known step (the
+ * planner plans it from the food route).
+ */
+const hungryForFood = (w: MockWorld, food = 9): void => {
+  w.player.hunger = food;
+  delete w.inventory.items['minecraft:bread'];
+  w.task = {
+    taskId: FOOD_TASK_ID,
+    goal: `Get food: hungry (food ${food}/20) with nothing to eat.`,
+    subgoal: '0/10 hunger points of food carried',
+    status: 'active',
+  };
+  w.recipe = null;
+};
+
+/** The planner's food plan: ONE GATHER step, as the food route offers it. */
+const gatherPlan = (args: Record<string, unknown>, goal: string) => ({
+  kind: 'plan',
+  plan: {
+    goal,
+    steps: [
+      {
+        step: 1,
+        action: { type: 'GATHER', args },
+        rationale: 'The food route lists it in view: one GATHER, code walks and gets it.',
+      },
+    ],
+    requiresUserApproval: false,
+    explanation: 'Get food from the nearest source the route lists.',
+    failureHandling: {
+      onStepFailure: 'REPLAN',
+      maxRetriesPerStep: 1,
+      escalationMessage: 'Could not get food here.',
+    },
+  },
+});
+
 const fetchPlan = {
   goal: 'Fetch cobblestone for the next step',
   steps: [
@@ -188,6 +228,85 @@ export const SCENARIOS: readonly Scenario[] = [
     { decision: 'EAT', actionType: 'EAT_FOOD', status: 'succeeded' },
     (w) => {
       w.player.hunger = 8;
+    },
+  ),
+  scenario(
+    'hungry-no-food-cow',
+    'Food 9 and nothing to eat, on the food task; a cow 5 blocks away: GATHER it, so walk next to it first.',
+    { decision: 'REQUEST_PLANNER', actionType: 'MOVE_TO', status: 'succeeded' },
+    (w) => {
+      hungryForFood(w);
+      w.mobs = [
+        {
+          id: 501,
+          type: 'minecraft:Cow',
+          category: 'passive',
+          position: { x: 6, y: 64, z: 1 },
+          health: 10,
+          drops: { 'minecraft:beef': 2, 'minecraft:leather': 1 },
+        },
+      ];
+    },
+    {
+      plannerFixtures: [
+        {
+          name: 'hunt-a-cow',
+          when: { taskId: FOOD_TASK_ID },
+          response: gatherPlan({ animal: 'minecraft:Cow', count: 3 }, 'Hunt the cow in view'),
+        },
+      ],
+    },
+  ),
+  scenario(
+    'hungry-no-food-garden',
+    'Food 9 and nothing to eat, on the food task; a HarvestCraft grass garden within reach: GATHER it, dug at once, its produce collected.',
+    { decision: 'REQUEST_PLANNER', actionType: 'DIG_BLOCK', status: 'succeeded' },
+    (w) => {
+      hungryForFood(w);
+      w.resourceBlocks.push({ block: 'harvestcraft:grassgarden', position: { x: 1, y: 64, z: 2 } });
+    },
+    {
+      plannerFixtures: [
+        {
+          name: 'dig-a-garden',
+          when: { taskId: FOOD_TASK_ID },
+          response: gatherPlan(
+            { block: 'harvestcraft:grassgarden', count: 6 },
+            'Dig the garden in view',
+          ),
+        },
+      ],
+    },
+  ),
+  scenario(
+    'starving-no-food-garden',
+    'Food 2 and nothing to eat (seen live), on the food task by day; a garden within reach: getting food goes on below minHunger, and the garden is dug.',
+    { decision: 'REQUEST_PLANNER', actionType: 'DIG_BLOCK', status: 'succeeded' },
+    (w) => {
+      hungryForFood(w, 2);
+      w.resourceBlocks.push({ block: 'harvestcraft:berrygarden', position: { x: 1, y: 64, z: 2 } });
+    },
+    {
+      plannerFixtures: [
+        {
+          name: 'dig-a-garden-starving',
+          when: { taskId: FOOD_TASK_ID },
+          response: gatherPlan(
+            { block: 'harvestcraft:berrygarden', count: 6 },
+            'Dig the garden in view',
+          ),
+        },
+      ],
+    },
+  ),
+  scenario(
+    'starving-no-food-task',
+    'Food 2 and nothing to eat, on a quest task (not the food task), away from home: retreats home as before.',
+    { decision: 'RETREAT_HOME', actionType: 'RETURN_TO_SAFE_LOCATION', status: 'succeeded' },
+    (w) => {
+      w.player.hunger = 2;
+      w.player.position = { x: 40, y: 64, z: 40 };
+      delete w.inventory.items['minecraft:bread'];
     },
   ),
   scenario(

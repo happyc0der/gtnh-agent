@@ -32,6 +32,8 @@ export const SURVEY_KINDS = [
   'lava',
   'stone',
   'ore',
+  // HarvestCraft's land gardens that give food (src/domain/food.ts FOOD_GARDENS).
+  'garden',
 ] as const;
 export const SurveyKindSchema = z.enum(SURVEY_KINDS);
 export type SurveyKind = z.infer<typeof SurveyKindSchema>;
@@ -175,6 +177,7 @@ export const PLACE_KINDS = [
   'water',
   'stone',
   'ore',
+  'garden',
 ] as const;
 export type PlaceKind = (typeof PLACE_KINDS)[number];
 
@@ -188,6 +191,8 @@ export const PLACE_MINIMUM: Readonly<Record<PlaceKind, number>> = {
   water: 8,
   stone: 8,
   ore: 1,
+  // One garden is a meal or three, and they are scattered.
+  garden: 1,
 };
 
 const DirectionOrHereSchema = z.enum([...EXPLORE_DIRECTIONS, 'here']);

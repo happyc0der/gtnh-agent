@@ -342,11 +342,17 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
         else if (!target.attackable) bad(`${target.type} ${target.id} is not attackable`);
         break;
       }
-      case 'GATHER':
-        if (!state.diggableBlocks.some((b) => b.block === a.args.block)) {
-          bad(`no ${a.args.block} is listed in state.diggableBlocks to gather`);
+      case 'GATHER': {
+        const args = a.args;
+        if ('block' in args) {
+          if (!state.diggableBlocks.some((b) => b.block === args.block)) {
+            bad(`no ${args.block} is listed in state.diggableBlocks to gather`);
+          }
+        } else if (!state.entities.some((e) => e.type === args.animal && e.attackable)) {
+          bad(`no attackable ${args.animal} is listed in state.entities to hunt`);
         }
         break;
+      }
       case 'SUBMIT_QUEST':
       case 'CHECK_QUEST_BOX':
       case 'CLAIM_QUEST_REWARD':

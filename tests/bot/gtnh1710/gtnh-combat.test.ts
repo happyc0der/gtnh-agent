@@ -143,6 +143,57 @@ describe('Gtnh1710Client fighting', () => {
     ).toBe(true);
   }, 15_000);
 
+  it('walks to where a cow died and picks up its drops: a farm animal is killed for them', async () => {
+    const { server, client } = await start({
+      items: [...ITEMS, [363, 'minecraft:beef'], [334, 'minecraft:leather']],
+      combat: {
+        mobs: [
+          {
+            entityId: 401,
+            mobType: 92,
+            ...east(2),
+            health: 1,
+            age: 0,
+            drops: [
+              { item: 'minecraft:beef', count: 2 },
+              { item: 'minecraft:leather', count: 1 },
+            ],
+          },
+        ],
+      },
+    });
+    const result = await attack(client, 401);
+    expect(result).toMatchObject({
+      ok: true,
+      data: { target: 'minecraft:Cow', kills: 1, dropsCollected: true, walkedToDrops: true },
+    });
+    // The drops lay 2 blocks away, beyond a player's pickup reach (1.3): it walked there.
+    expect(result.message).toMatch(/walked to the drops at \(-2\.5, 106\.0, -7\.5\) and picked up/);
+    expect(server.combatSim.pickedUp).toEqual(
+      expect.arrayContaining([
+        { item: 'minecraft:beef', count: 2 },
+        { item: 'minecraft:leather', count: 1 },
+      ]),
+    );
+    expect((await client.observe()).inventory).toMatchObject({
+      known: true,
+      value: { items: { 'minecraft:beef': 2, 'minecraft:leather': 1 } },
+    });
+  }, 10_000);
+
+  it('never walks to the drops of a hostile it killed (that is no escape)', async () => {
+    const { server, client } = await start({
+      items: [...ITEMS, [367, 'minecraft:rotten_flesh']],
+      combat: {
+        mobs: [zombie(301, 2, 1, { drops: [{ item: 'minecraft:rotten_flesh', count: 1 }] })],
+      },
+    });
+    const result = await attack(client, 301);
+    expect(result).toMatchObject({ ok: true, data: { kills: 1 } });
+    expect(result.data).not.toHaveProperty('walkedToDrops');
+    expect(server.combatSim.pickedUp).toEqual([]);
+  }, 10_000);
+
   it('holds the best axe in the hotbar and strikes once per hurt-resistance window', async () => {
     const { server, client } = await start({
       inventory: [

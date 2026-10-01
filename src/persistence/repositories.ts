@@ -348,6 +348,28 @@ export class ActionLogRepository implements FailureHistory {
   }
 
   /**
+   * The foods the agent ate lately, newest first: the items of its EAT_FOOD actions that
+   * succeeded, at most `limit` (Spice of Life's history counts every food eaten).
+   */
+  recentMeals(limit: number): string[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT action_json FROM action_logs
+          WHERE action_type = 'EAT_FOOD' AND status = 'succeeded'
+          ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all(limit) as Array<{ action_json: string }>;
+    return rows.flatMap((r) => {
+      try {
+        const action = JSON.parse(r.action_json) as { args?: { item?: unknown } };
+        return typeof action.args?.item === 'string' ? [action.args.item] : [];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  /**
    * Executed-and-failed attempts (execution or verification) of this exact action for this
    * task, by the agent itself: failures of actions a human requested directly (origin
    * 'user', e.g. a stopped test walk) do not count against the agent's own attempts, nor do

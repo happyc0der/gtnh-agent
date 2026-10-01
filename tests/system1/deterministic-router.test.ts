@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import { DecisionResultSchema } from '../../src/domain/decisions.ts';
+import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import { NIGHT_SHELTER_TASK_ID } from '../../src/domain/night-shelter.ts';
 import { routeDecision } from '../../src/system1/deterministic-router.ts';
 import { makeState, routerCtx, testConfig } from '../fixtures/index.ts';
@@ -182,6 +183,70 @@ describe('System1 deterministic router', () => {
         delete w.inventory.items['minecraft:bread'];
       });
       expect(d.decision).toBe('EXECUTE_KNOWN_SAFE_STEP');
+    });
+
+    /** Food 2 with nothing to eat (seen live), away from home, on the food task. */
+    const starvingOnFoodTask = (w: MockWorld): void => {
+      w.player.hunger = 2;
+      w.player.position = { x: 40, y: 64, z: 40 };
+      delete w.inventory.items['minecraft:bread'];
+      w.task = {
+        taskId: FOOD_TASK_ID,
+        goal: 'Get food',
+        subgoal: '0/10 carried',
+        status: 'active',
+      };
+      w.recipe = null;
+    };
+
+    it('starving without food, on the food task by day: goes on getting food', () => {
+      // A retreat home finds no food there, and a pause only starves (nothing heals offline).
+      const d = route(starvingOnFoodTask);
+      expect(d.decision).toBe('REQUEST_PLANNER');
+      expect(d.factsUsed).toMatchObject({ hunger: 2, approvedFood: null, gettingFood: true });
+    });
+
+    it('starving without food, on the food task in the evening: retreats as before', () => {
+      const d = route((w) => {
+        starvingOnFoodTask(w);
+        w.timeOfDay = 12_500;
+      });
+      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.reasonCodes).toEqual(['HUNGRY', 'NO_APPROVED_FOOD']);
+    });
+
+    it('low health still comes first on the food task', () => {
+      const d = route((w) => {
+        starvingOnFoodTask(w);
+        w.player.health = 5;
+      });
+      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.reasonCodes).toEqual(['LOW_HEALTH']);
+    });
+
+    it('eats the carried food that restores the most now (Spice of Life)', () => {
+      // Five apples among the last meals: the next restores floor(1 x 0.875) = 0.
+      const ctx = { ...routerCtx(), recentMeals: Array<string>(5).fill('minecraft:apple') };
+      const d = route((w) => {
+        w.player.hunger = 10;
+        delete w.inventory.items['minecraft:bread'];
+        w.inventory.items['minecraft:apple'] = 4;
+        w.inventory.items['minecraft:carrot'] = 1;
+      }, ctx);
+      expect(d.decision).toBe('EAT');
+      expect(d.factsUsed).toMatchObject({ approvedFood: 'minecraft:carrot' });
+    });
+
+    it('carried food that would restore nothing counts as none', () => {
+      const ctx = { ...routerCtx(), recentMeals: Array<string>(5).fill('minecraft:apple') };
+      const d = route((w) => {
+        w.player.hunger = 3;
+        w.player.position = { x: 40, y: 64, z: 40 };
+        delete w.inventory.items['minecraft:bread'];
+        w.inventory.items['minecraft:apple'] = 4;
+      }, ctx);
+      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.reasonCodes).toEqual(['HUNGRY', 'NO_APPROVED_FOOD']);
     });
   });
 

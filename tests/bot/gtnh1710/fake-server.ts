@@ -481,6 +481,9 @@ export class FakeGtnhServer {
       },
       health: this.#opts.health.health,
       food: this.#opts.health.food,
+      itemId: (name) =>
+        this.#opts.items.find(([, n]) => n === name)?.[0] ??
+        this.#opts.blocks.find(([, n]) => n === name)?.[0],
     });
     this.questBookSim =
       options.questBook === undefined
@@ -831,6 +834,7 @@ export class FakeGtnhServer {
           case 0x03:
             this.idleTicks += 1;
             this.digSim.onPlayerTick();
+            this.combatSim.onPlayerTick();
             this.questBookSim?.onPlayerTick();
             if (!healthSent && this.confirmedPositions.length > 0) {
               healthSent = true;
@@ -859,6 +863,7 @@ export class FakeGtnhServer {
             };
             this.confirmedPositions.push(p);
             this.digSim.onPlayerTick();
+            this.combatSim.onPlayerTick();
             this.questBookSim?.onPlayerTick();
             const centre = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`;
             if (this.#opts.streamChunks && this.#views.get(socket)?.centre !== centre) {

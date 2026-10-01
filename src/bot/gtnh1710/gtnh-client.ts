@@ -7,7 +7,7 @@ import type { GameState } from '../../domain/game-state.ts';
 import { placedBlockOf, type DiggableBlock, type PlaceableItem } from '../../domain/blocks.ts';
 import type { BlockPosition, Position } from '../../domain/common.ts';
 import { known } from '../../domain/known.ts';
-import { BARE_HAND_SPEED, digWaitTicks, TICK_MS } from '../../domain/dig-time.ts';
+import { BARE_HAND_SPEED, digWaitTicks, instantDig, TICK_MS } from '../../domain/dig-time.ts';
 import {
   needsCraftingTable,
   RECIPES,
@@ -62,6 +62,7 @@ import {
   BARE_HAND,
   calmRefusal,
   ENGAGE_RADIUS,
+  FARM_ANIMALS,
   killStrikeAllowed,
   MAX_BURST_MS,
   MAX_SWINGS_PER_BURST,
@@ -73,11 +74,13 @@ import {
 } from '../../domain/combat.ts';
 import {
   chooseWeapon,
+  dropSpot,
   eyeHeightOf,
   insideFence,
   lineOfSightClear,
   lookAtPoint,
   playerEyes,
+  withinPickup,
 } from './combat.ts';
 import {
   BQ_CHANNEL,
@@ -292,6 +295,15 @@ function describeGain(gained: ReadonlyArray<[string, number]>): string {
     .map(([item, n]) => `${n} x ${item}`)
     .join(', ')
     .slice(0, 200);
+}
+
+/**
+ * An ATTACK_ENTITY burst's outcome: the action's result, and the kill when the target died
+ * (where it last stood, its type, and the weapon struck with: null for a bare hand).
+ */
+interface Burst {
+  result: ClientActionResult;
+  kill: { at: Vec3; type: string; weapon: string | null } | null;
 }
 
 /** What a walk broke: "2 leaves on the way: (1, 64, 0), (1, 65, 0)". */
@@ -2410,7 +2422,12 @@ export class Gtnh1710Client implements MinecraftClient {
     const held = tool === null ? null : { slot: hand.slot, stack: this.#hotbar(hand.slot) ?? null };
 
     const itemsBefore = this.#world.inventoryItems();
-    const ticks = digWaitTicks(check.block, tool === null ? BARE_HAND_SPEED : tool.speed);
+    // A block of hardness 0 (a HarvestCraft garden) breaks on the dig's start: the server's
+    // ItemInWorldManager.onBlockClicked harvests it there, and a vanilla client sends no finish.
+    const instant = instantDig(check.block);
+    const ticks = instant
+      ? 0
+      : digWaitTicks(check.block, tool === null ? BARE_HAND_SPEED : tool.speed);
     const holding =
       tool === null ? 'an empty hand' : `${tool.item} (${usesLeft(tool, hand.damage)} uses left)`;
     const guard = callerGuard ?? {
@@ -2429,7 +2446,16 @@ export class Gtnh1710Client implements MinecraftClient {
       this.#lastYaw = look.yaw;
       const self = this.#world.selfEntityId;
       if (self !== null) this.#send(outbound.swingArm(self));
+      const startSentAt = watch.updates.length;
       this.#send(outbound.digBlock(DIG_STATUS.start, x, y, z, check.face));
+      if (instant) {
+        // The server's answer to the start is the verdict: air with no re-send, as for a
+        // finish (a cancelled break re-sends the block).
+        verdict = await this.#digVerdict(watch, startSentAt, check.block, where);
+        if (!verdict.ok) return done(verdict.result);
+        this.#world.noteDug(target);
+        return { ok: true, world, check, hand, held, itemsBefore, ticks, guard };
+      }
       const startedAt = clock.now().getTime();
       let tick = 0;
       while (clock.now().getTime() - startedAt < ticks * TICK_MS) {
@@ -3172,6 +3198,7 @@ export class Gtnh1710Client implements MinecraftClient {
    * System 1 decides again), an unidentified entity or something that may explode nearby, and
    * a target that is gone, out of the fence or out of range. A blow that may kill is held
    * back while the player would not survive GTNH's kill explosion from where it stands.
+   * After killing a farm animal it picks up the drops (#collectKillDrops), as a dig does.
    */
   async #attack(entityId: number): Promise<ClientActionResult> {
     const blocker = this.#combatBlocker();
@@ -3188,6 +3215,8 @@ export class Gtnh1710Client implements MinecraftClient {
     const unsafe = this.#fightMomentProblem();
     if (unsafe !== null) return failed(`not attacking: ${unsafe}`, 'REFUSED');
 
+    const itemsBefore = this.#world.inventoryItems();
+    let burst: Burst;
     this.#fighting = true;
     try {
       // A window left open by an earlier action is closed first (never with a full cursor).
@@ -3220,16 +3249,30 @@ export class Gtnh1710Client implements MinecraftClient {
         this.#send(outbound.selectHotbarSlot(slot));
         this.#world.setHeldSlot(slot);
       }
-      return await this.#strikeBurst(entityId, fence, weapon);
+      burst = await this.#strikeBurst(entityId, fence, weapon);
     } finally {
       this.#fighting = false;
     }
+    const { result, kill } = burst;
+    // Hunting: a farm animal's drops are what it was killed for. Never after a fight with a
+    // hostile (DEFEND): walking to its drops is no escape.
+    if (!result.ok || kill === null || !FARM_ANIMALS.has(kill.type) || itemsBefore === null) {
+      return result;
+    }
+    return this.#collectKillDrops(result, kill.at, itemsBefore, kill.weapon);
   }
 
-  async #strikeBurst(entityId: number, fence: Fence, weapon: Weapon): Promise<ClientActionResult> {
+  /**
+   * One ATTACK_ENTITY burst (see #attack): the action's result and, when the target died,
+   * where it last stood (its drops spawn there), its type and the weapon struck with.
+   */
+  async #strikeBurst(entityId: number, fence: Fence, weapon: Weapon): Promise<Burst> {
     const clock = this.#opts.clock;
     const first = this.#world.combatEntity(entityId);
-    if (first === null) return failed('not attacking: the target is gone', 'REFUSED');
+    if (first === null) {
+      return { result: failed('not attacking: the target is gone', 'REFUSED'), kill: null };
+    }
+    let lastAt: Vec3 = first.position;
     const what = `${first.type} ${entityId}`;
     const startedAt = clock.now().getTime();
     const deadline = startedAt + MAX_BURST_MS;
@@ -3265,6 +3308,7 @@ export class Gtnh1710Client implements MinecraftClient {
       if (t !== null) {
         hurt = Math.max(hurt, t.hurtCount);
         lastHealth = t.health ?? lastHealth;
+        lastAt = t.position;
       }
       const health = this.#world.health;
       if (this.#world.hasDied(entityId) || t?.dead === true) {
@@ -3323,6 +3367,7 @@ export class Gtnh1710Client implements MinecraftClient {
       if (t !== null) {
         hurt = Math.max(hurt, t.hurtCount);
         lastHealth = t.health ?? lastHealth;
+        lastAt = t.position;
       }
     }
     const killed = this.#world.hasDied(entityId);
@@ -3351,9 +3396,70 @@ export class Gtnh1710Client implements MinecraftClient {
       `${killed ? 'killed' : 'struck'} ${what}: ${swings} swing(s), ${hits} hit(s) seen` +
       `${first.health !== null ? `, health ${first.health} -> ${killed ? 0 : (lastHealth ?? '?')}` : ''}` +
       `${damageTaken !== null && damageTaken > 0 ? `, took ${damageTaken} damage` : ''}; stopped: ${reason}`;
-    if (stop?.hard === true) return craftFailed(`fight stopped: ${summary}`, 'FAILED', data);
-    if (hits > 0 || killed) return ok(summary.slice(0, 500), data);
-    return craftFailed(`no hit landed on ${what}: ${summary}`, 'FAILED', data);
+    const kill = killed ? { at: lastAt, type: first.type, weapon: weapon.item } : null;
+    if (stop?.hard === true) {
+      return { result: craftFailed(`fight stopped: ${summary}`, 'FAILED', data), kill };
+    }
+    if (hits > 0 || killed) return { result: ok(summary.slice(0, 500), data), kill };
+    return { result: craftFailed(`no hit landed on ${what}: ${summary}`, 'FAILED', data), kill };
+  }
+
+  /**
+   * After killing a farm animal: its drops (raw meat, leather, wool...) spawn where it died,
+   * and the player struck from up to 2.2 blocks away with a bare hand (4.5 with an axe), out
+   * of the pickup reach (the body's box grown by 1 sideways and 0.5 up and down: the vanilla
+   * player's onLivingUpdate). As a dig fetches a drop it cannot reach (#dig), it walks onto the
+   * spot the animal died on, or the nearest standable spot beside it, with an ordinary checked
+   * walk that stops for threats, then waits for the drops to arrive. The kill stands whatever
+   * the walk does; the result says what was picked up.
+   */
+  async #collectKillDrops(
+    result: ClientActionResult,
+    at: Vec3,
+    itemsBefore: Readonly<Record<string, number>>,
+    weapon: string | null,
+  ): Promise<ClientActionResult> {
+    // A struck weapon wears (its name's @damage changes): that is no drop.
+    const isWeapon = (item: string): boolean =>
+      weapon !== null && (item === weapon || item.startsWith(`${weapon}@`));
+    const gains = (): Array<[string, number]> =>
+      this.#gainSince(itemsBefore, null).filter(([item]) => !isWeapon(item));
+    const where = `(${at.x.toFixed(1)}, ${at.y.toFixed(1)}, ${at.z.toFixed(1)})`;
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    const fence = this.#fence().fence;
+    let walked: ClientActionResult | null = null;
+    if (world !== null && feet !== null && fence !== null && !withinPickup(feet, at)) {
+      const spot = dropSpot(world, fence, at);
+      walked =
+        spot === null
+          ? failed(`no spot a player could stand on at or beside ${where}`, 'REFUSED')
+          : await this.#walkTo(spot, { stopForThreats: true });
+    }
+    if (walked === null || walked.ok) {
+      await this.#waitFor(() => gains().length > 0, DROP_WAIT_MS);
+      // Several stacks (meat and leather) arrive a tick or two apart.
+      if (gains().length > 0) await delay(5 * TICK_MS);
+    }
+    const gained = gains();
+    const drops = describeGain(gained);
+    const how =
+      walked === null
+        ? gained.length > 0
+          ? `picked up ${drops}`
+          : 'no drop reached the inventory'
+        : !walked.ok
+          ? `its drops lie at ${where}, but walking there failed: ${walked.message}`
+          : gained.length > 0
+            ? `walked to the drops at ${where} and picked up ${drops}`
+            : `walked to ${where}, but no drop reached the inventory`;
+    this.#log(`after the kill: ${how}`);
+    return ok(`${result.message}; ${how}`.slice(0, 500), {
+      ...result.data,
+      dropsCollected: gained.length > 0,
+      drops,
+      walkedToDrops: walked?.ok ?? false,
+    });
   }
 
   // -------------------------------------------------------------------------

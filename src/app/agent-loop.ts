@@ -10,6 +10,7 @@ import {
 import type { BlockPosition } from '../domain/common.ts';
 import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.ts';
 import { GameStateSchema, LastActionSchema, type GameState } from '../domain/game-state.ts';
+import { MEAL_HISTORY_LENGTH } from '../domain/food.ts';
 import { distance } from '../domain/geometry.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 import { summarizeExploration, type ExplorationSummary } from '../domain/world-memory.ts';
@@ -22,7 +23,15 @@ import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
-import { chooseGatherAction, GATHER, startGather } from '../planner/gather.ts';
+import {
+  chooseGatherAction,
+  GATHER,
+  gatherSourceOf,
+  sourceName,
+  startGather,
+  type GatherOptions,
+  type GatherStep,
+} from '../planner/gather.ts';
 import {
   MAX_JOURNAL_LINE,
   PlannerResponseSchema,
@@ -525,6 +534,7 @@ export async function runSingleCycle(
     routing: config.routing,
     combatEnabled: config.minecraft.combat.enabled,
     eatingEnabled: config.minecraft.eating.enabled,
+    recentMeals: repos.actions.recentMeals(MEAL_HISTORY_LENGTH),
     plan: taskPlanFacts(repos, state),
     ...(nearer ? { retreatTo: TRAIL_LOCATION } : {}),
   };
@@ -770,9 +780,16 @@ interface PlanStepRef {
   planner: string;
   /**
    * The step is a GATHER (gather-step.ts), which runs many actions: this one is for the
-   * block at `target` (`walk`: the walk to its stand spot).
+   * block at `target` (`walk`: the walk to its stand spot; `travel`: an EXPLORE toward a
+   * place it is remembered at), or for the animal `entity`.
    */
-  gather?: { ref: GatherRef; target: BlockPosition; walk: boolean; travel?: boolean };
+  gather?: {
+    ref: GatherRef;
+    target: BlockPosition;
+    walk: boolean;
+    entity: number | null;
+    travel?: boolean;
+  };
 }
 
 const reviewHint = (taskId: string, planId: number): string =>
@@ -786,6 +803,25 @@ type Consulted =
       outcome: PlannerOutcome;
       ended: { status: CycleStatus; label: string; why: string };
     };
+
+/**
+ * Where world memory remembers a GATHER step's block, for a step with none of it in view
+ * (gather.ts GatherOptions.remembered). None for an animal: animals wander, and world memory
+ * keeps places of blocks only.
+ */
+function rememberedFor(
+  deps: AgentDeps,
+  gather: GatherStep,
+  state: GameState,
+  now: Date,
+): NonNullable<GatherOptions['remembered']> {
+  if (!('block' in gather.args)) return [];
+  return rememberedPlacesOf(
+    gather.args.block,
+    state,
+    explorationFor(deps.config, deps.repos, state, now),
+  );
+}
 
 function stepOf(
   deps: AgentDeps,
@@ -827,11 +863,7 @@ function stepOf(
       ref,
       state,
       ctx,
-      rememberedPlacesOf(
-        step.action.args.block,
-        state,
-        explorationFor(deps.config, deps.repos, state, ctx.now),
-      ),
+      rememberedFor(deps, step.action, state, ctx.now),
     );
     if (turn.kind === 'end') return gatherEnded(deps.repos, stored, turn, outcome);
     return {
@@ -847,6 +879,7 @@ function stepOf(
           ref,
           target: turn.target,
           walk: turn.walk,
+          entity: turn.entity,
           ...(turn.travel === true ? { travel: true } : {}),
         },
       },
@@ -1114,15 +1147,13 @@ function refusedFirstStep(
         reach: ctx.config.interactionReach,
         now: ctx.now,
         check: previewCheck(deps.repos.actions, taskId, state, ctx),
-        remembered: rememberedPlacesOf(
-          s.action.args.block,
-          state,
-          explorationFor(deps.config, deps.repos, state, ctx.now),
-        ),
+        remembered: rememberedFor(deps, s.action, state, ctx.now),
       },
     );
     if (choice.kind === 'act') return null;
-    if (choice.end === 'no-target') idle.push(`GATHER ${s.action.args.block}: ${choice.why}`);
+    if (choice.end === 'no-target') {
+      idle.push(`GATHER ${sourceName(gatherSourceOf(s.action))}: ${choice.why}`);
+    }
   }
   if (first === undefined) {
     if (idle.length === 0) return null;
@@ -1315,6 +1346,8 @@ async function consultPlanner(
       safety: ctx,
       maxPlanSteps: config.planner.maxPlanSteps,
       ...(exploration === undefined ? {} : { exploration }),
+      recentMeals: repos.actions.recentMeals(MEAL_HISTORY_LENGTH),
+      combatEnabled: config.minecraft.combat.enabled,
       recentActions: repos.actions
         .recent(limit, taskId)
         .flatMap((a) =>

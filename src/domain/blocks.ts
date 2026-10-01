@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
 /**
- * The ONLY blocks DIG_BLOCK may break, by 1.7.10 registry name: vanilla natural blocks
- * that a bare hand harvests (their material needs no tool), and modded natural blocks read
- * in their mod's code to be the same (Biomes O' Plenty's leaves). Nothing with a tile
- * entity, nothing that is part of a build. Each block's hardness and falling behaviour are
- * kept next to this list (src/domain/dig-time.ts); a test keeps the two identical.
+ * Natural blocks that a bare hand harvests (their material needs no tool): vanilla's, and
+ * modded ones read in their mod's code to be the same (Biomes O' Plenty's leaves). Full
+ * blocks, with no tile entity, never part of a build. The dig allowlist's solid part: what
+ * may touch a dug block (DIG_NEIGHBOURS in src/bot/gtnh1710/digging.ts) is these, never a
+ * garden (a plant on a dug block drops).
  */
-export const DIGGABLE_BLOCKS = [
+export const SOLID_DIGGABLE_BLOCKS = [
   'minecraft:log',
   'minecraft:log2',
   'minecraft:leaves',
@@ -27,8 +27,47 @@ export const DIGGABLE_BLOCKS = [
   'minecraft:clay',
 ] as const;
 
+/**
+ * Pam's HarvestCraft gardens on land (harvestcraft-1.3.2-GTNH, approved 2026-10-01 for food:
+ * GTNH's quest "Sticks 'n Stones" sends a new player to them). Read in the mod's code
+ * (javap; docs/gtnh-compatibility.md, "Food"): BlockGarden extends BlockFlower, so a garden
+ * is a plant with no collision box and no tile entity; its registration sets no hardness, so
+ * a hand breaks it at once (hardness 0: the server breaks it on the dig's start), and it
+ * drops `gardendropAmount` (3, harvestcraft.cfg) of its produce, each a random one of its
+ * kind's list (BlockGarden.getDropList). A right-click instead picks the garden up as a block
+ * (onBlockActivated): the agent never right-clicks one. The water garden is left out: it
+ * floats on water (BlockPamWaterGarden.canPlaceBlockOn), where its drop would fall into the
+ * water the walker never enters.
+ */
+export const GARDEN_BLOCKS = [
+  'harvestcraft:berrygarden',
+  'harvestcraft:desertgarden',
+  'harvestcraft:grassgarden',
+  'harvestcraft:gourdgarden',
+  'harvestcraft:groundgarden',
+  'harvestcraft:herbgarden',
+  'harvestcraft:leafygarden',
+  'harvestcraft:mushroomgarden',
+  'harvestcraft:stalkgarden',
+  'harvestcraft:textilegarden',
+  'harvestcraft:tropicalgarden',
+] as const;
+export type GardenBlock = (typeof GARDEN_BLOCKS)[number];
+
+/**
+ * The ONLY blocks DIG_BLOCK may break, by 1.7.10 registry name: the solid vanilla ones and
+ * HarvestCraft's land gardens. Nothing else modded, nothing with a tile entity, nothing that
+ * is part of a build. Each block's hardness and falling behaviour are kept next to this list
+ * (src/domain/dig-time.ts); a test keeps the two identical.
+ */
+export const DIGGABLE_BLOCKS = [...SOLID_DIGGABLE_BLOCKS, ...GARDEN_BLOCKS] as const;
+
 export const DiggableBlockSchema = z.enum(DIGGABLE_BLOCKS);
 export type DiggableBlock = z.infer<typeof DiggableBlockSchema>;
+
+export function isGardenBlock(name: string): name is GardenBlock {
+  return (GARDEN_BLOCKS as readonly string[]).includes(name);
+}
 
 /** Blocks that fall when the block under them is removed (1.7.10 BlockFalling). */
 export const FALLING_DIGGABLE_BLOCKS: ReadonlySet<DiggableBlock> = new Set<DiggableBlock>([

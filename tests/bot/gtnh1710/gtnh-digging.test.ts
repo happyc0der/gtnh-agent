@@ -334,6 +334,59 @@ describe('Gtnh1710Client digging', () => {
     );
   }, 10_000);
 
+  it('breaks a HarvestCraft garden on the dig start (hardness 0): no wait, no finish; its 3 drops are picked up', async () => {
+    // A berry garden on the grass floor next to the player, and one beside water (refused:
+    // water would flow into the freed cell).
+    const BERRY_GARDEN = 3001;
+    const garden = { x: -4, y: 106, z: -8 };
+    const wetGarden = { x: -6, y: 106, z: -10 };
+    const { server, client } = await start({
+      blocks: [...DIG_TEST_BLOCK_REGISTRY, [BERRY_GARDEN, 'harvestcraft:berrygarden']],
+      items: [
+        [297, 'minecraft:bread'],
+        [6001, 'harvestcraft:strawberryItem'],
+      ],
+      inventory: [],
+      blockOverrides: new Map([
+        ...WORLD,
+        [key(garden), BERRY_GARDEN],
+        [key(wetGarden), BERRY_GARDEN],
+      ]),
+    });
+    const listed = blocksOf(await client.observe()).resources.filter(
+      (r) => r.block === 'harvestcraft:berrygarden',
+    );
+    expect(listed.map((r) => r.position)).toContainEqual(garden);
+
+    const wet = await perform(client, dig(wetGarden));
+    expect(wet).toMatchObject({ ok: false, code: 'REFUSED' });
+    expect(wet.message).toMatch(/touches minecraft:water/);
+
+    const started = Date.now();
+    const result = await perform(client, dig(garden));
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        block: 'harvestcraft:berrygarden',
+        dropCollected: true,
+        drops: '3 x harvestcraft:strawberryItem',
+      },
+    });
+    // The start only: the server broke it at once, and a finish would find air.
+    expect(server.digSim.digs.map((d) => [d.status, d.x, d.y, d.z])).toEqual([
+      [0, garden.x, garden.y, garden.z],
+    ]);
+    expect(server.digSim.broken).toEqual([
+      { ...garden, name: 'harvestcraft:berrygarden', late: false },
+    ]);
+    // No dig time was waited (a dirt block takes 21 ticks, over a second).
+    expect(Date.now() - started).toBeLessThan(1_000 + 600);
+    expect((await client.observe()).inventory).toMatchObject({
+      known: true,
+      value: { items: { 'harvestcraft:strawberryItem': 3 } },
+    });
+  }, 10_000);
+
   it('reports a drop that fell out of pickup range instead of claiming it', async () => {
     const { server, client } = await start();
     const result = await perform(client, dig(AT.farDirt));

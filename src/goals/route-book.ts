@@ -1,4 +1,12 @@
-import type { DiggableBlock } from '../domain/blocks.ts';
+import {
+  GARDEN_BLOCKS,
+  isGardenBlock,
+  type DiggableBlock,
+  type GardenBlock,
+  type SOLID_DIGGABLE_BLOCKS,
+} from '../domain/blocks.ts';
+import { diggableInfo } from '../domain/dig-time.ts';
+import { ANIMAL_DROPS, GARDEN_BIOMES, GARDEN_DROPS, GARDEN_FOODS } from '../domain/food.ts';
 import {
   ingredientRequirements,
   needsCraftingTable,
@@ -23,13 +31,15 @@ import type { RouteBook, RouteRecipe, RouteSource, RouteTool } from './route.ts'
  * itself stays general: new abilities and data are new entries here.
  */
 
-type Yields = Readonly<Record<DiggableBlock, ReadonlyArray<{ item: string; perDig: number }>>>;
+type Yields<B extends string = DiggableBlock> = Readonly<
+  Record<B, ReadonlyArray<{ item: string; perDig: number }>>
+>;
 
 /**
  * Vanilla 1.7.10 (the base layer): what one bare-hand dig of each allowlisted block yields
  * on average, with no fortune. GTNH changes some of it (GTNH_DIG_CHANGES).
  */
-export const VANILLA_DIG_YIELDS: Yields = {
+export const VANILLA_DIG_YIELDS: Yields<(typeof SOLID_DIGGABLE_BLOCKS)[number]> = {
   'minecraft:sand': [{ item: 'minecraft:sand', perDig: 1 }],
   // BlockGravel: 10% flint instead of gravel (fortune 0).
   'minecraft:gravel': [
@@ -84,11 +94,59 @@ export const GTNH_DIG_CHANGES: ReadonlyArray<{
   },
 ];
 
-/** What one bare-hand dig yields on this server: vanilla, with GTNH's changes applied. */
+/**
+ * HarvestCraft's land gardens (GTNH's own pack content): one dig drops 3 items
+ * (gardendropAmount=3), each a random one of the garden's list (BlockGarden.getDropList,
+ * src/domain/food.ts GARDEN_DROPS), so 3 / n of each of its n kinds on average.
+ */
+export const GARDEN_DIG_YIELDS: Yields<GardenBlock> = (() => {
+  const out = {} as Record<GardenBlock, ReadonlyArray<{ item: string; perDig: number }>>;
+  for (const g of GARDEN_BLOCKS) {
+    const drops = GARDEN_DROPS[g];
+    out[g] = drops.map((item) => ({ item, perDig: Number((3 / drops.length).toFixed(3)) }));
+  }
+  return out;
+})();
+
+/**
+ * What one bare-hand dig yields on this server: vanilla, with GTNH's changes applied, and the
+ * gardens.
+ */
 export const DIG_YIELDS: Yields = {
   ...VANILLA_DIG_YIELDS,
   ...Object.fromEntries(GTNH_DIG_CHANGES.map((c) => [c.block, c.yields])),
+  ...GARDEN_DIG_YIELDS,
 };
+
+/**
+ * Health of the farm animals (applyEntityAttributes in the vanilla jar: EntityCow and EntityPig
+ * 10, EntitySheep 8, EntityChicken 4). A bare hand deals 1 a hit, and a struck animal runs
+ * off for a few seconds (EntityAIPanic), so every hit costs a walk after it: about 5 s a hit.
+ */
+const ANIMAL_HEALTH: Readonly<Record<string, number>> = {
+  'minecraft:Cow': 10,
+  'minecraft:Pig': 10,
+  'minecraft:Sheep': 8,
+  'minecraft:Chicken': 4,
+};
+const SECONDS_PER_HIT = 5;
+
+/**
+ * Mob drops as route sources (via 'kill'): what killing a farm animal yields on average, from
+ * food.ts ANIMAL_DROPS (the vanilla jar's dropFewItems, HarvestCraft's mutton). Only the
+ * animals ATTACK_ENTITY may strike for a task (src/domain/combat.ts FARM_ANIMALS).
+ */
+function killSources(): RouteSource[] {
+  return Object.entries(ANIMAL_DROPS).flatMap(([animal, drops]) =>
+    drops.map((d) => ({
+      item: d.item,
+      via: 'kill' as const,
+      blocks: [animal],
+      perAction: (d.min + d.max) / 2,
+      secondsPerAction: (ANIMAL_HEALTH[animal] ?? 10) * SECONDS_PER_HIT,
+    })),
+  );
+}
 
 /**
  * Blocks that need a tool, with what one dig drops (vanilla 1.7.10: stone drops cobblestone,
@@ -140,6 +198,13 @@ export const FIND_HINTS: Readonly<Record<string, string>> = {
   'minecraft:cobblestone': 'dungeons and villages (or dig stone)',
   'minecraft:sandstone': 'under desert sand',
   'minecraft:obsidian': 'where lava meets water, deep underground',
+  // HarvestCraft's gardens, by where its generator puts them (food.ts GARDEN_BIOMES), and the
+  // farm animals (they spawn on grass, in grassy biomes).
+  ...Object.fromEntries(GARDEN_BLOCKS.map((g) => [g, `HarvestCraft gardens: ${GARDEN_BIOMES[g]}`])),
+  'minecraft:Cow': 'grassy biomes: plains, forests, hills',
+  'minecraft:Pig': 'grassy biomes: plains, forests, hills',
+  'minecraft:Sheep': 'grassy biomes: plains, forests, hills',
+  'minecraft:Chicken': 'grassy biomes: plains, forests, hills',
 };
 
 /** The item that provides each station. */
@@ -164,35 +229,27 @@ function secondsPerToolDig(hardness: number): number {
 /** GT ores: a dig in a found vein, and a small ore (scattered: mostly searching). */
 const VEIN_ORE_SECONDS = 4;
 const SMALL_ORE_SECONDS = 30;
+/**
+ * A garden breaks at once, but gardens are scattered (a few per chunk of the biomes they grow
+ * in, none elsewhere): like a GT small ore, a dig is mostly looking for one.
+ */
+const GARDEN_SECONDS = 30;
 
-const HARDNESS: Readonly<Record<DiggableBlock, number>> = {
-  'minecraft:log': 2,
-  'minecraft:log2': 2,
-  'minecraft:leaves': 0.2,
-  'minecraft:leaves2': 0.2,
-  'BiomesOPlenty:leaves1': 0.2,
-  'BiomesOPlenty:leaves2': 0.2,
-  'BiomesOPlenty:leaves3': 0.2,
-  'BiomesOPlenty:leaves4': 0.2,
-  'BiomesOPlenty:colorizedLeaves1': 0.2,
-  'BiomesOPlenty:colorizedLeaves2': 0.2,
-  'BiomesOPlenty:appleLeaves': 0.2,
-  'BiomesOPlenty:persimmonLeaves': 0.2,
-  'minecraft:dirt': 0.5,
-  'minecraft:grass': 0.6,
-  'minecraft:sand': 0.5,
-  'minecraft:gravel': 0.6,
-  'minecraft:clay': 0.6,
-};
-
+/**
+ * Bare-hand digs as route sources. A garden counts only for its food: its other drops (cactus,
+ * pumpkins, mushrooms, cotton) are left out, so no route reaches for a garden to make
+ * something else (seen in a test: 4 clay blocks routed through Natura water drops from cactus).
+ */
 function digSources(): RouteSource[] {
   const byItem = new Map<string, { blocks: string[]; perAction: number; seconds: number }>();
   for (const [block, yields] of Object.entries(DIG_YIELDS) as Array<
     [DiggableBlock, ReadonlyArray<{ item: string; perDig: number }>]
   >) {
+    const garden = isGardenBlock(block);
     for (const y of yields) {
+      if (garden && !GARDEN_FOODS.includes(y.item)) continue;
       const entry = byItem.get(y.item);
-      const seconds = secondsPerDig(HARDNESS[block]);
+      const seconds = garden ? GARDEN_SECONDS : secondsPerDig(diggableInfo(block).hardness);
       if (entry === undefined) {
         byItem.set(y.item, { blocks: [block], perAction: y.perDig, seconds });
       } else {
@@ -226,10 +283,13 @@ function handRecipes(): RouteRecipe[] {
   });
 }
 
-/** A book of only the hand-verified recipes and bare-hand digging (no generated data). */
+/**
+ * A book of only the hand-verified recipes, bare-hand digging and the farm animals' drops (no
+ * generated data).
+ */
 export const HAND_BOOK: RouteBook = {
   recipes: handRecipes(),
-  sources: digSources(),
+  sources: [...digSources(), ...killSources()],
   hints: FIND_HINTS,
   stationItems: STATION_ITEMS,
 };
@@ -350,7 +410,7 @@ export function buildRouteBook(data: KnowledgeData): RouteBook {
 
   return {
     recipes: [...hand, ...generated.filter((g) => !replaced.has(g))],
-    sources: [...digSources(), ...toolDigSources(data), ...oreSources(data)],
+    sources: [...digSources(), ...killSources(), ...toolDigSources(data), ...oreSources(data)],
     hints: FIND_HINTS,
     tools: toolsOf(data),
     stationItems: STATION_ITEMS,

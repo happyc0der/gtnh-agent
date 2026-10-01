@@ -316,6 +316,47 @@ waits offline for 30 s (an offline player cannot be hurt) and plays on, at most 
 row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play.ts`). Every new session re-checks the
 state from scratch, so a mob that is still there pauses it again.
 
+**Food** (`src/app/food.ts`, `src/domain/food.ts`; approved 2026-10-01). Seen live: food 9/20
+with nothing to eat, its only apple eaten. Below food 6 with no food System 1 retreats or
+pauses, so within a game day or two the agent would starve its own play. GTNH's quest "Sticks
+'n Stones" sends a new player to Pam's HarvestCraft gardens. So, as play turns to a shelter at
+dusk, it turns to food by day:
+
+- **When.** Hungry (below `hungerEatThreshold`, 14) with nothing carried that would restore
+  anything, play makes `get-food` the current task and runs bounded sessions on it until the
+  agent carries `FOOD_TRIP_POINTS` (10 hunger points, about a day of food); then the quest goes
+  on where it stopped. A quest session ends as soon as an observation shows the agent hungry
+  with nothing to eat. At dusk the shelter comes first, and the trip goes on in the morning.
+- **What counts.** Food is counted in hunger points as this server gives them:
+  HungerOverhaul's own values (most foods restore 1; seen live, an apple took food from 8 to
+  9), scaled by Spice of Life for how often the food was eaten among the last 20 meals and
+  rounded down (a 1-point food eaten 5 times lately restores nothing). The agent's meals come
+  from its action log (`recentMeals`). System 1 eats the carried food that restores the most
+  now; a food that would restore nothing counts as none, so none is eaten for nothing. Values
+  and sources: [GTNH compatibility: food](gtnh-compatibility.md#food-2026-10-01).
+- **The route is code's.** The food task's route (`foodRouteForPlanner` in
+  `src/planner/planner-provider.ts`) counts the food carried against what the trip brings back,
+  then lists the sources code sees, each with the `GATHER` step that gets it: HarvestCraft
+  gardens in view (one dig breaks one at once and drops 3 of its produce); grown, unowned cows,
+  pigs and sheep in view (raw beef, porkchop and mutton are approved), only with combat on and
+  while the moment allows a fight; with none of those, a remembered garden (`EXPLORE` toward it
+  first), else where gardens grow (the nearest seen biome like that, or new ground). The
+  planner (the model) chooses; code turns its `GATHER` into checked walks, digs and strikes
+  ([GATHER](#gather-gathering-in-one-plan-step)).
+- **Starving is no reason to stop getting food.** Below `minHunger` (6) with no food, System 1
+  goes on with the food task by day instead of retreating home (no food there) or pausing (a
+  pause only starves: nothing heals offline, and on Hard a food bar at 0 starves the player to
+  death). The safety policy still refuses everything else while the food bar is that low; for
+  the food task by day it lets only the actions that get food run: walks, `EXPLORE`s, and the
+  dig of a listed garden (`getsFood` in `src/safety/safety-policy.ts`). Low health, hostiles,
+  hazards or leaving the work area still stop it. Hunting keeps its own limits (food 8 and
+  health 14: no healing below food 8 here, and a kill may explode), so a starving agent's route
+  offers gardens only, and says why.
+- **Stuck.** A food session that got no food, filled no food bar and saw no new ground is
+  stuck; after `maxStuckSessions` in a row play stops and says so.
+
+Not covered yet: cooking (a furnace needs cobblestone, so a pickaxe), fishing and farming.
+
 **Checkpoints and compaction.** Long work is done in chunks. The planner plans only the next
 one or two route steps; when they are done the agent checkpoints and asks again with fresh
 stock. Each task keeps a journal written by code at every checkpoint: a plan made, done or
@@ -507,6 +548,18 @@ anew: no code was taken from Baritone (LGPL-3.0).
   and logged as before (origin `planner`). Its block must be on `DIG_BLOCK`'s allowlist, and
   its count (1 to 256) is of what the block drops, from the route book's dig yields: clay
   gives 4 clay balls, grass gives dirt, gravel gives gravel or flint.
+- **A block, or a farm animal.** `{"animal":"minecraft:Cow","count":3}` hunts (for food: see
+  Food in [Routes, nights and the play loop](#routes-nights-and-the-play-loop)). Code walks next
+  to the nearest grown, unowned animal of that kind (`MOVE_TO`, tolerance 1) and strikes it once
+  it is within reach (`ATTACK_ENTITY`: 2.2 blocks with a bare hand, less 0.3 as it moves). A
+  struck animal runs off for a few seconds (EntityAIPanic), so after 3 walks in a row to the
+  same one it is passed over. The count is of its drops (a cow: 1-3 raw beef and 0-2 leather),
+  which the live client walks to and picks up after the kill, as a dig picks up its drop. Each
+  strike is dry-run like a dig: an animal the policy would not let it attack now (food or health
+  below the fighting limits, a hostile near) is passed over, and the step ends saying why.
+- **None in view, but remembered.** A `GATHER` of a block with none of it in view heads for the
+  nearest place world memory remembers it at (an `EXPLORE` toward its x and z), then digs there
+  as usual. Animals wander, and world memory keeps no animals: a hunt has no such trip.
 - **Each cycle** while it is the plan's current step, System 1 decides first, as always
   (dangers, vitals, upkeep). When it decides `REQUEST_PLANNER`, code picks the action from the
   fresh observation, without a model:
@@ -855,9 +908,10 @@ copied, and every number was checked in the 1.7.10 and GTNH jars.
 
 ## Digging
 
-`DIG_BLOCK` breaks ONE block from a fixed allowlist of vanilla natural blocks: `log`, `log2`,
-`leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay` (`src/domain/blocks.ts`). A
-bare hand harvests all of them, and none has a tile entity. It needs `MC_ENABLE_DIGGING=true`
+`DIG_BLOCK` breaks ONE block from a fixed allowlist of natural blocks: vanilla `log`, `log2`,
+`leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay`, Biomes O' Plenty's leaves,
+and HarvestCraft's land gardens (`src/domain/blocks.ts`). A bare hand harvests all of them,
+and none has a tile entity. It needs `MC_ENABLE_DIGGING=true`
 **and** the movement fence. The block facts and dig times are in `src/domain/dig-time.ts`, the
 tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digging.ts`;
 `Gtnh1710Client` sends. The server-side rules it relies on are in
@@ -906,6 +960,14 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
      attached or change a build.
    - Nothing on top may fall into the hole, and nothing dangerous may be anywhere in the 3 x 3
      x 3 cube around it.
+   - A HarvestCraft garden is a plant (BlockGarden extends BlockFlower): its cell is open
+     already, so breaking it opens no hole. Its own rules: plain ground under it, nothing beside
+     or above it but air, plain blocks and plants (never a fluid: water would flow into the freed
+     cell), nothing on top that falls, nothing dangerous in the cube. A garden is never among
+     the blocks that may touch another dug block: on top of one, it would drop. Gardens have no
+     hardness (0): the server breaks one on the dig's start, so the client sends no finish and
+     waits no dig time (`instantDig` in `src/domain/dig-time.ts`); a right-click would pick it up
+     as a block instead, and the agent never right-clicks one.
 4. **The dig itself, with the best allowed tool or an empty hand.**
    - Only the wooden shovel (on dirt, grass, sand, gravel and clay) and the vanilla axes (on
      logs) may be held. On this server each breaks one block, and its speed and wear are known.
@@ -1381,6 +1443,13 @@ not stopping the client's walks, digs or placements, and never attacked. The rul
 6. **Verification:** `ENTITY_ATTACKED` passes when the target is seen dying (a death status
    after the action started), its health fell, or (health unknown) the server showed it hurt.
    A target that vanished without a death status fails.
+7. **The drops of a farm animal** (hunting for food: [GATHER](#gather-gathering-in-one-plan-step)).
+   A killed animal drops its meat where it last stood. When that is beyond a player's pickup
+   reach (the body's box grown by 1 sideways: `withinPickup`), the client walks to its cell, or
+   the nearest cell beside it a player may stand in from which the drops are in reach
+   (`dropSpot`), with the walker's checks and stopping for threats, then waits for the inventory
+   to grow. The result says what arrived (`dropsCollected`, `drops`, `walkedToDrops`). Never
+   after killing a hostile: walking to its drops is no escape.
 
 `cli attack --live --entity <id>` runs one burst for a person (origin `user`); `observe` and
 `watch` print the entity ids. Walking, chests, crafting, digging and fighting exclude each

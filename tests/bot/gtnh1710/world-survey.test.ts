@@ -121,6 +121,11 @@ describe('what a survey counts', () => {
     expect(surveyKindOf('minecraft:cobblestone')).toBe('stone');
     expect(surveyKindOf('minecraft:grass')).toBe('dirt'); // grass drops dirt when dug
     expect(surveyKindOf('minecraft:sandstone')).toBeNull();
+    // HarvestCraft's gardens that give food, for food trips; never the cotton-only one.
+    expect(surveyKindOf('harvestcraft:berrygarden')).toBe('garden');
+    expect(surveyKindOf('harvestcraft:tropicalgarden')).toBe('garden');
+    expect(surveyKindOf('harvestcraft:textilegarden')).toBeNull();
+    expect(sightOf('harvestcraft:berrygarden')).toBe(SIGHT.clear); // a plant: seen through
     for (const ore of [
       'minecraft:iron_ore',
       'minecraft:lit_redstone_ore',

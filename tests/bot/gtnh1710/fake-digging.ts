@@ -16,6 +16,10 @@ const VANILLA_HARDNESS: Readonly<Record<string, number>> = {
   'minecraft:stone': 1.5,
 };
 
+/** HarvestCraft's gardens set no hardness (BlockRegistry, javap): 0, broken on the start. */
+const hardnessOf = (name: string): number | undefined =>
+  /^harvestcraft:[a-z]+garden$/.test(name) ? 0 : VANILLA_HARDNESS[name];
+
 /** What a block drops (the fake's fixed version of the vanilla drop table). */
 const DROPS: Readonly<Record<string, { item: string; count: number } | null>> = {
   'minecraft:log': { item: 'minecraft:log', count: 1 },
@@ -28,6 +32,9 @@ const DROPS: Readonly<Record<string, { item: string; count: number } | null>> = 
   'minecraft:gravel': { item: 'minecraft:gravel', count: 1 },
   'minecraft:clay': { item: 'minecraft:clay_ball', count: 4 },
   'minecraft:stone': { item: 'minecraft:cobblestone', count: 1 },
+  // gardendropAmount=3 of the garden's produce (one kind here; the server picks at random).
+  'harvestcraft:berrygarden': { item: 'harvestcraft:strawberryItem', count: 3 },
+  'harvestcraft:grassgarden': { item: 'harvestcraft:cornItem', count: 3 },
 };
 
 const TICK_MS = 50;
@@ -113,7 +120,9 @@ export interface RecordedDig {
 /**
  * Vanilla 1.7.10 + Forge 10.13.4.1614 digging, server side (ItemInWorldManager and
  * NetHandlerPlayServer.processPlayerDigging, as disassembled from the test server's jars):
- *  - C07 status 0 remembers the block and the time; status 1 cancels;
+ *  - C07 status 0 remembers the block and the time; status 1 cancels; a block whose relative
+ *    hardness is at least 1 (hardness 0: HarvestCraft's gardens) is broken on the start
+ *    (onBlockClicked calls tryHarvestBlock), and a later finish finds air and does nothing;
  *  - status 2 for that block breaks it if progress x (ticks since the start + 1) >= 0.7, with
  *    progress per tick = speed / hardness / 30 (a block that needs no tool; an empty hand has
  *    speed 1, a tool its own on the blocks it is made for, see SERVER_TOOLS). Forge
@@ -189,6 +198,10 @@ export class FakeDigSim {
         this.#send(blockChangeFrame(x, y, z, id));
         return;
       }
+      if (id !== 0 && this.#hardness(id) === 0) {
+        this.#break(x, y, z, false);
+        return;
+      }
       this.#current = { x, y, z, startedAt: Date.now() };
       return;
     }
@@ -235,9 +248,14 @@ export class FakeDigSim {
     return s === null ? null : (SERVER_TOOLS[this.#world.itemName(s.id) ?? ''] ?? null);
   }
 
+  #hardness(id: number): number {
+    const name = this.#world.blockName(id) ?? '';
+    return this.#opts.hardness?.[name] ?? hardnessOf(name) ?? 50;
+  }
+
   #progressPerTick(id: number): number {
     const name = this.#world.blockName(id) ?? '';
-    const hardness = this.#opts.hardness?.[name] ?? VANILLA_HARDNESS[name] ?? 50;
+    const hardness = this.#hardness(id);
     const tool = this.#heldTool();
     const speed =
       tool === null ? 1 : tool.useless === true ? 0 : tool.blocks.includes(name) ? tool.speed : 1;

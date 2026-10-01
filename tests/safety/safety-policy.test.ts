@@ -21,8 +21,10 @@ import {
   emptyFailureHistory,
   evaluateAction,
   evaluateStaticSpec,
+  getsFood,
   type FailureHistory,
 } from '../../src/safety/safety-policy.ts';
+import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import { action, makeState, safetyCtx, T0 } from '../fixtures/index.ts';
 
 const codes = (
@@ -219,6 +221,65 @@ describe('rule 3: health and hunger thresholds', () => {
     expect(
       codes({ type: 'INSPECT_MACHINE', args: { machineId: 'machine.macerator.1' } }, state),
     ).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+
+  describe('starving with no food: the food task may get food (and nothing else)', () => {
+    // Food 2 with nothing to eat (seen live), on the play loop's food task, by day. A grass
+    // garden is listed next to the player (it stands at (1, 64, 1)).
+    const starving = (mutate: (w: MockWorld) => void = () => undefined): GameState =>
+      makeState((w) => {
+        w.player.hunger = 2;
+        delete w.inventory.items['minecraft:bread'];
+        w.task = { taskId: FOOD_TASK_ID, goal: 'Get food', subgoal: '0/10', status: 'active' };
+        w.recipe = null;
+        w.resourceBlocks.push({
+          block: 'harvestcraft:grassgarden',
+          position: { x: 1, y: 64, z: 2 },
+        });
+        mutate(w);
+      });
+    const foodCodes = (spec: ActionSpec, state: GameState, taskId: string | null = FOOD_TASK_ID) =>
+      evaluateAction(action(spec, taskId), state, safetyCtx(), emptyFailureHistory).violations.map(
+        (v) => v.code,
+      );
+    const walk: ActionSpec = {
+      type: 'MOVE_TO',
+      args: { target: { x: 4, y: 64, z: 1 }, tolerance: 0.5 },
+    };
+    const explore: ActionSpec = { type: 'EXPLORE', args: { toward: 'south', maxDistance: 64 } };
+    const digGarden: ActionSpec = { type: 'DIG_BLOCK', args: { position: { x: 1, y: 64, z: 2 } } };
+    const digDirt: ActionSpec = { type: 'DIG_BLOCK', args: { position: { x: 2, y: 64, z: 1 } } };
+
+    it('allows the walks, EXPLOREs and garden digs of the food task', () => {
+      for (const spec of [walk, explore, digGarden]) {
+        expect(getsFood(action(spec, FOOD_TASK_ID), starving()), spec.type).toBe(true);
+        expect(foodCodes(spec, starving()), spec.type).toEqual([]);
+      }
+    });
+
+    it('refuses what does not get food: another dig, other work, or a fight', () => {
+      expect(foodCodes(digDirt, starving())).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+      expect(
+        foodCodes(
+          { type: 'INSPECT_MACHINE', args: { machineId: 'machine.macerator.1' } },
+          starving(),
+        ),
+      ).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+    });
+
+    it('refuses the same actions for any other task, or by night, or with low health', () => {
+      expect(foodCodes(walk, starving(), 'task-test')).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+      const quest = starving((w) => {
+        if (w.task !== null) w.task.taskId = 'task-test';
+      });
+      expect(foodCodes(walk, quest, 'task-test')).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+      const evening = starving((w) => void (w.timeOfDay = 12_500));
+      expect(foodCodes(walk, evening)).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+      const hurt = starving((w) => void (w.player.health = 4));
+      expect(foodCodes(walk, hurt)).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+      const hostile = starving((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
+      expect(foodCodes(walk, hostile)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+    });
   });
 
   it('respects configured thresholds', () => {

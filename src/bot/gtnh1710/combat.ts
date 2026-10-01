@@ -6,6 +6,7 @@ import {
 } from '../../domain/combat.ts';
 import type { Classification } from './entity-types.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
+import { standProblem } from './terrain.ts';
 import type { Fence, Vec3, WalkWorld } from './walking.ts';
 
 /**
@@ -176,6 +177,56 @@ export function insideFence(p: Vec3, fence: Fence): boolean {
     p.y >= fence.min.y - 1 &&
     p.y < fence.max.y + 3
   );
+}
+
+/**
+ * Whether an item lying at `at` is within a player's pickup reach from feet at `feet`: the
+ * body's box (0.6 wide, 1.8 tall) grown by 1 sideways and 0.5 up and down
+ * (EntityPlayer.onLivingUpdate collides it with items), a little short of it to be sure.
+ */
+export function withinPickup(feet: Vec3, at: Vec3): boolean {
+  return (
+    Math.abs(at.x - feet.x) <= 1.2 &&
+    Math.abs(at.z - feet.z) <= 1.2 &&
+    at.y >= feet.y - 0.5 &&
+    at.y <= feet.y + 2.2
+  );
+}
+
+/**
+ * Where to stand to pick up what an animal dropped where it died (`at`, its feet): its own
+ * block cell when a player may stand there (terrain.ts standProblem: a full block under it,
+ * the body's cells passable, no hazard around), else the nearest such cell beside it (the 8
+ * around it, at its level, one up or one down) from which the drops are within pickup reach;
+ * inside the fence's columns and heights. Feet at the cell's centre; null when none will do.
+ */
+export function dropSpot(world: WalkWorld, fence: Fence, at: Vec3): Vec3 | null {
+  const cx = Math.floor(at.x);
+  const cy = Math.floor(at.y + 1e-6);
+  const cz = Math.floor(at.z);
+  let best: { spot: Vec3; d: number } | null = null;
+  for (const dy of [0, 1, -1]) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const x = cx + dx;
+        const y = cy + dy;
+        const z = cz + dz;
+        const inside =
+          x >= fence.min.x &&
+          x <= fence.max.x &&
+          z >= fence.min.z &&
+          z <= fence.max.z &&
+          y >= fence.min.y &&
+          y <= fence.max.y;
+        if (!inside || standProblem(world, x, y, z) !== null) continue;
+        const spot = { x: x + 0.5, y, z: z + 0.5 };
+        if (!withinPickup(spot, at)) continue;
+        const d = Math.hypot(spot.x - at.x, spot.z - at.z) + Math.abs(spot.y - at.y) / 4;
+        if (best === null || d < best.d - 1e-9) best = { spot, d };
+      }
+    }
+  }
+  return best?.spot ?? null;
 }
 
 /** A hotbar slot as the client sees it: the stack's registry name, or null when empty. */

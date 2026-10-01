@@ -23,6 +23,7 @@ import type { DecisionProvider } from '../system1/decision-provider.ts';
 import { systemClock } from '../util/clock.ts';
 import { randomIds } from '../util/ids.ts';
 import { runQuestBookAction, syncConfigToDatabase, type AgentDeps } from './agent-loop.ts';
+import { foodStatusOf } from './food.ts';
 import { runSession } from './live-session.ts';
 import { withLiveClient } from './live-agent.ts';
 import { passProblem } from '../bot/gtnh1710/passable.ts';
@@ -237,6 +238,17 @@ export async function runLivePlay(
                 return state.time.known ? state.time.value : null;
               },
               shelter: liveShelter(client, config, repos),
+              // Food trips only when the agent may eat (food it never eats is no use) and can
+              // get some: dig a garden or hunt.
+              ...(config.minecraft.eating.enabled &&
+              (config.minecraft.digging.enabled || config.minecraft.combat.enabled)
+                ? {
+                    food: {
+                      now: async () => foodStatusOf(await client.observe(), config, repos),
+                      of: (state: GameState) => foodStatusOf(state, config, repos),
+                    },
+                  }
+                : {}),
               session: (limits, hooks) => runSession(agent, limits, hooks),
             },
             input.limits,

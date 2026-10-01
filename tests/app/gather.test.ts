@@ -5,10 +5,11 @@ import {
   syncConfigToDatabase,
   type CycleResult,
 } from '../../src/app/agent-loop.ts';
-import type { MockResourceBlock } from '../../src/bot/mock-minecraft-client.ts';
+import type { MockResourceBlock, MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import type { ActionSpec } from '../../src/domain/actions.ts';
 import type { DiggableBlock } from '../../src/domain/blocks.ts';
 import type { BlockPosition } from '../../src/domain/common.ts';
+import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import type { Plan, PlannerRequest, PlannerResponse } from '../../src/planner/plan-schema.ts';
 import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
 import { actionFingerprint } from '../../src/safety/safety-policy.ts';
@@ -50,11 +51,16 @@ const NO_PLAN: PlannerResponse = {
 };
 
 /** A world with these resource blocks, a planner that answers `responses` in turn. */
-async function gathering(blocks: MockResourceBlock[], ...responses: PlannerResponse[]) {
+function gathering(blocks: MockResourceBlock[], ...responses: PlannerResponse[]) {
+  return gatheringIn((w) => void (w.resourceBlocks = blocks), ...responses);
+}
+
+/** A world as `mutate` makes it, a planner that answers `responses` in turn. */
+async function gatheringIn(mutate: (w: MockWorld) => void, ...responses: PlannerResponse[]) {
   const clock = testClock();
   const { world, client } = makeWorld((w) => {
     w.recipe = null; // no known step: System 1 asks for the plan
-    w.resourceBlocks = blocks;
+    mutate(w);
   }, clock);
   await client.connect();
   const repos = memoryRepos(clock);
@@ -77,7 +83,7 @@ async function gathering(blocks: MockResourceBlock[], ...responses: PlannerRespo
     clock,
     newId: sequentialIds(),
   };
-  const taskId = 'task-test';
+  const taskId = world.task?.taskId ?? 'task-test';
   const cycle = (): Promise<CycleResult> => {
     clock.advance(500);
     return runSingleCycle(deps);
@@ -415,6 +421,76 @@ describe('GATHER: one plan step, many checked actions', () => {
     expect(g.repos.plans.get(stored.id)?.status).toBe('completed');
     expect(g.repos.tasks.get(g.taskId)?.status).toBe('completed');
     expect(g.requests).toHaveLength(0);
+  });
+});
+
+describe('GATHER for food', () => {
+  const huntPlan = (count: number): PlannerResponse => ({
+    kind: 'plan',
+    plan: plan([{ type: 'GATHER', args: { animal: 'minecraft:Cow', count } }], 'Hunt a cow'),
+  });
+
+  it('hunts a cow with ONE planner call: a walk next to it, strikes until it dies, its drops', async () => {
+    const g = await gatheringIn((w) => {
+      w.resourceBlocks = [];
+      w.mobs = [
+        {
+          id: 501,
+          type: 'minecraft:Cow',
+          category: 'passive',
+          position: { x: 6, y: 64, z: 1 },
+          health: 10,
+          drops: { 'minecraft:beef': 2, 'minecraft:leather': 1 },
+        },
+      ];
+    }, huntPlan(3));
+    await g.until(() => g.repos.plans.get(1)?.status !== 'active', 20);
+    expect(g.requests).toHaveLength(1);
+    expect(g.repos.plans.get(1)).toMatchObject({ status: 'completed' });
+    expect(g.world.inventory.items).toMatchObject({ 'minecraft:beef': 2, 'minecraft:leather': 1 });
+    // A bare hand deals 1 a hit, 8 hits a burst: the walk, then two bursts.
+    expect(g.performed().map((s) => s.type)).toEqual(['MOVE_TO', 'ATTACK_ENTITY', 'ATTACK_ENTITY']);
+    expect(g.journal()).toContain(
+      'GATHER 3 minecraft:Cow (plan #1 step 1) started: counts minecraft:beef or minecraft:leather, ' +
+        '0 held; 1 minecraft:Cow listed in view',
+    );
+    expect(g.journal()).toContainEqual(
+      expect.stringMatching(/^GATHER 3 minecraft:Cow done; 2 attack\(s\), 3\/3 gathered/),
+    );
+  });
+
+  it('starving on the food task by day: digs the gardens in view (and nothing else may run)', async () => {
+    // Food 2 with nothing to eat (seen live): below minHunger, only the food task's walks,
+    // EXPLOREs and garden digs may run (safety-policy.ts getsFood).
+    const g = await gatheringIn(
+      (w) => {
+        w.player.hunger = 2;
+        delete w.inventory.items['minecraft:bread'];
+        w.task = { taskId: FOOD_TASK_ID, goal: 'Get food', subgoal: '0/10', status: 'active' };
+        w.resourceBlocks = [
+          { block: 'harvestcraft:berrygarden', position: { x: 1, y: 64, z: 3 } },
+          {
+            block: 'harvestcraft:grassgarden',
+            position: { x: 7, y: 64, z: 1 },
+            standAt: { x: 6.5, y: 64, z: 1.5 },
+          },
+        ];
+      },
+      {
+        kind: 'plan',
+        plan: plan(
+          [{ type: 'GATHER', args: { block: 'harvestcraft:berrygarden', count: 3 } }],
+          'Dig the berry garden',
+        ),
+      },
+    );
+    const results = await g.until((r) => r.action?.type === 'DIG_BLOCK', 5);
+    expect(results.at(-1)).toMatchObject({
+      status: 'succeeded',
+      decision: { decision: 'REQUEST_PLANNER' },
+    });
+    expect(g.world.inventory.items['harvestcraft:blackberryItem']).toBe(3);
+    expect(g.repos.plans.get(1)?.status).toBe('completed');
   });
 });
 

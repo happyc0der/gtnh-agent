@@ -1,7 +1,8 @@
 import {
-  DIGGABLE_BLOCKS,
   FALLING_DIGGABLE_BLOCKS,
   isDiggableBlock,
+  isGardenBlock,
+  SOLID_DIGGABLE_BLOCKS,
   type DiggableBlock,
 } from '../../domain/blocks.ts';
 import { BARE_HAND_SPEED, diggableInfo, digWaitTicks } from '../../domain/dig-time.ts';
@@ -63,16 +64,17 @@ export const DIG_SETTLE_TICKS = 5;
 /**
  * Blocks that may touch a block the agent digs: plain full blocks with no tile entity that
  * do not fall, flow or hang on their neighbours (the walker's known full blocks), plus the
- * allowlist itself and air. Anything else next to the target (water, a torch, a flower,
- * a chest, a machine, any modded block, an unnamed id) refuses the dig: removing the block
- * could flood the hole, drop an attached block or change a build. Beside it (not on top),
- * the plants the body walks through are fine too (digDoesNotDisturb): they stand on the
- * block under them, not on the dug one.
+ * allowlist's solid blocks and air. Anything else next to the target (water, a torch, a
+ * flower, a garden, a chest, a machine, any other modded block, an unnamed id) refuses the
+ * dig: removing the block could flood the hole, drop an attached block or change a build.
+ * Beside it (not on top), the plants the body walks through are fine too (digDoesNotDisturb):
+ * they stand on the block under them, not on the dug one. A garden is such a plant: on top of
+ * a dug block it would drop, so it is not in this set.
  */
 export const DIG_NEIGHBOURS: ReadonlySet<string> = new Set<string>([
   'minecraft:air',
   ...WALKABLE_SURFACES,
-  ...DIGGABLE_BLOCKS,
+  ...SOLID_DIGGABLE_BLOCKS,
 ]);
 
 export interface BlockPos {
@@ -208,6 +210,13 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
   if (own && diggableInfo(name).falls) {
     return refuse(`${fmt(target)} is ${name} directly above the player's head`);
   }
+  if (isGardenBlock(name)) {
+    const plant = gardenProblem(world, target);
+    if (plant !== null) return refuse(plant);
+    const hazard = hazardNear(world, target);
+    if (hazard !== null) return refuse(hazard);
+    return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+  }
 
   // Everything touching it must be known and inert (see DIG_NEIGHBOURS).
   for (const [dx, dy, dz] of FACES) {
@@ -235,20 +244,64 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
   }
 
   // Nothing dangerous anywhere around it (lava, fire, harmful fluids, damaging blocks).
+  const hazard = hazardNear(world, target);
+  if (hazard !== null) return refuse(hazard);
+
+  return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+}
+
+/** Why the 3 x 3 x 3 cube around `target` holds something dangerous or unloaded, or null. */
+function hazardNear(world: WalkWorld, target: BlockPos): string | null {
+  const { x, y, z } = target;
   for (let dx = -1; dx <= 1; dx++) {
     for (let dy = -1; dy <= 1; dy++) {
       for (let dz = -1; dz <= 1; dz++) {
         const nid = world.blockAt(x + dx, y + dy, z + dz);
-        if (nid === undefined) return refuse(`a block near it is not loaded`);
+        if (nid === undefined) return `a block near it is not loaded`;
         if (world.hazardCode(nid) !== BLOCK_CODE.safe) {
           const n = { x: x + dx, y: y + dy, z: z + dz };
-          return refuse(`it is next to ${world.blockName(nid) ?? `block id ${nid}`} at ${fmt(n)}`);
+          return `it is next to ${world.blockName(nid) ?? `block id ${nid}`} at ${fmt(n)}`;
         }
       }
     }
   }
+  return null;
+}
 
-  return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+/**
+ * Why a HarvestCraft garden at `target` may not be broken, or null. A garden is a plant
+ * (BlockGarden extends BlockFlower: no collision box, nothing hangs on it), so its cell is open
+ * already and breaking it opens no hole: what touches it may be a plant on any face (another
+ * garden, tall grass), and no deeper-hole rule applies. Still fail closed:
+ *  - under it, what it grows on: a plain full block (grass, dirt, sand, a log), never air,
+ *    a fluid or anything unknown;
+ *  - beside and above it: air, a plain block, the dig allowlist's solid blocks, or a plant the
+ *    body passes (passable.ts, by metadata); never a fluid (water or lava would flow into the
+ *    freed cell beside the player), a modded block or an unnamed id;
+ *  - never sand or gravel on top of it: it would fall into the freed cell.
+ */
+function gardenProblem(world: WalkWorld, target: BlockPos): string | null {
+  const { x, y, z } = target;
+  const under = { x, y: y - 1, z };
+  const ground = nameAt(world, under.x, under.y, under.z);
+  if (ground === undefined)
+    return `the block under the garden at ${fmt(under)} is not loaded or not named`;
+  if (ground === 'minecraft:air' || !DIG_NEIGHBOURS.has(ground)) {
+    return `the garden stands on ${ground} at ${fmt(under)}, not on plain ground`;
+  }
+  for (const [dx, dy, dz] of FACES) {
+    if (dy === -1) continue;
+    const n = { x: x + dx, y: y + dy, z: z + dz };
+    const nname = nameAt(world, n.x, n.y, n.z);
+    if (nname === undefined) return `the block next to it at ${fmt(n)} is not loaded or not named`;
+    if (dy === 1 && FALLING_DIGGABLE_BLOCKS.has(nname as DiggableBlock)) {
+      return `${nname} on top of the garden at ${fmt(target)} would fall into its cell`;
+    }
+    if (!DIG_NEIGHBOURS.has(nname) && passProblem(world, n.x, n.y, n.z) !== null) {
+      return `it touches ${variantName(world, n.x, n.y, n.z, nname)} at ${fmt(n)} (only air, plain blocks and plants may touch a garden the agent breaks: no fluid)`;
+    }
+  }
+  return null;
 }
 
 /** Feet heights tried for a stand spot, relative to the block: on the ground beside it (+1), level with it, or below it (logs overhead). */
