@@ -12,10 +12,10 @@ import {
   runLiveExplore,
   runLiveInteract,
   runLiveMove,
-  summarizeObservation,
   watchLive,
   withLiveClient,
 } from './live-commands.ts';
+import { summarizeObservation } from './live-view.ts';
 
 /**
  * The CLI's live commands (src/app/cli.ts): what the agent sees on the test server (observe,
