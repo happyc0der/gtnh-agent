@@ -53,6 +53,7 @@ export type OutboundKind =
   | 'close-window'
   | 'dig-block'
   | 'place-block'
+  | 'use-item'
   | 'player-look'
   | 'swing-arm'
   | 'attack-entity'
@@ -341,6 +342,42 @@ export const outbound = {
           Buffer.from([face]),
           writeItemStack(held, modularUi), // refuses a stack with NBT data
           Buffer.from(c),
+        ]),
+      ),
+    };
+  },
+
+  /**
+   * C08 Player Block Placement with face 255: use the held item in the air, as a player
+   * right-clicks with food in hand (NetHandlerPlayServer.processPlayerBlockPlacement:
+   * tryUseItem). x and z are -1, y is -1 as a byte (255), the cursor 0, and the stack is
+   * claimed exactly as held (NBT-free, 1-64), like placeBlock.
+   */
+  useHeldItem(held: ItemStackData, modularUi: boolean): OutboundPacket {
+    if (
+      !Number.isInteger(held.id) ||
+      held.id < 1 ||
+      held.id > 32767 ||
+      !Number.isInteger(held.damage) ||
+      held.damage < 0 ||
+      held.damage > 32767 ||
+      !Number.isInteger(held.count) ||
+      held.count < 1 ||
+      held.count > 64
+    ) {
+      throw new ProtocolError('refusing to claim a held stack that cannot be used');
+    }
+    return {
+      kind: 'use-item',
+      frame: encodeFrame(
+        0x08,
+        Buffer.concat([
+          i32(-1),
+          Buffer.from([255]),
+          i32(-1),
+          Buffer.from([255]),
+          writeItemStack(held, modularUi), // refuses a stack with NBT data
+          Buffer.from([0, 0, 0]),
         ]),
       ),
     };

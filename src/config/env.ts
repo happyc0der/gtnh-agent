@@ -167,6 +167,16 @@ export const CombatConfigSchema = z.strictObject({
 export type CombatConfig = z.infer<typeof CombatConfigSchema>;
 
 /**
+ * Eating (EAT_FOOD, and System 1's EAT): an approved food from the inventory into the hand,
+ * used until the server has eaten it. Off by default: it uses up an item. Without it, System 1
+ * never decides EAT (as if no approved food were carried).
+ */
+export const EatingConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+});
+export type EatingConfig = z.infer<typeof EatingConfigSchema>;
+
+/**
  * Quest-book clicks (SUBMIT_QUEST, CHECK_QUEST_BOX, CLAIM_QUEST_REWARD on Better Questing's
  * channel). Off by default: a submit can hand items in. Reading the quest book needs no switch.
  */
@@ -215,6 +225,7 @@ export const MinecraftConfigSchema = z
     crafting: CraftingConfigSchema.prefault({}),
     interact: InteractConfigSchema.prefault({}),
     combat: CombatConfigSchema.prefault({}),
+    eating: EatingConfigSchema.prefault({}),
     questBook: QuestBookConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
@@ -416,6 +427,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_ENABLE_INTERACT'))) set(['minecraft', 'interact', 'enabled'], v === 'true');
   if ((v = e('MC_INTERACT_OBSERVE_ONLY'))) set(['minecraft', 'interact', 'observeOnly'], list(v));
   if ((v = e('MC_ENABLE_COMBAT'))) set(['minecraft', 'combat', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_EATING'))) set(['minecraft', 'eating', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_QUEST_BOOK'))) set(['minecraft', 'questBook', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))

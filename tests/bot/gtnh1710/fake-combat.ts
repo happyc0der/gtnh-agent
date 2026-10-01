@@ -226,6 +226,17 @@ export class FakeCombatSim {
     this.#broadcast(this.#spawnFrame(m));
   }
 
+  /** The food level the server keeps for the player. */
+  get food(): number {
+    return this.#food;
+  }
+
+  /** The player ate (the server's FoodStats.addStats): the server sends the new food level. */
+  feed(points: number): void {
+    this.#food = Math.min(20, this.#food + points);
+    this.#sendHealth();
+  }
+
   /** The player is hurt by something else (tests): the server sends the new health. */
   hurtPlayer(damage: number): void {
     this.playerHealth = Math.max(0, this.playerHealth - damage);

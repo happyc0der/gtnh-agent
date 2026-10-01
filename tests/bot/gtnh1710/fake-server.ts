@@ -54,6 +54,9 @@ export interface FakeItem {
   nbt?: boolean | undefined;
 }
 
+/** Ticks a food takes to eat (vanilla ItemFood.getMaxItemUseDuration). */
+const EAT_TICKS = 32;
+
 export interface FakeServerOptions {
   motd?: string;
   versionName?: string;
@@ -70,6 +73,11 @@ export interface FakeServerOptions {
   inventory?: FakeItem[];
   windowSlots?: number;
   health?: { health: number; food: number; saturation: number };
+  /**
+   * Foods the server lets the player eat (item id, food points): a C08 in the air with one in
+   * hand is eaten after EAT_TICKS (vanilla ItemFood: 32), as the server does it.
+   */
+  edible?: Array<[number, number]>;
   keepAliveEveryMs?: number;
   /** Send a truncated inventory packet (the client must degrade, not disconnect). */
   corruptInventory?: boolean;
@@ -362,6 +370,7 @@ export class FakeGtnhServer {
       ],
       windowSlots: options.windowSlots ?? 46,
       health: options.health ?? { health: 20, food: 18, saturation: 5 },
+      edible: options.edible ?? [],
       keepAliveEveryMs: options.keepAliveEveryMs ?? 100,
       corruptInventory: options.corruptInventory ?? false,
       entities: options.entities ?? [],
@@ -458,8 +467,27 @@ export class FakeGtnhServer {
       options.questBook === undefined
         ? null
         : new FakeQuestBookSim({ ...options.questBook, items: this.#opts.items }, this.chestSim);
+    const edible = new Map(options.edible ?? []);
+    this.placeSim.onUseInAir = (held) => {
+      const points = held === null ? undefined : edible.get(held.id);
+      if (held === null || points === undefined || this.combatSim.food >= 20) return;
+      this.eatsStarted += 1;
+      // EntityPlayer counts the use down server side, as long as the same stack stays in hand.
+      const timer = setTimeout(() => {
+        this.#timers.delete(timer);
+        const now = this.chestSim.heldStack;
+        if (now === null || now.id !== held.id) return;
+        this.chestSim.useHeldItem();
+        this.chestSim.sendHeldSlot();
+        this.combatSim.feed(points);
+      }, EAT_TICKS * 50);
+      this.#timers.add(timer);
+    };
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
+
+  /** Eats the server started (a C08 in the air with an edible stack in hand). */
+  eatsStarted = 0;
 
   listen(): Promise<number> {
     return new Promise((resolve) => {

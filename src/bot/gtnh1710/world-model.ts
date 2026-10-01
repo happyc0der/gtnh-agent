@@ -1801,6 +1801,11 @@ export class WorldModel {
     return this.#health?.health ?? null;
   }
 
+  /** The food level (0-20), or null before the server sent it. */
+  get food(): number | null {
+    return this.#health?.food ?? null;
+  }
+
   /** The player's item counts (as the GameState reports them), or null while unknown. */
   inventoryItems(): Record<string, number> | null {
     const inv = this.#inventory();

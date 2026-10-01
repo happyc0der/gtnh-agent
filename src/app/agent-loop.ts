@@ -520,6 +520,7 @@ export async function runSingleCycle(
     safety: ctx,
     routing: config.routing,
     combatEnabled: config.minecraft.combat.enabled,
+    eatingEnabled: config.minecraft.eating.enabled,
     plan: taskPlanFacts(repos, state),
     ...(nearer ? { retreatTo: TRAIL_LOCATION } : {}),
   };

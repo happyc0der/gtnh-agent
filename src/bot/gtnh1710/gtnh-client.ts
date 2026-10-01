@@ -187,6 +187,8 @@ import {
 } from './world-model.ts';
 import { describeSightings, SurveyTracker } from './world-survey.ts';
 
+/** Longest wait for the server to finish eating (vanilla 32 ticks; HungerOverhaul longer). */
+const EAT_TIMEOUT_MS = 8_000;
 /** Vanilla clients send one "player" packet per tick (20 per second). */
 const IDLE_TICK_MS = 50;
 /** Walking sends one position per tick. */
@@ -450,6 +452,8 @@ export class Gtnh1710Client implements MinecraftClient {
   /** An ATTACK_ENTITY burst is running (it excludes walking, window work, digging and placing). */
   #fighting = false;
   #placing = false;
+  /** An EAT_FOOD is running: the hand holds the food until the server finishes eating it. */
+  #eating = false;
   /** Sync clicks sent while crafting (diagnostics). */
   #craftSyncs = 0;
   /** An EXPLORE is running (its hops are walks; no second EXPLORE starts meanwhile). */
@@ -772,11 +776,12 @@ export class Gtnh1710Client implements MinecraftClient {
           choice: action.args.choice,
         });
       case 'EAT_FOOD':
+        return this.#eat(action.args.item);
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
         return Promise.resolve(
           failed(
-            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft, dig, place, use block windows and fight`,
+            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft, dig, place, use block windows, fight and eat`,
             'NOT_IMPLEMENTED',
           ),
         );
@@ -797,6 +802,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#eating) return 'the player is eating';
     if (this.#fighting) return 'the player is fighting';
     return null;
   }
@@ -1141,6 +1147,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#eating) return 'the player is eating';
     if (this.#fighting) return 'the player is fighting';
     return null;
   }
@@ -1568,6 +1575,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#eating) return 'the player is eating';
     if (this.#fighting) return 'the player is fighting';
     return null;
   }
@@ -3528,6 +3536,98 @@ export class Gtnh1710Client implements MinecraftClient {
     return ok(`waited ${clock.now().getTime() - start} ms`);
   }
 
+  /**
+   * EAT_FOOD, as a player eats: the food into a hotbar slot (moved there from the main
+   * inventory if need be) and into the hand, then "use the held item in the air" (C08, face
+   * 255), standing still while the server counts the eating down (32 ticks in vanilla; mods may
+   * take longer), until the stack shrinks. Seen live: the agent had an apple, hunger fell, and
+   * EAT_FOOD was not implemented, so every EAT failed until the repeated-failure rule stopped it.
+   */
+  async #eat(item: string): Promise<ClientActionResult> {
+    const refuse = (why: string, code: 'REFUSED' | 'FAILED' | 'ERROR' = 'REFUSED') =>
+      failed(`not eating: ${why}`.slice(0, 500), code);
+    if (this.#phase !== 'play') return refuse('not connected', 'ERROR');
+    if (!this.#opts.config.eating.enabled) {
+      return failed('eating is disabled (MC_ENABLE_EATING)', 'NOT_IMPLEMENTED');
+    }
+    if (this.#walking || this.#exploring) return refuse('a walk is in progress');
+    if (this.#digging || this.#placing || this.#fighting || this.#eating) {
+      return refuse('the hand is busy (digging, placing, fighting or eating)');
+    }
+    if (this.#usingContainer || this.#world.openWindow !== null) return refuse('a window is open');
+    const food = this.#world.food;
+    if (food === null) return refuse('the food level is not known yet');
+    if (food >= 20) return refuse('the player is not hungry (food 20)');
+    const registry = this.#world.registry;
+    const storage = this.#world.playerStorage();
+    if (registry === null || storage === null) return refuse('the inventory is not known yet');
+    // The held slot first, then the rest of the hotbar, then the main inventory.
+    const heldIndex = 27 + this.#world.heldSlot;
+    const order = [heldIndex];
+    for (let i = 27; i < 36; i++) if (i !== heldIndex) order.push(i);
+    for (let i = 0; i < 27; i++) order.push(i);
+    const index = order.find((i) => {
+      const s = storage[i];
+      if (s == null || s.hasNbt) return false;
+      const naming = nameItemStack(registry, s.id, s.damage);
+      return naming.ok && naming.name === item;
+    });
+    if (index === undefined) return refuse(`no ${item} in the inventory`);
+    let slot = index - 27;
+    if (index < 27) {
+      const free = this.#emptyHotbarSlot();
+      if (free === null)
+        return refuse(`the ${item} is not in the hotbar, and no hotbar slot is free`);
+      const moved = await this.#moveToHotbar(9 + index, free, storage[index] as Stack);
+      if (moved !== null) {
+        return refuse(
+          `the ${item} could not be moved into the hotbar: ${moved}`,
+          moved.startsWith('ITEMS MAY') ? 'ERROR' : 'FAILED',
+        );
+      }
+      slot = free;
+    }
+    if (slot !== this.#world.heldSlot) {
+      this.#send(outbound.selectHotbarSlot(slot));
+      this.#world.setHeldSlot(slot);
+    }
+    const held = this.#hotbar(slot);
+    if (held == null) return refuse(`the ${item} left the hotbar`, 'FAILED');
+    const before = held.count;
+    this.#eating = true;
+    try {
+      this.#log(`eating ${item} (food ${food})`);
+      this.#send(
+        outbound.useHeldItem(
+          { id: held.id, damage: held.damage, count: held.count, hasNbt: false },
+          this.#decoding.itemStackSizeVarInt,
+        ),
+      );
+      // The server finishes eating on its own after the use time, and sends the slot.
+      await this.#waitFor(() => {
+        const now = this.#hotbar(slot);
+        return now == null || now.id !== held.id || now.count < before;
+      }, EAT_TIMEOUT_MS);
+      const now = this.#hotbar(slot);
+      const ate = now == null || now.id !== held.id || now.count < before;
+      if (!ate) {
+        return failed(
+          `not eaten: the server did not finish eating the ${item} within ${EAT_TIMEOUT_MS / 1000} s`,
+          'FAILED',
+        );
+      }
+      // The food level comes in its own packet, a tick or so after the slot.
+      await this.#waitFor(() => (this.#world.food ?? 0) > food, 1_000);
+      const after = this.#world.food;
+      return ok(`ate 1 x ${item}: food ${food} -> ${after ?? 'unknown'}`, {
+        foodBefore: food,
+        foodAfter: after,
+      });
+    } finally {
+      this.#eating = false;
+    }
+  }
+
   /** Stops a walk in progress at its next step and refuses new walks (e.g. on Ctrl+C). */
   halt(reason: string): void {
     this.#haltReason = reason;
@@ -3598,6 +3698,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#fighting) return 'the player is fighting';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#eating) return 'the player is eating';
     // Walking away closes an open window server-side, which drops the cursor and a table's grid.
     if (this.#world.openWindow?.cursor != null || this.#leftovers() !== null) {
       return 'items are on the cursor or in a crafting grid';

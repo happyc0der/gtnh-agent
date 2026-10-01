@@ -32,6 +32,8 @@ export const MOCK_CONFIG: AgentConfigInput = {
   },
   routing: { homeLocationName: 'home', dumpContainerId: 'chest.main', keepItems: [] },
   safety: { protectedItems: ['minecraft:diamond', 'minecraft:nether_star'] },
+  // The mock client eats (EAT_FOOD), as the scenarios expect.
+  minecraft: { eating: { enabled: true } },
 };
 
 export function baseWorld(taskId: string): MockWorld {

@@ -121,6 +121,9 @@ export class FakePlaceSim {
   #send: (frame: Buffer) => void = () => undefined;
   #broadcast: (frame: Buffer) => void = () => undefined;
 
+  /** C08 with face 255 (use the held item in the air), with the held stack. */
+  onUseInAir: ((held: FakeStack | null) => void) | null = null;
+
   constructor(world: FakePlaceWorld, chests: FakeChestSim, options: FakePlaceOptions = {}) {
     this.#world = world;
     this.#chests = chests;
@@ -152,7 +155,11 @@ export class FakePlaceSim {
     const held = this.#chests.heldStack;
     const record: RecordedPlacement = { x, y, z, face, claimed, held, cursor, placed: false };
     this.placements.push(record);
-    if (face === 255) return; // using the held item in the air: never expected from the agent
+    if (face === 255) {
+      // Using the held item in the air: eating (the server decides what it does).
+      this.onUseInAir?.(held);
+      return;
+    }
 
     let placeResult = true;
     // Too high: the server says "build.tooHigh" in chat instead (not simulated).

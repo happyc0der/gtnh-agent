@@ -31,6 +31,11 @@ export interface RouterContext {
    */
   combatEnabled?: boolean;
   /**
+   * The client may eat (minecraft.eating.enabled, MC_ENABLE_EATING). Without it System 1 never
+   * decides EAT: no approved food counts as carried. Left out: eating is possible.
+   */
+  eatingEnabled?: boolean;
+  /**
    * The current task's latest plan (null: it has none). The rules ignore it; a model's
    * cadence uses it. Left out, a model at decision points treats every plan request as one.
    */
@@ -80,6 +85,7 @@ export function inventoryFillFraction(state: GameState): number | null {
 
 /** First approved, unprotected food the player is carrying, in config order. */
 export function availableApprovedFood(state: GameState, ctx: RouterContext): string | null {
+  if (ctx.eatingEnabled === false) return null;
   const items = inventoryItems(state);
   for (const food of ctx.safety.config.approvedFoods) {
     if ((items[food] ?? 0) > 0 && !isProtected(food, ctx.safety.protectedItems)) return food;

@@ -142,6 +142,11 @@ describe('System1 deterministic router', () => {
       expect(route((w) => void (w.player.hunger = 10)).decision).toBe('EAT');
     });
 
+    it('never EAT when the client may not eat (MC_ENABLE_EATING off): as if no food were carried', () => {
+      const off = { ...routerCtx(), eatingEnabled: false };
+      expect(route((w) => void (w.player.hunger = 10), off).decision).not.toBe('EAT');
+    });
+
     it('starving without approved food -> RETREAT_HOME', () => {
       const d = route((w) => {
         w.player.hunger = 3;
