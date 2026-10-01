@@ -237,4 +237,16 @@ describe('the survey tracker', () => {
     expect(describeSightings(drained)).toMatch(/^\d+ chunk\(s\) \(Hot Desert \d+\); sand 1/);
     expect(describeSightings([])).toMatch(/^nothing/);
   });
+
+  it('keeps at most the newest sightings when nobody takes them', () => {
+    const store = storeOf(ground({}), () => 230);
+    const tracker = new SurveyTracker(12);
+    const t0 = new Date('2026-09-30T12:00:00Z');
+    tracker.update(worldOf(store), { x: 8.5, y: 64, z: 8.5 }, t0); // chunks -2..2 around (0, 0)
+    tracker.update(worldOf(store), { x: 24.5, y: 64, z: 8.5 }, t0); // around (1, 0)
+    const kept = tracker.drain();
+    expect(kept).toHaveLength(12);
+    // The chunks of the newer survey are kept, oldest dropped first.
+    expect(kept.every((c) => c.chunkX >= -1)).toBe(true);
+  });
 });

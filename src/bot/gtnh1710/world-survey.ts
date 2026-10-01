@@ -39,6 +39,8 @@ export const SURVEY_RANGE = 40;
 export const SURVEY_RADIUS_CHUNKS = 2;
 /** Staying in the same chunk, the area is surveyed again at most this often. */
 export const RESURVEY_MS = 30_000;
+/** Sightings kept until drained; beyond this the oldest are dropped (nobody is taking them). */
+export const MAX_PENDING_SIGHTINGS = 4096;
 
 const BY_NAME: ReadonlyMap<string, SurveyKind> = new Map<string, SurveyKind>([
   ['minecraft:log', 'log'],
@@ -334,6 +336,11 @@ export class SurveyTracker {
   #lastChunk: string | null = null;
   #lastAt = -Infinity;
   readonly #pending = new Map<string, SeenChunk>();
+  readonly #maxPending: number;
+
+  constructor(maxPending = MAX_PENDING_SIGHTINGS) {
+    this.#maxPending = maxPending;
+  }
 
   /** Surveys if due; returns this survey's sightings (also kept until drained). */
   update(world: TrackedWorld, feet: Vec3, now: Date, force = false): SeenChunk[] {
@@ -364,8 +371,13 @@ export class SurveyTracker {
         out.push(seen);
         const key = `${dimension}:${seen.chunkX},${seen.chunkZ}`;
         const before = this.#pending.get(key);
+        this.#pending.delete(key); // re-inserted last: the map stays oldest-first
         this.#pending.set(key, before === undefined ? seen : mergeSeen(before, seen));
       }
+    }
+    for (const key of this.#pending.keys()) {
+      if (this.#pending.size <= this.#maxPending) break;
+      this.#pending.delete(key);
     }
     return out;
   }
