@@ -45,6 +45,17 @@ export const GROUND_RESOURCES: ReadonlySet<DiggableBlock> = new Set<DiggableBloc
 ]);
 
 /**
+ * Dirt and grass one level below the feet: the floor almost everywhere, so only the nearest
+ * GROUND_DIRT_SAMPLE are listed (seen live: the first quest wants 8 dirt, and on flat grass
+ * the agent saw none it could dig). A sample, not every one within the scan's radius.
+ */
+export const GROUND_DIRT: ReadonlySet<DiggableBlock> = new Set<DiggableBlock>([
+  'minecraft:dirt',
+  'minecraft:grass',
+]);
+export const GROUND_DIRT_SAMPLE = 8;
+
+/**
  * Diggable blocks within a sphere around the feet, at or above the feet level, plus the
  * GROUND_RESOURCES one level below it; nearest first (ties by position). Like a player, the
  * scan sees only EXPOSED blocks: at least one face touches air (no x-ray through the
@@ -95,6 +106,7 @@ export function scanResources(
     return { ok: false, reason: `waiting for ${missing} nearby chunk(s) of block data` };
 
   const found: FoundResource[] = [];
+  const groundDirt: FoundResource[] = [];
   for (let x = minX; x <= maxX; x++) {
     const dx = x + 0.5 - feet.x;
     for (let z = minZ; z <= maxZ; z++) {
@@ -121,24 +133,20 @@ export function scanResources(
           x <= (ownX[1] as number) &&
           z >= (ownZ[0] as number) &&
           z <= (ownZ[1] as number);
-        if (
-          block !== undefined &&
-          (y >= feetLevel || GROUND_RESOURCES.has(block)) &&
-          !support &&
-          exposed(x, y, z)
-        ) {
-          found.push({ block, position: { x, y, z }, distance: Math.sqrt(h2 + dy * dy) });
-        }
+        if (block === undefined || support || !exposed(x, y, z)) continue;
+        const resource = { block, position: { x, y, z }, distance: Math.sqrt(h2 + dy * dy) };
+        if (y >= feetLevel || GROUND_RESOURCES.has(block)) found.push(resource);
+        else if (GROUND_DIRT.has(block)) groundDirt.push(resource);
       }
     }
   }
-  found.sort(
-    (a, b) =>
-      a.distance - b.distance ||
-      a.position.x - b.position.x ||
-      a.position.y - b.position.y ||
-      a.position.z - b.position.z,
-  );
+  const byDistance = (a: FoundResource, b: FoundResource): number =>
+    a.distance - b.distance ||
+    a.position.x - b.position.x ||
+    a.position.y - b.position.y ||
+    a.position.z - b.position.z;
+  found.push(...groundDirt.sort(byDistance).slice(0, GROUND_DIRT_SAMPLE));
+  found.sort(byDistance);
   if (found.length <= max) return { ok: true, scanRadius: radius, resources: found };
   const firstLeftOut = (found[max] as FoundResource).distance;
   const kept = found.slice(0, max).filter((f) => f.distance < firstLeftOut);

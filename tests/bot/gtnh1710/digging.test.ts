@@ -13,6 +13,7 @@ import { parseModIdData } from '../../../src/bot/gtnh1710/registry.ts';
 import {
   buildDiggableTable,
   diggableOf,
+  GROUND_DIRT_SAMPLE,
   scanResources,
 } from '../../../src/bot/gtnh1710/resource-scan.ts';
 import type { Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
@@ -412,7 +413,7 @@ describe('resource scan', () => {
     expect(diggableOf(table, 0)).toBeUndefined();
   });
 
-  it('lists diggable blocks at or above the feet, nearest first, never the ground', () => {
+  it('lists diggable blocks at or above the feet, nearest first, and of the floor only a sample', () => {
     const store = storeOf({
       [k(3, 106, 0)]: BLOCK.dirt,
       [k(-2, 107, 0)]: BLOCK.log,
@@ -422,12 +423,18 @@ describe('resource scan', () => {
     const scan = scanResources(store, table, feet);
     if (!scan.ok) throw new Error(scan.reason);
     expect(scan.scanRadius).toBe(16);
-    expect(scan.resources.map(({ block, position }) => ({ block, position }))).toEqual([
+    // The grass floor (y=105): only the nearest few, never the block the player stands on.
+    const floor = scan.resources.filter((r) => r.position.y === 105);
+    expect(floor).toHaveLength(GROUND_DIRT_SAMPLE);
+    expect(floor.every((r) => r.block === 'minecraft:grass' && r.distance < 2)).toBe(true);
+    expect(floor.some((r) => r.position.x === 0 && r.position.z === 0)).toBe(false);
+    const rest = scan.resources.filter((r) => r.position.y !== 105);
+    expect(rest.map(({ block, position }) => ({ block, position }))).toEqual([
       { block: 'minecraft:sand', position: { x: 1, y: 106, z: 0 } },
       { block: 'minecraft:log', position: { x: -2, y: 107, z: 0 } },
       { block: 'minecraft:dirt', position: { x: 3, y: 106, z: 0 } },
     ]);
-    expect(scan.resources.map((r) => r.distance)).toEqual([
+    expect(rest.map((r) => r.distance)).toEqual([
       expect.closeTo(Math.hypot(1, 0.5), 9),
       expect.closeTo(Math.hypot(2, 1.5), 9),
       expect.closeTo(Math.hypot(3, 0.5), 9),

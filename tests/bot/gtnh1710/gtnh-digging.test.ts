@@ -40,6 +40,9 @@ const AT = {
 } as const;
 
 const key = (p: { x: number; y: number; z: number }): string => `${p.x},${p.y},${p.z}`;
+/** Not the grass floor (y=105), of which the scan lists only the nearest few. */
+const notFloor = (r: { block: string; position: { y: number } }): boolean =>
+  !(r.block === 'minecraft:grass' && r.position.y === 105);
 const WORLD = new Map<string, number>([
   [key(AT.dirt), BLOCK.dirt],
   [key(AT.farDirt), BLOCK.dirt],
@@ -156,9 +159,9 @@ describe('Gtnh1710Client digging on terrain', () => {
     clients.push(client);
     await client.connect();
 
-    // The scan sees the sand one level below the feet (the grass floor is not listed).
+    // The scan sees the sand one level below the feet (and a sample of the grass floor).
     const before = blocksOf(await client.observe());
-    expect(before.resources.map((r) => [r.block, key(r.position)])).toEqual([
+    expect(before.resources.filter(notFloor).map((r) => [r.block, key(r.position)])).toEqual([
       ['minecraft:sand', key(sand)],
     ]);
 
@@ -231,9 +234,10 @@ describe('Gtnh1710Client digging', () => {
     expect(digPackets(server)).toEqual([]);
   });
 
-  it('observes the diggable blocks at or above the feet, nearest first (not the grass floor)', async () => {
+  it('observes the diggable blocks at or above the feet, nearest first (and a sample of the floor)', async () => {
     const { client } = await start();
-    const blocks = blocksOf(await client.observe());
+    const all = blocksOf(await client.observe());
+    const blocks = { ...all, resources: all.resources.filter(notFloor) };
     expect(blocks.scanRadius).toBe(16);
     expect(blocks.removed).toEqual([]);
     // Each comes with where to stand to dig it: the dirt next to the player from right here.
@@ -256,7 +260,7 @@ describe('Gtnh1710Client digging', () => {
       AT.outOfReach, // 5.68 m
     ]);
     expect(blocks.resources[4]?.block).toBe('minecraft:sand');
-    // Below the feet level only sand, gravel and clay: the grass floor at y=105 is never listed.
+    // Below the feet level only sand, gravel and clay, plus the nearest few of the grass floor.
     expect(
       blocks.resources.every(
         (r) =>
@@ -264,6 +268,7 @@ describe('Gtnh1710Client digging', () => {
           ['minecraft:sand', 'minecraft:gravel', 'minecraft:clay'].includes(r.block),
       ),
     ).toBe(true);
+    expect(all.resources.filter((r) => !notFloor(r)).length).toBeLessThanOrEqual(8);
   });
 
   it('digs with an empty hand: start, the dig time, finish; the block turns to air and the drop is picked up', async () => {
@@ -411,7 +416,7 @@ describe('Gtnh1710Client digging', () => {
     expect(server.digSim.digs.map((d) => d.status)).toEqual([0, 2]);
     const blocks = blocksOf(await client.observe());
     expect(blocks.removed).toEqual([]);
-    expect(blocks.resources[0]?.position).toEqual(AT.dirt);
+    expect(blocks.resources.filter(notFloor)[0]?.position).toEqual(AT.dirt);
   }, 10_000);
 
   it('a finish the server judges too early is re-sent and fails; vanilla then breaks it on its own', async () => {
