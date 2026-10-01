@@ -69,6 +69,21 @@ export const ContainersConfigSchema = z.strictObject({
 });
 export type ContainersConfig = z.infer<typeof ContainersConfigSchema>;
 
+/** Highest dig height the config accepts (blocks above the fence's feet level). */
+export const MAX_DIG_HEIGHT_ABOVE_FENCE = 8;
+
+/**
+ * Breaking blocks (DIG_BLOCK; the third world-changing ability). Off by default. It also
+ * needs the movement fence: only allowlisted blocks inside the fence's columns, from its
+ * feet level up to `maxHeightAboveFence` above it, are ever dug (never the floor below).
+ */
+export const DiggingConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  /** Blocks from the fence's level (the feet level) up to this many above it may be dug. */
+  maxHeightAboveFence: z.int().min(0).max(MAX_DIG_HEIGHT_ABOVE_FENCE).default(4),
+});
+export type DiggingConfig = z.infer<typeof DiggingConfigSchema>;
+
 export const MinecraftConfigSchema = z
   .strictObject({
     host: z.string().min(1).max(253).default('127.0.0.1'),
@@ -101,6 +116,7 @@ export const MinecraftConfigSchema = z
     initialStateGraceMs: z.int().min(0).max(30_000).default(3_000),
     movement: MovementConfigSchema.prefault({}),
     containers: ContainersConfigSchema.prefault({}),
+    digging: DiggingConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -223,6 +239,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
     set(['minecraft', 'movement', 'fence', 'max'], xyz('MC_MOVEMENT_FENCE_MAX', v));
   if ((v = e('MC_MOVEMENT_STOP_FILE'))) set(['minecraft', 'movement', 'stopFile'], v);
   if ((v = e('MC_ENABLE_CONTAINERS'))) set(['minecraft', 'containers', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_DIGGING'))) set(['minecraft', 'digging', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))
     set(['safety', 'boundary', 'min'], xyz('SAFETY_BOUNDARY_MIN', v));

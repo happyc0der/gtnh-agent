@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  BlockPositionSchema,
   EntityIdSchema,
   ItemNameSchema,
   LocationNameSchema,
@@ -12,8 +13,9 @@ import {
  * The complete allowlist of in-game actions. Anything not listed here is rejected
  * by schema validation before it reaches the safety policy or the executor.
  *
- * Deliberately absent: lava interaction, dropping items, combat, block placing/breaking,
- * electrical-network or multiblock changes, and rare-item consumption.
+ * Deliberately absent: lava interaction, dropping items, combat, block placing,
+ * electrical-network or multiblock changes, and rare-item consumption. Blocks are broken
+ * only by DIG_BLOCK, and only blocks on its allowlist (src/domain/blocks.ts).
  */
 export const ACTION_TYPES = [
   'OBSERVE_STATE',
@@ -26,6 +28,7 @@ export const ACTION_TYPES = [
   'WITHDRAW_ITEM',
   'INSPECT_MACHINE',
   'REFUEL_KNOWN_GENERATOR',
+  'DIG_BLOCK',
   'PAUSE_AND_ASK_USER',
 ] as const;
 
@@ -93,6 +96,14 @@ export const RefuelKnownGeneratorSpec = z.strictObject({
     quantity: z.int().min(1).max(MAX_REFUEL_QUANTITY),
   }),
 });
+/**
+ * Break ONE block: an allowlisted natural block (logs, leaves, dirt, grass, sand, gravel,
+ * clay) that the observation lists within reach. See docs/action-contract.md.
+ */
+export const DigBlockSpec = z.strictObject({
+  type: z.literal('DIG_BLOCK'),
+  args: z.strictObject({ position: BlockPositionSchema }),
+});
 export const PauseAndAskUserSpec = z.strictObject({
   type: z.literal('PAUSE_AND_ASK_USER'),
   args: z.strictObject({ question: z.string().min(1).max(500) }),
@@ -109,6 +120,7 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   WithdrawItemSpec,
   InspectMachineSpec,
   RefuelKnownGeneratorSpec,
+  DigBlockSpec,
   PauseAndAskUserSpec,
 ]);
 export type ActionSpec = z.infer<typeof ActionSpecSchema>;
@@ -143,6 +155,8 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
     fuelItem: ItemNameSchema,
     quantity: z.int().min(1).max(MAX_REFUEL_QUANTITY),
   }),
+  /** The observed block at the position is air (the observation saw the block removed). */
+  z.strictObject({ kind: z.literal('BLOCK_REMOVED'), position: BlockPositionSchema }),
   z.strictObject({ kind: z.literal('USER_NOTIFIED') }),
 ]);
 export type Postcondition = z.infer<typeof PostconditionSchema>;
@@ -191,6 +205,8 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
         fuelItem: spec.args.fuelItem,
         quantity: spec.args.quantity,
       };
+    case 'DIG_BLOCK':
+      return { kind: 'BLOCK_REMOVED', position: spec.args.position };
     case 'PAUSE_AND_ASK_USER':
       return { kind: 'USER_NOTIFIED' };
   }
@@ -222,6 +238,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   WithdrawItemSpec.extend(actionMetadata),
   InspectMachineSpec.extend(actionMetadata),
   RefuelKnownGeneratorSpec.extend(actionMetadata),
+  DigBlockSpec.extend(actionMetadata),
   PauseAndAskUserSpec.extend(actionMetadata),
 ]);
 export type Action = z.infer<typeof ActionSchema>;

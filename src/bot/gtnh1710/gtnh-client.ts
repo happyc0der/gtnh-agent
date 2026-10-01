@@ -4,7 +4,7 @@ import { resolve as resolvePath } from 'node:path';
 import type { MinecraftConfig } from '../../config/env.ts';
 import { assertPrivateDestination } from '../../config/network.ts';
 import type { GameState } from '../../domain/game-state.ts';
-import type { Position } from '../../domain/common.ts';
+import type { BlockPosition, Position } from '../../domain/common.ts';
 import { assertValidatedAction, type ValidatedAction } from '../../domain/validated-action.ts';
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
@@ -18,12 +18,14 @@ import {
   type Click,
   type TransferDirection,
 } from './container.ts';
+import { checkDig, digWaitTicks, TICK_MS, type DigArea } from './digging.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
 import {
   decodeFmlRuntimeMessage,
   decodeLogin,
   decodePlay,
+  DIG_STATUS,
   outbound,
   PLAYER_EYE_HEIGHT,
   type OutboundKind,
@@ -46,7 +48,7 @@ import {
   type WalkPlan,
 } from './walking.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
-import { WorldModel } from './world-model.ts';
+import { WorldModel, type BlockWatch } from './world-model.ts';
 
 /** Vanilla clients send one "player" packet per tick (20 per second). */
 const IDLE_TICK_MS = 50;
@@ -64,6 +66,16 @@ const VANILLA_CHEST = 'minecraft:chest';
 const CHEST_WINDOW_TYPE = 0;
 /** The server sends at least a time update every second; within this window the state is current. */
 const FRESHNESS_WINDOW_MS = 3_000;
+/** After the finish: how long to wait for the server's verdict on the block. */
+const DIG_OUTCOME_TIMEOUT_MS = 2_000;
+/**
+ * After the block turned to air: a quiet period with no further update for it. Forge sends
+ * "air" to the digging player BEFORE it asks mods whether the break may happen, and re-sends
+ * the block if one cancels it, so the first "air" alone is not proof.
+ */
+const DIG_SETTLE_MS = 5 * TICK_MS;
+/** How long the drop may take to reach the inventory: a 10-tick pickup delay, plus falling. */
+const DROP_WAIT_MS = 2_000;
 /**
  * Reported with every presence and walking packet. The walker only ever stands or walks on
  * a full block (never jumps or falls), so the player is always on the ground.
@@ -100,21 +112,25 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
 
 /**
  * Client for a private GTNH (Minecraft 1.7.10 + Forge) server: read-only, except that it
- * can WALK when movement is explicitly enabled with a fence.
+ * can WALK inside a fence, use configured vanilla CHESTS and DIG allowlisted blocks inside
+ * the fence, each only when explicitly enabled.
  *
  * Guarantees, enforced here and in packets.ts:
  *  - never connects unless live connections are enabled, an identity marker is set, the
  *    host is private, and the server's status ping shows that marker, Forge and GregTech;
  *  - can only send: handshake, status request, login start, keep-alive, FML handshake /
- *    channel registration, idle ticks, confirmations of server-assigned positions, and
- *    walking steps;
+ *    channel registration, idle ticks, confirmations of server-assigned positions, walking
+ *    steps, the chest packets, and digging start/cancel/finish;
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
- *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled (NOT_IMPLEMENTED
+ *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, the chest actions when
+ *    containers are enabled and DIG_BLOCK when digging is enabled (NOT_IMPLEMENTED
  *    otherwise); every other world-changing action returns NOT_IMPLEMENTED without
  *    sending anything;
  *  - a walk stays on one level inside the fence, and every step is re-checked just before
  *    it is sent; it stops on a server correction, a health drop, a nearby threat (MOVE_TO),
- *    a blocked or dangerous way ahead, the stop file, halt(), or a lost connection.
+ *    a blocked or dangerous way ahead, the stop file, halt(), or a lost connection;
+ *  - a dig uses an empty hand on one allowlisted block that digging.ts has checked, and
+ *    re-checks it every tick; walking, chests and digging never run at the same time.
  */
 export class Gtnh1710Client implements MinecraftClient {
   readonly kind = 'gtnh1710';
@@ -138,6 +154,7 @@ export class Gtnh1710Client implements MinecraftClient {
   readonly #clickVerdicts = new Map<number, boolean>();
   #nextActionNumber = 1;
   #usingContainer = false;
+  #digging = false;
 
   constructor(opts: Gtnh1710ClientOptions) {
     this.#opts = opts;
@@ -266,12 +283,14 @@ export class Gtnh1710Client implements MinecraftClient {
           item: action.args.item,
           quantity: action.args.quantity,
         });
+      case 'DIG_BLOCK':
+        return this.#dig(action.args.position);
       case 'EAT_FOOD':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
         return Promise.resolve(
           failed(
-            `${action.type} is not available: the GTNH client can only observe and walk`,
+            `${action.type} is not available: the GTNH client can observe, walk, use chests and dig`,
             'NOT_IMPLEMENTED',
           ),
         );
@@ -290,6 +309,7 @@ export class Gtnh1710Client implements MinecraftClient {
       return `the stop file ${cfg.movement.stopFile} exists`;
     }
     if (this.#walking) return 'the player is walking';
+    if (this.#digging) return 'the player is digging';
     return null;
   }
 
@@ -504,6 +524,245 @@ export class Gtnh1710Client implements MinecraftClient {
     return null;
   }
 
+  // -------------------------------------------------------------------------
+  // Digging one block
+
+  /** Why digging cannot start now, or null. */
+  #digBlocker(): { reason: string; code: 'NOT_IMPLEMENTED' | 'REFUSED' } | null {
+    const cfg = this.#opts.config;
+    if (!cfg.digging.enabled) {
+      return { reason: 'digging is disabled (MC_ENABLE_DIGGING)', code: 'NOT_IMPLEMENTED' };
+    }
+    const refused = (reason: string) => ({ reason, code: 'REFUSED' as const });
+    if (cfg.movement.fence === null) {
+      return refused('no movement fence is configured (digging stays inside the fence)');
+    }
+    if (!cfg.presenceTicks) return refused('digging needs presence ticks (MC_PRESENCE_TICKS)');
+    if (this.#haltReason !== null) return refused(`halted: ${this.#haltReason}`);
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return refused(`the stop file ${cfg.movement.stopFile} exists`);
+    }
+    if (this.#walking) return refused('the player is walking');
+    if (this.#usingContainer) return refused('a chest operation is running');
+    if (this.#digging) return refused('a dig is already in progress');
+    return null;
+  }
+
+  /**
+   * DIG_BLOCK: break one allowlisted block with an empty hand. C07 start, then the dig time
+   * (vanilla x 1.25 + 2 ticks, re-checking everything every tick), then C07 finish; a
+   * problem on the way sends C07 cancel. Success needs the server's own block change to
+   * air, with no re-send after it. Reports whether the drop reached the inventory.
+   */
+  async #dig(target: BlockPosition): Promise<ClientActionResult> {
+    const blocker = this.#digBlocker();
+    const fence = this.#opts.config.movement.fence;
+    if (blocker !== null || fence === null) {
+      return failed(`not digging: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED');
+    }
+    const area: DigArea = {
+      fence: fenceOf(fence),
+      maxHeightAboveFence: this.#opts.config.digging.maxHeightAboveFence,
+    };
+    const where = `(${target.x}, ${target.y}, ${target.z})`;
+    this.#digging = true;
+    try {
+      // A chest left open by an earlier action is closed first (never with a full cursor).
+      if (this.#world.openWindow !== null) {
+        const closed = this.#closeOpenWindow();
+        if (closed !== null) return failed(`not digging: ${closed.message}`, 'REFUSED');
+      }
+      const world = this.#world.walkWorld();
+      const feet = this.#world.ownPosition;
+      if (world === null || feet === null) {
+        return failed('not digging: block data or position unknown', 'REFUSED');
+      }
+      const check = checkDig(world, area, feet, target);
+      if (!check.ok) return failed(`not digging: ${check.reason}`, 'REFUSED');
+      // An empty hand: no tool can wear out, fell a whole tree or do anything else.
+      const hand = this.#emptyHotbarSlot();
+      if (hand === null) {
+        return failed(
+          'not digging: no empty hotbar slot (the agent digs with an empty hand)',
+          'REFUSED',
+        );
+      }
+      if (hand !== this.#world.heldSlot) {
+        this.#send(outbound.selectHotbarSlot(hand));
+        this.#world.setHeldSlot(hand);
+      }
+
+      const itemsBefore = this.#world.inventoryItems();
+      const ticks = digWaitTicks(check.block);
+      const guard = {
+        placementsAtStart: this.#confirmedPositions,
+        healthAtStart: this.#world.health,
+      };
+      const clock = this.#opts.clock;
+      const watch = this.#world.watchBlock(target.x, target.y, target.z);
+      const { x, y, z } = target;
+      let verdict: { ok: true } | { ok: false; result: ClientActionResult };
+      try {
+        this.#log(`digging ${check.block} at ${where}: ${ticks} ticks`);
+        this.#send(outbound.digBlock(DIG_STATUS.start, x, y, z, check.face));
+        const startedAt = clock.now().getTime();
+        while (clock.now().getTime() - startedAt < ticks * TICK_MS) {
+          await delay(TICK_MS);
+          const problem = this.#digProblem(area, target, check.blockId, watch, guard);
+          if (problem !== null) {
+            if (this.#phase === 'play') {
+              this.#send(outbound.digBlock(DIG_STATUS.cancel, x, y, z, check.face));
+            }
+            this.#log(`dig stopped: ${problem}`);
+            return failed(`dig of ${check.block} at ${where} stopped: ${problem}`, 'FAILED', {
+              x,
+              y,
+              z,
+              block: check.block,
+            });
+          }
+        }
+        const sentAt = watch.updates.length;
+        this.#send(outbound.digBlock(DIG_STATUS.finish, x, y, z, check.face));
+        verdict = await this.#digVerdict(watch, sentAt, check.block, where);
+      } finally {
+        this.#world.unwatch(watch);
+      }
+      if (!verdict.ok) return verdict.result;
+
+      // The drop spawns in the block's cell and is picked up (after 10 ticks) only when it
+      // lands within reach of the player's body; report whether it arrived.
+      let gained: Array<[string, number]> = [];
+      if (itemsBefore !== null) {
+        const increase = (): Array<[string, number]> => {
+          const now = this.#world.inventoryItems() ?? {};
+          return Object.entries(now)
+            .map(([item, n]): [string, number] => [item, n - (itemsBefore[item] ?? 0)])
+            .filter(([, d]) => d > 0);
+        };
+        await this.#waitFor(() => increase().length > 0, DROP_WAIT_MS);
+        gained = increase();
+      }
+      const drops = gained
+        .map(([item, n]) => `${n} x ${item}`)
+        .join(', ')
+        .slice(0, 200);
+      const dropCollected = gained.length > 0;
+      this.#log(`dug ${check.block} at ${where}; drop ${dropCollected ? drops : 'not collected'}`);
+      return ok(
+        `dug ${check.block} at ${where} in ${ticks} ticks; ` +
+          (dropCollected
+            ? `the drop reached the inventory: ${drops}`
+            : itemsBefore === null
+              ? 'the inventory was unknown, so the drop could not be checked'
+              : 'no drop reached the inventory (none, or it fell out of pickup range)'),
+        { x, y, z, block: check.block, ticks, dropCollected, drops },
+      );
+    } finally {
+      this.#digging = false;
+    }
+  }
+
+  /** Why the dig in progress must stop now, or null. Checked every tick. */
+  #digProblem(
+    area: DigArea,
+    target: BlockPosition,
+    blockId: number,
+    watch: BlockWatch,
+    guard: { placementsAtStart: number; healthAtStart: number | null },
+  ): string | null {
+    if (this.#phase !== 'play') return 'the connection closed';
+    const cfg = this.#opts.config;
+    if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return `the stop file ${cfg.movement.stopFile} exists`;
+    }
+    if (this.#confirmedPositions !== guard.placementsAtStart) {
+      return 'the server corrected the position';
+    }
+    const health = this.#world.health;
+    if (guard.healthAtStart !== null && health !== null && health < guard.healthAtStart) {
+      return `health dropped from ${guard.healthAtStart} to ${health}`;
+    }
+    if (!this.#world.entitiesReady(this.#opts.clock.now())) {
+      return 'the entities around the player are not fully known';
+    }
+    const threat = this.#world
+      .nearbyEntities(cfg.movement.threatRadius)
+      .find((e) => e.category === 'hostile' || e.category === 'unclassified');
+    if (threat !== undefined) {
+      return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
+    }
+    // Any update for the block while digging: the server refused the dig (it re-sends the
+    // block), or the block changed. Either way this dig is over.
+    if (watch.updates.length > 0) {
+      return `the server sent the block again while digging (id ${watch.updates[0]}): the dig was refused or the block changed`;
+    }
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    if (world === null || feet === null) return 'block data or position became unknown';
+    const check = checkDig(world, area, feet, target);
+    if (!check.ok) return `it is no longer safe to dig: ${check.reason}`;
+    if (check.blockId !== blockId) return 'the block changed';
+    return null;
+  }
+
+  /**
+   * After the finish: the server either breaks the block (Forge first sends "air" to the
+   * digging player, then the world's own change follows) or re-sends it. Waits for the
+   * first update, then for a quiet DIG_SETTLE_MS, and fails on anything but air.
+   */
+  async #digVerdict(
+    watch: BlockWatch,
+    sentAt: number,
+    block: string,
+    where: string,
+  ): Promise<{ ok: true } | { ok: false; result: ClientActionResult }> {
+    const clock = this.#opts.clock;
+    const deadline = clock.now().getTime() + DIG_OUTCOME_TIMEOUT_MS;
+    await this.#waitFor(() => watch.updates.length > sentAt, DIG_OUTCOME_TIMEOUT_MS);
+    let seen = watch.updates.length;
+    let quietSince = clock.now().getTime();
+    while (seen > sentAt && clock.now().getTime() < deadline) {
+      if (clock.now().getTime() - quietSince >= DIG_SETTLE_MS) break;
+      await delay(TICK_MS);
+      if (watch.updates.length !== seen) {
+        seen = watch.updates.length;
+        quietSince = clock.now().getTime();
+      }
+    }
+    const after = watch.updates.slice(sentAt);
+    const fail = (message: string): { ok: false; result: ClientActionResult } => {
+      this.#log(message);
+      const now = this.#world.blockAt(watch.x, watch.y, watch.z);
+      return {
+        ok: false,
+        result: failed(message, 'FAILED', {
+          x: watch.x,
+          y: watch.y,
+          z: watch.z,
+          block,
+          airNow: now === 0,
+        }),
+      };
+    };
+    if (this.#phase !== 'play')
+      return fail(`the connection closed after finishing the dig at ${where}`);
+    if (after.length === 0) {
+      return fail(
+        `no block change arrived within ${DIG_OUTCOME_TIMEOUT_MS} ms of finishing the dig at ${where}`,
+      );
+    }
+    if (after.some((id) => id !== 0)) {
+      return fail(
+        `the server re-sent the block at ${where} after the finish (updates ${after.slice(0, 4).join(', ')}): ` +
+          'the dig was judged too early or the break was cancelled. A vanilla server still ' +
+          'breaks a too-early dig on its own once its timer reaches 100%.',
+      );
+    }
+    return { ok: true };
+  }
+
   /**
    * WAIT's postcondition is "observed time advanced by at least `ms`", and a live state is
    * timestamped with the arrival of the last server packet (the honest "as of"). So wait
@@ -569,6 +828,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
     if (existsSync(resolvePath(m.stopFile))) return `the stop file ${m.stopFile} exists`;
     if (this.#usingContainer) return 'a chest operation is running';
+    if (this.#digging) return 'the player is digging';
     return null;
   }
 

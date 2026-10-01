@@ -1,15 +1,18 @@
 import type { ActionType } from '../domain/actions.ts';
-import type { Position } from '../domain/common.ts';
+import type { DiggableBlock } from '../domain/blocks.ts';
+import type { BlockPosition, Position } from '../domain/common.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
+  MAX_REPORTED_REMOVED,
+  MAX_REPORTED_RESOURCES,
   type CurrentTask,
   type GameState,
   type Hazard,
   type KnownRecipeState,
   type MachineStatus,
 } from '../domain/game-state.ts';
-import { distance } from '../domain/geometry.ts';
+import { blockCentre, distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
 import { known, unknown } from '../domain/known.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
 import type { Clock, ManualClock } from '../util/clock.ts';
@@ -20,7 +23,29 @@ const STACK_SIZE = 64;
 const SCAN_RADIUS = 16;
 /** Hazards come from chunk data, which covers much more than the entity scan. */
 const HAZARD_SCAN_RADIUS = 48;
+/** Diggable blocks are listed within this radius, like the real client. */
+const BLOCK_SCAN_RADIUS = 16;
 const ACTION_OVERHEAD_MS = 250;
+/** Simulated time for one dig (the live client takes 0.5-3.9 s per block). */
+const MOCK_DIG_MS = 1_000;
+
+/** What a mock dig adds to the inventory (a simplified vanilla drop table). */
+const MOCK_DROPS: Readonly<Record<DiggableBlock, { item: string; count: number } | null>> = {
+  'minecraft:log': { item: 'minecraft:log', count: 1 },
+  'minecraft:log2': { item: 'minecraft:log2', count: 1 },
+  'minecraft:leaves': null,
+  'minecraft:leaves2': null,
+  'minecraft:dirt': { item: 'minecraft:dirt', count: 1 },
+  'minecraft:grass': { item: 'minecraft:dirt', count: 1 },
+  'minecraft:sand': { item: 'minecraft:sand', count: 1 },
+  'minecraft:gravel': { item: 'minecraft:gravel', count: 1 },
+  'minecraft:clay': { item: 'minecraft:clay_ball', count: 4 },
+};
+
+export interface MockResourceBlock {
+  block: DiggableBlock;
+  position: BlockPosition;
+}
 
 export interface MockContainer {
   id: string;
@@ -48,7 +73,7 @@ export interface MockMachine {
 
 /** Fields the mock can pretend it cannot observe, to exercise fail-closed paths. */
 export type MockUnobservable =
-  'position' | 'dimension' | 'health' | 'hunger' | 'inventory' | 'threats' | 'hazards';
+  'position' | 'dimension' | 'health' | 'hunger' | 'inventory' | 'threats' | 'hazards' | 'blocks';
 
 /** The whole simulated world. Tests may read and mutate it directly. */
 export interface MockWorld {
@@ -58,6 +83,10 @@ export interface MockWorld {
   /** Entities the agent cannot identify (e.g. unclassified modded mobs). */
   unclassified: Position[];
   hazards: Hazard[];
+  /** Diggable blocks (the only blocks the mock simulates; everything else counts as air). */
+  resourceBlocks: MockResourceBlock[];
+  /** Where diggable blocks were removed, most recent first. */
+  removedBlocks: BlockPosition[];
   containers: MockContainer[];
   generators: MockGenerator[];
   machines: MockMachine[];
@@ -143,6 +172,15 @@ export class MockMinecraftClient implements MinecraftClient {
       .map((u) => distance(pos, u))
       .filter((d) => d <= SCAN_RADIUS);
     const nearbyHazards = w.hazards.filter((h) => distance(pos, h.position) <= HAZARD_SCAN_RADIUS);
+    const near = (b: BlockPosition): number => distance(pos, blockCentre(b));
+    // Like the live client: at or above the feet level (never the ground it stands on).
+    const resources = w.resourceBlocks
+      .filter((r) => r.position.y >= Math.floor(pos.y) && near(r.position) <= BLOCK_SCAN_RADIUS)
+      .sort((a, b) => near(a.position) - near(b.position))
+      .slice(0, MAX_REPORTED_RESOURCES);
+    const removed = w.removedBlocks
+      .filter((p) => near(p) <= BLOCK_SCAN_RADIUS)
+      .slice(0, MAX_REPORTED_REMOVED);
 
     const state: GameState = {
       schemaVersion: GAME_STATE_SCHEMA_VERSION,
@@ -183,6 +221,13 @@ export class MockMinecraftClient implements MinecraftClient {
             lavaNearby: nearbyHazards.some((h) => h.kind === 'lava'),
             voidNearby: nearbyHazards.some((h) => h.kind === 'void'),
             hazards: nearbyHazards.map((h) => ({ kind: h.kind, position: { ...h.position } })),
+          }),
+      nearbyBlocks: hidden.has('blocks')
+        ? unknown('mock: blocks hidden')
+        : known({
+            scanRadius: BLOCK_SCAN_RADIUS,
+            resources: resources.map((r) => ({ block: r.block, position: { ...r.position } })),
+            removed: removed.map((p) => ({ ...p })),
           }),
       power: {
         availableEUt: unknown('mock: EU/t is not simulated'),
@@ -319,10 +364,46 @@ export class MockMinecraftClient implements MinecraftClient {
         return ok(`added ${quantity} ${fuelItem} to ${g.id}`);
       }
 
+      case 'DIG_BLOCK':
+        return this.#dig(action.args.position);
+
       case 'PAUSE_AND_ASK_USER':
         this.userMessages.push(action.args.question);
         return ok('user notified', { acknowledged: true });
     }
+  }
+
+  /** Removes the block and adds its drop, like a server would (within reach, if any room). */
+  #dig(p: BlockPosition): ClientActionResult {
+    const w = this.world;
+    const at = w.resourceBlocks.findIndex(
+      (r) => r.position.x === p.x && r.position.y === p.y && r.position.z === p.z,
+    );
+    const found = w.resourceBlocks[at];
+    if (found === undefined) return failed(`no diggable block at ${formatPosition(p)}`);
+    if (eyeDistanceToBlock(w.player.position, p) > w.reach) {
+      return failed(`${formatPosition(p)} is out of reach`);
+    }
+    this.#clock.advance(MOCK_DIG_MS);
+    w.resourceBlocks.splice(at, 1);
+    w.removedBlocks = [{ ...p }, ...w.removedBlocks];
+    const drop = MOCK_DROPS[found.block];
+    let dropCollected = false;
+    if (drop !== null) {
+      const after = {
+        ...w.inventory.items,
+        [drop.item]: (w.inventory.items[drop.item] ?? 0) + drop.count,
+      };
+      if (usedSlots(after) <= w.inventory.capacitySlots) {
+        w.inventory.items[drop.item] = after[drop.item] ?? 0;
+        dropCollected = true;
+      }
+    }
+    return ok(`dug ${found.block} at ${formatPosition(p)}`, {
+      block: found.block,
+      dropCollected,
+      drops: drop === null || !dropCollected ? '' : `${drop.count} x ${drop.item}`,
+    });
   }
 
   #moveTo(target: Position): ClientActionResult {

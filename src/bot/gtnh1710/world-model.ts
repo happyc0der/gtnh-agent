@@ -1,9 +1,16 @@
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
+  MAX_REPORTED_REMOVED,
   type GameState,
 } from '../../domain/game-state.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
+import {
+  buildDiggableTable,
+  diggableOf,
+  RESOURCE_SCAN_RADIUS,
+  scanResources,
+} from './resource-scan.ts';
 import {
   classifyModded,
   classifyVanillaMob,
@@ -131,6 +138,21 @@ interface PlayerPosition {
 }
 
 /**
+ * Every block update the server sends for one position, in order: the block id after the
+ * update, or -1 when its chunk was unloaded. The digging client watches its target so it
+ * can tell "broken" (air) from "re-sent" (the same block again, the server's refusal).
+ */
+export interface BlockWatch {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly updates: number[];
+}
+
+/** Positions of removed diggable blocks remembered per connection (most recent first). */
+const MAX_REMEMBERED_REMOVALS = 64;
+
+/**
  * Folds decoded server packets into what the agent knows. Pure: no sockets, no timers.
  * Anything not (yet) observed, or not reliably interpretable, is reported as unknown.
  */
@@ -172,10 +194,57 @@ export class WorldModel {
   #blockCodes: Uint8Array | null = null;
   /** Set when block data was lost: the hazard scan cannot be trusted for this session. */
   #hazardProblem: string | null = null;
+  /** Registry id -> diggable block (resource-scan.ts); rebuilt when the registry arrives. */
+  #diggable: Uint8Array | null = null;
+  /** Where the server turned a diggable block into air, most recent first. */
+  #removed: Array<{ x: number; y: number; z: number }> = [];
+  readonly #watches = new Set<BlockWatch>();
 
   setRegistry(registry: Registry): void {
     this.#registry = registry;
     this.#blockCodes = buildBlockCodeTable(registry);
+    this.#diggable = buildDiggableTable(registry);
+  }
+
+  /** Records every update the server sends for this block until unwatch(). */
+  watchBlock(x: number, y: number, z: number): BlockWatch {
+    const w: BlockWatch = { x, y, z, updates: [] };
+    this.#watches.add(w);
+    return w;
+  }
+
+  unwatch(w: BlockWatch): void {
+    this.#watches.delete(w);
+  }
+
+  /** A single block changed: remember removed diggable blocks, and tell the watchers. */
+  #onBlockChanged(x: number, y: number, z: number, id: number): void {
+    const before = this.#store.blockAt(x, y, z);
+    this.#store.setBlock(x, y, z, id);
+    const table = this.#diggable;
+    if (
+      id === 0 &&
+      before !== undefined &&
+      table !== null &&
+      diggableOf(table, before) !== undefined
+    ) {
+      this.#removed = [
+        { x, y, z },
+        ...this.#removed.filter((p) => p.x !== x || p.y !== y || p.z !== z),
+      ].slice(0, MAX_REMEMBERED_REMOVALS);
+    }
+    for (const w of this.#watches) {
+      if (w.x === x && w.y === y && w.z === z) w.updates.push(this.#store.blockAt(x, y, z) ?? -1);
+    }
+  }
+
+  /** A whole column (or some of its sections) arrived or went: tell the watchers in it. */
+  #onColumnChanged(chunkX: number, chunkZ: number): void {
+    for (const w of this.#watches) {
+      if (Math.floor(w.x / 16) === chunkX && Math.floor(w.z / 16) === chunkZ) {
+        w.updates.push(this.#store.blockAt(w.x, w.y, w.z) ?? -1);
+      }
+    }
   }
 
   /** Mod versions the server reports (modid -> version); entity identifications are version-bound. */
@@ -494,6 +563,8 @@ export class WorldModel {
         this.#entities.clear();
         this.#machines.clear();
         this.#store.clear();
+        this.#removed = [];
+        for (const w of this.#watches) w.updates.push(-1);
         return;
       case 'chunk-data': {
         const { chunkX, chunkZ } = packet.header;
@@ -504,6 +575,7 @@ export class WorldModel {
               this.#machines.delete(key);
             }
           }
+          this.#onColumnChanged(chunkX, chunkZ);
           return;
         }
         try {
@@ -528,6 +600,7 @@ export class WorldModel {
           else
             this.#hazardProblem ??= `undecodable chunk update ${chunkX},${chunkZ}: ${error.message}`;
         }
+        this.#onColumnChanged(chunkX, chunkZ);
         return;
       }
       case 'chunk-bulk':
@@ -545,14 +618,15 @@ export class WorldModel {
           for (const c of packet.columns)
             this.#store.markBad(c.chunkX, c.chunkZ, error.message, at.getTime());
         }
+        for (const c of packet.columns) this.#onColumnChanged(c.chunkX, c.chunkZ);
         return;
       case 'block-change':
-        this.#store.setBlock(packet.x, packet.y, packet.z, packet.blockId);
+        this.#onBlockChanged(packet.x, packet.y, packet.z, packet.blockId);
         this.#forgetReplacedMachine(packet.x, packet.y, packet.z, packet.blockId);
         return;
       case 'multi-block-change':
         for (const r of packet.records) {
-          this.#store.setBlock(r.x, r.y, r.z, r.blockId);
+          this.#onBlockChanged(r.x, r.y, r.z, r.blockId);
           this.#forgetReplacedMachine(r.x, r.y, r.z, r.blockId);
         }
         return;
@@ -703,6 +777,7 @@ export class WorldModel {
       inventory: this.#inventory(),
       nearbyThreats: this.#threats(now),
       environmentHazards: this.#hazards(),
+      nearbyBlocks: this.#nearbyBlocks(),
       power: {
         availableEUt: unknown('GTNH EU is not observable through the protocol'),
         generators: [],
@@ -798,6 +873,32 @@ export class WorldModel {
     });
   }
 
+  /** Diggable blocks within RESOURCE_SCAN_RADIUS, and recently removed ones (still air). */
+  #nearbyBlocks(): GameState['nearbyBlocks'] {
+    if (this.#hazardProblem !== null) return unknown(this.#hazardProblem);
+    if (!this.#joined) return unknown('not joined yet');
+    const pos = this.#position;
+    if (pos === null) return unknown('player position unknown');
+    const table = this.#diggable;
+    if (table === null) return unknown('block registry not received yet');
+    const feet = { x: pos.x, y: pos.feetY, z: pos.z };
+    const scan = scanResources(this.#store, table, feet);
+    if (!scan.ok) return unknown(scan.reason);
+    const removed = this.#removed
+      .filter(
+        (p) =>
+          this.#store.blockAt(p.x, p.y, p.z) === 0 &&
+          Math.hypot(p.x + 0.5 - feet.x, p.y + 0.5 - feet.y, p.z + 0.5 - feet.z) <=
+            RESOURCE_SCAN_RADIUS,
+      )
+      .slice(0, MAX_REPORTED_REMOVED);
+    return known({
+      scanRadius: scan.scanRadius,
+      resources: scan.resources.map(({ block, position }) => ({ block, position })),
+      removed: removed.map((p) => ({ ...p })),
+    });
+  }
+
   /** Hazard scan with a custom radius, for diagnostics only (the agent always uses the default). */
   diagnosticHazardScan(radius: number): HazardScan | null {
     const pos = this.#position;
@@ -818,6 +919,12 @@ export class WorldModel {
 
   get health(): number | null {
     return this.#health?.health ?? null;
+  }
+
+  /** The player's item counts (as the GameState reports them), or null while unknown. */
+  inventoryItems(): Record<string, number> | null {
+    const inv = this.#inventory();
+    return inv.known ? { ...inv.value.items } : null;
   }
 
   /**

@@ -170,6 +170,34 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'BLOCK_REMOVED': {
+      const p = post.position;
+      const where = formatPosition(p);
+      if (!after.nearbyBlocks.known) {
+        check(
+          'block-removed',
+          false,
+          `nearby blocks unknown after digging: ${after.nearbyBlocks.reason}`,
+        );
+        break;
+      }
+      const blocks = after.nearbyBlocks.value;
+      const same = (q: { x: number; y: number; z: number }): boolean =>
+        q.x === p.x && q.y === p.y && q.z === p.z;
+      const still = blocks.resources.find((r) => same(r.position));
+      const removed = blocks.removed.some(same);
+      check(
+        'block-removed',
+        still === undefined && removed,
+        still !== undefined
+          ? `${where} is still ${still.block}`
+          : removed
+            ? `${where} was observed turning into air`
+            : `${where} was not observed turning into air (scan radius ${blocks.scanRadius})`,
+      );
+      break;
+    }
+
     case 'USER_NOTIFIED':
       check(
         'user-acknowledged',

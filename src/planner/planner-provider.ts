@@ -1,8 +1,10 @@
-import { ACTION_TYPES } from '../domain/actions.ts';
+import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
+import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
 import type { GameState } from '../domain/game-state.ts';
-import { forbiddenKeywords } from '../safety/forbidden-actions.ts';
+import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
+  MAX_COMPACT_RESOURCES,
   PlannerRequestSchema,
   type CompactState,
   type PlannerRequest,
@@ -55,6 +57,7 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
   const inventory = val('inventory', state.inventory);
   const threats = val('nearbyThreats', state.nearbyThreats);
   const hazards = val('environmentHazards', state.environmentHazards);
+  const blocks = val('nearbyBlocks', state.nearbyBlocks);
   val('power.availableEUt', state.power.availableEUt);
 
   const inventoryTop = inventory
@@ -79,6 +82,9 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       ? { hostileCount: threats.hostileCount, unclassifiedCount: threats.unclassifiedCount }
       : null,
     hazards: hazards ? { lavaNearby: hazards.lavaNearby, voidNearby: hazards.voidNearby } : null,
+    diggableBlocks: (blocks?.resources ?? [])
+      .slice(0, MAX_COMPACT_RESOURCES)
+      .map((r) => ({ block: r.block, position: { ...r.position } })),
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
       name: m.name,
@@ -132,6 +138,8 @@ export function buildPlannerRequest(input: {
         .map(([name]) => name)
         .sort(),
       forbidden: [...forbiddenKeywords()],
+      forbiddenExceptions: operatorApprovedTypes().filter(isAllowlistedActionType),
+      diggableBlocks: [...DIGGABLE_BLOCKS],
     },
     recentActions: input.recentActions,
     recentFailures: input.recentFailures,

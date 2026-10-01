@@ -87,6 +87,10 @@ export const VIOLATION_CODES = [
   'ACTION_NOT_ALLOWED_IN_DANGER',
   'REPEATED_FAILURE',
   'PLAN_INVALID',
+  /** DIG_BLOCK on a block that is not an observed, allowlisted diggable block. */
+  'NOT_DIGGABLE',
+  /** DIG_BLOCK on a block whose removal could hurt the player (support, falling blocks). */
+  'UNSAFE_DIG',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

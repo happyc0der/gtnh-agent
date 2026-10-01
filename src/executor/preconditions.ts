@@ -1,7 +1,7 @@
 import type { Action } from '../domain/actions.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
-import { distance } from '../domain/geometry.ts';
+import { distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 
 export interface PreconditionResult {
@@ -126,6 +126,23 @@ export function checkPreconditions(
         failures.push(
           `inventory holds ${have(action.args.fuelItem)} ${action.args.fuelItem}, need ${action.args.quantity}`,
         );
+      }
+      break;
+    }
+
+    case 'DIG_BLOCK': {
+      // Reach is measured like the game does: from the eyes to the block.
+      const p = requirePosition();
+      const target = action.args.position;
+      if (p !== null && eyeDistanceToBlock(p, target) > reach) {
+        failures.push(
+          `block ${formatPosition(target)} is ${eyeDistanceToBlock(p, target).toFixed(1)} blocks from the eyes (reach ${reach})`,
+        );
+      }
+      // The drop needs somewhere to go, or it is left lying in the world.
+      requireInventory();
+      if (inventory !== null && inventory.usedSlots >= inventory.capacitySlots) {
+        failures.push('inventory is full (no room for the drop)');
       }
       break;
     }

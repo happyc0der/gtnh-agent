@@ -54,6 +54,15 @@ describe('configuration', () => {
     expect(config.safety.boundary.max).toEqual({ x: 256, y: 255, z: 256 });
   });
 
+  it('digging is off unless enabled, and its heights are bounded', () => {
+    expect(defaultConfig().minecraft.digging).toEqual({ enabled: false, maxHeightAboveFence: 4 });
+    const { config } = loadConfig({ cwd: emptyDir(), env: { MC_ENABLE_DIGGING: 'true' } });
+    expect(config.minecraft.digging.enabled).toBe(true);
+    expect(() =>
+      defaultConfig({ minecraft: { digging: { enabled: true, maxHeightAboveFence: 9 } } }),
+    ).toThrow();
+  });
+
   it('rejects invalid values with a readable error', () => {
     expect(() => loadConfig({ cwd: emptyDir(), env: { SAFETY_MIN_HEALTH: 'lots' } })).toThrow(
       /must be a number/,

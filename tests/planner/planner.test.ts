@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
 import { PlanSchema, plannerResponseJsonSchema, type Plan } from '../../src/planner/plan-schema.ts';
@@ -88,6 +90,13 @@ describe('validatePlan', () => {
     expect(validatePlan(validPlan, safetyCtx(), 8).ok).toBe(true);
   });
 
+  it.each(['fetch-cobblestone.json', 'dig-pen.json'])('passes the example plan %s', (file) => {
+    const plan: unknown = JSON.parse(readFileSync(join('examples', 'plans', file), 'utf8'));
+    const r = validatePlan(plan, safetyCtx(), 8);
+    expect(r.schemaIssues).toEqual([]);
+    expect(r.stepViolations).toEqual([]);
+  });
+
   it('enforces the configured step limit', () => {
     const r = validatePlan(validPlan, safetyCtx(), 1);
     expect(r.ok).toBe(false);
@@ -145,14 +154,52 @@ describe('planner request and mock planner', () => {
     expect(compact.unknownFields).toEqual(['player.health', 'power.availableEUt']);
   });
 
+  it('passes the observed diggable blocks, nearest first, and marks them unknown when hidden', () => {
+    // The grass under the player's feet is never listed (the ground is never dug).
+    const compact = sanitizeStateForPlanner(makeState());
+    expect(compact.diggableBlocks.map((b) => b.block)).toEqual([
+      'minecraft:dirt',
+      'minecraft:log',
+      'minecraft:leaves',
+    ]);
+    expect(compact.diggableBlocks[0]).toEqual({
+      block: 'minecraft:dirt',
+      position: { x: 2, y: 64, z: 1 },
+    });
+    const hidden = sanitizeStateForPlanner(makeState((w) => void (w.unobservable = ['blocks'])));
+    expect(hidden.diggableBlocks).toEqual([]);
+    expect(hidden.unknownFields).toContain('nearbyBlocks');
+  });
+
   it('the request carries the allowlist and constraints', () => {
     const r = request();
-    expect(r.allowedActions).toHaveLength(11);
+    expect(r.allowedActions).toHaveLength(12);
+    expect(r.allowedActions).toContain('DIG_BLOCK');
     expect(r.safetyConstraints.protectedItems).toEqual([
       'minecraft:diamond',
       'minecraft:nether_star',
     ]);
     expect(r.safetyConstraints.safeLocations).toEqual(['home']);
+    // 'DIG' stays a forbidden keyword; exactly DIG_BLOCK is the operator's exception.
+    expect(r.safetyConstraints.forbidden).toContain('DIG');
+    expect(r.safetyConstraints.forbiddenExceptions).toEqual(['DIG_BLOCK']);
+    expect(r.safetyConstraints.diggableBlocks).toContain('minecraft:log');
+  });
+
+  it('a plan may dig an allowlisted block, but not a block outside the boundary', () => {
+    const dig = (y: number): Plan => ({
+      ...validPlan,
+      steps: [
+        {
+          step: 1,
+          action: { type: 'DIG_BLOCK', args: { position: { x: 2, y, z: 1 } } },
+          rationale: 'gather dirt',
+        },
+      ],
+    });
+    expect(validatePlan(dig(64), safetyCtx(), 8).ok).toBe(true);
+    const outside = validatePlan(dig(255), safetyCtx(), 8);
+    expect(outside.stepViolations[0]?.violations.map((v) => v.code)).toEqual(['OUT_OF_BOUNDS']);
   });
 
   it('MockPlannerProvider is fixture-driven and deterministic', async () => {

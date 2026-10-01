@@ -1,0 +1,30 @@
+{
+  "goal": "Dig the dirt and grass test blocks in the pen",
+  "steps": [
+    {
+      "step": 1,
+      "action": {
+        "type": "MOVE_TO",
+        "args": { "target": { "x": -6.5, "y": 200, "z": -10.5 }, "tolerance": 0.5 }
+      },
+      "rationale": "Stand between the dirt (-8, 200, -11) and the grass (-6, 200, -11), so both drops land within pickup range."
+    },
+    {
+      "step": 2,
+      "action": { "type": "DIG_BLOCK", "args": { "position": { "x": -8, "y": 200, "z": -11 } } },
+      "rationale": "Dig the dirt block west of the player."
+    },
+    {
+      "step": 3,
+      "action": { "type": "DIG_BLOCK", "args": { "position": { "x": -6, "y": 200, "z": -11 } } },
+      "rationale": "Dig the grass block east of the player (it drops dirt)."
+    }
+  ],
+  "requiresUserApproval": false,
+  "explanation": "Written by the operator for the glass test pen after `pen resources`; each step runs in its own cycle.",
+  "failureHandling": {
+    "onStepFailure": "PAUSE_AND_ASK_USER",
+    "maxRetriesPerStep": 1,
+    "escalationMessage": "Could not dig the pen's test blocks."
+  }
+}

@@ -177,6 +177,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
         type: 'REFUEL_KNOWN_GENERATOR',
         args: { generatorId: 'g1', fuelItem: 'minecraft:coal', quantity: 1 },
       },
+      DIG_BLOCK: { type: 'DIG_BLOCK', args: { position: { x: -4, y: 105, z: -8 } } },
       PAUSE_AND_ASK_USER: { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
     };
     expect(Object.keys(specs).sort()).toEqual([...ACTION_TYPES].sort());

@@ -35,22 +35,31 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 
 ## Allowlist
 
-| Action                    | Bounded args                                   | Preconditions (feasibility)                                      | Key safety checks                                                                                                                                                                 | Postcondition (verified)                                       |
-| ------------------------- | ---------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `OBSERVE_STATE`           | none                                           | none                                                             | always permitted                                                                                                                                                                  | Fresh observation exists.                                      |
-| `MOVE_TO`                 | target (world-border bounded), tolerance 0.5–5 | player position known                                            | target inside boundary; ≥ `hazardAvoidanceRadius` from known lava/void; target + avoidance radius inside the hazard scan; distance ≤ `maxMoveDistance`; not allowed during danger | Player within `tolerance` of target.                           |
-| `WAIT`                    | 50–60,000 ms                                   | none                                                             | not allowed during danger                                                                                                                                                         | Observed time advanced ≥ duration.                             |
-| `EAT_FOOD`                | item id                                        | item in inventory; not full                                      | approved food, not protected; allowed during low-vitals danger                                                                                                                    | Item count −1 and food level not lower.                        |
-| `RETURN_TO_SAFE_LOCATION` | location name                                  | location resolvable; position known                              | location is a known `safe` location, inside boundary, same dimension, clear of hazards, ≤ `maxRetreatDistance`; allowed during danger (not when outside work area)                | Player within reach of the location.                           |
-| `OPEN_CONTAINER`          | container id                                   | container known and within reach                                 | container is a known storage container                                                                                                                                            | `openContainerId` equals the container.                        |
-| `DEPOSIT_ITEM`            | container, item, 1–2304                        | within reach; enough items                                       | item not protected; container is known storage (not a machine)                                                                                                                    | Player inventory −qty exactly; container +qty when observable. |
-| `WITHDRAW_ITEM`           | container, item, 1–2304                        | within reach; container contents known and sufficient; free slot | item not protected                                                                                                                                                                | Player inventory +qty exactly; container −qty when observable. |
-| `INSPECT_MACHINE`         | machine id                                     | machine known and within reach                                   | machine is known                                                                                                                                                                  | Machine `lastInspectedAt` ≥ action time.                       |
-| `REFUEL_KNOWN_GENERATOR`  | generator, fuel, 1–64                          | generator known and within reach; enough fuel                    | fuel approved, not protected, and in that generator's `acceptedFuels`                                                                                                             | Fuel left inventory (−qty) and generator not `out_of_fuel`.    |
-| `PAUSE_AND_ASK_USER`      | question ≤ 500 chars                           | none                                                             | always permitted                                                                                                                                                                  | Client acknowledged. The loop marks the task `paused`.         |
+| Action                    | Bounded args                                   | Preconditions (feasibility)                                      | Key safety checks                                                                                                                                                                                                                             | Postcondition (verified)                                       |
+| ------------------------- | ---------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `OBSERVE_STATE`           | none                                           | none                                                             | always permitted                                                                                                                                                                                                                              | Fresh observation exists.                                      |
+| `MOVE_TO`                 | target (world-border bounded), tolerance 0.5–5 | player position known                                            | target inside boundary; ≥ `hazardAvoidanceRadius` from known lava/void; target + avoidance radius inside the hazard scan; distance ≤ `maxMoveDistance`; not allowed during danger                                                             | Player within `tolerance` of target.                           |
+| `WAIT`                    | 50–60,000 ms                                   | none                                                             | not allowed during danger                                                                                                                                                                                                                     | Observed time advanced ≥ duration.                             |
+| `EAT_FOOD`                | item id                                        | item in inventory; not full                                      | approved food, not protected; allowed during low-vitals danger                                                                                                                                                                                | Item count −1 and food level not lower.                        |
+| `RETURN_TO_SAFE_LOCATION` | location name                                  | location resolvable; position known                              | location is a known `safe` location, inside boundary, same dimension, clear of hazards, ≤ `maxRetreatDistance`; allowed during danger (not when outside work area)                                                                            | Player within reach of the location.                           |
+| `OPEN_CONTAINER`          | container id                                   | container known and within reach                                 | container is a known storage container                                                                                                                                                                                                        | `openContainerId` equals the container.                        |
+| `DEPOSIT_ITEM`            | container, item, 1–2304                        | within reach; enough items                                       | item not protected; container is known storage (not a machine)                                                                                                                                                                                | Player inventory −qty exactly; container +qty when observable. |
+| `WITHDRAW_ITEM`           | container, item, 1–2304                        | within reach; container contents known and sufficient; free slot | item not protected                                                                                                                                                                                                                            | Player inventory +qty exactly; container −qty when observable. |
+| `INSPECT_MACHINE`         | machine id                                     | machine known and within reach                                   | machine is known                                                                                                                                                                                                                              | Machine `lastInspectedAt` ≥ action time.                       |
+| `REFUEL_KNOWN_GENERATOR`  | generator, fuel, 1–64                          | generator known and within reach; enough fuel                    | fuel approved, not protected, and in that generator's `acceptedFuels`                                                                                                                                                                         | Fuel left inventory (−qty) and generator not `out_of_fuel`.    |
+| `DIG_BLOCK`               | block position (integers, y 0–255)             | block within reach of the eyes; a free inventory slot            | an observed, allowlisted diggable block (`NOT_DIGGABLE`); whole block inside boundary; clear of known hazards; not under the player or a falling block over its head or one with sand/gravel on top (`UNSAFE_DIG`); not allowed during danger | The block is observed turning into air (`BLOCK_REMOVED`).      |
+| `PAUSE_AND_ASK_USER`      | question ≤ 500 chars                           | none                                                             | always permitted                                                                                                                                                                                                                              | Client acknowledged. The loop marks the task `paused`.         |
 
-**Not in the allowlist, by design:** lava interaction, dropping items, combat, placing or breaking
-blocks, wrenching, cable/energy-network changes, multiblock changes, and rare-item consumption.
+**Not in the allowlist, by design:** lava interaction, dropping items, combat, placing blocks,
+breaking any block that is not on `DIG_BLOCK`'s allowlist, wrenching, cable/energy-network
+changes, multiblock changes, and rare-item consumption.
+
+**`DIG_BLOCK`** breaks one of `minecraft:log`, `log2`, `leaves`, `leaves2`, `dirt`, `grass`,
+`sand`, `gravel` or `clay` (`src/domain/blocks.ts`); nothing else, nothing modded. The block must
+be listed in the observation's `nearbyBlocks.resources`. Only allowlisted blocks at or above the
+player's feet level are listed there, so the ground it stands on is never a target. Its drop is
+reported (`dropCollected`), not required: leaves usually drop nothing, and a drop that lands out
+of pickup range stays where it fell.
 
 **On the live GTNH client**, `OPEN_CONTAINER`, `DEPOSIT_ITEM` and `WITHDRAW_ITEM` work on
 configured vanilla chests when `MC_ENABLE_CONTAINERS=true` (otherwise `NOT_IMPLEMENTED`). A
@@ -64,14 +73,34 @@ fails the action (`FAILED`) after the cursor has been emptied back into the wind
 refused (`REFUSED`, nothing sent) when the target is off the fence's level, outside the fence or
 unreachable over walkable blocks. It stops (`FAILED`) on a server correction, a health drop, a
 hostile or unidentified entity within `threatRadius` (`MOVE_TO` only), a blocked or dangerous way
-ahead, the stop file, `halt()` or a lost connection. The other world-changing actions return
-`NOT_IMPLEMENTED`. See [architecture: walking](architecture.md#walking).
+ahead, the stop file, `halt()` or a lost connection.
+
+`DIG_BLOCK` needs `MC_ENABLE_DIGGING=true` and the movement fence (otherwise `NOT_IMPLEMENTED`).
+
+- **Refused** (`REFUSED`, nothing sent) when the block:
+  - is outside the fence's columns, or outside its level up to `maxHeightAboveFence`;
+  - is not loaded, is not allowlisted, or is out of 4.5 blocks' reach;
+  - is under the player, or is sand or gravel over its head;
+  - touches anything but air, allowlisted blocks and plain full blocks (water, a torch, a
+    chest...);
+  - has sand or gravel on top, or has a hazard within one block.
+    It is also refused with no empty hotbar slot, or while a walk or chest operation runs.
+- **Fails** (`FAILED`, after C07 cancel if it had started) on:
+  - any server update for the block while digging (a refusal), or the block becoming unsafe;
+  - the stop file, `halt()`, a server correction, a health drop or a nearby threat;
+  - a re-send after the finish (judged too early, or the break was cancelled), or no block
+    change at all.
+
+The other world-changing actions return `NOT_IMPLEMENTED`. See
+[architecture: walking](architecture.md#walking) and [digging](architecture.md#digging).
 
 ## Global rules applied to every action
 
 1. **Unsupported/malformed** (not a schema-valid allowlisted action) → `UNSUPPORTED_ACTION`, pause.
-   Types matching the destructive-keyword denylist (`PLACE`, `BREAK`, `WRENCH`, `CABLE`, `MULTIBLOCK`,
-   `LAVA`, `DROP`, `ATTACK`, `SHELL`, …) → `FORBIDDEN_MODIFICATION`, pause.
+   Types matching the destructive-keyword denylist (`PLACE`, `BREAK`, `DIG`, `MINE`, `WRENCH`,
+   `CABLE`, `MULTIBLOCK`, `LAVA`, `DROP`, `ATTACK`, `SHELL`, …) → `FORBIDDEN_MODIFICATION`, pause.
+   The operator allows exactly one exception, `DIG_BLOCK`, matched character for character:
+   `BREAK_BLOCK`, `MINE_ORE`, `DIG_AREA` or `dig_block` stay forbidden.
 2. **Unreliable state** (critical field unknown, older than `maxStateAgeMs`, from the future, or
    internally inconsistent) → refused, pause. Only `PAUSE_AND_ASK_USER` and `OBSERVE_STATE` remain available.
 3. **Danger gate.** Outside the boundary/dimension, nothing but pause/observe. Near lava, fire,

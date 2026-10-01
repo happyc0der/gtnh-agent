@@ -180,4 +180,21 @@ describe('preconditions', () => {
       ).failures,
     ).toContain('player is not hungry');
   });
+
+  it('a dig needs the block within reach of the eyes and room for the drop', () => {
+    const dig = (x: number, y: number, z: number): ActionSpec => ({
+      type: 'DIG_BLOCK',
+      args: { position: { x, y, z } },
+    });
+    expect(pre(dig(2, 64, 1)).ok).toBe(true);
+    // The player stands at (1, 64, 1): eyes at y 65.62. Reach is measured to block centres.
+    expect(pre(dig(-2, 64, 4)).ok).toBe(true); // 4.44 blocks
+    expect(pre(dig(-2, 64, 5)).failures).toEqual([
+      'block (-2, 64, 5) is 5.3 blocks from the eyes (reach 4.5)',
+    ]);
+    const full = pre(dig(2, 64, 1), (w) => {
+      w.inventory.capacitySlots = 5;
+    });
+    expect(full.failures).toEqual(['inventory is full (no room for the drop)']);
+  });
 });

@@ -11,8 +11,10 @@ import { errorMessage } from '../util/json.ts';
 import { syncConfigToDatabase, type CycleResult } from './agent-loop.ts';
 import {
   movementStatus,
+  parseBlockPosition,
   runLiveChest,
   runLiveCycle,
+  runLiveDig,
   runLiveSession,
   runLiveMove,
   setMovementHalted,
@@ -25,7 +27,8 @@ import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
 import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
-const USAGE = `gtnh-agent (single cycle, no autonomy; the live client is read-only)
+const USAGE = `gtnh-agent (single cycle, no autonomy; the live client only observes unless walking,
+chests or digging are explicitly enabled)
 
 Usage:
   node src/app/cli.ts once [--scenario <name>] [--db <path> | --memory] [--full]
@@ -43,13 +46,18 @@ Usage:
   node src/app/cli.ts chest --live --container <id> [--withdraw <item> | --deposit <item>] [--count N]
       Open a configured vanilla chest (needs MC_ENABLE_CONTAINERS=true) and optionally move
       exactly N items, as checked user actions; prints the chest and inventory afterwards.
+  node src/app/cli.ts dig --live --at <x,y,z> [--db <path>]
+      BREAK one allowlisted block (logs, leaves, dirt, grass, sand, gravel, clay) inside the
+      fence with an empty hand (needs MC_ENABLE_DIGGING=true and a fence), as a checked user
+      action; prints the diggable blocks and the inventory afterwards. Ctrl+C stops it.
   node src/app/cli.ts run --live [--max-cycles N] [--max-minutes M] [--db <path>] [--verbose]
       BOUNDED auto-run of the current task on one connection: ordinary cycles back to back,
       stopping when the task is done or anything needs you (a pause, rejection, failure,
       approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
       stop file (pnpm cli halt) or Ctrl+C.
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
-      Create / remove the stop file (nothing walks while it exists) / show movement settings.
+      Create / remove the stop file (nothing walks, uses chests or digs while it exists) /
+      show movement and digging settings.
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -128,6 +136,7 @@ async function main(argv: string[]): Promise<number> {
       machines: { type: 'string' },
       reason: { type: 'string' },
       to: { type: 'string' },
+      at: { type: 'string' },
       container: { type: 'string' },
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
@@ -306,6 +315,28 @@ async function main(argv: string[]): Promise<number> {
         inventory: out.inventory,
       });
       return out.results.every((r) => r.status === 'succeeded') ? 0 : 1;
+    }
+    case 'dig': {
+      if (!values.live) {
+        process.stderr.write('dig breaks a block on the test server; pass --live to confirm.\n');
+        return 1;
+      }
+      const at = values.at === undefined ? null : parseBlockPosition(values.at);
+      if (at === null) {
+        process.stderr.write(
+          'dig requires --at <x,y,z> (whole-block coordinates; use --at=-8,200,-11 for negatives)\n',
+        );
+        return 1;
+      }
+      const out = await runLiveDig(config, dbPath, at, log);
+      print({
+        action: values.full
+          ? { result: out.result, connection: out.info }
+          : compact('live-dig', dbPath, out.result),
+        diggable: out.diggable,
+        inventory: out.inventory,
+      });
+      return out.result.status === 'succeeded' ? 0 : 1;
     }
     case 'halt':
       print(setMovementHalted(config, true, values.reason));

@@ -32,6 +32,7 @@ const oneOfEach: ActionSpec[] = [
     type: 'REFUEL_KNOWN_GENERATOR',
     args: { generatorId: 'g1', fuelItem: 'minecraft:coal', quantity: 1 },
   },
+  { type: 'DIG_BLOCK', args: { position: { x: -8, y: 200, z: -11 } } },
   { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
 ];
 
@@ -69,6 +70,19 @@ describe('action model', () => {
         args: { generatorId: 'g', fuelItem: 'minecraft:coal', quantity: 65 },
       },
     ],
+    [
+      'a dig at a point, not a block',
+      { type: 'DIG_BLOCK', args: { position: { x: 1.5, y: 64, z: 0 } } },
+    ],
+    ['a dig above the world', { type: 'DIG_BLOCK', args: { position: { x: 1, y: 256, z: 0 } } }],
+    [
+      'a dig with extra args',
+      { type: 'DIG_BLOCK', args: { position: { x: 1, y: 64, z: 0 }, radius: 3 } },
+    ],
+    [
+      'breaking by another name',
+      { type: 'BREAK_BLOCK', args: { position: { x: 1, y: 64, z: 0 } } },
+    ],
   ])('rejects %s', (_name, spec) => {
     expect(ActionSpecSchema.safeParse(spec).success).toBe(false);
     expect(() =>
@@ -98,5 +112,31 @@ describe('game state schema', () => {
     });
     expect(state.player.health).toEqual({ known: false, reason: 'mock: health hidden' });
     expect(state.power.availableEUt.known).toBe(false);
+  });
+
+  it('reads a snapshot stored before nearbyBlocks existed as "nearby blocks unknown"', () => {
+    const older: Record<string, unknown> = { ...makeState() };
+    delete older['nearbyBlocks'];
+    const parsed = GameStateSchema.parse(older);
+    expect(parsed.nearbyBlocks).toEqual({
+      known: false,
+      reason: 'not reported by this observation',
+    });
+  });
+
+  it('lists only allowlisted blocks as diggable resources', () => {
+    const state = makeState();
+    if (!state.nearbyBlocks.known) throw new Error('fixture blocks unknown');
+    const withStone = {
+      ...state,
+      nearbyBlocks: {
+        known: true,
+        value: {
+          ...state.nearbyBlocks.value,
+          resources: [{ block: 'minecraft:stone', position: { x: 0, y: 64, z: 0 } }],
+        },
+      },
+    };
+    expect(GameStateSchema.safeParse(withStone).success).toBe(false);
   });
 });

@@ -14,6 +14,17 @@ export const PositionSchema = z.strictObject({
 export type Position = z.infer<typeof PositionSchema>;
 
 /**
+ * A block (not a point): integer coordinates of its minimum corner. The block spans
+ * [x, x+1] x [y, y+1] x [z, z+1]; 1.7.10 worlds hold blocks at y 0..255.
+ */
+export const BlockPositionSchema = z.strictObject({
+  x: z.int().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT),
+  y: z.int().min(0).max(255),
+  z: z.int().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT),
+});
+export type BlockPosition = z.infer<typeof BlockPositionSchema>;
+
+/**
  * Namespaced item identifier, optionally with 1.7.10-style metadata:
  * `minecraft:bread`, `gregtech:gt.metaitem.01@2032`.
  *

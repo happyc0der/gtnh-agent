@@ -49,6 +49,14 @@ export function baseWorld(taskId: string): MockWorld {
     hostiles: [],
     unclassified: [],
     hazards: [],
+    // A dirt block next to the player, the ground under it, and a small tree further off.
+    resourceBlocks: [
+      { block: 'minecraft:dirt', position: { x: 2, y: 64, z: 1 } },
+      { block: 'minecraft:grass', position: { x: 1, y: 63, z: 1 } },
+      { block: 'minecraft:log', position: { x: -2, y: 64, z: 4 } },
+      { block: 'minecraft:leaves', position: { x: -2, y: 65, z: 4 } },
+    ],
+    removedBlocks: [],
     containers: [
       {
         id: 'chest.main',
@@ -115,6 +123,15 @@ function scenario(
 const noKnownStep = (w: MockWorld): void => {
   if (w.recipe !== null) w.recipe.nextKnownSafeStep = null;
 };
+
+/** The task's known next step digs the block at (x, y, z). */
+const digStep =
+  (x: number, y: number, z: number) =>
+  (w: MockWorld): void => {
+    if (w.recipe !== null) {
+      w.recipe.nextKnownSafeStep = { type: 'DIG_BLOCK', args: { position: { x, y, z } } };
+    }
+  };
 
 const fetchPlan = {
   goal: 'Fetch cobblestone for the next step',
@@ -361,6 +378,40 @@ export const SCENARIOS: readonly Scenario[] = [
         };
       }
     },
+  ),
+  scenario(
+    'dig',
+    'The known next step digs the dirt block next to the player: dug, the drop collected, verified.',
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'DIG_BLOCK', status: 'succeeded' },
+    digStep(2, 64, 1),
+  ),
+  scenario(
+    'dig-under-feet',
+    'The known next step would dig the grass block the player stands on: rejected (not listed).',
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'DIG_BLOCK', status: 'rejected' },
+    digStep(1, 63, 1),
+  ),
+  scenario(
+    'dig-sand-overhead',
+    "The known next step would dig sand right above the player's head: rejected (UNSAFE_DIG).",
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'DIG_BLOCK', status: 'rejected' },
+    (w) => {
+      w.resourceBlocks.push({ block: 'minecraft:sand', position: { x: 1, y: 66, z: 1 } });
+      digStep(1, 66, 1)(w);
+    },
+  ),
+  scenario(
+    'dig-not-diggable',
+    'The known next step would dig the storage chest, which is not a diggable block: rejected.',
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'DIG_BLOCK', status: 'rejected' },
+    digStep(3, 64, 0),
+  ),
+  scenario(
+    'dig-verification-fails',
+    'The client claims it dug, but the block is still there: postcondition check fails.',
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'DIG_BLOCK', status: 'verification_failed' },
+    digStep(2, 64, 1),
+    { setup: (client) => client.silentNoop('DIG_BLOCK') },
   ),
   scenario(
     'action-fails',

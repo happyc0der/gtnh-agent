@@ -17,6 +17,19 @@ export const BLOCK = {
   trappedChest: 146,
   /** GregTech's machine block (every machine and pipe); 2693 in the real test world. */
   gtMachines: 2693,
+  // Digging tests:
+  flowingWater: 8,
+  water: 9,
+  sand: 12,
+  gravel: 13,
+  log: 17,
+  leaves: 18,
+  glass: 20,
+  tallgrass: 31,
+  torch: 50,
+  clay: 82,
+  leaves2: 161,
+  log2: 162,
 } as const;
 
 export const TEST_BLOCK_REGISTRY: Array<[number, string]> = [
@@ -31,6 +44,23 @@ export const TEST_BLOCK_REGISTRY: Array<[number, string]> = [
   [BLOCK.chest, 'minecraft:chest'],
   [BLOCK.trappedChest, 'minecraft:trapped_chest'],
   [BLOCK.gtMachines, 'gregtech:gt.blockmachines'],
+];
+
+/** The test registry plus the blocks the digging tests use. */
+export const DIG_TEST_BLOCK_REGISTRY: Array<[number, string]> = [
+  ...TEST_BLOCK_REGISTRY,
+  [BLOCK.flowingWater, 'minecraft:flowing_water'],
+  [BLOCK.water, 'minecraft:water'],
+  [BLOCK.sand, 'minecraft:sand'],
+  [BLOCK.gravel, 'minecraft:gravel'],
+  [BLOCK.log, 'minecraft:log'],
+  [BLOCK.leaves, 'minecraft:leaves'],
+  [BLOCK.glass, 'minecraft:glass'],
+  [BLOCK.tallgrass, 'minecraft:tallgrass'],
+  [BLOCK.torch, 'minecraft:torch'],
+  [BLOCK.clay, 'minecraft:clay'],
+  [BLOCK.leaves2, 'minecraft:leaves2'],
+  [BLOCK.log2, 'minecraft:log2'],
 ];
 
 export type BlockFn = (x: number, y: number, z: number) => number;

@@ -6,8 +6,17 @@ import {
   type ActionSpec,
   type ActionType,
 } from '../domain/actions.ts';
+import { FALLING_DIGGABLE_BLOCKS } from '../domain/blocks.ts';
+import type { BlockPosition } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
-import { distance } from '../domain/geometry.ts';
+import {
+  blockCentre,
+  bodyColumns,
+  distance,
+  formatPosition,
+  headBlockY,
+  isBlockInsideBox,
+} from '../domain/geometry.ts';
 import type { NamedLocation, SafetyConfig, SafetyViolation } from '../domain/safety.ts';
 import { stableStringify } from '../util/json.ts';
 import { checkHazardClearance, checkWithinBoundary } from './coordinate-boundaries.ts';
@@ -170,6 +179,15 @@ function findInconsistencies(state: GameState): string[] {
       problems.push('void hazard listed but voidNearby is false');
     }
   }
+  if (state.nearbyBlocks.known) {
+    const { resources, removed } = state.nearbyBlocks.value;
+    const key = (p: BlockPosition): string => `${p.x},${p.y},${p.z}`;
+    const listed = new Set(resources.map((r) => key(r.position)));
+    if (listed.size !== resources.length) problems.push('nearbyBlocks lists a position twice');
+    if (removed.some((p) => listed.has(key(p)))) {
+      problems.push('nearbyBlocks lists a position as both a resource and removed');
+    }
+  }
   const ids = [
     ...state.machines.map((m) => m.id),
     ...state.storage.map((s) => s.id),
@@ -308,6 +326,25 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
         'MOVE_TO target',
       ).filter((x) => x.code === 'OUT_OF_BOUNDS');
       v.push(...outside.map((x) => ({ ...x, severity: 'block' as const })));
+      break;
+    }
+    case 'DIG_BLOCK': {
+      // The whole block must lie inside the work area, not just a corner of it.
+      const b = spec.args.position;
+      if (!isBlockInsideBox(b, config.boundary)) {
+        v.push({
+          code: 'OUT_OF_BOUNDS',
+          severity: 'block',
+          message: `DIG_BLOCK target block ${formatPosition(b)} is not inside the configured boundary`,
+          details: {
+            x: b.x,
+            y: b.y,
+            z: b.z,
+            min: formatPosition(config.boundary.min),
+            max: formatPosition(config.boundary.max),
+          },
+        });
+      }
       break;
     }
     case 'RETURN_TO_SAFE_LOCATION': {
@@ -451,6 +488,9 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
         v.push(unknownTarget('Machine', action.args.machineId));
       }
       break;
+    case 'DIG_BLOCK':
+      v.push(...digChecks(action.args.position, state, config));
+      break;
     case 'REFUEL_KNOWN_GENERATOR': {
       const generator = state.power.generators.find((g) => g.id === action.args.generatorId);
       if (generator === undefined) {
@@ -471,6 +511,90 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
     case 'PAUSE_AND_ASK_USER':
       break;
   }
+  return v;
+}
+
+/**
+ * DIG_BLOCK rules that the observation can answer. The live client re-checks all of them
+ * (and more: fluids, tile entities and anything else touching the block) on the blocks the
+ * server sent, just before and during the dig.
+ *  - The block must be an allowlisted diggable block the observation lists.
+ *  - Never the player's own support: nothing in a column the body overlaps, at or below
+ *    the head (the body's own cells are air anyway).
+ *  - Never a falling block (sand/gravel) above the player's head, and never a block with a
+ *    listed falling block directly on top of it (it would fall into the hole).
+ *  - Clear of known hazards, like a MOVE_TO target.
+ */
+function digChecks(
+  target: BlockPosition,
+  state: GameState,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  const v: SafetyViolation[] = [];
+  const where = formatPosition(target);
+  const details = { x: target.x, y: target.y, z: target.z };
+  if (!state.nearbyBlocks.known) {
+    v.push({
+      code: 'UNKNOWN_TARGET',
+      severity: 'pause',
+      message: `Nearby blocks are not observed (${state.nearbyBlocks.reason}); nothing can be dug`,
+      details,
+    });
+    return v;
+  }
+  const blocks = state.nearbyBlocks.value;
+  const same = (p: BlockPosition, q: BlockPosition): boolean =>
+    p.x === q.x && p.y === q.y && p.z === q.z;
+  const listed = blocks.resources.find((r) => same(r.position, target));
+  if (listed === undefined) {
+    v.push({
+      code: 'NOT_DIGGABLE',
+      severity: 'pause',
+      message: `The block at ${where} is not an observed diggable block (only allowlisted blocks the observation lists may be dug)`,
+      details: { ...details, scanRadius: blocks.scanRadius },
+    });
+    return v;
+  }
+  const position = state.player.position.known ? state.player.position.value : null;
+  if (position !== null) {
+    const own = bodyColumns(position).some((c) => c.x === target.x && c.z === target.z);
+    if (own && target.y <= headBlockY(position)) {
+      v.push({
+        code: 'UNSAFE_DIG',
+        severity: 'pause',
+        message: `${where} is under the player (the block it stands on, or its own column below the feet)`,
+        details,
+      });
+    }
+    if (own && target.y > headBlockY(position) && FALLING_DIGGABLE_BLOCKS.has(listed.block)) {
+      v.push({
+        code: 'UNSAFE_DIG',
+        severity: 'pause',
+        message: `${where} is ${listed.block} directly above the player's head`,
+        details: { ...details, block: listed.block },
+      });
+    }
+  }
+  const above = blocks.resources.find((r) =>
+    same(r.position, { x: target.x, y: target.y + 1, z: target.z }),
+  );
+  if (above !== undefined && FALLING_DIGGABLE_BLOCKS.has(above.block)) {
+    v.push({
+      code: 'UNSAFE_DIG',
+      severity: 'pause',
+      message: `${above.block} sits on ${where} and would fall into the hole`,
+      details: { ...details, above: above.block },
+    });
+  }
+  const hazards = state.environmentHazards.known ? state.environmentHazards.value.hazards : [];
+  v.push(
+    ...checkHazardClearance(
+      blockCentre(target),
+      hazards,
+      config.hazardAvoidanceRadius,
+      'DIG_BLOCK target',
+    ),
+  );
   return v;
 }
 

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { ActionIdSchema, ActionSpecSchema, ActionTypeSchema } from './actions.ts';
+import { DiggableBlockSchema } from './blocks.ts';
 import {
+  BlockPositionSchema,
   DimensionSchema,
   EntityIdSchema,
   ItemCountsSchema,
@@ -84,6 +86,41 @@ export const EnvironmentHazardsSchema = z.strictObject({
 });
 export type EnvironmentHazards = z.infer<typeof EnvironmentHazardsSchema>;
 
+/** Largest `nearbyBlocks.resources` list; beyond it the declared scan radius shrinks. */
+export const MAX_REPORTED_RESOURCES = 64;
+/** Largest `nearbyBlocks.removed` list. */
+export const MAX_REPORTED_REMOVED = 16;
+
+/** A block DIG_BLOCK may break, where the observation saw it. */
+export const ResourceBlockSchema = z.strictObject({
+  block: DiggableBlockSchema,
+  position: BlockPositionSchema,
+});
+export type ResourceBlock = z.infer<typeof ResourceBlockSchema>;
+
+/**
+ * Blocks near the player that matter for digging, from the blocks the server sent. Only
+ * allowlisted blocks at or above the player's feet level are listed (every other block,
+ * and the ground it stands on, is left out), so this stays small.
+ */
+export const NearbyBlocksSchema = z.strictObject({
+  /**
+   * How far (blocks, from the player's feet to block centres) the scan looked. `resources`
+   * is complete within it: a block at or above the feet level that is not listed there is
+   * not a diggable block.
+   */
+  scanRadius: z.number().min(0).max(64),
+  /** Diggable blocks within `scanRadius`, at or above the feet level, nearest first. */
+  resources: z.array(ResourceBlockSchema).max(MAX_REPORTED_RESOURCES),
+  /**
+   * Positions near the player (within the scan's full radius, even when `scanRadius` shrank)
+   * where the observer saw a diggable block turn into air and that are still air, most
+   * recent first. BLOCK_REMOVED is verified against this.
+   */
+  removed: z.array(BlockPositionSchema).max(MAX_REPORTED_REMOVED),
+});
+export type NearbyBlocks = z.infer<typeof NearbyBlocksSchema>;
+
 export const GENERATOR_STATUSES = ['running', 'idle', 'out_of_fuel', 'unknown', 'error'] as const;
 export const GeneratorSchema = z.strictObject({
   id: EntityIdSchema,
@@ -159,6 +196,14 @@ export const GameStateSchema = z.strictObject({
   inventory: knownSchema(InventorySchema),
   nearbyThreats: knownSchema(ThreatsSchema),
   environmentHazards: knownSchema(EnvironmentHazardsSchema),
+  /**
+   * Diggable blocks nearby (for DIG_BLOCK). Snapshots stored before this field existed
+   * read back as unknown.
+   */
+  nearbyBlocks: knownSchema(NearbyBlocksSchema).default({
+    known: false,
+    reason: 'not reported by this observation',
+  }),
   power: PowerSchema,
   machines: z.array(MachineSchema).max(512),
   storage: z.array(StorageContainerSchema).max(512),

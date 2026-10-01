@@ -1,0 +1,111 @@
+import { DIGGABLE_BLOCKS, type DiggableBlock } from '../../domain/blocks.ts';
+import { MAX_REPORTED_RESOURCES } from '../../domain/game-state.ts';
+import type { ChunkStore } from './chunk-data.ts';
+import type { Registry } from './registry.ts';
+
+/** Blocks around the player searched for diggable blocks (a sphere around the feet). */
+export const RESOURCE_SCAN_RADIUS = 16;
+
+export interface FoundResource {
+  block: DiggableBlock;
+  position: { x: number; y: number; z: number };
+  distance: number;
+}
+
+export type ResourceScan =
+  { ok: true; scanRadius: number; resources: FoundResource[] } | { ok: false; reason: string };
+
+/**
+ * Registry id -> 1 + index in DIGGABLE_BLOCKS (0 = not diggable). Ids are per world, so this
+ * is rebuilt from each login's registry.
+ */
+export function buildDiggableTable(registry: Registry): Uint8Array {
+  const table = new Uint8Array(65536);
+  for (const [id, name] of registry.blocks) {
+    const k = (DIGGABLE_BLOCKS as readonly string[]).indexOf(name);
+    if (k >= 0 && id > 0 && id < 65536) table[id] = k + 1;
+  }
+  return table;
+}
+
+export function diggableOf(table: Uint8Array, id: number): DiggableBlock | undefined {
+  const k = table[id] ?? 0;
+  return k === 0 ? undefined : DIGGABLE_BLOCKS[k - 1];
+}
+
+/**
+ * Diggable blocks within a sphere around the feet, at or above the feet level, nearest first
+ * (ties by position). The ground the player stands on (grass or dirt almost everywhere) is
+ * left out: it is never dug, and it would crowd out everything else. Fail closed: any
+ * column in range that has not arrived or could not be decoded makes the scan unknown. At
+ * most `max` are listed; beyond that the declared radius shrinks below the first block left
+ * out, so the list is always complete within the radius it declares.
+ */
+export function scanResources(
+  store: ChunkStore,
+  table: Uint8Array,
+  feet: { x: number; y: number; z: number },
+  radius = RESOURCE_SCAN_RADIUS,
+  max = MAX_REPORTED_RESOURCES,
+): ResourceScan {
+  const r2 = radius * radius;
+  const minX = Math.floor(feet.x - radius);
+  const maxX = Math.floor(feet.x + radius);
+  const minZ = Math.floor(feet.z - radius);
+  const maxZ = Math.floor(feet.z + radius);
+  const minY = Math.max(0, Math.floor(feet.y));
+  const maxY = Math.min(255, Math.floor(feet.y + radius));
+
+  let missing = 0;
+  for (let cx = Math.floor(minX / 16); cx <= Math.floor(maxX / 16); cx++) {
+    for (let cz = Math.floor(minZ / 16); cz <= Math.floor(maxZ / 16); cz++) {
+      const problem = store.problem(cx, cz);
+      if (problem === undefined) missing += 1;
+      else if (problem !== null) {
+        return { ok: false, reason: `chunk ${cx},${cz} block data unusable: ${problem}` };
+      }
+    }
+  }
+  if (missing > 0)
+    return { ok: false, reason: `waiting for ${missing} nearby chunk(s) of block data` };
+
+  const found: FoundResource[] = [];
+  for (let x = minX; x <= maxX; x++) {
+    const dx = x + 0.5 - feet.x;
+    for (let z = minZ; z <= maxZ; z++) {
+      const dz = z + 0.5 - feet.z;
+      const h2 = dx * dx + dz * dz;
+      if (h2 > r2) continue;
+      const sections = store.columnSections(Math.floor(x / 16), Math.floor(z / 16));
+      if (sections === undefined)
+        return { ok: false, reason: 'chunk block data changed during the scan' };
+      for (let y = minY; y <= maxY; y++) {
+        const section = sections[y >> 4];
+        if (section === null || section === undefined) {
+          y = y | 15; // an all-air section
+          continue;
+        }
+        const dy = y + 0.5 - feet.y;
+        if (h2 + dy * dy > r2) continue;
+        const id = section[((y & 15) << 8) | ((z & 15) << 4) | (x & 15)] as number;
+        if (id === 0) continue;
+        const block = diggableOf(table, id);
+        if (block !== undefined) {
+          found.push({ block, position: { x, y, z }, distance: Math.sqrt(h2 + dy * dy) });
+        }
+      }
+    }
+  }
+  found.sort(
+    (a, b) =>
+      a.distance - b.distance ||
+      a.position.x - b.position.x ||
+      a.position.y - b.position.y ||
+      a.position.z - b.position.z,
+  );
+  if (found.length <= max) return { ok: true, scanRadius: radius, resources: found };
+  const firstLeftOut = (found[max] as FoundResource).distance;
+  const kept = found.slice(0, max).filter((f) => f.distance < firstLeftOut);
+  const coverage = Math.max(0, Math.floor((firstLeftOut - 1e-6) * 1000) / 1000);
+  return { ok: true, scanRadius: coverage, resources: kept };
+}
