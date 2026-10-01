@@ -67,6 +67,28 @@ describe('the route uses what exploring found', () => {
     ).toContain('no known place yet');
   });
 
+  it('leaves out a remembered place the scan covers: in view already, or out of reach', () => {
+    // The player stands at (1, 64, 1); the scan covers 16 blocks from the feet, at or above them.
+    const log = WORLD.places[0] as (typeof WORLD.places)[number];
+    const at = (x: number, y: number, z: number) => ({
+      ...WORLD,
+      places: [{ ...log, x, y, z, distance: Math.round(Math.hypot(x - 1, z - 1)) }],
+      biomes: [],
+    });
+    const gather = (world: typeof WORLD, state = needing({ 'minecraft:log': 8 })) =>
+      routeForPlanner(state, world)?.steps.find((s) => s.includes('gather 8 minecraft:log'));
+    // 8 m away, at head height: covered (seen live: walled in by leaves, EXPLORE never got there).
+    expect(gather(at(6, 65, 7))).toContain('no known place yet');
+    // Out of the sphere, or below the feet (the scan does not list logs there): still a place.
+    expect(gather(at(20, 65, 7))).toContain('(20, 65, 7)');
+    expect(gather(at(6, 60, 7))).toContain('(6, 60, 7)');
+    // With the nearby blocks unknown, nothing is covered.
+    const blind = needing({ 'minecraft:log': 8 });
+    expect(
+      gather(at(6, 65, 7), { ...blind, nearbyBlocks: { known: false, reason: 'test' } }),
+    ).toContain('(6, 65, 7)');
+  });
+
   it('points at the nearest seen biome where a material is common when no place is known', () => {
     const route = routeForPlanner(needing({ 'minecraft:dirt': 8 }), WORLD);
     const gather = route?.steps.find((s) => s.includes('gather 8 minecraft:dirt'));

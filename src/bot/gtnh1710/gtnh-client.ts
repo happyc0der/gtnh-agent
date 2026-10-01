@@ -168,6 +168,7 @@ import {
   landingHazard,
   MAX_SAFE_FALL,
   planTerrainWalk,
+  reachableFeet,
   standProblem,
   terrainSteps,
   type TerrainStep,
@@ -643,11 +644,20 @@ export class Gtnh1710Client implements MinecraftClient {
         fence,
         maxHeightAboveFence: cfg.digging.maxHeightAboveFence,
       };
+      // Only stand spots a walk from here reaches (seen live: logs walled in by leaves,
+      // cactus and foliage were offered, and every walk to them failed). Terrain fences only:
+      // a one-level fence (the pen) walks by planWalk, which the flood does not model. When
+      // the player cannot walk at all, blocks in reach stay diggable where it stands.
+      const reachable =
+        fence.min.y === fence.max.y
+          ? undefined
+          : reachableFeet(world, fence, feet, cfg.movement.maxPathLength);
+      const walkable = reachable !== undefined && reachable.size > 0 ? reachable : undefined;
       blocks = {
         ...blocks,
         resources: blocks.resources.map((r) => ({
           ...r,
-          standAt: standSpotFor(world, area, r.position, feet),
+          standAt: standSpotFor(world, area, r.position, feet, walkable),
         })),
         // The ground in the player's own column (DIG_DOWN, the night pit only).
         underFeet: underFeetOf(world, feet),

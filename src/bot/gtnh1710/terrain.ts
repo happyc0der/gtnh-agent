@@ -160,54 +160,7 @@ export function planTerrainWalk(
   const goalStand = standProblem(world, goal.x, goal.y, goal.z);
   if (goalStand !== null) return refuse(`the target block is not walkable: ${goalStand}`);
 
-  const standable = new Map<string, boolean>();
-  const canStand = (n: Node): boolean => {
-    if (!inFence(fence, n.x, n.y, n.z)) return false;
-    const k = key(n);
-    let v = standable.get(k);
-    if (v === undefined) {
-      v = standProblem(world, n.x, n.y, n.z) === null;
-      standable.set(k, v);
-    }
-    return v;
-  };
-  const clear = (x: number, y: number, z: number): boolean => passProblem(world, x, y, z) === null;
-
-  type Edge = { to: Node; move: TerrainMove['kind']; cost: number; height: number };
-  const edges = (n: Node): Edge[] => {
-    const out: Edge[] = [];
-    for (const [dx, dz] of DIRECTIONS) {
-      const diagonal = dx !== 0 && dz !== 0;
-      const nx = n.x + dx;
-      const nz = n.z + dz;
-      // Level.
-      const level = { x: nx, y: n.y, z: nz };
-      if (canStand(level)) {
-        const corners =
-          !diagonal ||
-          (canStand({ x: n.x + dx, y: n.y, z: n.z }) && canStand({ x: n.x, y: n.y, z: n.z + dz }));
-        if (corners)
-          out.push({ to: level, move: 'walk', cost: diagonal ? Math.SQRT2 : 1, height: 0 });
-      }
-      if (diagonal) continue; // steps and drops only straight ahead
-      // Step up: headroom above the current block, then stand on the higher neighbour.
-      const up = { x: nx, y: n.y + 1, z: nz };
-      if (clear(n.x, n.y + 2, n.z) && canStand(up))
-        out.push({ to: up, move: 'step-up', cost: 1.5, height: 1 });
-      // Drops: the neighbour column clear from the head height down to the landing.
-      for (let d = 1; d <= MAX_DROP; d++) {
-        const down = { x: nx, y: n.y - d, z: nz };
-        let open = clear(nx, n.y + 1, nz);
-        for (let y = n.y; y >= n.y - d + 1 && open; y--) open = clear(nx, y, nz);
-        if (!open) break;
-        if (canStand(down)) {
-          out.push({ to: down, move: 'drop', cost: 1 + 0.5 * d, height: d });
-          break;
-        }
-      }
-    }
-    return out;
-  };
+  const edges = terrainEdges(world, fence);
 
   const heuristic = (n: Node): number =>
     Math.hypot(n.x - goal.x, n.z - goal.z) + 0.5 * Math.abs(n.y - goal.y);
@@ -263,6 +216,161 @@ export function planTerrainWalk(
     }
   }
   return refuse('there is no walkable path to the target inside the fence');
+}
+
+type Edge = { to: Node; move: TerrainMove['kind']; cost: number; height: number };
+
+/**
+ * The walker's moves out of feet block `n`: level moves in 8 directions without cutting
+ * corners, one block up with headroom, drops of up to MAX_DROP onto standable blocks (never
+ * into water, lava, unloaded chunks or next to a hazard: standProblem). For one search: what
+ * can be stood on is cached.
+ */
+function terrainEdges(world: WalkWorld, fence: Fence): (n: Node) => Edge[] {
+  const standable = new Map<string, boolean>();
+  const canStand = (n: Node): boolean => {
+    if (!inFence(fence, n.x, n.y, n.z)) return false;
+    const k = key(n);
+    let v = standable.get(k);
+    if (v === undefined) {
+      v = standProblem(world, n.x, n.y, n.z) === null;
+      standable.set(k, v);
+    }
+    return v;
+  };
+  const clear = (x: number, y: number, z: number): boolean => passProblem(world, x, y, z) === null;
+  return (n) => {
+    const out: Edge[] = [];
+    for (const [dx, dz] of DIRECTIONS) {
+      const diagonal = dx !== 0 && dz !== 0;
+      const nx = n.x + dx;
+      const nz = n.z + dz;
+      // Level.
+      const level = { x: nx, y: n.y, z: nz };
+      if (canStand(level)) {
+        const corners =
+          !diagonal ||
+          (canStand({ x: n.x + dx, y: n.y, z: n.z }) && canStand({ x: n.x, y: n.y, z: n.z + dz }));
+        if (corners)
+          out.push({ to: level, move: 'walk', cost: diagonal ? Math.SQRT2 : 1, height: 0 });
+      }
+      if (diagonal) continue; // steps and drops only straight ahead
+      // Step up: headroom above the current block, then stand on the higher neighbour.
+      const up = { x: nx, y: n.y + 1, z: nz };
+      if (clear(n.x, n.y + 2, n.z) && canStand(up))
+        out.push({ to: up, move: 'step-up', cost: 1.5, height: 1 });
+      // Drops: the neighbour column clear from the head height down to the landing.
+      for (let d = 1; d <= MAX_DROP; d++) {
+        const down = { x: nx, y: n.y - d, z: nz };
+        let open = clear(nx, n.y + 1, nz);
+        for (let y = n.y; y >= n.y - d + 1 && open; y--) open = clear(nx, y, nz);
+        if (!open) break;
+        if (canStand(down)) {
+          out.push({ to: down, move: 'drop', cost: 1 + 0.5 * d, height: d });
+          break;
+        }
+      }
+    }
+    return out;
+  };
+}
+
+/** A feet block a walk reaches, and the blocks walked to get there. */
+export interface ReachedFeet {
+  x: number;
+  y: number;
+  z: number;
+  /** Across plus up or down, as planTerrainWalk measures a path (from `from` itself). */
+  length: number;
+}
+
+/**
+ * Every feet block inside `fence` that a walk from `from` reaches within `maxLength` blocks,
+ * by "x,y,z": Dijkstra over the walker's own moves (terrainEdges), shortest walks. Empty when
+ * the player cannot walk from where it stands (not on a block top, or not on standable
+ * ground). What a stand spot must be among for a walk to it to be possible (seen live: logs
+ * 7 blocks away, walled in by leaves, cactus and foliage, were offered again and again).
+ */
+export function reachableFeet(
+  world: WalkWorld,
+  fence: Fence,
+  from: Vec3,
+  maxLength: number,
+): Map<string, ReachedFeet> {
+  const reached = new Map<string, ReachedFeet>();
+  if (Math.abs(from.y - Math.round(from.y)) > EPS) return reached;
+  const start: Node = { x: Math.floor(from.x), y: Math.round(from.y), z: Math.floor(from.z) };
+  if (!inFence(fence, start.x, start.y, start.z)) return reached;
+  if (standProblem(world, start.x, start.y, start.z) !== null) return reached;
+  const edges = terrainEdges(world, fence);
+  const best = new Map<string, number>();
+  const heap = new NodeHeap();
+  // A walk begins by centring on its start block.
+  const first = Math.hypot(start.x + 0.5 - from.x, start.z + 0.5 - from.z);
+  best.set(key(start), first);
+  heap.push(first, start);
+  while (heap.size > 0) {
+    const { key: length, node: n } = heap.pop();
+    const k = key(n);
+    if (reached.has(k) || length > (best.get(k) ?? Infinity)) continue;
+    reached.set(k, { ...n, length });
+    for (const e of edges(n)) {
+      // The length a path is measured by: across, plus the height climbed or dropped.
+      const l = length + (e.move === 'walk' ? e.cost : 1 + e.height);
+      if (l > maxLength + EPS) continue;
+      const ek = key(e.to);
+      if (l < (best.get(ek) ?? Infinity)) {
+        best.set(ek, l);
+        heap.push(l, e.to);
+      }
+    }
+  }
+  return reached;
+}
+
+/** Minimal binary min-heap of nodes by key. */
+class NodeHeap {
+  readonly #items: Array<{ key: number; node: Node }> = [];
+
+  get size(): number {
+    return this.#items.length;
+  }
+
+  push(key: number, node: Node): void {
+    const a = this.#items;
+    a.push({ key, node });
+    let i = a.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if ((a[parent] as { key: number }).key <= key) break;
+      a[i] = a[parent] as { key: number; node: Node };
+      i = parent;
+    }
+    a[i] = { key, node };
+  }
+
+  pop(): { key: number; node: Node } {
+    const a = this.#items;
+    const top = a[0] as { key: number; node: Node };
+    const last = a.pop() as { key: number; node: Node };
+    if (a.length > 0) {
+      let i = 0;
+      for (;;) {
+        const left = 2 * i + 1;
+        if (left >= a.length) break;
+        const right = left + 1;
+        const child =
+          right < a.length && (a[right] as { key: number }).key < (a[left] as { key: number }).key
+            ? right
+            : left;
+        if ((a[child] as { key: number }).key >= last.key) break;
+        a[i] = a[child] as { key: number; node: Node };
+        i = child;
+      }
+      a[i] = last;
+    }
+    return top;
+  }
 }
 
 const DIRECTIONS: ReadonlyArray<readonly [number, number]> = [

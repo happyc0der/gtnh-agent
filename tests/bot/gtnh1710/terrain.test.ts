@@ -7,18 +7,20 @@ import {
   landingHazard,
   MAX_DROP,
   planTerrainWalk,
+  reachableFeet,
   terrainSteps,
   type TerrainMove,
 } from '../../../src/bot/gtnh1710/terrain.ts';
 import type { Fence, Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 
-const ID = { air: 0, stone: 1, grass: 2, water: 9, lava: 11, tallgrass: 31 } as const;
+const ID = { air: 0, stone: 1, grass: 2, water: 9, lava: 11, leaves: 18, tallgrass: 31 } as const;
 const NAMES = new Map<number, string>([
   [ID.air, 'minecraft:air'],
   [ID.stone, 'minecraft:stone'],
   [ID.grass, 'minecraft:grass'],
   [ID.water, 'minecraft:water'],
   [ID.lava, 'minecraft:lava'],
+  [ID.leaves, 'minecraft:leaves'],
   [ID.tallgrass, 'minecraft:tallgrass'],
 ]);
 
@@ -108,6 +110,40 @@ describe('terrain planning', () => {
     expect(planTerrainWalk(hot, strip, at(0.5, 64, 0.5), at(2.5, 64, 0.5), 64)).toMatchObject({
       ok: false,
     });
+  });
+});
+
+describe('where a walk can get to (reachableFeet)', () => {
+  it("floods the walker's own moves, with the blocks walked, up to the limit", () => {
+    const w = terrain((x) => (x >= 3 ? 64 : 63)); // a one-block step up at x = 3
+    const r = reachableFeet(w, FENCE, at(0.5, 64, 0.5), 64);
+    expect(r.get('0,64,0')?.length).toBe(0);
+    expect(r.get('2,64,0')?.length).toBe(2);
+    expect(r.get('3,65,0')?.length).toBe(4); // a step up: one across and one up
+    expect(r.has('3,64,0')).toBe(false); // inside the step
+    // Every spot planTerrainWalk could walk to is in it, and nothing outside the fence.
+    expect(r.has('8,65,8')).toBe(true);
+    expect(r.has('9,65,0')).toBe(false);
+    const near = reachableFeet(w, FENCE, at(0.5, 64, 0.5), 2);
+    expect(near.has('2,64,0')).toBe(true);
+    expect(near.has('3,65,0')).toBe(false);
+    expect([...near.values()].every((n) => n.length <= 2)).toBe(true);
+  });
+
+  it('does not get into a pocket walled in by leaves, or anywhere from off a block top', () => {
+    const blocks: Record<string, number> = {};
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        for (const y of [64, 65]) blocks[`${5 + dx},${y},${5 + dz}`] = ID.leaves;
+      }
+    }
+    const w = terrain(() => 63, blocks);
+    const r = reachableFeet(w, FENCE, at(0.5, 64, 0.5), 64);
+    expect(r.has('5,64,5')).toBe(false);
+    expect(r.has('3,64,3')).toBe(true);
+    expect(planTerrainWalk(w, FENCE, at(0.5, 64, 0.5), at(5.5, 64, 5.5), 64).ok).toBe(false);
+    expect(reachableFeet(w, FENCE, at(0.5, 64.5, 0.5), 64).size).toBe(0);
   });
 });
 

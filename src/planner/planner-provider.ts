@@ -2,7 +2,7 @@ import { ACTION_TYPES, isAllowlistedActionType, isCodeOnlyActionType } from '../
 import { isQuestBookActionType } from '../domain/quest-book.ts';
 import { DIGGABLE_BLOCKS, nearestOfEachKind, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import { attackRefusal } from '../domain/combat.ts';
-import type { Position } from '../domain/common.ts';
+import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
 import { SafetyConfigSchema, type SafetyConfig } from '../domain/safety.ts';
@@ -281,9 +281,12 @@ function likelyBiome(blocks: readonly string[], exploration: ExplorationSummary)
  */
 function knownPlaces(state: GameState, exploration?: ExplorationSummary): PlaceLookup {
   const inView = placesInView(state);
+  const covered = scanCovers(state);
   return (wanted) => {
     const remembered = (exploration?.places ?? []).flatMap((p) =>
-      p.y !== null && PLACE_BLOCKS[p.resource].some((b) => wanted.includes(b))
+      p.y !== null &&
+      !covered({ x: p.x, y: p.y, z: p.z }) &&
+      PLACE_BLOCKS[p.resource].some((b) => wanted.includes(b))
         ? [
             {
               where: { x: p.x, y: p.y, z: p.z },
@@ -298,6 +301,22 @@ function knownPlaces(state: GameState, exploration?: ExplorationSummary): PlaceL
     );
     return [...inView(wanted), ...remembered];
   };
+}
+
+/**
+ * Whether the current resource scan covers block `b`: inside its sphere, at or above the
+ * feet level, where it lists every kind (scanResources). A remembered place it covers is in
+ * view already (listed, with a spot a walk reaches to dig it from) or out of reach from here,
+ * so it is no place to EXPLORE toward (seen live: the model planned EXPLORE toward logs 8 m
+ * away, walled in by leaves and cactus, again and again).
+ */
+function scanCovers(state: GameState): (b: BlockPosition) => boolean {
+  const at = state.player.position.known ? state.player.position.value : null;
+  const radius = state.nearbyBlocks.known ? state.nearbyBlocks.value.scanRadius : null;
+  if (at === null || radius === null) return () => false;
+  const feetLevel = Math.floor(at.y + 1e-6);
+  return (b) =>
+    b.y >= feetLevel && Math.hypot(b.x + 0.5 - at.x, b.y + 0.5 - at.y, b.z + 0.5 - at.z) <= radius;
 }
 
 /** The blocks in the current observation, as places (nearest first, with stand spots). */

@@ -6,8 +6,10 @@ import {
   checkDig,
   DIG_NEIGHBOURS,
   faceTowards,
+  standSpotFor,
   type DigArea,
 } from '../../../src/bot/gtnh1710/digging.ts';
+import { reachableFeet } from '../../../src/bot/gtnh1710/terrain.ts';
 import { DIG_STATUS, outbound } from '../../../src/bot/gtnh1710/packets.ts';
 import { parseModIdData } from '../../../src/bot/gtnh1710/registry.ts';
 import {
@@ -149,6 +151,33 @@ const TERRAIN: DigArea = {
   fence: { min: { x: -4, y: 195, z: -4 }, max: { x: 4, y: 205, z: 4 } },
   maxHeightAboveFence: 4,
 };
+
+describe('stand spots (standSpotFor)', () => {
+  const log = { x: 3, y: 200, z: 0 };
+
+  it('beside the block, the nearest walk first', () => {
+    const w = world({ [k(3, 200, 0)]: ID.log });
+    const reachable = reachableFeet(w, TERRAIN.fence, FEET, 64);
+    expect(standSpotFor(w, TERRAIN, log, FEET, reachable)).toEqual({ x: 2.5, y: 200, z: 0.5 });
+  });
+
+  it('only where a walk gets to, given the spots it reaches (seen live: logs ringed by leaves)', () => {
+    const ringed: Record<string, number> = { [k(3, 200, 0)]: ID.log };
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== 2) continue;
+        for (const y of [200, 201]) ringed[k(3 + dx, y, dz)] = ID.leaves;
+      }
+    }
+    const w = world(ringed);
+    // Beside it, inside the ring, there is room to stand...
+    expect(standSpotFor(w, TERRAIN, log, FEET)).toEqual({ x: 2.5, y: 200, z: 0.5 });
+    // ...but no walk gets there through the leaves.
+    expect(
+      standSpotFor(w, TERRAIN, log, FEET, reachableFeet(w, TERRAIN.fence, FEET, 64)),
+    ).toBeNull();
+  });
+});
 
 describe('checkDig on terrain', () => {
   it('digs the ground layer next to the player, but only one block deep', () => {

@@ -1,7 +1,7 @@
 import type { ExploreToward } from '../../domain/actions.ts';
 import { COMPASS } from '../../domain/world-memory.ts';
 import type { PointBox } from './play-area.ts';
-import { MAX_DROP, passProblem, standProblem } from './terrain.ts';
+import { reachableFeet, standProblem } from './terrain.ts';
 import type { Fence, Vec3, WalkWorld } from './walking.ts';
 
 /**
@@ -73,19 +73,6 @@ interface Node {
   z: number;
 }
 
-const STRAIGHT: ReadonlyArray<readonly [number, number]> = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
-const DIAGONAL: ReadonlyArray<readonly [number, number]> = [
-  [1, 1],
-  [1, -1],
-  [-1, 1],
-  [-1, -1],
-];
-
 /**
  * The next hop toward `goal`: spots inside `fence` that a walk from `from` reaches within
  * `maxLength` blocks, closest to the goal first (ties: shorter walks). The search follows the
@@ -113,69 +100,9 @@ export function chooseHop(
   const startProblem = standProblem(world, start.x, start.y, start.z);
   if (startProblem !== null) return { ok: false, reason: `cannot walk from here: ${startProblem}` };
 
-  const width = fence.max.x - fence.min.x + 1;
-  const depth = fence.max.z - fence.min.z + 1;
-  const levels = fence.max.y - fence.min.y + 1;
-  const index = (n: Node): number =>
-    ((n.y - fence.min.y) * depth + (n.z - fence.min.z)) * width + (n.x - fence.min.x);
-  const standCache = new Int8Array(width * depth * levels); // 0 unknown, 1 yes, 2 no
-  const canStand = (n: Node): boolean => {
-    if (!inside(n)) return false;
-    const i = index(n);
-    if (standCache[i] === 0) standCache[i] = standProblem(world, n.x, n.y, n.z) === null ? 1 : 2;
-    return standCache[i] === 1;
-  };
-  const clear = (x: number, y: number, z: number): boolean => passProblem(world, x, y, z) === null;
-
-  const budget =
-    maxLength - LENGTH_MARGIN - Math.hypot(from.x - start.x - 0.5, from.z - start.z - 0.5);
-  const dist = new Float64Array(width * depth * levels).fill(Infinity);
-  const heap = new NodeHeap();
-  dist[index(start)] = 0;
-  heap.push(0, start);
-  const reached: Array<{ n: Node; length: number }> = [];
-  while (heap.size > 0) {
-    const { key: length, node: n } = heap.pop();
-    if (length > (dist[index(n)] as number)) continue;
-    reached.push({ n, length });
-    const relax = (to: Node, step: number): void => {
-      const l = length + step;
-      if (l > budget) return;
-      const i = index(to);
-      if (l < (dist[i] as number)) {
-        dist[i] = l;
-        heap.push(l, to);
-      }
-    };
-    for (const [dx, dz] of STRAIGHT) {
-      const nx = n.x + dx;
-      const nz = n.z + dz;
-      const level = { x: nx, y: n.y, z: nz };
-      if (canStand(level)) relax(level, 1);
-      const up = { x: nx, y: n.y + 1, z: nz };
-      if (clear(n.x, n.y + 2, n.z) && canStand(up)) relax(up, 2);
-      for (let d = 1; d <= MAX_DROP; d++) {
-        let open = clear(nx, n.y + 1, nz);
-        for (let y = n.y; y >= n.y - d + 1 && open; y--) open = clear(nx, y, nz);
-        if (!open) break;
-        const down = { x: nx, y: n.y - d, z: nz };
-        if (canStand(down)) {
-          relax(down, 1 + d);
-          break;
-        }
-      }
-    }
-    for (const [dx, dz] of DIAGONAL) {
-      const to = { x: n.x + dx, y: n.y, z: n.z + dz };
-      if (
-        canStand(to) &&
-        canStand({ x: n.x + dx, y: n.y, z: n.z }) &&
-        canStand({ x: n.x, y: n.y, z: n.z + dz })
-      ) {
-        relax(to, Math.SQRT2);
-      }
-    }
-  }
+  const reached = [...reachableFeet(world, fence, from, maxLength - LENGTH_MARGIN).values()].map(
+    (n) => ({ n, length: n.length }),
+  );
 
   const toGoal = (n: Node): number => Math.hypot(n.x + 0.5 - goal.x, n.z + 0.5 - goal.z);
   const here = Math.hypot(from.x - goal.x, from.z - goal.z);
@@ -204,49 +131,4 @@ export function chooseHop(
     };
   }
   return { ok: true, candidates };
-}
-
-/** Minimal binary min-heap of nodes by key. */
-class NodeHeap {
-  readonly #items: Array<{ key: number; node: Node }> = [];
-
-  get size(): number {
-    return this.#items.length;
-  }
-
-  push(key: number, node: Node): void {
-    const a = this.#items;
-    a.push({ key, node });
-    let i = a.length - 1;
-    while (i > 0) {
-      const parent = (i - 1) >> 1;
-      if ((a[parent] as { key: number }).key <= key) break;
-      a[i] = a[parent] as { key: number; node: Node };
-      i = parent;
-    }
-    a[i] = { key, node };
-  }
-
-  pop(): { key: number; node: Node } {
-    const a = this.#items;
-    const top = a[0] as { key: number; node: Node };
-    const last = a.pop() as { key: number; node: Node };
-    if (a.length > 0) {
-      let i = 0;
-      for (;;) {
-        const left = 2 * i + 1;
-        if (left >= a.length) break;
-        const right = left + 1;
-        const child =
-          right < a.length && (a[right] as { key: number }).key < (a[left] as { key: number }).key
-            ? right
-            : left;
-        if ((a[child] as { key: number }).key >= last.key) break;
-        a[i] = a[child] as { key: number; node: Node };
-        i = child;
-      }
-      a[i] = last;
-    }
-    return top;
-  }
 }

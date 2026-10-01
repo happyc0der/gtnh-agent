@@ -9,7 +9,12 @@ import type { UnderFeet } from '../../domain/game-state.ts';
 import { isDigDownBlock } from '../../domain/night-shelter.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
-import { FLOAT_CHECK_HALF_WIDTH, PASSABLE_BLOCKS, standProblem } from './terrain.ts';
+import {
+  FLOAT_CHECK_HALF_WIDTH,
+  PASSABLE_BLOCKS,
+  standProblem,
+  type ReachedFeet,
+} from './terrain.ts';
 import {
   sweptColumns,
   WALKABLE_SURFACES,
@@ -241,13 +246,16 @@ const STAND_HEIGHTS = [1, 0, -1, -2, -3, -4] as const;
  * Where the player can stand to dig `target`: feet at the centre of a block beside it (one
  * of the 8 columns around it, never on top of it), standable by the terrain rules, inside
  * the fence, and from which checkDig allows the dig. The spot nearest to `from`; null when
- * there is none. A planner walks there (MOVE_TO) and then digs.
+ * there is none. A planner walks there (MOVE_TO) and then digs. With `reachable` (from
+ * terrain.ts reachableFeet), only spots a walk from the player reaches, the shortest walk
+ * first.
  */
 export function standSpotFor(
   world: WalkWorld,
   area: DigArea,
   target: BlockPos,
   from: Vec3,
+  reachable?: ReadonlyMap<string, ReachedFeet>,
 ): Vec3 | null {
   const { fence } = area;
   let best: { spot: Vec3; d: number } | null = null;
@@ -261,9 +269,11 @@ export function standSpotFor(
         const fy = target.y + dy;
         if (fy < fence.min.y || fy > fence.max.y) continue;
         if (standProblem(world, fx, fy, fz) !== null) continue;
+        const walk = reachable?.get(`${fx},${fy},${fz}`);
+        if (reachable !== undefined && walk === undefined) continue;
         const spot = { x: fx + 0.5, y: fy, z: fz + 0.5 };
         if (!checkDig(world, area, spot, target).ok) continue;
-        const d = Math.hypot(spot.x - from.x, spot.y - from.y, spot.z - from.z);
+        const d = walk?.length ?? Math.hypot(spot.x - from.x, spot.y - from.y, spot.z - from.z);
         if (best === null || d < best.d - 1e-9) best = { spot, d };
       }
     }
