@@ -7,8 +7,8 @@ import type { RouterContext } from './state-queries.ts';
 /**
  * Source of bounded System 1 decisions: the deterministic router, a mock, or (opt-in) a
  * local model (src/llm/ollama-decision-provider.ts), which is always wrapped in
- * SafetyFirstDecisionProvider. Every provider returns one of the eight Decision values and
- * nothing else; it never produces actions directly.
+ * SafetyFirstDecisionProvider. Every provider returns one of the Decision values and nothing
+ * else; it never produces actions directly.
  */
 export interface DecisionProvider {
   readonly name: string;

@@ -44,9 +44,11 @@ server only so far). With digging enabled, `DIG_BLOCK` breaks one allowlisted bl
 fence, holding the best verified tool the player carries (a wooden shovel for sand, dirt, gravel,
 grass and clay; a vanilla axe for logs) or an empty hand. With placing enabled, `PLACE_BLOCK` puts
 one allowlisted plain block the player carries into an empty cell inside the fence (fake server
-only so far). The remaining world-changing actions return `NOT_IMPLEMENTED`. See
+only so far). With combat enabled, `ATTACK_ENTITY` strikes one listed hostile (or a farm animal,
+for a task) in a short burst, and System 1 decides `DEFEND` when retreating is impossible or worse
+(fake server only so far). The remaining world-changing actions return `NOT_IMPLEMENTED`. See
 [Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting),
-[Digging](#digging) and [Placing](#placing).
+[Digging](#digging), [Placing](#placing) and [Combat](#combat).
 
 **Exploring (2026-09-30, fake server only so far):** with `MC_MOVEMENT_MODE=follow` the walk/dig
 fence becomes a play area that moves with the player, inside the safety boundary. `EXPLORE` walks
@@ -116,6 +118,7 @@ cp agent.config.example.json agent.config.json
 | **Place** one allowlisted block in the pen   | `pnpm cli place --live --at=-7,200,-11 --item minecraft:cobblestone`                      |
 | **Explore** toward a direction or a point    | `pnpm cli explore --live --toward south --distance 64`                                    |
 | What world memory knows (known places)       | `pnpm cli places [--at x,z]`                                                              |
+| **Fight** one mob in the pen (by its id)     | `pnpm cli attack --live --entity 1234`                                                    |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
 | Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`                                              |
@@ -163,7 +166,7 @@ Example output (abridged):
 
 A `MinecraftClient` (mock today) produces a Zod-validated `GameState` in which anything unobservable
 is explicitly `unknown`. A pure-code **safety policy** decides whether the state is trustworthy
-(unknown/stale/inconsistent → pause). A deterministic **System 1 router** picks one of eight bounded
+(unknown/stale/inconsistent → pause). A deterministic **System 1 router** picks one of nine bounded
 decisions, which becomes exactly **one** allowlisted action (or a planner request answered by a
 fixture-driven mock planner). The single **ActionExecutor** validates the action (schema, safety,
 preconditions), persists it, executes it with a token only it can mint, re-observes, verifies the
@@ -178,13 +181,13 @@ and [docs/action-contract.md](docs/action-contract.md).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6 (1.5 for cacti and other
   blocks that hurt only on contact); retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 18 action types exist. No dropping, combat, lava, network/multiblock changes or
-  rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs,
-  leaves, dirt, grass, sand, gravel and clay; the one that places blocks, `PLACE_BLOCK`, only
-  places vanilla dirt, cobblestone, sand, gravel, sandstone, planks and logs; `EXPLORE` only
-  walks, in hops, inside the boundary and only in daylight. Blocks are opened only by
-  `INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT`, and only blocks with an interaction profile or
-  on the observe-only list.
+- Only 19 action types exist. No dropping, lava, network/multiblock changes or rare-item use.
+  The one action that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs, leaves, dirt, grass,
+  sand, gravel and clay; the one that places blocks, `PLACE_BLOCK`, only places vanilla dirt,
+  cobblestone, sand, gravel, sandstone, planks and logs; `EXPLORE` only walks, in hops, inside
+  the boundary and only in daylight. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and
+  `TAKE_OUTPUT`, and only blocks with an interaction profile or on the observe-only list. The
+  only combat is `ATTACK_ENTITY`, on one listed hostile or farm animal.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
 - Exploring is off unless walking is on **and** `MC_MOVEMENT_MODE=follow`; it never leaves the
@@ -206,6 +209,12 @@ and [docs/action-contract.md](docs/action-contract.md).
   cells inside the fence, never one the player's body or an entity is in, only by clicking a
   plain full block (never a chest or machine, which would open), never next to water, a chest
   or a machine, never sand or gravel where it could fall, and never during danger (see below).
+- Combat is off unless `MC_ENABLE_COMBAT=true` **and** the fence is set. It strikes only
+  identified zombies, spiders, skeletons and witches (and their Special Mobs variants), or a
+  grown, unnamed cow, pig, sheep or chicken for a task. Never players, villagers, golems, pets,
+  creepers, endermen, pigmen or anything unidentified. It refuses with health below 14 or food
+  below 8, more than 2 hostiles near, or anything that may explode within 16 blocks
+  (`safety.combat`), and stops at the first damage it takes (see below).
 - Protected items are never consumed or moved.
 
 ## Project notes
@@ -491,6 +500,36 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and
 - World memory records only what a player could see: blocks near the surface with a face
   touching air, in a clear line of sight from the eyes, in daylight. Ores are recorded as "ore",
   never by material.
+
+### Combat
+
+`ATTACK_ENTITY` engages ONE mob the observation lists, for a short burst, and System 1 decides
+`DEFEND` (which becomes `ATTACK_ENTITY`) when a hostile is close and retreating is impossible or
+worse. It has been tested against the fake server only; the live test is next (see
+[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#combat-2026-09-30) for the server rules
+it is built on).
+
+- Settings: `MC_ENABLE_COMBAT=true` (it also needs the movement fence and presence ticks), and
+  optionally `safety.combat` in `agent.config.json` (`minHealthToFight` 14, `minHungerToFight` 8,
+  `maxHostilesToFight` 2, `creeperFleeRadius` 16).
+- `pnpm cli observe --live` prints every nearby entity with its id, health and whether the agent
+  may attack it. `pnpm cli attack --live --entity <id>` runs one burst as a checked user action
+  and prints what happened (swings, hits, kill, damage taken).
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#combat)):
+
+- Only identified mobs that fight in melee or at range, and farm animals only for a task and
+  never with hostiles near. Creepers (and every mob that might be one), endermen, pigmen,
+  silverfish, players, villagers, golems, pets, named or baby animals are never attacked.
+- It fights only when the moment is safe (enough health and food, few hostiles, nothing that may
+  explode near), and DEFEND prefers retreating home unless the mob is already in reach and dies
+  in a few hits.
+- The player never moves. It strikes with the best vanilla axe in the hotbar, or an empty hand
+  (GTNH's swords deal no damage), one full hit per 12 ticks, at most 8 swings or 5 seconds.
+- A killing blow waits while GTNH's 10% "kamikaze" explosion of a killed mob could hurt the
+  player too much.
+- Every tick it stops on any damage taken (System 1 decides again), a creeper or an unidentified
+  mob appearing, the target leaving, the stop file, Ctrl+C or a server correction.
 
 ### Live tasks
 

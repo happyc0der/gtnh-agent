@@ -202,6 +202,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
         type: 'TAKE_OUTPUT',
         args: { position: { x: -4, y: 106, z: -6 }, item: 'minecraft:coal' },
       },
+      ATTACK_ENTITY: { type: 'ATTACK_ENTITY', args: { entityId: 101 } },
       PAUSE_AND_ASK_USER: { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
     };
     expect(Object.keys(specs).sort()).toEqual([...ACTION_TYPES].sort());

@@ -391,6 +391,52 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'ENTITY_ATTACKED': {
+      const id = post.entityId;
+      if (!after.nearbyEntities.known) {
+        check(
+          'entity-attacked',
+          false,
+          `nearby entities unknown after the attack: ${after.nearbyEntities.reason}`,
+        );
+        break;
+      }
+      const startedMs = Date.parse(action.timestamp);
+      const died = after.nearbyEntities.value.recentDeaths.find(
+        (d) => d.id === id && Date.parse(d.at) >= startedMs,
+      );
+      if (died !== undefined) {
+        check('entity-attacked', true, `${died.type} ${id} was observed dying`);
+        break;
+      }
+      const now = after.nearbyEntities.value.entities.find((e) => e.id === id);
+      const was = before.nearbyEntities.known
+        ? before.nearbyEntities.value.entities.find((e) => e.id === id)
+        : undefined;
+      if (now === undefined) {
+        check('entity-attacked', false, `entity ${id} is gone, but was not observed dying`);
+        break;
+      }
+      if (now.health !== null && was !== undefined && was.health !== null) {
+        check(
+          'entity-attacked',
+          now.health < was.health,
+          `${now.type} ${id}: health ${was.health} -> ${now.health}`,
+        );
+        break;
+      }
+      // Health not known (no metadata yet): the server's hurt status is the only evidence.
+      const hurt = now.lastHurtAt !== null && Date.parse(now.lastHurtAt) >= startedMs;
+      check(
+        'entity-attacked',
+        hurt,
+        hurt
+          ? `${now.type} ${id} was observed taking a hit (its health is not known)`
+          : `${now.type} ${id} was not observed taking damage`,
+      );
+      break;
+    }
+
     case 'USER_NOTIFIED':
       check(
         'user-acknowledged',

@@ -1,14 +1,19 @@
 import { isPlaceableBlock, type PlaceableBlock } from '../../domain/blocks.ts';
+import { BARE_HAND } from '../../domain/combat.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
+  MAX_REPORTED_DEATHS,
+  MAX_REPORTED_ENTITIES,
   MAX_REPORTED_PLACEABLE,
   MAX_REPORTED_PLACED,
   MAX_REPORTED_REMOVED,
   worldTime,
   type GameState,
+  type NearbyEntity as StateEntity,
   type WorldTime,
 } from '../../domain/game-state.ts';
+import { chooseWeapon, listedCategory, vitalsOf, type HotbarSlot } from './combat.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
 import { toolInfo, usesLeft } from '../../domain/tools.ts';
 import { PLACE_TARGETS, scanPlaceable } from './placing.ts';
@@ -26,6 +31,7 @@ import {
 } from './entity-types.ts';
 import {
   PLAYER_EYE_HEIGHT,
+  type EntityMetadata,
   type FmlRuntimeMessage,
   type ItemStackData,
   type PlayPacket,
@@ -106,6 +112,28 @@ export interface TrackedEntity {
   x: number;
   y: number;
   z: number;
+  /**
+   * DataWatcher values received so far (the full list at spawn, then S1C changes), by index.
+   * An index not in the map is not known (never sent, or an update for it was lost).
+   */
+  metadata?: Map<number, number | string | null>;
+  /** Hurt statuses (S19 status 2, a full hit) seen for it, and when the last one arrived. */
+  hurtCount?: number;
+  lastHurtAt?: Date | null;
+  /** When the server said it died (S19 status 3); it is removed about 20 ticks later. */
+  diedAt?: Date | null;
+}
+
+/** A recent death the server announced (S19 status 3). */
+interface DeathRecord {
+  entityId: number;
+  type: string;
+  at: Date;
+}
+
+/** DataWatcher entries as a map (the last value per index wins). */
+function metadataMap(entries: EntityMetadata | undefined): Map<number, number | string | null> {
+  return new Map((entries ?? []).map((e) => [e.index, e.value]));
 }
 
 export interface NearbyEntity {
@@ -316,6 +344,8 @@ export class WorldModel {
   #inventoryProblem: string | null = null;
   readonly #chat: string[] = [];
   readonly #entities = new Map<number, TrackedEntity>();
+  /** Deaths the server announced on this connection, most recent first. */
+  #deaths: DeathRecord[] = [];
   #selfEntityId: number | null = null;
 
   /** The player's own entity id (from Join Game), or null before it arrived. */
@@ -866,6 +896,11 @@ export class WorldModel {
       case 0x08:
         this.#position = null;
         return;
+      case 0x1c:
+        // An entity's metadata update was lost, and which entity is not known: every
+        // entity's health, name tag and age become unknown until they are sent again.
+        for (const e of this.#entities.values()) e.metadata = new Map();
+        return;
       default:
         if (BLOCK_PACKETS.has(packetId)) {
           this.#hazardProblem ??= `undecodable block packet 0x${packetId.toString(16)}: ${reason}`;
@@ -901,6 +936,7 @@ export class WorldModel {
           x: message.x,
           y: message.y,
           z: message.z,
+          metadata: metadataMap(message.metadata),
         });
         return;
       case 'fml-entity-adjust': {
@@ -953,12 +989,16 @@ export class WorldModel {
     }
   }
 
-  /** Every tracked entity within `radius` of the player, nearest first (for diagnostics). */
+  /**
+   * Every tracked entity within `radius` of the player, nearest first. An entity the server
+   * said died (it lies in its death animation until it is removed) is no longer counted.
+   */
   nearbyEntities(radius = ENTITY_SCAN_RADIUS): NearbyEntity[] {
     const pos = this.#position;
     if (pos === null) return [];
     const out: NearbyEntity[] = [];
     for (const [entityId, e] of this.#entities) {
+      if (e.diedAt != null) continue;
       const distance = Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z);
       if (distance <= radius) {
         out.push({
@@ -1038,6 +1078,7 @@ export class WorldModel {
         this.#dimension = packet.dimension;
         this.#selfEntityId = packet.entityId;
         this.#entities.clear();
+        this.#deaths = [];
         this.#machines.clear();
         return;
       case 'respawn':
@@ -1046,6 +1087,7 @@ export class WorldModel {
         this.#dimension = packet.dimension;
         this.#position = null;
         this.#entities.clear();
+        this.#deaths = [];
         this.#machines.clear();
         this.#store.clear();
         this.#removed = [];
@@ -1144,8 +1186,37 @@ export class WorldModel {
           x: packet.x,
           y: packet.y,
           z: packet.z,
+          metadata: metadataMap(packet.metadata),
         });
         return;
+      case 'entity-status': {
+        const e = this.#entities.get(packet.entityId);
+        if (e === undefined) return;
+        if (packet.status === 2) {
+          e.hurtCount = (e.hurtCount ?? 0) + 1;
+          e.lastHurtAt = at;
+        } else if (packet.status === 3 && e.diedAt == null) {
+          e.diedAt = at;
+          const type = e.kind === 'player' ? 'player' : e.classification.name;
+          this.#deaths = [{ entityId: packet.entityId, type, at }, ...this.#deaths].slice(
+            0,
+            MAX_REPORTED_DEATHS,
+          );
+        }
+        return;
+      }
+      case 'entity-metadata': {
+        const e = this.#entities.get(packet.entityId);
+        if (e === undefined) return;
+        // A lost update: which values changed is not known, so none of the old ones count.
+        if (packet.metadata === null) e.metadata = new Map();
+        else {
+          const merged = new Map(e.metadata ?? []);
+          for (const entry of packet.metadata) merged.set(entry.index, entry.value);
+          e.metadata = merged;
+        }
+        return;
+      }
       case 'spawn-object':
         this.#track(packet.entityId, {
           kind: 'object',
@@ -1303,9 +1374,11 @@ export class WorldModel {
         hunger: this.#health === null ? unknown('no food update yet') : known(this.#health.food),
         armor: this.#armor(),
         heldTool: this.#heldTool(),
+        weapon: this.#weapon(),
       },
       inventory: this.#inventory(),
       nearbyThreats: this.#threats(now),
+      nearbyEntities: this.#nearbyEntitiesState(now),
       environmentHazards: this.#hazards(),
       nearbyBlocks: this.#nearbyBlocks(),
       time: this.#worldTime(now),
@@ -1473,6 +1546,107 @@ export class WorldModel {
       unclassifiedCount: unclassified.length,
       nearestUnclassifiedDistance: unclassified[0]?.distance ?? null,
     });
+  }
+
+  /**
+   * The entities behind #threats: everything it counts (and players), nearest first, with
+   * health and the like from their metadata. Known exactly when the threats are.
+   */
+  #nearbyEntitiesState(now: Date): GameState['nearbyEntities'] {
+    const threats = this.#threats(now);
+    if (!threats.known) return unknown(threats.reason);
+    const entities: StateEntity[] = [];
+    for (const n of this.nearbyEntities(ENTITY_SCAN_RADIUS)) {
+      const e = this.combatEntity(n.entityId);
+      if (e !== null) {
+        entities.push({
+          id: e.id,
+          type: e.type,
+          category: e.category,
+          kind: e.kind,
+          position: e.position,
+          distance: e.distance,
+          health: e.health,
+          owned: e.owned,
+          baby: e.baby,
+          lastHurtAt: e.lastHurtAt,
+        });
+      }
+      if (entities.length >= MAX_REPORTED_ENTITIES) break;
+    }
+    return known({
+      scanRadius: ENTITY_SCAN_RADIUS,
+      entities,
+      recentDeaths: this.#deaths.map((d) => ({
+        id: d.entityId,
+        type: d.type,
+        at: d.at.toISOString(),
+      })),
+    });
+  }
+
+  /**
+   * A tracked entity as the GameState lists it (and as the combat code checks it), or null
+   * when it is not tracked, not listed (a dropped item, an arrow) or the position is unknown.
+   */
+  combatEntity(entityId: number): (StateEntity & { hurtCount: number; dead: boolean }) | null {
+    const e = this.#entities.get(entityId);
+    const pos = this.#position;
+    if (e === undefined || pos === null) return null;
+    const category = listedCategory(e.kind, e.classification);
+    if (category === null) return null;
+    const type = e.kind === 'player' ? 'player' : e.classification.name;
+    const vitals = vitalsOf(type, e.metadata ?? null);
+    return {
+      id: entityId,
+      type,
+      category,
+      kind: e.kind === 'modded' ? 'mob' : e.kind,
+      position: { x: e.x, y: e.y, z: e.z },
+      distance: Number(Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z).toFixed(2)),
+      health: vitals.health,
+      owned: vitals.owned,
+      baby: vitals.baby,
+      lastHurtAt: e.lastHurtAt == null ? null : e.lastHurtAt.toISOString(),
+      hurtCount: e.hurtCount ?? 0,
+      dead: e.diedAt != null,
+    };
+  }
+
+  /** Whether the server announced this entity's death on this connection. */
+  hasDied(entityId: number): boolean {
+    return this.#deaths.some((d) => d.entityId === entityId);
+  }
+
+  /**
+   * The hotbar as the client would click it (registry names without @damage), or null while
+   * the inventory is not known.
+   */
+  hotbar(): HotbarSlot[] | null {
+    const storage = this.playerStorage();
+    if (storage === null) return null;
+    return storage.slice(27, 36).map((s, slot) => {
+      if (s === null) return { slot, name: null, hasNbt: false };
+      const naming = nameItemStack(this.#registry, s.id, s.damage);
+      return {
+        slot,
+        name: naming.ok ? naming.name.replace(/@\d+$/, '') : `item#${s.id}`,
+        hasNbt: s.hasNbt,
+      };
+    });
+  }
+
+  /**
+   * What ATTACK_ENTITY would strike with: the best allowlisted weapon in the hotbar, else a
+   * bare hand when a hotbar slot is empty; unknown when it could strike with neither.
+   */
+  #weapon(): GameState['player']['weapon'] {
+    const hotbar = this.hotbar();
+    if (hotbar === null) return unknown('inventory not known');
+    const best = chooseWeapon(hotbar, this.#heldSlot);
+    if (best !== null) return known(best.weapon);
+    if (hotbar.some((s) => s.name === null)) return known({ ...BARE_HAND });
+    return unknown('no allowlisted weapon and no empty hotbar slot: the agent cannot strike');
   }
 
   #hazards(): GameState['environmentHazards'] {

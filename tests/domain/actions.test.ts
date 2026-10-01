@@ -60,6 +60,7 @@ const oneOfEach: ActionSpec[] = [
     type: 'TAKE_OUTPUT',
     args: { position: { x: -6, y: 200, z: -9 }, item: 'minecraft:stone' },
   },
+  { type: 'ATTACK_ENTITY', args: { entityId: 1234 } },
   { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
 ];
 

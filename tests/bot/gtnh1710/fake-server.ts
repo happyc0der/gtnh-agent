@@ -19,6 +19,7 @@ import {
   type FakeRecipe,
   type FakeSmelting,
 } from './fake-chests.ts';
+import { FakeCombatSim, type FakeCombatOptions } from './fake-combat.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
 import { FakePlaceSim, type FakeBody, type FakePlaceOptions } from './fake-placing.ts';
 import {
@@ -111,6 +112,8 @@ export interface FakeServerOptions {
   streamChunks?: boolean;
   /** The world's time of day (S03 at join and every second); default: no time updates. */
   dayTicks?: number;
+  /** Mobs with health, and how the server treats attacks (C02); see fake-combat.ts. */
+  combat?: FakeCombatOptions;
 }
 
 export interface ReceivedPacket {
@@ -271,7 +274,7 @@ export function spawnFrame(e: FakeEntity): Buffer {
           i32(e.typeId),
           fixed(e.x, e.y, e.z),
           Buffer.from([0, 0, 0]), // yaw, pitch, head yaw
-          Buffer.from([0x66, 0, 0, 0, 0, 0x7f]), // some DataWatcher bytes the client must not need
+          Buffer.from([0x66, 0x41, 0xa0, 0, 0, 0x7f]), // DataWatcher: health (index 6) 20.0
           i32(0), // no thrower
         ]),
       );
@@ -290,6 +293,8 @@ export class FakeGtnhServer {
   readonly digSim: FakeDigSim;
   /** Placing (C08 with a held block): what the client clicked, what was placed. */
   readonly placeSim: FakePlaceSim;
+  /** Fighting (C02): mobs with health, the attacks, kills, explosions, the player's health. */
+  readonly combatSim: FakeCombatSim;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -363,6 +368,7 @@ export class FakeGtnhServer {
       biomeAt: options.biomeAt ?? null,
       viewDistance: options.viewDistance ?? 3,
       streamChunks: options.streamChunks ?? false,
+      combat: options.combat ?? {},
     };
     this.#dayTicks = options.dayTicks ?? null;
     this.chestSim = new FakeChestSim({
@@ -422,6 +428,14 @@ export class FakeGtnhServer {
       this.chestSim,
       this.#opts.place,
     );
+    this.combatSim = new FakeCombatSim(this.#opts.combat, this.chestSim, {
+      feet: () => {
+        const p = this.confirmedPositions.at(-1);
+        return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
+      },
+      health: this.#opts.health.health,
+      food: this.#opts.health.food,
+    });
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
@@ -438,6 +452,7 @@ export class FakeGtnhServer {
     for (const t of this.#timers) clearInterval(t);
     this.digSim.stop();
     this.placeSim.stop();
+    this.combatSim.stop();
     for (const s of this.#sockets) s.destroy();
     return new Promise((resolve) => this.#server.close(() => resolve()));
   }
@@ -674,6 +689,14 @@ export class FakeGtnhServer {
           sim.onJoin();
           this.digSim.setSenders(send, (f) => this.broadcast(f));
           this.placeSim.setSenders(send, (f) => this.broadcast(f));
+          this.combatSim.setSenders(
+            send,
+            (f) => this.broadcast(f),
+            (reason) => {
+              send(encodeFrame(0x40, encodeString(JSON.stringify({ text: reason }))));
+              socket.end();
+            },
+          );
           send(
             plugin(
               'REGISTER',
@@ -698,7 +721,11 @@ export class FakeGtnhServer {
               send(
                 encodeFrame(
                   0x06,
-                  Buffer.concat([f32(h.health), Buffer.from([0, h.food]), f32(h.saturation)]),
+                  Buffer.concat([
+                    f32(this.combatSim.playerHealth),
+                    Buffer.from([0, h.food]),
+                    f32(h.saturation),
+                  ]),
                 ),
               );
             }
@@ -736,6 +763,9 @@ export class FakeGtnhServer {
               r,
               this.#opts.mods.some((m) => m.modid === 'modularui'),
             );
+            break;
+          case 0x02:
+            this.combatSim.handle(r);
             break;
           default:
             sim?.handle(frame.packetId, r);
@@ -832,6 +862,7 @@ export class FakeGtnhServer {
       this.#sendView(socket, send, Math.floor(o.spawn.x / 16), Math.floor(o.spawn.z / 16));
     }
     for (const entity of o.entities) send(spawnFrame(entity));
+    this.combatSim.onJoin();
     const timer = setInterval(
       () => send(encodeFrame(0x00, i32(Math.floor(Math.random() * 1e6)))),
       o.keepAliveEveryMs,

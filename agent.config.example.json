@@ -43,7 +43,13 @@
     "maxMoveDistance": 64,
     "maxRetreatDistance": 512,
     "inventoryNearlyFullFraction": 0.9,
-    "interactionReach": 4.5
+    "interactionReach": 4.5,
+    "combat": {
+      "minHealthToFight": 14,
+      "minHungerToFight": 8,
+      "maxHostilesToFight": 2,
+      "creeperFleeRadius": 16
+    }
   },
   "routing": {
     "homeLocationName": "home",

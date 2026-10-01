@@ -57,6 +57,27 @@ import {
   type CraftingLayout,
   type PlacedRecipe,
 } from './crafting.ts';
+import {
+  attackRefusal,
+  BARE_HAND,
+  ENGAGE_RADIUS,
+  killStrikeAllowed,
+  MAX_BURST_MS,
+  MAX_SWINGS_PER_BURST,
+  mayExplode,
+  mayKill,
+  strikeReach,
+  SWING_INTERVAL_TICKS,
+  type Weapon,
+} from '../../domain/combat.ts';
+import {
+  chooseWeapon,
+  eyeHeightOf,
+  insideFence,
+  lineOfSightClear,
+  lookAtPoint,
+  playerEyes,
+} from './combat.ts';
 import { checkDig, eyesOf, faceTowards, reachTo, standSpotFor, type DigArea } from './digging.ts';
 import { ARRIVED, chooseHop, exploreGoal } from './explore.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
@@ -124,7 +145,12 @@ import {
   type TerrainStep,
 } from './terrain.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
-import { WORKBENCH_WINDOW_TYPE, WorldModel, type BlockWatch } from './world-model.ts';
+import {
+  ENTITY_SCAN_RADIUS,
+  WORKBENCH_WINDOW_TYPE,
+  WorldModel,
+  type BlockWatch,
+} from './world-model.ts';
 import { describeSightings, SurveyTracker } from './world-survey.ts';
 
 /** Vanilla clients send one "player" packet per tick (20 per second). */
@@ -274,8 +300,9 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
 /**
  * Client for a private GTNH (Minecraft 1.7.10 + Forge) server: read-only, except that it
  * can WALK (and EXPLORE) inside a fence or a moving play area, use configured vanilla
- * CHESTS, CRAFT, DIG and PLACE allowlisted blocks, and use BLOCK WINDOWS (furnaces and other
- * blocks with an interaction profile), each only when explicitly enabled.
+ * CHESTS, CRAFT, DIG and PLACE allowlisted blocks, use BLOCK WINDOWS (furnaces and other
+ * blocks with an interaction profile) and FIGHT one checked entity, each only when explicitly
+ * enabled.
  *
  * Guarantees, enforced here and in packets.ts:
  *  - never connects unless live connections are enabled, an identity marker is set, the
@@ -284,16 +311,16 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    channel registration, idle ticks, confirmations of server-assigned positions, walking
  *    steps, the window packets chests and crafting need (empty-hand block activation,
  *    hotbar selection, predictable clicks, confirmations, closing a window), digging
- *    start/cancel/finish, a block placement with the held block item, and the cosmetic head
- *    look and arm swing;
+ *    start/cancel/finish, a block placement with the held block item, attacks on one checked
+ *    entity (C02, attack only), and the cosmetic head look and arm swing;
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
  *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
  *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
  *    DEPOSIT_ITEM / WITHDRAW_ITEM when containers are enabled, CRAFT_ITEM when crafting is
- *    enabled, DIG_BLOCK when digging is enabled, PLACE_BLOCK when placing is enabled and
- *    INTERACT_BLOCK / SMELT / TAKE_OUTPUT when interacting is enabled (NOT_IMPLEMENTED
- *    otherwise); every other world-changing action returns NOT_IMPLEMENTED without sending
- *    anything;
+ *    enabled, DIG_BLOCK when digging is enabled, PLACE_BLOCK when placing is enabled,
+ *    INTERACT_BLOCK / SMELT / TAKE_OUTPUT when interacting is enabled and ATTACK_ENTITY when
+ *    combat is enabled (NOT_IMPLEMENTED otherwise); every other world-changing action returns
+ *    NOT_IMPLEMENTED without sending anything;
  *  - a walk stays inside the fence (one level, or terrain when the fence has a height
  *    range; in mode 'follow' the play area around the player, inside the exploration
  *    boundary: #fence()), and every step is re-checked just before it is sent; it stops on
@@ -307,7 +334,9 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    hand;
  *  - a placement puts one allowlisted block into a cell placing.ts has checked, clicking
  *    only a plain full block, never a chest, machine or modded block;
- *  - walking, window work, digging and placing never run at the same time.
+ *  - a fight strikes one entity src/domain/combat.ts allows, with an allowlisted weapon or an
+ *    empty hand, never moving, and re-checks the target and the moment every tick;
+ *  - walking, window work, digging, placing and fighting never run at the same time.
  */
 export class Gtnh1710Client implements MinecraftClient {
   readonly kind = 'gtnh1710';
@@ -334,6 +363,8 @@ export class Gtnh1710Client implements MinecraftClient {
   /** A chest or crafting operation is running (they, and walking, exclude each other). */
   #usingContainer = false;
   #digging = false;
+  /** An ATTACK_ENTITY burst is running (it excludes walking, window work, digging and placing). */
+  #fighting = false;
   #placing = false;
   /** Sync clicks sent while crafting (diagnostics). */
   #craftSyncs = 0;
@@ -607,12 +638,14 @@ export class Gtnh1710Client implements MinecraftClient {
         return this.#smelt(action.args);
       case 'TAKE_OUTPUT':
         return this.#takeOutput(action.args);
+      case 'ATTACK_ENTITY':
+        return this.#attack(action.args.entityId);
       case 'EAT_FOOD':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
         return Promise.resolve(
           failed(
-            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft, dig, place and use block windows`,
+            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft, dig, place, use block windows and fight`,
             'NOT_IMPLEMENTED',
           ),
         );
@@ -633,6 +666,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#fighting) return 'the player is fighting';
     return null;
   }
 
@@ -976,6 +1010,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#fighting) return 'the player is fighting';
     return null;
   }
 
@@ -1401,6 +1436,8 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
+    if (this.#placing) return 'the player is placing a block';
+    if (this.#fighting) return 'the player is fighting';
     return null;
   }
 
@@ -1869,6 +1906,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#usingContainer) return refused('a chest or crafting operation is running');
     if (this.#digging) return refused('a dig is already in progress');
     if (this.#placing) return refused('the player is placing a block');
+    if (this.#fighting) return refused('the player is fighting');
     return null;
   }
 
@@ -2391,6 +2429,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#usingContainer) return refused('a chest or crafting operation is running');
     if (this.#digging) return refused('the player is digging');
     if (this.#placing) return refused('a placement is already in progress');
+    if (this.#fighting) return refused('the player is fighting');
     return null;
   }
 
@@ -2725,6 +2764,269 @@ export class Gtnh1710Client implements MinecraftClient {
     return { ok: true };
   }
 
+  // -------------------------------------------------------------------------
+  // Fighting: one ATTACK_ENTITY burst (combat.ts, src/domain/combat.ts)
+
+  /** Why fighting cannot start now, or null. */
+  #combatBlocker(): { reason: string; code: 'NOT_IMPLEMENTED' | 'REFUSED' } | null {
+    const cfg = this.#opts.config;
+    if (!cfg.combat.enabled) {
+      return { reason: 'combat is disabled (MC_ENABLE_COMBAT)', code: 'NOT_IMPLEMENTED' };
+    }
+    const refused = (reason: string) => ({ reason, code: 'REFUSED' as const });
+    const area = this.#fence();
+    if (area.fence === null) {
+      return refused(`${area.problem}: the player and its target stay inside the fence`);
+    }
+    if (!cfg.presenceTicks) return refused('fighting needs presence ticks (MC_PRESENCE_TICKS)');
+    if (this.#haltReason !== null) return refused(`halted: ${this.#haltReason}`);
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return refused(`the stop file ${cfg.movement.stopFile} exists`);
+    }
+    if (this.#walking) return refused('the player is walking');
+    if (this.#usingContainer) return refused('a chest or crafting operation is running');
+    if (this.#digging) return refused('the player is digging');
+    if (this.#placing) return refused('the player is placing a block');
+    if (this.#exploring) return refused('the player is exploring');
+    if (this.#fighting) return refused('a fight is already in progress');
+    return null;
+  }
+
+  /** Why this target cannot be engaged (never, or not from here), or null. */
+  #targetProblem(entityId: number, fence: Fence): string | null {
+    const t = this.#world.combatEntity(entityId);
+    if (t === null) return `entity ${entityId} is not tracked near the player`;
+    const refusal = attackRefusal(t);
+    if (refusal !== null) return refusal;
+    if (!insideFence(t.position, fence)) return `the ${t.type} is outside the fence`;
+    if (t.distance > ENGAGE_RADIUS) {
+      return `the ${t.type} is ${t.distance.toFixed(1)} blocks away (engages within ${ENGAGE_RADIUS})`;
+    }
+    return null;
+  }
+
+  /**
+   * Why the moment is unsafe for fighting, or null: the entity picture is incomplete, an
+   * unidentified entity is within the threat radius, or something that explodes (or might:
+   * anything unidentified) is within the scan. Checked before the burst and every tick of it.
+   */
+  #fightMomentProblem(): string | null {
+    if (!this.#world.entitiesReady(this.#opts.clock.now())) {
+      return 'the entities around the player are not fully known';
+    }
+    const unidentified = this.#world
+      .nearbyEntities(this.#opts.config.movement.threatRadius)
+      .find((e) => e.category === 'unclassified');
+    if (unidentified !== undefined) {
+      return `unidentified entity ${unidentified.name} ${unidentified.distance.toFixed(1)} blocks away`;
+    }
+    const explosive = this.#world
+      .nearbyEntities(ENTITY_SCAN_RADIUS)
+      .find(
+        (e) =>
+          (e.category === 'hostile' || e.category === 'unclassified') &&
+          mayExplode(e.name, e.category),
+      );
+    if (explosive !== undefined) {
+      return `${explosive.name} ${explosive.distance.toFixed(1)} blocks away may explode: back off`;
+    }
+    return null;
+  }
+
+  /**
+   * ATTACK_ENTITY: engage ONE entity for a bounded burst. The player does not move. It holds
+   * the best allowlisted weapon in the hotbar (else an empty hand), and strikes as a player
+   * does (C05 look, C0A arm swing, C02 attack) whenever the target is within reach, one full
+   * hit per SWING_INTERVAL_TICKS (a mob takes full damage again only 10 ticks after one),
+   * until the target dies, MAX_SWINGS_PER_BURST swings, or MAX_BURST_MS. Every tick it stops
+   * for: the halt, the stop file, a server correction, a lost connection, ANY damage taken (so
+   * System 1 decides again), an unidentified entity or something that may explode nearby, and
+   * a target that is gone, out of the fence or out of range. A blow that may kill is held
+   * back while the player would not survive GTNH's kill explosion from where it stands.
+   */
+  async #attack(entityId: number): Promise<ClientActionResult> {
+    const blocker = this.#combatBlocker();
+    const fence = this.#fence().fence;
+    if (blocker !== null || fence === null) {
+      return failed(`not attacking: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED');
+    }
+    const me = this.#world.ownPosition;
+    if (me === null) return failed('not attacking: player position unknown', 'REFUSED');
+    if (!insideFence(me, fence))
+      return failed('not attacking: the player is outside the fence', 'REFUSED');
+    const notTarget = this.#targetProblem(entityId, fence);
+    if (notTarget !== null) return failed(`not attacking: ${notTarget}`, 'REFUSED');
+    const unsafe = this.#fightMomentProblem();
+    if (unsafe !== null) return failed(`not attacking: ${unsafe}`, 'REFUSED');
+
+    this.#fighting = true;
+    try {
+      // A window left open by an earlier action is closed first (never with a full cursor).
+      if (this.#world.openWindow !== null) {
+        const closed = this.#closeOpenWindow();
+        if (closed !== null) return failed(`not attacking: ${closed.message}`, 'REFUSED');
+      }
+      const hotbar = this.#world.hotbar();
+      if (hotbar === null) return failed('not attacking: the inventory is not known', 'REFUSED');
+      // The best allowlisted weapon in the hotbar, else an empty hand: never anything else
+      // (a held item's own left-click code could do anything).
+      const choice = chooseWeapon(hotbar, this.#world.heldSlot);
+      let slot: number;
+      let weapon: Weapon;
+      if (choice !== null) {
+        slot = choice.slot;
+        weapon = choice.weapon;
+      } else {
+        const hand = this.#emptyHotbarSlot();
+        if (hand === null) {
+          return failed(
+            'not attacking: no allowlisted weapon and no empty hotbar slot to strike with',
+            'REFUSED',
+          );
+        }
+        slot = hand;
+        weapon = BARE_HAND;
+      }
+      if (slot !== this.#world.heldSlot) {
+        this.#send(outbound.selectHotbarSlot(slot));
+        this.#world.setHeldSlot(slot);
+      }
+      return await this.#strikeBurst(entityId, fence, weapon);
+    } finally {
+      this.#fighting = false;
+    }
+  }
+
+  async #strikeBurst(entityId: number, fence: Fence, weapon: Weapon): Promise<ClientActionResult> {
+    const clock = this.#opts.clock;
+    const first = this.#world.combatEntity(entityId);
+    if (first === null) return failed('not attacking: the target is gone', 'REFUSED');
+    const what = `${first.type} ${entityId}`;
+    const startedAt = clock.now().getTime();
+    const deadline = startedAt + MAX_BURST_MS;
+    // The held item's damage counts only after the server's next player tick (idle ticks run
+    // every 50 ms), so the first swing waits two ticks.
+    let nextSwingAt = startedAt + 2 * TICK_MS;
+    const healthAtStart = this.#world.health;
+    const placementsAtStart = this.#confirmedPositions;
+    let hurt = first.hurtCount;
+    let lastHealth = first.health;
+    let swings = 0;
+    let heldBack = 0;
+    let stop: { reason: string; hard: boolean } | null = null;
+    this.#log(`engaging ${what} with ${weapon.item ?? 'a bare hand'} (${weapon.damage} per hit)`);
+
+    while (stop === null) {
+      await delay(TICK_MS);
+      const now = clock.now().getTime();
+      // Hard stops: the operator, the connection, the server moving the player.
+      if (this.#phase !== 'play') stop = { reason: 'the connection closed', hard: true };
+      else if (this.#haltReason !== null)
+        stop = { reason: `halted: ${this.#haltReason}`, hard: true };
+      else if (existsSync(resolvePath(this.#opts.config.movement.stopFile))) {
+        stop = {
+          reason: `the stop file ${this.#opts.config.movement.stopFile} exists`,
+          hard: true,
+        };
+      } else if (this.#confirmedPositions !== placementsAtStart) {
+        stop = { reason: 'the server corrected the position', hard: true };
+      }
+      if (stop !== null) break;
+      const t = this.#world.combatEntity(entityId);
+      if (t !== null) {
+        hurt = Math.max(hurt, t.hurtCount);
+        lastHealth = t.health ?? lastHealth;
+      }
+      const health = this.#world.health;
+      if (this.#world.hasDied(entityId) || t?.dead === true) {
+        stop = { reason: 'the target died', hard: false };
+      } else if (t === null) {
+        stop = { reason: 'the target is gone', hard: false };
+      } else if (healthAtStart !== null && health !== null && health < healthAtStart) {
+        stop = { reason: `the player took ${healthAtStart - health} damage`, hard: false };
+      } else {
+        const moment = this.#fightMomentProblem();
+        const target = moment ?? this.#targetProblem(entityId, fence);
+        if (target !== null) stop = { reason: target, hard: false };
+        else if (swings >= MAX_SWINGS_PER_BURST && now >= nextSwingAt) {
+          stop = { reason: `${swings} swings`, hard: false };
+        } else if (now >= deadline) {
+          stop = { reason: 'the burst is over', hard: false };
+        }
+      }
+      if (stop !== null || t === null || swings >= MAX_SWINGS_PER_BURST || now < nextSwingAt) {
+        continue;
+      }
+      const feet = this.#world.ownPosition;
+      if (feet === null) {
+        stop = { reason: 'player position unknown', hard: true };
+        continue;
+      }
+      const eyes = playerEyes(feet);
+      const aim = { x: t.position.x, y: t.position.y + eyeHeightOf(t.type), z: t.position.z };
+      const world = this.#world.walkWorld();
+      const sight = world !== null && lineOfSightClear(world, eyes, aim);
+      if (t.distance > strikeReach(weapon, sight)) continue; // wait for it to come within reach
+      if (mayKill(t.health, weapon) && !killStrikeAllowed(health ?? 0, t.distance)) {
+        // GTNH's AngerMod may blow up what a player kills: not from this close, at this health.
+        if (heldBack === 0) {
+          this.#log(
+            `holding a blow that may kill the ${t.type} ${t.distance.toFixed(1)} blocks away`,
+          );
+        }
+        heldBack += 1;
+        continue;
+      }
+      const look = lookAtPoint(eyes, aim);
+      this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
+      this.#lastYaw = look.yaw;
+      const self = this.#world.selfEntityId;
+      if (self !== null) this.#send(outbound.swingArm(self));
+      this.#send(outbound.attackEntity(entityId));
+      swings += 1;
+      nextSwingAt = now + SWING_INTERVAL_TICKS * TICK_MS;
+    }
+
+    // The answers to the last swing (hurt and death statuses, the new health) take a tick.
+    if (swings > 0 && this.#phase === 'play') {
+      await this.#waitFor(() => this.#world.hasDied(entityId), 4 * TICK_MS);
+      const t = this.#world.combatEntity(entityId);
+      if (t !== null) {
+        hurt = Math.max(hurt, t.hurtCount);
+        lastHealth = t.health ?? lastHealth;
+      }
+    }
+    const killed = this.#world.hasDied(entityId);
+    const hits = hurt - first.hurtCount;
+    const healthNow = this.#world.health;
+    const damageTaken =
+      healthAtStart !== null && healthNow !== null ? Math.max(0, healthAtStart - healthNow) : null;
+    const reason = stop?.reason ?? 'the burst is over';
+    const data = {
+      entityId,
+      target: first.type,
+      weapon: weapon.item,
+      swings,
+      hits,
+      kills: killed ? 1 : 0,
+      targetHealthBefore: first.health,
+      targetHealthAfter: killed ? 0 : lastHealth,
+      damageTaken,
+      heldBack,
+      stopReason: reason.slice(0, 200),
+    };
+    this.#log(
+      `fight with ${what}: ${swings} swing(s), ${hits} hit(s)${killed ? ', killed' : ''}; ${reason}`,
+    );
+    const summary =
+      `${killed ? 'killed' : 'struck'} ${what}: ${swings} swing(s), ${hits} hit(s) seen` +
+      `${first.health !== null ? `, health ${first.health} -> ${killed ? 0 : (lastHealth ?? '?')}` : ''}` +
+      `${damageTaken !== null && damageTaken > 0 ? `, took ${damageTaken} damage` : ''}; stopped: ${reason}`;
+    if (stop?.hard === true) return craftFailed(`fight stopped: ${summary}`, 'FAILED', data);
+    if (hits > 0 || killed) return ok(summary.slice(0, 500), data);
+    return craftFailed(`no hit landed on ${what}: ${summary}`, 'FAILED', data);
+  }
+
   /**
    * WAIT's postcondition is "observed time advanced by at least `ms`", and a live state is
    * timestamped with the arrival of the last server packet (the honest "as of"). So wait
@@ -2805,6 +3107,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
     if (existsSync(resolvePath(m.stopFile))) return `the stop file ${m.stopFile} exists`;
     if (this.#usingContainer) return 'a chest or crafting operation is running';
+    if (this.#fighting) return 'the player is fighting';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
     // Walking away closes an open window server-side, which drops the cursor and a table's grid.
@@ -3405,6 +3708,8 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'spawn-player':
       case 'spawn-object':
       case 'spawn-mob':
+      case 'entity-status':
+      case 'entity-metadata':
       case 'destroy-entities':
       case 'entity-move':
       case 'entity-teleport':
@@ -3438,7 +3743,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (channel === 'FML') {
       // Forge runtime messages: this is how GTNH's modded mobs are spawned and moved.
       try {
-        this.#world.applyFml(decodeFmlRuntimeMessage(data), this.#opts.clock.now());
+        this.#world.applyFml(decodeFmlRuntimeMessage(data, this.#decoding), this.#opts.clock.now());
       } catch (error) {
         if (!(error instanceof ProtocolError)) throw error;
         this.#log(`could not decode FML message: ${error.message}`);

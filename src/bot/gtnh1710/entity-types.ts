@@ -1,3 +1,5 @@
+import { specialMobsName } from './special-mobs.ts';
+
 /**
  * Entity classification for GTNH 1.7.10.
  *
@@ -246,6 +248,11 @@ export function classifyModded(
   if (entry !== undefined && entry.modVersion === serverModVersion) {
     return { name: entry.name, category: entry.category };
   }
-  if (HOSTILE_MODS.has(modId)) return { name: entry?.name ?? key, category: 'hostile' };
+  if (HOSTILE_MODS.has(modId)) {
+    // Special Mobs' own registration order names every type (special-mobs.ts); the combat
+    // rules need the name to tell a creeper (it explodes) from a zombie.
+    const derived = modId === 'SpecialMobs' ? specialMobsName(typeId, serverModVersion) : null;
+    return { name: derived ?? entry?.name ?? key, category: 'hostile' };
+  }
   return { name: key, category: 'unclassified' };
 }
