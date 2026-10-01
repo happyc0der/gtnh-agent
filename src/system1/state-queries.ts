@@ -35,6 +35,11 @@ export interface RouterContext {
    * cadence uses it. Left out, a model at decision points treats every plan request as one.
    */
   plan?: PlanFacts | null;
+  /**
+   * A safe location nearer than home that RETREAT_HOME walks to instead, away from what
+   * threatens the player (the trail: src/app/trail.ts); left out, home.
+   */
+  retreatTo?: string;
 }
 
 /** Deterministic ordering for item names so ties never depend on object key order. */

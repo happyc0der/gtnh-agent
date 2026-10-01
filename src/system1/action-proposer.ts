@@ -61,9 +61,9 @@ export function proposeAction(
         kind: 'action',
         spec: {
           type: 'RETURN_TO_SAFE_LOCATION',
-          args: { locationName: ctx.routing.homeLocationName },
+          args: { locationName: ctx.retreatTo ?? ctx.routing.homeLocationName },
         },
-        reason: why,
+        reason: ctx.retreatTo === undefined ? why : `${why}: back along the trail`,
       };
 
     case 'DEFEND': {

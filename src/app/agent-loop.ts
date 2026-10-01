@@ -10,6 +10,7 @@ import {
 import type { BlockPosition } from '../domain/common.ts';
 import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.ts';
 import { GameStateSchema, LastActionSchema, type GameState } from '../domain/game-state.ts';
+import { distance } from '../domain/geometry.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 import { summarizeExploration, type ExplorationSummary } from '../domain/world-memory.ts';
 import {
@@ -44,6 +45,7 @@ import type { Clock } from '../util/clock.ts';
 import type { IdGenerator } from '../util/ids.ts';
 import { errorMessage, stableStringify } from '../util/json.ts';
 import { gatherAfterAction, gatherStopped, gatherTurn, type GatherRef } from './gather-step.ts';
+import { readTrail, recordTrail, TRAIL_LOCATION, trailRetreat } from './trail.ts';
 import { knownStepAfterAction, nextKnownStep } from './known-steps.ts';
 
 export interface AgentDeps {
@@ -412,7 +414,8 @@ async function freshForExecution(
 ): Promise<{ state: GameState; ctx: SafetyContext } | { error: string }> {
   const now = deps.clock.now();
   if (now.getTime() === ctx.now.getTime()) return { state, ctx };
-  const execCtx = buildSafetyContext(deps.config, deps.repos, now);
+  // The cycle's own locations stay (the trail's retreat point is not in the database).
+  const execCtx = { ...buildSafetyContext(deps.config, deps.repos, now), locations: ctx.locations };
   const wentStale =
     stateViolationCount === 0 &&
     assessStateReliability(state, execCtx).some((v) => v.code === 'STATE_STALE');
@@ -426,7 +429,10 @@ async function freshForExecution(
   if ('error' in again) return { error: `Re-observation failed: ${again.error}` };
   return {
     state: again.state,
-    ctx: buildSafetyContext(deps.config, deps.repos, deps.clock.now()),
+    ctx: {
+      ...buildSafetyContext(deps.config, deps.repos, deps.clock.now()),
+      locations: ctx.locations,
+    },
   };
 }
 
@@ -468,9 +474,26 @@ export async function runSingleCycle(
   const { state, stateSnapshotId } = observed;
 
   // 3. Hard safety validation of the state itself.
-  const ctx = buildSafetyContext(config, repos, clock.now());
-  const stateViolations = assessStateReliability(state, ctx);
+  const base = buildSafetyContext(config, repos, clock.now());
+  const stateViolations = assessStateReliability(state, base);
   if (stateViolations.length > 0) repos.violations.insertMany(cycleId, null, stateViolations);
+
+  // The way back: where the player stood out of danger lately. With a creature threatening
+  // it, a point back along that trail and away from it is a safe location for this cycle, and
+  // RETREAT_HOME walks there when it is nearer than home.
+  if (stateViolations.length === 0) recordTrail(repos.memory, state, base);
+  const trail =
+    stateViolations.length === 0 ? trailRetreat(readTrail(repos.memory), state, base) : null;
+  const home = base.locations.get(config.routing.homeLocationName);
+  const at = state.player.position.known ? state.player.position.value : null;
+  const nearer =
+    trail !== null &&
+    (home === undefined ||
+      at === null ||
+      distance(at, trail.position) < distance(at, home.position));
+  const ctx: SafetyContext = nearer
+    ? { ...base, locations: new Map([...base.locations, [TRAIL_LOCATION, trail]]) }
+    : base;
 
   // 4. System 1 decision (forced to PAUSE if the state is unreliable, whatever the provider says).
   const routerCtx: RouterContext = {
@@ -478,6 +501,7 @@ export async function runSingleCycle(
     routing: config.routing,
     combatEnabled: config.minecraft.combat.enabled,
     plan: taskPlanFacts(repos, state),
+    ...(nearer ? { retreatTo: TRAIL_LOCATION } : {}),
   };
   let decision: DecisionResult;
   if (stateViolations.length > 0) {
