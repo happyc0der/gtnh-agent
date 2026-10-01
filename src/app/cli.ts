@@ -70,12 +70,14 @@ Usage:
       stopping when the task is done or anything needs you (a pause, rejection, failure,
       approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
       stop file (pnpm cli halt) or Ctrl+C.
-  node src/app/cli.ts play --live [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
+  node src/app/cli.ts play --live [--needs item=count,...] [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
       AUTONOMOUS PLAY through the Age 0 quest book: the agent picks its next quest, the
       configured decision maker and planner (AGENT_DECISIONS / AGENT_PLANNER, e.g. ollama)
       choose what to do, and every action is validated, executed and verified as always.
       Stops when no doable quest is left, when anything needs you, after 3 sessions without
       progress on a quest, at the time limit, the stop file (pnpm cli halt) or Ctrl+C.
+      --needs pursues your own goal instead (e.g. --needs minecraft:diamond=100): the planner
+      gets its route the same way, and play ends when the items are held.
   node src/app/cli.ts quests [--live] [--db <path>]
       The agent's Age 0 quest book (GTNH "Tier 0 Stone Age"): progress, completed quests
       and the next goal. --live reads the inventory first and records the quests it now
@@ -325,6 +327,19 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`${invalid}\n`);
         return 1;
       }
+      const needs = values.needs === undefined ? null : parseNeeds(values.needs);
+      const freeGoal =
+        needs === null
+          ? null
+          : {
+              taskId: `goal-${Object.entries(needs)
+                .map(([item, n]) => `${item}-${n}`)
+                .join('-')}`.slice(0, 64),
+              name: `get ${Object.entries(needs)
+                .map(([item, n]) => `${n} ${item}`)
+                .join(', ')}`,
+              requirements: needs,
+            };
       const providers = createProviders(config);
       process.stderr.write(
         `playing: decisions by ${providers.decisionProvider.name}, plans by ` +
@@ -348,6 +363,7 @@ async function main(argv: string[]): Promise<number> {
               limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, minutesLeft)) },
               ...providers,
               abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
+              ...(freeGoal === null ? {} : { goal: freeGoal }),
               onEvent: (e) => process.stderr.write(`${describePlayEvent(e)}\n`),
             },
             log,

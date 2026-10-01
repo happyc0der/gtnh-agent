@@ -2,12 +2,14 @@ import { AGE0_QUESTS } from '../goals/age0-quests.ts';
 import {
   BASE_ABILITIES,
   missingItems,
+  missingText,
   type Abilities,
   type Quest,
   type QuestProgress,
 } from '../goals/quest-goals.ts';
 import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../domain/recipes.ts';
 import type { WorldTime } from '../domain/game-state.ts';
+import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { CycleResult } from './agent-loop.ts';
 import {
@@ -79,6 +81,11 @@ export interface PlayDeps {
   inventory: () => Promise<Readonly<Record<string, number>> | null>;
   /** Reads the world's clock now (null when unknown). Without it, play ignores the time. */
   time?: () => Promise<WorldTime | null>;
+  /**
+   * A goal of the player's own instead of the quest book: items to have (item -> count).
+   * Play pursues it like a quest (the planner gets its route) and ends when it is reached.
+   */
+  goal?: FreeGoal;
   /** Runs one bounded session on the current task (runSession on the live connection). */
   session: (
     limits: SessionLimits,
@@ -91,6 +98,14 @@ export interface PlayDeps {
   quests?: readonly Quest[];
   /** Milliseconds since the epoch (injectable for tests). */
   now?: () => number;
+}
+
+export interface FreeGoal {
+  /** The task id it is worked under (e.g. goal-minecraft:diamond-100). */
+  taskId: string;
+  /** Shown to the planner and in messages, e.g. "get 100 minecraft:diamond". */
+  name: string;
+  requirements: Readonly<Record<string, number>>;
 }
 
 export type PlayEvent =
@@ -180,6 +195,51 @@ export function liveAbilities(hasCraftingTable: boolean): Abilities {
   return { gather: BASE_ABILITIES.gather, craft: new Set(craft) };
 }
 
+/** What `requirements` still needs beyond `inventory` (item -> missing count). */
+function missingFor(
+  requirements: Readonly<Record<string, number>>,
+  inventory: Readonly<Record<string, number>>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [item, n] of Object.entries(requirements)) {
+    const need = n - (inventory[item] ?? 0);
+    if (need > 0) out[item] = need;
+  }
+  return out;
+}
+
+/** Makes a free goal the current task, with its requirements (the planner's route). */
+function adoptFreeGoal(
+  repos: Repositories,
+  goal: FreeGoal,
+  missing: Record<string, number>,
+): { taskId: string; created: boolean; status: string } {
+  const existing = repos.tasks.get(goal.taskId);
+  const task = repos.transaction(() => {
+    const t = repos.tasks.ensure({
+      id: goal.taskId,
+      goal: goal.name.slice(0, 300),
+      subgoal: missingText(missing),
+      status: 'active',
+    });
+    repos.memory.setTaskRequirements(goal.taskId, { ...goal.requirements });
+    if (t.status === 'active') repos.memory.setValue(CURRENT_TASK_KEY, goal.taskId);
+    return t;
+  });
+  return { taskId: goal.taskId, created: existing === null, status: task.status };
+}
+
+/** The goal is held: its task completes and stops being current. */
+function reachGoal(repos: Repositories, goal: FreeGoal): void {
+  repos.transaction(() => {
+    if (repos.tasks.get(goal.taskId) !== null) repos.tasks.setStatus(goal.taskId, 'completed');
+    if (repos.memory.getValue(CURRENT_TASK_KEY) === goal.taskId) {
+      repos.memory.setValue(CURRENT_TASK_KEY, null);
+    }
+    repos.memory.appendJournal(goal.taskId, `GOAL "${goal.name}" reached`);
+  });
+}
+
 /** Evening or night: hostile mobs come out, and the agent has no shelter yet. */
 export const isDark = (t: WorldTime): boolean => t.phase === 'evening' || t.phase === 'night';
 
@@ -238,49 +298,84 @@ export async function runPlay(
     if (clock !== null && isDark(clock)) return done(nightReason(clock), clock);
 
     const inventory = await deps.inventory();
-    if (inventory === null) return done('the inventory is unknown, so quest progress is unknown');
-    const update = updateQuests(deps.repos, inventory, abilities, quests);
-    progress = update.progress;
-    for (const q of update.added) {
-      questsCompleted.push(q.name);
-      deps.repos.memory.appendJournal(`quest-${q.id}`, `QUEST "${q.name}" completed`);
-      emit({
-        kind: 'quest-completed',
-        quest: q.name,
-        completed: update.progress.completed,
-        total: update.progress.total,
-      });
-    }
-    const goal = update.next;
-    if (goal === null) return done('no quest the agent can do is left');
+    if (inventory === null) return done('the inventory is unknown, so progress is unknown');
 
-    // Progress is fewer missing items for the same quest (read from the inventory, not
-    // from what a session claims); moving to another quest resets the count.
-    const missingNow = total(goal.missing);
-    if (last !== null && last.questId === goal.quest.id) {
+    // What to work on this round: the player's own goal, or the next quest.
+    let current: {
+      id: string;
+      name: string;
+      text: string;
+      missing: Record<string, number>;
+      missingWith: (inv: Readonly<Record<string, number>>) => number;
+      adopt: () => { taskId: string; created: boolean; status: string };
+    };
+    if (deps.goal !== undefined) {
+      const free = deps.goal;
+      const missing = missingFor(free.requirements, inventory);
+      if (total(missing) === 0) {
+        reachGoal(deps.repos, free);
+        return done(`the goal "${free.name}" is reached`);
+      }
+      current = {
+        id: free.taskId,
+        name: free.name,
+        text: free.name,
+        missing,
+        missingWith: (inv) => total(missingFor(free.requirements, inv)),
+        adopt: () => adoptFreeGoal(deps.repos, free, missing),
+      };
+    } else {
+      const update = updateQuests(deps.repos, inventory, abilities, quests);
+      progress = update.progress;
+      for (const q of update.added) {
+        questsCompleted.push(q.name);
+        deps.repos.memory.appendJournal(`quest-${q.id}`, `QUEST "${q.name}" completed`);
+        emit({
+          kind: 'quest-completed',
+          quest: q.name,
+          completed: update.progress.completed,
+          total: update.progress.total,
+        });
+      }
+      const goal = update.next;
+      if (goal === null) return done('no quest the agent can do is left');
+      current = {
+        id: goal.quest.id,
+        name: goal.quest.name,
+        text: goal.text,
+        missing: goal.missing,
+        missingWith: (inv) => total(missingItems(goal.quest, inv)),
+        adopt: () => adoptGoal(deps.repos, goal),
+      };
+    }
+
+    // Progress is fewer missing items for the same goal (read from the inventory, not
+    // from what a session claims); moving to another goal resets the count.
+    const missingNow = total(current.missing);
+    if (last !== null && last.questId === current.id) {
       last.stuck = missingNow < last.missing ? 0 : last.stuck + 1;
       last.missing = missingNow;
       if (last.stuck >= limits.maxStuckSessions) {
         return done(
-          `no progress on "${goal.quest.name}" in ${last.stuck} sessions in a row (last: ${lastStop})`,
+          `no progress on "${current.name}" in ${last.stuck} sessions in a row (last: ${lastStop})`,
         );
       }
     } else {
-      last = { questId: goal.quest.id, missing: missingNow, stuck: 0 };
+      last = { questId: current.id, missing: missingNow, stuck: 0 };
     }
 
-    const adopted = adoptGoal(deps.repos, goal);
+    const adopted = current.adopt();
     if (adopted.status !== 'active') {
       return done(
-        `the task ${adopted.taskId} for "${goal.quest.name}" is ${adopted.status}; ` +
+        `the task ${adopted.taskId} for "${current.name}" is ${adopted.status}; ` +
           'it needs you (plan-approve, task-resume) before play goes on',
       );
     }
     emit({
       kind: 'goal',
-      quest: goal.quest.name,
-      goal: goal.text,
-      missing: goal.missing,
+      quest: current.name,
+      goal: current.text,
+      missing: current.missing,
       taskId: adopted.taskId,
       created: adopted.created,
     });
@@ -293,7 +388,7 @@ export async function runPlay(
     const result = await deps.session(limits.session, {
       stopRequested: () =>
         met
-          ? `the quest "${goal.quest.name}" is satisfied`
+          ? `"${current.name}" is satisfied`
           : dark !== null
             ? nightReason(dark)
             : hooks.stopRequested(),
@@ -318,7 +413,7 @@ export async function runPlay(
         });
         const after = r.outcome?.stateAfter;
         if (after?.inventory.known === true) {
-          met = total(missingItems(goal.quest, after.inventory.value.items)) === 0;
+          met = current.missingWith(after.inventory.value.items) === 0;
         }
         if (after?.time.known === true && isDark(after.time.value)) dark = after.time.value;
       },
