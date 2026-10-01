@@ -10,6 +10,7 @@ import {
 } from '../../src/app/trail.ts';
 import { defaultConfig } from '../../src/config/env.ts';
 import { NIGHT_SHELTER_TASK_ID } from '../../src/domain/night-shelter.ts';
+import { actionFingerprint } from '../../src/safety/safety-policy.ts';
 import { DeterministicDecisionProvider } from '../../src/system1/decision-provider.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
 import { makeState, makeWorld, memoryRepos, safetyCtx, testClock } from '../fixtures/index.ts';
@@ -85,5 +86,50 @@ describe('the trail', () => {
     });
     expect(result.status).toBe('succeeded');
     expect(world.player.position).toMatchObject({ x: 48, z: 1 });
+  });
+
+  it('goes home instead once two retreats along the trail failed from the same block', async () => {
+    const clock = testClock();
+    const { client } = makeWorld((w) => {
+      w.player.position = standing(60, 1);
+      w.hostiles = [standing(67, 1)];
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = defaultConfig(MOCK_CONFIG);
+    syncConfigToDatabase(config, repos);
+    repos.memory.setValue(TRAIL_KEY, JSON.stringify([point(20, 1), point(48, 1)]));
+    const state = await client.observe();
+    const fingerprint = actionFingerprint(
+      { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: TRAIL_LOCATION } },
+      state.player.position.known ? state.player.position.value : null,
+    );
+    for (const id of ['old-1', 'old-2']) {
+      repos.actions.insert({
+        actionId: id,
+        cycleId: null,
+        taskId: state.currentTask?.taskId ?? null,
+        actionType: 'RETURN_TO_SAFE_LOCATION',
+        origin: 'deterministic-router',
+        fingerprint,
+        reason: 'an earlier retreat',
+        action: {},
+        status: 'failed',
+        validation: { ok: true },
+      });
+    }
+    const result = await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: new DeterministicDecisionProvider(),
+      planner: null,
+      clock,
+      newId: sequentialIds(),
+    });
+    expect(result.action).toMatchObject({
+      type: 'RETURN_TO_SAFE_LOCATION',
+      args: { locationName: 'home' },
+    });
   });
 });

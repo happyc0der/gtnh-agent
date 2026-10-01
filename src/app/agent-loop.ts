@@ -486,8 +486,19 @@ export async function runSingleCycle(
     stateViolations.length === 0 ? trailRetreat(readTrail(repos.memory), state, base) : null;
   const home = base.locations.get(config.routing.homeLocationName);
   const at = state.player.position.known ? state.player.position.value : null;
+  // Two retreats along the trail that failed from this very block: home instead (the
+  // repeated-failure rule would refuse a third, and the trail point may be cut off).
+  const trailFailed =
+    repos.actions.countFailures(
+      state.currentTask?.taskId ?? null,
+      actionFingerprint(
+        { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: TRAIL_LOCATION } },
+        at,
+      ),
+    ) >= base.config.maxFailuresPerActionPerTask;
   const nearer =
     trail !== null &&
+    !trailFailed &&
     (home === undefined ||
       at === null ||
       distance(at, trail.position) < distance(at, home.position));
