@@ -2,7 +2,7 @@
   "name": "gtnh-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first, safety-first agent foundation for GregTech: New Horizons on a private server.",
+  "description": "Safety-first agent that plays GregTech: New Horizons (Minecraft 1.7.10) on a private server: local models decide and plan, code keeps it safe.",
   "type": "module",
   "packageManager": "pnpm@12.6.0",
   "engines": {
