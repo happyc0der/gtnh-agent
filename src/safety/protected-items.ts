@@ -14,12 +14,14 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
       return [spec.args.item];
     case 'REFUEL_KNOWN_GENERATOR':
       return [spec.args.fuelItem];
+    // DIG_BLOCK uses an empty hand and only adds the block's drop to the inventory.
     case 'OBSERVE_STATE':
     case 'MOVE_TO':
     case 'WAIT':
     case 'RETURN_TO_SAFE_LOCATION':
     case 'OPEN_CONTAINER':
     case 'INSPECT_MACHINE':
+    case 'DIG_BLOCK':
     case 'PAUSE_AND_ASK_USER':
       return [];
   }

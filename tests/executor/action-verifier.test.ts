@@ -88,6 +88,37 @@ describe('verifyPostcondition', () => {
     expect(r.checks.find((c) => c.name === 'container-delta')?.passed).toBe(false);
   });
 
+  it('BLOCK_REMOVED needs the observation to have seen the block turn into air', () => {
+    const spec: ActionSpec = { type: 'DIG_BLOCK', args: { position: { x: 2, y: 64, z: 1 } } };
+    if (!before.nearbyBlocks.known) throw new Error('fixture blocks unknown');
+    const blocks = before.nearbyBlocks.value;
+    const dug = later({
+      ...before,
+      nearbyBlocks: known({
+        ...blocks,
+        resources: blocks.resources.filter((r) => r.position.x !== 2),
+        removed: [{ x: 2, y: 64, z: 1 }],
+      }),
+    });
+    expect(verify(spec, before, dug).verified).toBe(true);
+
+    // The client said it dug, but the block is still listed (e.g. the server re-sent it).
+    const still = verify(spec, before, later(before));
+    expect(still.verified).toBe(false);
+    expect(still.checks.find((c) => c.name === 'block-removed')?.detail).toBe(
+      '(2, 64, 1) is still minecraft:dirt',
+    );
+    // Gone from the list but never seen as air (out of view, unloaded...): not verified.
+    const vanished = later({
+      ...before,
+      nearbyBlocks: known({ ...blocks, resources: [], removed: [] }),
+    });
+    expect(verify(spec, before, vanished).verified).toBe(false);
+    // Blocks not observable afterwards: fail closed.
+    const blind = later({ ...before, nearbyBlocks: unknown('chunk unloaded') });
+    expect(verify(spec, before, blind).verified).toBe(false);
+  });
+
   it('USER_NOTIFIED requires an acknowledgement', () => {
     const spec: ActionSpec = { type: 'PAUSE_AND_ASK_USER', args: { question: 'q' } };
     expect(verify(spec, before, later(before), ok('x', { acknowledged: true })).verified).toBe(

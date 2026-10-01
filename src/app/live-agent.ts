@@ -7,7 +7,7 @@ import type { NearbyEntity, TrackedMachine } from '../bot/gtnh1710/world-model.t
 import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
 import type { AgentConfig } from '../config/env.ts';
 import type { ActionSpec } from '../domain/actions.ts';
-import type { Position } from '../domain/common.ts';
+import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
@@ -62,8 +62,23 @@ export function unknownFields(state: GameState): Record<string, string> {
   check('inventory', state.inventory);
   check('nearbyThreats', state.nearbyThreats);
   check('environmentHazards', state.environmentHazards);
+  check('nearbyBlocks', state.nearbyBlocks);
   check('power.availableEUt', state.power.availableEUt);
   return out;
+}
+
+/** The diggable blocks an observation lists, nearest first, for printing. */
+export function summarizeDiggable(state: GameState, limit = 10): Record<string, unknown> | null {
+  if (!state.nearbyBlocks.known) return null;
+  const b = state.nearbyBlocks.value;
+  return {
+    scanRadius: b.scanRadius,
+    count: b.resources.length,
+    nearest: b.resources
+      .slice(0, limit)
+      .map((r) => `${r.block} at (${r.position.x}, ${r.position.y}, ${r.position.z})`),
+    removed: b.removed.map((p) => `(${p.x}, ${p.y}, ${p.z})`),
+  };
 }
 
 export function summarizeObservation(
@@ -118,6 +133,7 @@ export function summarizeObservation(
                 ),
             }
           : { unavailable: wideHazardScan.reason },
+    diggable: summarizeDiggable(state),
     machines: machines
       .map((m) => ({
         m,
@@ -171,14 +187,20 @@ export async function runLiveCycle(
 // Walking
 // ---------------------------------------------------------------------------
 
-/** Movement settings and whether the stop file currently halts all walking. */
+/** Movement (and digging) settings, and whether the stop file currently halts everything. */
 export function movementStatus(config: AgentConfig): Record<string, unknown> {
   const m = config.minecraft.movement;
+  const d = config.minecraft.digging;
   return {
     enabled: m.enabled,
     fence: m.fence,
     stopFile: resolve(m.stopFile),
     halted: existsSync(resolve(m.stopFile)),
+    digging: {
+      enabled: d.enabled,
+      heights:
+        m.fence === null ? null : `y=${m.fence.min.y}..${m.fence.min.y + d.maxHeightAboveFence}`,
+    },
   };
 }
 
@@ -357,6 +379,79 @@ export async function runLiveChest(
           return {
             results,
             chest: chest?.items.known ? chest.items.value : null,
+            inventory: state.inventory.known ? state.inventory.value.items : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Digging
+// ---------------------------------------------------------------------------
+
+const BLOCK_COORDINATES = /^\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*$/;
+
+/** "x,y,z" whole-block coordinates, or null. */
+export function parseBlockPosition(text: string): BlockPosition | null {
+  const m = BLOCK_COORDINATES.exec(text);
+  if (m === null) return null;
+  return { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) };
+}
+
+export interface LiveDigResult {
+  result: CycleResult;
+  /** Diggable blocks and the inventory after the dig (when known). */
+  diggable: Record<string, unknown> | null;
+  inventory: Record<string, number> | null;
+  info: ConnectionInfo;
+}
+
+/**
+ * Digs ONE block as a user-requested action: validated (schema, safety policy,
+ * preconditions), dug, re-observed and verified like the agent's own actions. Ctrl+C or
+ * the stop file stops the dig at its next tick.
+ */
+export async function runLiveDig(
+  config: AgentConfig,
+  dbPath: string,
+  at: BlockPosition,
+  log?: (line: string) => void,
+): Promise<LiveDigResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const result = await runUserAction(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: null,
+              clock: systemClock,
+              newId: randomIds,
+            },
+            { type: 'DIG_BLOCK', args: { position: at } },
+            `requested by the operator: dig --at ${at.x},${at.y},${at.z}`,
+          );
+          const state = await client.observe();
+          return {
+            result,
+            diggable: summarizeDiggable(state),
             inventory: state.inventory.known ? state.inventory.value.items : null,
             info: client.info(),
           };

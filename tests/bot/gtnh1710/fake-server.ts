@@ -11,6 +11,7 @@ import {
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
 import { FakeChestSim, type FakeChest } from './fake-chests.ts';
+import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
 import {
   blockChangeFrame,
   chunkBulkFrame,
@@ -69,6 +70,8 @@ export interface FakeServerOptions {
   chests?: FakeChest[];
   /** 1-based click numbers the server rejects (as if the client's claim did not match). */
   rejectClicks?: number[];
+  /** How the server treats digging (C07); vanilla by default. */
+  dig?: FakeDigOptions;
 }
 
 export interface ReceivedPacket {
@@ -240,6 +243,8 @@ export class FakeGtnhServer {
   readonly placements: Array<{ x: number; eyeY: number; z: number }> = [];
   /** Chests and the player's inventory: one world, kept across connections like a real server. */
   readonly chestSim: FakeChestSim;
+  /** Digging (C07): what the client sent, what broke, what was picked up. */
+  readonly digSim: FakeDigSim;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -250,6 +255,8 @@ export class FakeGtnhServer {
   readonly #sockets = new Set<Socket>();
   readonly #timers = new Set<NodeJS.Timeout>();
   readonly #playSockets = new Set<Socket>();
+  /** The world's blocks that differ from the flat world ("x,y,z" -> id); changes as blocks break. */
+  readonly #blocks: Map<string, number>;
 
   constructor(options: FakeServerOptions = {}) {
     this.#opts = {
@@ -289,6 +296,7 @@ export class FakeGtnhServer {
       corruptChunks: options.corruptChunks ?? false,
       chests: options.chests ?? [],
       rejectClicks: options.rejectClicks ?? [],
+      dig: options.dig ?? {},
     };
     this.chestSim = new FakeChestSim({
       chests: this.#opts.chests,
@@ -297,6 +305,26 @@ export class FakeGtnhServer {
       rejectClicks: new Set(this.#opts.rejectClicks),
       send: () => undefined,
     });
+    this.#blocks = new Map(this.#opts.blockOverrides);
+    const world = flatWorld(this.#blocks, this.#opts.voidColumns);
+    const blockNames = new Map(this.#opts.blocks);
+    this.digSim = new FakeDigSim(
+      {
+        blockAt: world,
+        setBlock: (x, y, z, id) => this.#blocks.set(`${x},${y},${z}`, id),
+        blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
+        // 1.7.10 block items share their block's id.
+        itemId: (name) =>
+          this.#opts.items.find(([, n]) => n === name)?.[0] ??
+          this.#opts.blocks.find(([, n]) => n === name)?.[0],
+        playerFeet: () => {
+          const p = this.confirmedPositions.at(-1);
+          return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
+        },
+      },
+      this.chestSim,
+      this.#opts.dig,
+    );
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
@@ -311,6 +339,7 @@ export class FakeGtnhServer {
 
   close(): Promise<void> {
     for (const t of this.#timers) clearInterval(t);
+    this.digSim.stop();
     for (const s of this.#sockets) s.destroy();
     return new Promise((resolve) => this.#server.close(() => resolve()));
   }
@@ -358,9 +387,9 @@ export class FakeGtnhServer {
     );
   }
 
-  /** 1.7.10 chunk unload: Chunk Data, ground-up continuous, no sections, empty data. */
   /** A single block change (NEID format), e.g. lava appearing next to the player. */
   setBlock(x: number, y: number, z: number, id: number): void {
+    this.#blocks.set(`${x},${y},${z}`, id);
     this.broadcast(blockChangeFrame(x, y, z, id));
   }
 
@@ -369,9 +398,11 @@ export class FakeGtnhServer {
     chunkZ: number,
     records: Array<{ x: number; y: number; z: number; id: number }>,
   ): void {
+    for (const r of records) this.#blocks.set(`${r.x},${r.y},${r.z}`, r.id);
     this.broadcast(multiBlockChangeFrame(chunkX, chunkZ, records));
   }
 
+  /** 1.7.10 chunk unload: Chunk Data, ground-up continuous, no sections, empty data. */
   unloadChunk(chunkX: number, chunkZ: number): void {
     this.broadcast(
       encodeFrame(
@@ -478,6 +509,7 @@ export class FakeGtnhServer {
           sim = this.chestSim;
           sim.setSender(send);
           sim.onJoin();
+          this.digSim.setSenders(send, (f) => this.broadcast(f));
           send(
             plugin(
               'REGISTER',
@@ -523,6 +555,9 @@ export class FakeGtnhServer {
             if (channel === 'FML|HS') this.#onHandshake(data, send);
             break;
           }
+          case 0x07:
+            this.digSim.handle(r);
+            break;
           default:
             sim?.handle(frame.packetId, r);
             break;
@@ -626,7 +661,7 @@ export class FakeGtnhServer {
       );
       for (let i = 0; i < columns.length; i += 5) {
         const batch = columns.slice(i, i + 5);
-        const world = flatWorld(o.blockOverrides, o.voidColumns);
+        const world = flatWorld(this.#blocks, o.voidColumns);
         send(
           chunkBulkFrame(
             batch.map(([cx, cz]) => neidColumn(cx, cz, world)),

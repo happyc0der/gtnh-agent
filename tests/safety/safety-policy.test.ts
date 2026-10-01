@@ -317,6 +317,25 @@ describe('rule 5: no world/base modification', () => {
     for (const t of ACTION_TYPES) expect(classifyActionType(t)).toBe('allowlisted');
   });
 
+  it.each([
+    'DIG',
+    'dig_block',
+    'DIG_BLOCKS',
+    'DIG_AREA',
+    'MINE_BLOCK',
+    'BREAK_BLOCK',
+    'DIG_BLOCK ',
+  ])('only exactly DIG_BLOCK is exempt from the DIG keyword: %j stays forbidden', (type) => {
+    expect(classifyActionType(type)).toBe('forbidden');
+    const r = evaluateAction(
+      { ...action({ type: 'WAIT', args: { durationMs: 100 } }), type },
+      makeState(),
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['FORBIDDEN_MODIFICATION']);
+  });
+
   it('cannot deposit into a machine (containers must be known storage)', () => {
     expect(
       codes({
@@ -324,6 +343,65 @@ describe('rule 5: no world/base modification', () => {
         args: { containerId: 'machine.macerator.1', item: 'minecraft:dirt', quantity: 1 },
       }),
     ).toContain('UNKNOWN_TARGET');
+  });
+});
+
+describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's support", () => {
+  // The mock player stands at (1, 64, 1); dirt at (2, 64, 1) is listed next to it.
+  const dig = (x: number, y: number, z: number): ActionSpec => ({
+    type: 'DIG_BLOCK',
+    args: { position: { x, y, z } },
+  });
+
+  it('allows a listed diggable block in a safe state', () => {
+    expect(codes(dig(2, 64, 1))).toEqual([]);
+  });
+
+  it('refuses (and asks) for a block the observation does not list as diggable', () => {
+    const r = evaluateAction(action(dig(3, 64, 0)), makeState(), safetyCtx(), emptyFailureHistory);
+    expect(r.violations.map((v) => v.code)).toEqual(['NOT_DIGGABLE']);
+    expect(r.requiresUserPause).toBe(true);
+    // The ground under the feet is never listed, so it is never diggable either.
+    expect(codes(dig(1, 63, 1))).toEqual(['NOT_DIGGABLE']);
+  });
+
+  it('refuses when nearby blocks are not observed', () => {
+    const blind = makeState((w) => void (w.unobservable = ['blocks']));
+    expect(codes(dig(2, 64, 1), blind)).toEqual(['UNKNOWN_TARGET']);
+  });
+
+  it("refuses sand over the head, a block with gravel on it, and the player's own cells", () => {
+    const state = makeState((w) => {
+      w.resourceBlocks.push(
+        { block: 'minecraft:sand', position: { x: 1, y: 66, z: 1 } },
+        { block: 'minecraft:gravel', position: { x: 2, y: 65, z: 1 } },
+        { block: 'minecraft:dirt', position: { x: 0, y: 64, z: 0 } },
+      );
+    });
+    expect(codes(dig(1, 66, 1), state)).toEqual(['UNSAFE_DIG']);
+    expect(codes(dig(2, 64, 1), state)).toEqual(['UNSAFE_DIG']);
+    // (0, 64, 0) is a cell the player's body overlaps (it straddles four columns).
+    expect(codes(dig(0, 64, 0), state)).toEqual(['UNSAFE_DIG']);
+    // Gravel itself, with nothing above it, may be dug.
+    expect(codes(dig(2, 65, 1), state)).toEqual([]);
+  });
+
+  it('keeps the dug block clear of known hazards and inside the boundary', () => {
+    const lava = makeState((w) => {
+      w.hazards = [{ kind: 'lava', position: { x: 2, y: 64, z: 7 } }];
+    });
+    expect(assessDangers(lava, safetyCtx())).toEqual([]); // the player is 6.1 blocks away
+    expect(codes(dig(2, 64, 1), lava)).toEqual(['HAZARD_PROXIMITY']);
+    const edge = makeState((w) => {
+      w.player.position = { x: 255, y: 64, z: 1 };
+      w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 256, y: 64, z: 1 } });
+    });
+    expect(codes(dig(256, 64, 1), edge)).toEqual(['OUT_OF_BOUNDS']);
+  });
+
+  it('is not allowed during danger', () => {
+    const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
+    expect(codes(dig(2, 64, 1), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
   });
 });
 

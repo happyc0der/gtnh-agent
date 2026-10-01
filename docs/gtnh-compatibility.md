@@ -7,7 +7,9 @@ fully named inventory, nearby entities (vanilla and modded) and lava/void/damagi
 agent cycle has no state violations; it pauses only because it has no task. With movement enabled
 it walks on one level inside a fence (see "Walking"). GregTech machines are observed through
 GregTech's own channel: type, position, enabled and running (see "Machines"); stored energy and
-held-item durability are not observable. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
+held-item durability are not observable. Digging one allowlisted block (see "Digging") is built
+on the server's own code, checked in its jars, and tested against the fake server; it has not
+been run live yet. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
 (observed or checked in installed code) or _assumption_ (to be tested).
 
 ## Test server results (2026-09-30)
@@ -74,8 +76,9 @@ Findings while building it (verified):
 
 What the client can send is fixed in `packets.ts` (`outbound`): handshake, status request, login
 start, keep-alive, plugin messages on `REGISTER`/`FML|HS` only, idle ticks, echoes of
-server-assigned positions, and (since walking) walking steps. `perform()` supports `OBSERVE_STATE`,
-`WAIT` and `PAUSE_AND_ASK_USER`, plus walks when movement is enabled; every other action returns
+server-assigned positions, and (since walking, chests and digging) walking steps, the chest
+packets and digging start/cancel/finish. `perform()` supports `OBSERVE_STATE`, `WAIT` and
+`PAUSE_AND_ASK_USER`, plus walks, chests and digs when each is enabled; every other action returns
 `NOT_IMPLEMENTED` without sending anything (tested).
 
 ## Walking (2026-09-30)
@@ -182,6 +185,133 @@ Two things this found (_verified_, fixed):
   showed 4990 ms of observed time and failed verification. The live WAIT now also waits until
   the observed time has advanced by the full duration. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
   click simulation (tests), not live.
+
+## Digging (2026-09-30)
+
+`DIG_BLOCK` breaks one block. Everything below is _verified_ in the test server's own jars, not
+assumed from memory of vanilla:
+
+- **Vanilla:** `javap` on `minecraft_server.1.7.10.jar`: `nh` (NetHandlerPlayServer), `mx`
+  (ItemInWorldManager), `mw` (EntityPlayerMP), `yz` (EntityPlayer), `aji` (Block), `awt`
+  (Material), `ji` (C07), `eq` (packet ids), `lt` (DedicatedServer).
+- **Forge as it really runs:** Forge 10.13.4.1614 patches these classes at load time from
+  `binpatches.pack.lzma` in its universal jar. That file was unpacked (LZMA, then Pack200 with the
+  Commons Compress copy that ships in `lwjgl3ify-forgePatches.jar`), and its GDiff patches were
+  applied to the vanilla classes. Every source checksum matched. `ForgeHooks` comes from the
+  universal jar.
+- **Mods:** all 211 mod jars were scanned for mixins on, references to and event handlers for the
+  digging code (see "GTNH mods" below).
+
+**The packet.** C07 (id 0x07, `eq`): u8 status, i32 x, u8 y, i32 z, u8 face. Status 0 starts,
+1 cancels, 2 finishes. Statuses 3 and 4 drop the held item or stack, and 5 releases a used item
+(a bow, food). `outbound.digBlock` cannot express them.
+
+**Reach.** Forge's `processPlayerDigging` accepts a block whose centre is within
+`getBlockReachDistance() + 1` of (feet x, feet y + 1.5, feet z). The reach distance defaults to
+5.0, so that is 6 blocks, plus y below 256. The server does not check line of sight or where the
+player looks. The agent only digs blocks within 4.5 of its eyes.
+
+**Start (status 0).**
+
+- `DedicatedServer.isBlockProtected` (spawn protection) re-sends the block instead of digging
+  when all of these hold:
+  - the block is in the overworld;
+  - `ops.json` is not empty;
+  - the player is not an op;
+  - the block is within `spawn-protection` blocks of the world spawn (Chebyshev distance).
+- The test server has `spawn-protection=1` and an empty `ops.json`, so nothing is protected.
+  Adding any op makes the 3 x 3 columns around the world spawn undiggable for the bot.
+- Otherwise `ItemInWorldManager.onBlockClicked` runs:
+  - Forge posts `PlayerInteractEvent` (LEFT_CLICK_BLOCK). If it is cancelled, the block is
+    re-sent.
+  - Fire on the clicked face is put out.
+  - The current tick is remembered (`curblockDamage`).
+  - A block whose progress per tick is already 1 or more breaks at once (none on the allowlist).
+
+**Progress per tick** is `ForgeHooks.blockStrength`: dig speed / hardness / 30 when the player
+can harvest the block, / 100 when it cannot (and then nothing drops).
+
+- A material that needs no tool is always harvestable. In 1.7.10 only rock, iron, anvil, snow
+  and crafted snow need one (`awt`'s static block).
+- `EntityPlayer.getBreakSpeed` gives an empty hand speed 1. Haste and Mining Fatigue change it.
+- It is divided by 5 in water (without Aqua Affinity), and by 5 when the player is not on the
+  ground. The server takes "on the ground" from the client's C03, which the agent always sends
+  as true.
+- Last, Forge's `PlayerEvent.BreakSpeed` lets mods change the speed, or cancel it (speed 0).
+- The dig timer advances once per server tick, in `EntityPlayerMP.onUpdate`, not per packet.
+
+**Finish (status 2).** `uncheckedTryHarvestBlock` only acts on the block of the last start.
+
+- If progress per tick x (ticks since the start + 1) is at least **0.7**, the block is
+  harvested.
+- If not, it remembers the finish (`receivedFinishDiggingPacket`), and `processPlayerDigging`
+  re-sends the block (S23) at once. Then `updateBlockRemoving` **breaks the block on its own once
+  the progress reaches 1.0**. A cancel (status 1) does not clear that.
+
+**Harvest** (`tryHarvestBlock`):
+
+- `ForgeHooks.onBlockBreakEvent` first sends the digging player S23 **air** (for a block without
+  a tile entity), then posts `BlockEvent.BreakEvent`. If a mod cancels it, the block is re-sent
+  right after.
+- Otherwise the block is removed and the world's change goes to everyone watching the chunk (a
+  second S23, or S22).
+- The drop (`Block.dropBlockAsItem_do`, gamerule `doTileDrops`) is an item entity 0.15-0.85 into
+  the block's cell on each axis. It can be picked up after 10 ticks.
+
+**Pickup.** `EntityPlayer.onLivingUpdate` runs for every C03 the player sends, so it needs the
+agent's idle ticks.
+
+- It picks up items whose box touches the player's box grown by 1.0 sideways and 0.5 up and
+  down.
+- `InventoryPlayer` first fills a matching stack with room, then the first empty slot, **hotbar
+  first**. The agent's own empty hand slot is often where the first drop lands.
+- A drop from a block next to the player, at its feet or head level (or falling down to its
+  feet), is picked up. A drop two or more blocks away is not.
+
+Hardness and dig times (empty hand; ticks of 50 ms):
+
+| Block               | Hardness | Vanilla client | Server accepts from | Agent waits |
+| ------------------- | -------- | -------------- | ------------------- | ----------- |
+| `log`, `log2`       | 2.0      | 60             | 41                  | 77          |
+| `grass`             | 0.6      | 18             | 12                  | 25          |
+| `gravel`, `clay`    | 0.6      | 18             | 12                  | 25          |
+| `dirt`, `sand`      | 0.5      | 15             | 10                  | 21          |
+| `leaves`, `leaves2` | 0.2      | 6              | 4                   | 10          |
+
+The agent waits the vanilla time x 1.25 + 2 ticks. That is about twice what the server needs (1.9x
+for logs), so a server running at little more than half speed still accepts it.
+
+**GTNH mods** (all 211 jars scanned):
+
+- **Mixins on the digging code:**
+  - Backhand skips the finish only while the player uses its offhand (never the agent).
+  - ServerUtilities only affects vanished players.
+  - NotEnoughIDs changes how the break effect sent to other players encodes the block.
+  - ArchaicFix and Et Futurum touch block placement, elytra and spectators only.
+  - Hodgepodge changes nothing here.
+- **`BreakSpeed` handlers** (26 classes) all depend on a held tool, armor, enchantments, special
+  blocks or a dimension. For an empty hand only IguanaTweaks' `ExtraHarvestLevelHandler` could
+  matter: it cancels the speed for a no-tool block with harvest level above 0. The test server's
+  `config/IguanaTinkerTweaks/BlockDefaults.cfg` gives every allowlisted block level 0, and
+  `BlockOverride.cfg` overrides nothing. GregTech's handler only applies to GregTech tools.
+- **Claims and protection:** ServerUtilities chunk claims are off on the test server
+  (`chunk_claiming=false`, `spawn_radius=0`).
+- GTNH's own quest book talks about punching trees with bare hands.
+
+**What the client does** (`src/bot/gtnh1710/digging.ts`, `Gtnh1710Client`): see
+[architecture: digging](architecture.md#digging). A re-send at any point fails the dig. That
+includes the start (spawn protection, a cancelled interact event), after the finish (too early,
+or a cancelled BreakEvent) and air followed by the block. If the cause was "too early", vanilla
+still breaks the block itself shortly afterwards. The fake server simulates exactly this
+(`tests/bot/gtnh1710/fake-digging.ts`).
+
+_Assumptions, to check live:_
+
+- that no mod in this pack changes a bare hand's speed on these blocks beyond what the scan
+  found;
+- that the S23 order (Forge's early "air", then the world change) arrives as read from the code;
+- that the player is never under a potion effect that slows digging (effects are not observed
+  yet).
 
 ## Machines (2026-09-30)
 
@@ -370,12 +500,18 @@ with backups, never on a public server.
 6. **Machines (read-only). DONE 2026-09-30** for GregTech machines' enabled/running state (see
    "Machines"). Still open: power and machine contents (GUI read or a helper mod) before
    `INSPECT_MACHINE` can do more than look.
-7. **Soak test.** Run single cycles repeatedly (still human-triggered) and review `agent_events`
+7. **Digging allowlisted blocks. BUILT 2026-09-30, live test pending** (see "Digging"): in the
+   pen, after `node scripts/test-server-admin.ts pen resources`, dig each test block with
+   `pnpm cli dig --live --at=...`. Check that the block turns to air and the drop arrives. Then
+   check the refusals: a block next to the chest or water, sand on top, outside the fence, and
+   the stop file. Watch the server log for warnings.
+8. **Soak test.** Run single cycles repeatedly (still human-triggered) and review `agent_events`
    and `safety_violations` for false positives/negatives before any continuous loop is considered.
 
 ## What is mocked today
 
 Everything in-game. `MockMinecraftClient` simulates the player, inventory, one chest, one
-generator with fuel, one machine, hazards, hostiles and a clock, with injectable failures and
+generator with fuel, one machine, a few diggable blocks, hazards, hostiles and a clock, with
+injectable failures and
 "reports success but changes nothing" behaviour. All item and machine names in the mock are
 placeholders, not verified GTNH identifiers.

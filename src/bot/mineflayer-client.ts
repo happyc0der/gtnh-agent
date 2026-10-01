@@ -122,6 +122,7 @@ export class MineflayerClient implements MinecraftClient {
         : known({ items: counts, usedSlots: items.length, capacitySlots: 36 }),
       nearbyThreats: unknown('TODO: entity scan not implemented or verified for GTNH'),
       environmentHazards: unknown('TODO: lava/void scan not implemented or verified for GTNH'),
+      nearbyBlocks: unknown('block scan not implemented for Mineflayer'),
       power: {
         availableEUt: unknown('GTNH EU is not observable via the vanilla protocol'),
         generators: [],
@@ -165,6 +166,7 @@ export class MineflayerClient implements MinecraftClient {
       case 'WITHDRAW_ITEM':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
+      case 'DIG_BLOCK':
         return Promise.resolve(
           failed(`${action.type} is not implemented for Mineflayer yet`, 'NOT_IMPLEMENTED'),
         );

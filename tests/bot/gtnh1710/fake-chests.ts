@@ -129,6 +129,59 @@ export class FakeChestSim {
     return this.#open?.windowId ?? null;
   }
 
+  /**
+   * An item picked up from the ground, stored like 1.7.10's InventoryPlayer: onto a matching
+   * stack with room first, then into the first empty slot, hotbar FIRST (inventory index 0-8
+   * is window slots 36-44), then the main inventory (9-35). The changed slots are sent as S2F
+   * for window 0. Returns how many items did not fit.
+   */
+  pickUp(stack: FakeStack): number {
+    let left = stack.count;
+    const order = [
+      ...Array.from({ length: 9 }, (_, i) => 36 + i),
+      ...Array.from({ length: 27 }, (_, i) => 9 + i),
+    ];
+    const changed = new Set<number>();
+    for (const slot of order) {
+      const s = this.#player[slot];
+      if (
+        left > 0 &&
+        s != null &&
+        s.id === stack.id &&
+        s.damage === stack.damage &&
+        s.nbt !== true &&
+        s.count < 64
+      ) {
+        const n = Math.min(left, 64 - s.count);
+        this.#player[slot] = { ...s, count: s.count + n };
+        left -= n;
+        changed.add(slot);
+      }
+    }
+    for (const slot of order) {
+      if (left > 0 && this.#player[slot] == null) {
+        const n = Math.min(left, 64);
+        this.#player[slot] = { id: stack.id, count: n, damage: stack.damage };
+        left -= n;
+        changed.add(slot);
+      }
+    }
+    for (const slot of changed) {
+      this.#send(
+        encodeFrame(
+          0x2f,
+          Buffer.concat([
+            Buffer.from([0]),
+            i16(slot),
+            encodeStack(this.#player[slot] ?? null, this.#modularUi),
+          ]),
+        ),
+      );
+    }
+    this.#lastSentPlayer = this.#player.map((s) => (s === null ? null : { ...s }));
+    return left;
+  }
+
   /** Handles a play-state packet if it is a container packet; returns whether it was. */
   handle(packetId: number, r: Reader): boolean {
     switch (packetId) {

@@ -21,11 +21,12 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 
 // ---------------------------------------------------------------------------
 // Outbound: the ONLY packets this client can ever send. Anything that could change
-// the world (digging, placing, clicking windows, chat/commands, using items,
-// attacking) is intentionally absent. The exceptions are walking ('player-move', only for
-// steps walking.ts has checked) and vanilla chests ('activate-block', 'select-slot',
-// 'click-window', 'confirm-transaction', 'close-window', only as container.ts plans them);
-// see Gtnh1710Client.
+// the world (placing, chat/commands, using items, attacking, dropping items) is
+// intentionally absent. The exceptions are walking ('player-move', only for steps
+// walking.ts has checked), vanilla chests ('activate-block', 'select-slot', 'click-window',
+// 'confirm-transaction', 'close-window', only as container.ts plans them) and digging one
+// block ('dig-block' with status start/cancel/finish only, for targets digging.ts has
+// checked); see Gtnh1710Client.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -41,7 +42,16 @@ export type OutboundKind =
   | 'select-slot'
   | 'click-window'
   | 'confirm-transaction'
-  | 'close-window';
+  | 'close-window'
+  | 'dig-block';
+
+/**
+ * C07 Player Digging statuses the client may send. 1.7.10 also uses this packet for 3 (drop
+ * the held stack), 4 (drop one item) and 5 (release a used item, e.g. shoot a bow); those
+ * are deliberately not representable here.
+ */
+export const DIG_STATUS = { start: 0, cancel: 1, finish: 2 } as const;
+export type DigStatus = (typeof DIG_STATUS)[keyof typeof DIG_STATUS];
 
 export interface OutboundPacket {
   kind: OutboundKind;
@@ -202,6 +212,44 @@ export const outbound = {
   /** C0D Close Window. The caller must make sure nothing is on the cursor (it would be dropped). */
   closeWindow(windowId: number): OutboundPacket {
     return { kind: 'close-window', frame: encodeFrame(0x0d, Buffer.from([windowId])) };
+  },
+
+  /**
+   * C07 Player Digging (u8 status, i32 x, u8 y, i32 z, u8 face; verified against the
+   * 1.7.10 server's packet class): start (0), cancel (1) or finish (2) digging ONE block.
+   * Any other status (they drop items) is refused, whatever the caller passes.
+   */
+  digBlock(status: DigStatus, x: number, y: number, z: number, face: number): OutboundPacket {
+    if (
+      status !== DIG_STATUS.start &&
+      status !== DIG_STATUS.cancel &&
+      status !== DIG_STATUS.finish
+    ) {
+      throw new ProtocolError(`refusing digging status ${String(status)}`);
+    }
+    if (
+      !Number.isInteger(x) ||
+      !Number.isInteger(z) ||
+      Math.abs(x) > 30_000_000 ||
+      Math.abs(z) > 30_000_000
+    ) {
+      throw new ProtocolError('bad block x/z');
+    }
+    if (!Number.isInteger(y) || y < 0 || y > 255) throw new ProtocolError('bad y');
+    if (!Number.isInteger(face) || face < 0 || face > 5) throw new ProtocolError('bad face');
+    return {
+      kind: 'dig-block',
+      frame: encodeFrame(
+        0x07,
+        Buffer.concat([
+          Buffer.from([status]),
+          i32(x),
+          Buffer.from([y]),
+          i32(z),
+          Buffer.from([face]),
+        ]),
+      ),
+    };
   },
 
   /**

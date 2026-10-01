@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { ActionSpecSchema, ActionTypeSchema } from '../domain/actions.ts';
+import { DiggableBlockSchema } from '../domain/blocks.ts';
 import {
+  BlockPositionSchema,
   DimensionSchema,
   EntityIdSchema,
   ItemCountsSchema,
@@ -14,6 +16,9 @@ import {
 
 /** Hard ceiling on plan length. Config may lower it (planner.maxPlanSteps), never raise it. */
 export const MAX_PLAN_STEPS = 16;
+
+/** Diggable blocks passed to the planner (the nearest ones). */
+export const MAX_COMPACT_RESOURCES = 32;
 
 export const PlanStepSchema = z.strictObject({
   /** 1-based, sequential. */
@@ -86,6 +91,10 @@ export const CompactStateSchema = z.strictObject({
   inventoryFill: z.number().nullable(),
   threats: z.strictObject({ hostileCount: z.int(), unclassifiedCount: z.int() }).nullable(),
   hazards: z.strictObject({ lavaNearby: z.boolean(), voidNearby: z.boolean() }).nullable(),
+  /** Blocks DIG_BLOCK may target (allowlisted, observed), nearest first. */
+  diggableBlocks: z
+    .array(z.strictObject({ block: DiggableBlockSchema, position: BlockPositionSchema }))
+    .max(MAX_COMPACT_RESOURCES),
   machines: z
     .array(
       z.strictObject({
@@ -133,7 +142,12 @@ export const PlannerRequestSchema = z.strictObject({
     approvedFuels: z.array(z.string()),
     maxMoveDistance: z.number(),
     safeLocations: z.array(z.string()),
+    /** Action types containing any of these keywords are refused... */
     forbidden: z.array(z.string()),
+    /** ...except exactly these types, which the operator allows (DIG_BLOCK). */
+    forbiddenExceptions: z.array(ActionTypeSchema),
+    /** The only blocks DIG_BLOCK may break. */
+    diggableBlocks: z.array(DiggableBlockSchema),
   }),
   recentActions: z
     .array(z.strictObject({ actionType: ActionTypeSchema, status: z.string(), reason: z.string() }))

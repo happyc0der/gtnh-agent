@@ -5,7 +5,8 @@ A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTN
 
 **Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
 simulated world or a private GTNH 2.8.4 test server. On the test server the agent observes,
-**walks inside a fenced pen** and **moves exact amounts to and from configured chests**. It works on
+**walks inside a fenced pen**, **moves exact amounts to and from configured chests** and can **dig
+allowlisted natural blocks** (logs, leaves, dirt, sand, gravel, clay) inside the pen. It works on
 **live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`,
 or back to back in a **bounded auto-run** (`run --live`) that stops as soon as anything needs you.
 No open-ended loop, no model and no GPU use.
@@ -21,9 +22,11 @@ With everything critical observable, a live cycle pauses only because the agent 
 **Walking and chests (2026-09-30):** with movement explicitly enabled and a fence configured,
 `MOVE_TO` and `RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence (no jumping,
 climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, `WITHDRAW_ITEM` and
-`DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. The remaining
-world-changing actions return `NOT_IMPLEMENTED`. See
-[Walking in the test pen](#walking-in-the-test-pen) and [Chests](#chests).
+`DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. With digging enabled,
+`DIG_BLOCK` breaks one allowlisted block inside the fence with an empty hand (built and tested
+against the fake server; the live test is pending). The remaining world-changing actions return
+`NOT_IMPLEMENTED`. See [Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests) and
+[Digging](#digging).
 
 ## Requirements
 
@@ -78,6 +81,7 @@ cp agent.config.example.json agent.config.json
 | Bounded auto-run of the current task         | `pnpm cli run --live [--max-cycles 20] [--max-minutes 10]`                                |
 | The agent's Age 0 quest book and next goal   | `pnpm cli quests [--live]`                                                                |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
+| **Dig** one allowlisted block in the pen     | `pnpm cli dig --live --at=-8,200,-11`                                                     |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
 | Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`                                              |
@@ -136,12 +140,16 @@ and [docs/action-contract.md](docs/action-contract.md).
   load, and `MC_ENABLE_LIVE_CONNECTION` defaults to `false`.
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 11 non-destructive action types exist. No block placing/breaking, dropping, combat, lava,
-  network/multiblock changes or rare-item use.
+- Only 12 action types exist. No block placing, dropping, combat, lava, network/multiblock
+  changes or rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks
+  vanilla logs, leaves, dirt, grass, sand, gravel and clay.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
 - Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
   and only if the block is a plain `minecraft:chest` (see below).
+- Digging is off unless `MC_ENABLE_DIGGING=true` **and** the fence is set. It only breaks
+  allowlisted blocks inside the fence, never the floor, and never anything touching water, a
+  chest, a machine or any other non-plain block (see below).
 - Protected items are never consumed or moved.
 
 ## Project notes
@@ -234,6 +242,44 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#chests)):
 - The cursor is never left holding items. A rejected click is re-synced, and the cursor is put
   back into an empty slot.
 - Protected items never move, and neither do stacks with NBT data.
+
+### Digging
+
+The third world-changing ability: breaking ONE block, for gathering. It only breaks
+`minecraft:log`, `log2`, `leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay`, inside the
+pen. It has been tested against the fake server only; the live test is next.
+
+- `node scripts/test-server-admin.ts pen resources` places test blocks in the pen, each only where
+  there is air:
+  - dirt, sand, gravel and clay along the west side, plus a grass block;
+  - a two-log tree with (never-decaying) leaves on top in the east.
+- Settings:
+  - `MC_ENABLE_DIGGING=true` (it also needs the movement fence);
+  - `SAFETY_BOUNDARY_MAX` with y = 205, so the blocks above the feet level are inside the work
+    area (`pen show` prints it);
+  - optionally `minecraft.digging.maxHeightAboveFence` (default 4) in `agent.config.json`.
+- `pnpm cli dig --live --at=-8,200,-11` digs one block as a checked user action, and prints the
+  diggable blocks and the inventory afterwards. To collect the drop, stand next to the block
+  first, e.g. `pnpm cli move --live --to=-6.5,200,-10.5`.
+- `observe --live` lists the diggable blocks the agent sees.
+- `examples/plans/dig-pen.json` is a task plan that walks there and digs the dirt and the grass.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
+
+- Only a block the observation lists as allowlisted can be asked for.
+- The client re-checks it on the server's own block data before and during the dig. It refuses:
+  - anything outside the fence's columns, below its level or more than 4 blocks above it;
+  - anything under the player, or sand or gravel over its head;
+  - any block touching something other than air, an allowlisted block or a plain full block
+    (water, a torch, a chest, a machine...);
+  - a block with sand or gravel on top;
+  - a block next to lava, fire or other hazards.
+- It digs with an empty hand, so no tool or item can do anything special.
+- It waits 1.25 x the vanilla dig time + 2 ticks: well past the 70% the server requires.
+- Every tick it re-checks. It cancels on the stop file, Ctrl+C, a server correction, a health
+  drop, a nearby threat, or any change to the block.
+- Success needs the server's own block change to air, with no re-send. The result reports
+  whether the drop reached the inventory.
 
 ### Live tasks
 

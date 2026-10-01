@@ -18,6 +18,9 @@
  *   node scripts/test-server-admin.ts pen chest          Place the test chest in the pen (only if there is
  *                                                        none): 128 cobblestone, 3 diamonds (a protected
  *                                                        item) and 16 bread, three blocks south of the centre.
+ *   node scripts/test-server-admin.ts pen resources      Place blocks to dig (DIG_BLOCK) in the pen, each only
+ *                                                        where there is air: dirt, sand, gravel, clay and grass
+ *                                                        on the west side, a two-log tree with leaves in the east.
  * Settings (.env): TEST_SERVER_DIR (the server folder), TEST_PEN_CENTER="x,y,z" (the centre
  * block at the player's feet level) and TEST_PEN_RADIUS (interior half-width, default 4).
  */
@@ -209,6 +212,9 @@ function penCommands(pen: Pen): string[] {
   return out;
 }
 
+/** Blocks above the feet level that DIG_BLOCK may reach in the pen (its default dig height). */
+const PEN_DIG_HEIGHT = 4;
+
 function penSettings(pen: Pen): Record<string, unknown> {
   const { center: c, radius: r } = pen;
   return {
@@ -217,7 +223,8 @@ function penSettings(pen: Pen): Record<string, unknown> {
       MC_MOVEMENT_FENCE_MIN: `${c.x - r},${c.y},${c.z - r}`,
       MC_MOVEMENT_FENCE_MAX: `${c.x + r},${c.y},${c.z + r}`,
       SAFETY_BOUNDARY_MIN: `${c.x - r},${c.y},${c.z - r}`,
-      SAFETY_BOUNDARY_MAX: `${c.x + r + 1},${c.y + 1},${c.z + r + 1}`,
+      // Up to the top of the highest block digging may break (the feet stay at y=c.y).
+      SAFETY_BOUNDARY_MAX: `${c.x + r + 1},${c.y + PEN_DIG_HEIGHT + 1},${c.z + r + 1}`,
     },
     'agent.config.json': {
       locations: {
@@ -230,6 +237,28 @@ function penSettings(pen: Pen): Record<string, unknown> {
       },
     },
   };
+}
+
+/**
+ * Blocks to dig in the pen: a row on the west side (dirt, sand, gravel, clay) plus a grass
+ * block, and a two-log oak "tree" with leaves on top in the east (leaves metadata 4: placed,
+ * so they never decay). Every block has only air and the glass floor around it, and none
+ * is next to the test chest three blocks south of the centre.
+ */
+function penResources(
+  pen: Pen,
+): Array<{ x: number; y: number; z: number; block: string; meta: number }> {
+  const { x, y, z } = pen.center;
+  return [
+    { x: x - 3, y, z: z - 3, block: 'minecraft:dirt', meta: 0 },
+    { x: x - 3, y, z: z - 1, block: 'minecraft:sand', meta: 0 },
+    { x: x - 3, y, z: z + 1, block: 'minecraft:gravel', meta: 0 },
+    { x: x - 3, y, z: z + 3, block: 'minecraft:clay', meta: 0 },
+    { x: x - 1, y, z: z - 3, block: 'minecraft:grass', meta: 0 },
+    { x: x + 3, y, z: z - 3, block: 'minecraft:log', meta: 0 },
+    { x: x + 3, y: y + 1, z: z - 3, block: 'minecraft:log', meta: 0 },
+    { x: x + 3, y: y + 2, z: z - 3, block: 'minecraft:leaves', meta: 4 },
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +343,34 @@ async function main(argv: string[]): Promise<number> {
     });
     return 0;
   }
+  if (command === 'pen' && sub === 'resources') {
+    const pen = penFromEnv(process.env);
+    const placed = await withRcon(async (rcon) => {
+      const out: string[] = [];
+      for (const b of penResources(pen)) {
+        const at = `(${b.x}, ${b.y}, ${b.z})`;
+        // Only into air: never replace the chest (it would drop its contents) or anything else.
+        const free = await rcon.command(`testforblock ${b.x} ${b.y} ${b.z} minecraft:air`);
+        if (!/successfully/i.test(free)) {
+          out.push(`${at}: not air, left as it is`);
+          continue;
+        }
+        const reply = await rcon.command(`setblock ${b.x} ${b.y} ${b.z} ${b.block} ${b.meta}`);
+        out.push(`${b.block} at ${at}: ${reply.trim() || '(no reply)'}`);
+      }
+      return out;
+    });
+    const { x, y, z } = pen.center;
+    print({
+      placed,
+      env: { MC_ENABLE_DIGGING: 'true' },
+      try: [
+        `pnpm cli move --live --to=${x - 1.5},${y},${z - 2.5}`,
+        `pnpm cli dig --live --at=${x - 3},${y},${z - 3}`,
+      ],
+    });
+    return 0;
+  }
   if (command === 'pen' && sub === 'tp') {
     const pen = penFromEnv(process.env);
     const { username } = loadConfig().config.minecraft;
@@ -338,7 +395,7 @@ async function main(argv: string[]): Promise<number> {
     });
   }
   process.stderr.write(
-    'Usage: node scripts/test-server-admin.ts rcon "<command>" | pen show | pen build | pen chest | pen tp [--wait N]\n',
+    'Usage: node scripts/test-server-admin.ts rcon "<command>" | pen show | pen build | pen chest | pen resources | pen tp [--wait N]\n',
   );
   return 1;
 }
