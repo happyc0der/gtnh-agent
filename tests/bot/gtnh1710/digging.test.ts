@@ -4,9 +4,11 @@ import { BLOCK_CODE } from '../../../src/bot/gtnh1710/block-hazards.ts';
 import { ChunkStore, decodeChunkBulk } from '../../../src/bot/gtnh1710/chunk-data.ts';
 import {
   checkDig,
+  checkWalkBreak,
   DIG_NEIGHBOURS,
   faceTowards,
   standSpotFor,
+  walkBreaks,
   type DigArea,
 } from '../../../src/bot/gtnh1710/digging.ts';
 import { reachableFeet } from '../../../src/bot/gtnh1710/terrain.ts';
@@ -172,10 +174,81 @@ describe('stand spots (standSpotFor)', () => {
     const w = world(ringed);
     // Beside it, inside the ring, there is room to stand...
     expect(standSpotFor(w, TERRAIN, log, FEET)).toEqual({ x: 2.5, y: 200, z: 0.5 });
-    // ...but no walk gets there through the leaves.
+    // ...but no walk gets there through the leaves...
     expect(
       standSpotFor(w, TERRAIN, log, FEET, reachableFeet(w, TERRAIN.fence, FEET, 64)),
     ).toBeNull();
+    // ...unless it may break them (digging enabled): through the ring's west side.
+    const breaking = reachableFeet(w, TERRAIN.fence, FEET, 64, walkBreaks(TERRAIN));
+    expect(breaking.get('2,200,0')).toMatchObject({ breaks: 2 });
+    expect(standSpotFor(w, TERRAIN, log, FEET, breaking)).toEqual({ x: 2.5, y: 200, z: 0.5 });
+  });
+
+  it('a spot a walk reaches only by breaking the leaves in it, once they are broken', () => {
+    // The log's only open side, west, is filled with leaves (and the player stands beside them).
+    const blocks: Record<string, number> = { [k(3, 200, 0)]: ID.log };
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        for (const y of [200, 201]) blocks[k(3 + dx, y, dz)] = dx === -1 ? ID.leaves : ID.stone;
+      }
+    }
+    const w = world(blocks);
+    const feet = { x: 0.5, y: 200, z: 0.5 };
+    expect(standSpotFor(w, TERRAIN, log, feet)).toBeNull();
+    const breaking = reachableFeet(w, TERRAIN.fence, feet, 64, walkBreaks(TERRAIN));
+    expect(standSpotFor(w, TERRAIN, log, feet, breaking)).toEqual({ x: 2.5, y: 200, z: 0.5 });
+  });
+});
+
+describe('breaking on a walk (checkWalkBreak)', () => {
+  const leaf = { x: 1, y: 200, z: 0 };
+
+  it('breaks leaves by checkDig, but nothing else a dig may take', () => {
+    expect(checkWalkBreak(world({ [k(1, 200, 0)]: ID.leaves }), TERRAIN, FEET, leaf)).toMatchObject(
+      { ok: true, block: 'minecraft:leaves' },
+    );
+    expect(checkWalkBreak(world({ [k(1, 200, 0)]: ID.log }), TERRAIN, FEET, leaf)).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/minecraft:log: a walk breaks only leaves/) as unknown,
+    });
+    expect(checkDig(world({ [k(1, 200, 0)]: ID.log }), TERRAIN, FEET, leaf).ok).toBe(true);
+  });
+
+  it.each<[string, Record<string, number>, RegExp]>([
+    ['next to lava', { [k(2, 201, 1)]: ID.lava }, /next to minecraft:lava at \(2, 201, 1\)/],
+    ['touching water', { [k(2, 200, 0)]: ID.water }, /touches minecraft:water/],
+    ['touching a torch', { [k(1, 201, 0)]: ID.torch }, /touches minecraft:torch/],
+    ['under sand', { [k(1, 201, 0)]: ID.sand }, /minecraft:sand on top of .* would fall/],
+  ])('refuses leaves %s', (_name, around, reason) => {
+    const w = world({ [k(1, 200, 0)]: ID.leaves, ...around });
+    const r = checkWalkBreak(w, TERRAIN, FEET, leaf);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(reason);
+  });
+
+  it('refuses leaves outside the dig heights, out of reach, or outside the safety boundary', () => {
+    const w = world({ [k(1, 205, 0)]: ID.leaves, [k(4, 200, 4)]: ID.leaves });
+    expect(checkWalkBreak(w, TERRAIN, FEET, { x: 1, y: 205, z: 0 })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/outside the dig heights/) as unknown,
+    });
+    expect(checkWalkBreak(w, TERRAIN, FEET, { x: 4, y: 200, z: 4 })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/blocks from the eyes/) as unknown,
+    });
+    const near = world({ [k(1, 200, 0)]: ID.leaves });
+    const boundary = { min: { x: -10, y: 0, z: -10 }, max: { x: 1.5, y: 255, z: 10 } };
+    expect(checkWalkBreak(near, TERRAIN, FEET, leaf, boundary)).toMatchObject({
+      ok: false,
+      reason: '(1, 200, 0) is not inside the safety boundary',
+    });
+    // The walker's rule: the same check, with the cost.
+    expect(walkBreaks(TERRAIN).check(near, FEET, leaf)).toEqual({
+      ok: true,
+      cost: expect.closeTo(3.2, 9) as unknown,
+    });
+    expect(walkBreaks(TERRAIN, boundary).check(near, FEET, leaf)).toMatchObject({ ok: false });
   });
 });
 

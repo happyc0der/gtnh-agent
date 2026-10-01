@@ -4,19 +4,23 @@ import {
   isDiggableBlock,
   type DiggableBlock,
 } from '../../domain/blocks.ts';
-import { diggableInfo } from '../../domain/dig-time.ts';
+import { BARE_HAND_SPEED, diggableInfo, digWaitTicks } from '../../domain/dig-time.ts';
 import type { UnderFeet } from '../../domain/game-state.ts';
+import { isBlockInsideBox } from '../../domain/geometry.ts';
 import { isDigDownBlock } from '../../domain/night-shelter.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
+import type { PointBox } from './play-area.ts';
 import {
   FLOAT_CHECK_HALF_WIDTH,
   PASSABLE_BLOCKS,
   standProblem,
   type ReachedFeet,
+  type WalkBreaks,
 } from './terrain.ts';
 import {
   sweptColumns,
+  WALK_BLOCKS_PER_TICK,
   WALKABLE_SURFACES,
   type Fence,
   type Vec3,
@@ -49,6 +53,12 @@ import {
 
 /** The client digs only blocks whose centre is this close to its eyes (the server allows 6). */
 export const MAX_DIG_REACH = 4.5;
+
+/**
+ * After the finish, the client waits for the server's verdict on the block: its answer, then
+ * this many quiet ticks with no further update for it (gtnh-client.ts #digVerdict).
+ */
+export const DIG_SETTLE_TICKS = 5;
 
 /**
  * Blocks that may touch a block the agent digs: plain full blocks with no tile entity that
@@ -247,8 +257,9 @@ const STAND_HEIGHTS = [1, 0, -1, -2, -3, -4] as const;
  * of the 8 columns around it, never on top of it), standable by the terrain rules, inside
  * the fence, and from which checkDig allows the dig. The spot nearest to `from`; null when
  * there is none. A planner walks there (MOVE_TO) and then digs. With `reachable` (from
- * terrain.ts reachableFeet), only spots a walk from the player reaches, the shortest walk
- * first.
+ * terrain.ts reachableFeet), only spots a walk from the player reaches, the cheapest walk
+ * first: a spot the walk reaches by breaking leaves on its way (in the spot itself too) is
+ * standable once they are broken, and its breaks count in its walk's cost.
  */
 export function standSpotFor(
   world: WalkWorld,
@@ -268,17 +279,90 @@ export function standSpotFor(
       for (const dy of STAND_HEIGHTS) {
         const fy = target.y + dy;
         if (fy < fence.min.y || fy > fence.max.y) continue;
-        if (standProblem(world, fx, fy, fz) !== null) continue;
+        // A walk's end is standable (as its breaks leave it); without walks, as it is now.
         const walk = reachable?.get(`${fx},${fy},${fz}`);
-        if (reachable !== undefined && walk === undefined) continue;
+        if (reachable === undefined ? standProblem(world, fx, fy, fz) !== null : walk === undefined)
+          continue;
         const spot = { x: fx + 0.5, y: fy, z: fz + 0.5 };
         if (!checkDig(world, area, spot, target).ok) continue;
-        const d = walk?.length ?? Math.hypot(spot.x - from.x, spot.y - from.y, spot.z - from.z);
+        const d = walk?.cost ?? Math.hypot(spot.x - from.x, spot.y - from.y, spot.z - from.z);
         if (best === null || d < best.d - 1e-9) best = { spot, d };
       }
     }
   }
   return best?.spot ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Breaking leaves on a walk's way (MOVE_TO over terrain, with digging enabled)
+
+/**
+ * What a walk may break on its way: leaves, which a bare hand breaks in half a second. A
+ * person punches through a leaf bush rather than walk all the way round it (seen live
+ * 2026-10-01: in a Hot Forest the logs the agent needed stood 7 blocks away, walled in by one-
+ * and two-block-high leaf bushes; no walk reached a stand spot, and it gave up on the
+ * forest). Baritone's paths break soft blocks the same way, with the break time in the cost.
+ */
+export const WALK_BREAKABLE_BLOCKS: ReadonlySet<DiggableBlock> = new Set<DiggableBlock>([
+  'minecraft:leaves',
+  'minecraft:leaves2',
+]);
+
+/** At most this many blocks broken per walk: a bush or two in the way, never a tunnel. */
+export const MAX_WALK_BREAKS = 4;
+
+/**
+ * Whether the player standing at `feet` may break the block at `cell` to walk on: leaves
+ * only, by every rule of checkDig (inside the fence's columns and dig heights, within reach
+ * from where it stands, never its own support or a block over its head that falls, only air
+ * and plain full blocks touching it, nothing to fall into the hole, no hazard near, nothing
+ * unloaded or unnamed), and wholly inside the safety boundary when the client knows it (the
+ * safety policy's own rule for DIG_BLOCK). Checked by the walker for every break it plans,
+ * and by the client again just before each dig and every tick while digging.
+ */
+export function checkWalkBreak(
+  world: WalkWorld,
+  area: DigArea,
+  feet: Vec3,
+  cell: BlockPos,
+  boundary: PointBox | null = null,
+): DigCheck {
+  const c = checkDig(world, area, feet, cell);
+  if (!c.ok) return c;
+  if (!WALK_BREAKABLE_BLOCKS.has(c.block)) {
+    return { ok: false, reason: `${fmt(cell)} is ${c.block}: a walk breaks only leaves` };
+  }
+  if (boundary !== null && !isBlockInsideBox(cell, boundary)) {
+    return { ok: false, reason: `${fmt(cell)} is not inside the safety boundary` };
+  }
+  return c;
+}
+
+/**
+ * What breaking `block` on the way costs a walk, in blocks walked: the dig with an empty
+ * hand (no allowlisted tool is faster on leaves), then the server's verdict (about a tick,
+ * and DIG_SETTLE_TICKS quiet), at the walking pace. Leaves: (10 + 1 + 5) x 0.2 = 3.2 blocks,
+ * so the walker goes round a bush when that is at most about 3 blocks longer per leaf it
+ * would break, and punches through when the way round is much longer.
+ */
+export function walkBreakCost(block: DiggableBlock): number {
+  return (digWaitTicks(block, BARE_HAND_SPEED) + 1 + DIG_SETTLE_TICKS) * WALK_BLOCKS_PER_TICK;
+}
+
+/**
+ * The walker's rule for breaking on the way (terrain.ts WalkBreaks): checkWalkBreak, its
+ * cost, and at most MAX_WALK_BREAKS per walk. The client builds it once per observation and
+ * per walk with the same area, so reachableFeet's stand spots and MOVE_TO's plan agree.
+ */
+export function walkBreaks(area: DigArea, boundary: PointBox | null = null): WalkBreaks {
+  return {
+    max: MAX_WALK_BREAKS,
+    blocks: WALK_BREAKABLE_BLOCKS,
+    check: (world, feet, cell) => {
+      const c = checkWalkBreak(world, area, feet, cell, boundary);
+      return c.ok ? { ok: true, cost: walkBreakCost(c.block) } : c;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

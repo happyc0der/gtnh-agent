@@ -79,6 +79,12 @@ export interface FakeDigOptions {
   cancelBreak?: boolean;
   /** Break a too-early dig on its own once its progress reaches 1, as vanilla does (default true). */
   completeLateFinishes?: boolean;
+  /**
+   * What blocks drop, over the fake's fixed table (vanilla leaves drop a sapling 1 time in
+   * 20, an oak's an apple 1 in 200: e.g. `{ 'minecraft:leaves': { item: 'minecraft:sapling',
+   * count: 1 } }` makes every leaf drop one).
+   */
+  drops?: Record<string, { item: string; count: number } | null>;
 }
 
 export interface FakeDigWorld {
@@ -269,7 +275,8 @@ export class FakeDigSim {
     // player's next container sync, after the block changes.
     this.#wearHeldTool();
     this.broken.push({ x, y, z, name, late, ...(held === null ? {} : { held }) });
-    const drop = DROPS[name];
+    const drops = this.#opts.drops ?? {};
+    const drop = name in drops ? drops[name] : DROPS[name];
     if (drop === null || drop === undefined) return;
     this.#later(PICKUP_DELAY_MS, () => this.#pickUp(x, y, z, drop));
   }

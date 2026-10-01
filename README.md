@@ -59,6 +59,13 @@ for a task) in a short burst, and System 1 decides `DEFEND` when retreating is i
 [Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting),
 [Digging](#digging), [Placing](#placing) and [Combat](#combat).
 
+**Walking through leaves (2026-10-01, fake server only so far):** with digging enabled too, a
+`MOVE_TO` over terrain breaks up to 4 leaves in its way, as a person punches through a bush (seen
+live: logs walled in by leaf bushes in a Hot Forest were out of every walk's reach, and the agent
+gave up on the forest). Each break is checked and dug like `DIG_BLOCK` and costs the walker its
+dig time, so it still walks round a bush when that is only a little longer. See
+[Digging](#digging).
+
 **Night pit (2026-10-01, fake server only so far):** at dusk, play digs a pit three blocks
 straight down under the player (`DIG_DOWN`, the only dig of the ground underfoot, allowed only
 as code's own night-shelter step) and roofs it in the ground layer it dug through; in the
@@ -217,7 +224,9 @@ and [docs/action-contract.md](docs/action-contract.md).
   blocks with an interaction profile or on the observe-only list. The only combat is
   `ATTACK_ENTITY`, on one listed hostile or farm animal.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
-  inside the fence and stops at the first sign of trouble (see below).
+  inside the fence and stops at the first sign of trouble (see below). With digging on too, a
+  `MOVE_TO` over terrain may break up to 4 leaves in its way, each checked and dug like
+  `DIG_BLOCK`; nothing else is ever broken by a walk.
 - Exploring is off unless walking is on **and** `MC_MOVEMENT_MODE=follow`; it never leaves the
   safety boundary (at most 2048 blocks per side in that mode), walks at most 96 blocks per
   `EXPLORE`, only in daylight, and stops for threats like any walk.
@@ -467,6 +476,12 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
   drop, a nearby threat, any change to the block, or a change to the tool in hand.
 - Success needs the server's own block change to air, with no re-send. The result reports
   whether the drop reached the inventory.
+- A `MOVE_TO` over terrain may break up to 4 leaves in its way, the same way: before a move
+  that needs it, the walk stops and digs each one with these checks (leaves only), the dig time
+  and the server's confirmation, the upper block first. A break refused or not confirmed stops
+  the walk, and the agent re-plans. Each costs the walker its dig time (3.2 blocks of walking),
+  so a way round that is not much longer wins. The result says what it broke and what the
+  leaves dropped. Retreats, `EXPLORE` and the walk to a drop never break anything.
 
 ### Placing
 
