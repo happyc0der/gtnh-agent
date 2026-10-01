@@ -8,6 +8,7 @@ import {
   PositionSchema,
   TimestampSchema,
 } from './common.ts';
+import { QuestIdSchema } from './quest-book.ts';
 import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from './recipes.ts';
 
 /**
@@ -32,6 +33,10 @@ export const ACTION_TYPES = [
   'DIG_BLOCK',
   'CRAFT_ITEM',
   'PAUSE_AND_ASK_USER',
+  // Quest-book clicks (Better Questing): taken by the play loop, never by a plan.
+  'SUBMIT_QUEST',
+  'CHECK_QUEST_BOX',
+  'CLAIM_QUEST_REWARD',
 ] as const;
 
 export const ActionTypeSchema = z.enum(ACTION_TYPES);
@@ -122,6 +127,30 @@ export const PauseAndAskUserSpec = z.strictObject({
   type: z.literal('PAUSE_AND_ASK_USER'),
   args: z.strictObject({ question: z.string().min(1).max(500) }),
 });
+/** Better Questing's task and reward indexes (what task_checkbox and choice_reward name). */
+const QuestIndexSchema = z.int().min(0).max(1023);
+/**
+ * The quest book's "Submit" button (Better Questing quest_action 1, detect) for one quest the
+ * server lists as active. Retrieval tasks marked consume TAKE the matching items. Verified by
+ * the server recording the quest as completed.
+ */
+export const SubmitQuestSpec = z.strictObject({
+  type: z.literal('SUBMIT_QUEST'),
+  args: z.strictObject({ questId: QuestIdSchema }),
+});
+/** Ticks a checkbox task in the quest book (bq_standard task_checkbox). */
+export const CheckQuestBoxSpec = z.strictObject({
+  type: z.literal('CHECK_QUEST_BOX'),
+  args: z.strictObject({ questId: QuestIdSchema, taskIndex: QuestIndexSchema }),
+});
+/**
+ * Claims a completed quest's rewards (quest_action 0). `choice` selects the item of the quest's
+ * choice reward (choice_reward first), and must be null when it has none.
+ */
+export const ClaimQuestRewardSpec = z.strictObject({
+  type: z.literal('CLAIM_QUEST_REWARD'),
+  args: z.strictObject({ questId: QuestIdSchema, choice: QuestIndexSchema.nullable() }),
+});
 
 export const ActionSpecSchema = z.discriminatedUnion('type', [
   ObserveStateSpec,
@@ -137,6 +166,9 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   DigBlockSpec,
   CraftItemSpec,
   PauseAndAskUserSpec,
+  SubmitQuestSpec,
+  CheckQuestBoxSpec,
+  ClaimQuestRewardSpec,
 ]);
 export type ActionSpec = z.infer<typeof ActionSpecSchema>;
 export type ActionSpecOf<T extends ActionType> = Extract<ActionSpec, { type: T }>;
@@ -196,6 +228,20 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
       .max(9),
   }),
   z.strictObject({ kind: z.literal('USER_NOTIFIED') }),
+  /** The server's quest book records the quest as completed (and only consume items left). */
+  z.strictObject({ kind: z.literal('QUEST_COMPLETED'), questId: QuestIdSchema }),
+  /** The server's quest book records the checkbox task as done (or the quest as completed). */
+  z.strictObject({
+    kind: z.literal('QUEST_TASK_CHECKED'),
+    questId: QuestIdSchema,
+    taskIndex: QuestIndexSchema,
+  }),
+  /** The server records the rewards as claimed, and the inventory gained exactly them. */
+  z.strictObject({
+    kind: z.literal('QUEST_REWARD_CLAIMED'),
+    questId: QuestIdSchema,
+    choice: QuestIndexSchema.nullable(),
+  }),
 ]);
 export type Postcondition = z.infer<typeof PostconditionSchema>;
 
@@ -261,6 +307,20 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
     }
     case 'PAUSE_AND_ASK_USER':
       return { kind: 'USER_NOTIFIED' };
+    case 'SUBMIT_QUEST':
+      return { kind: 'QUEST_COMPLETED', questId: spec.args.questId };
+    case 'CHECK_QUEST_BOX':
+      return {
+        kind: 'QUEST_TASK_CHECKED',
+        questId: spec.args.questId,
+        taskIndex: spec.args.taskIndex,
+      };
+    case 'CLAIM_QUEST_REWARD':
+      return {
+        kind: 'QUEST_REWARD_CLAIMED',
+        questId: spec.args.questId,
+        choice: spec.args.choice,
+      };
   }
 }
 
@@ -293,6 +353,9 @@ export const ActionSchema = z.discriminatedUnion('type', [
   DigBlockSpec.extend(actionMetadata),
   CraftItemSpec.extend(actionMetadata),
   PauseAndAskUserSpec.extend(actionMetadata),
+  SubmitQuestSpec.extend(actionMetadata),
+  CheckQuestBoxSpec.extend(actionMetadata),
+  ClaimQuestRewardSpec.extend(actionMetadata),
 ]);
 export type Action = z.infer<typeof ActionSchema>;
 

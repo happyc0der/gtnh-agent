@@ -91,6 +91,8 @@ export const VIOLATION_CODES = [
   'NOT_DIGGABLE',
   /** DIG_BLOCK on a block whose removal could hurt the player (support, falling blocks). */
   'UNSAFE_DIG',
+  /** SUBMIT_QUEST / CHECK_QUEST_BOX on a quest the server does not list as active and unlocked. */
+  'QUEST_NOT_ACTIVE',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

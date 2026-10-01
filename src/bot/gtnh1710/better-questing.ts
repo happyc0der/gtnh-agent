@@ -754,7 +754,102 @@ export class QuestBookModel {
   }
 }
 
-/** Task types whose detect() can remove items from the inventory (a submit). */
-export function consumesItems(t: Pick<BqTaskConfig, 'type' | 'consume'>): boolean {
-  return (t.type === QUEST_TASK.retrieval || t.type === QUEST_TASK.optionalRetrieval) && t.consume;
+// ---------------------------------------------------------------------------
+// The agent's quest-book clicks, checked against the live quest book just before sending
+// ---------------------------------------------------------------------------
+
+export type QuestBookRequest =
+  | { kind: 'submit'; questId: string }
+  | { kind: 'check'; questId: string; taskIndex: number }
+  | { kind: 'claim'; questId: string; choice: number | null };
+
+/**
+ * Why the client must not send this request now, or null. The executor validated the action
+ * against an observation; this re-checks the server's quest book as it is at sending time:
+ * a quest the agent tracks, known to the server, and for a submit or a checkbox active,
+ * unlocked and not completed; for a claim completed, unclaimed, with a valid choice.
+ */
+export function questBookRequestProblem(
+  book: QuestBookModel,
+  scope: readonly string[],
+  req: QuestBookRequest,
+): string | null {
+  if (!book.synced) return book.problem ?? 'the quest book has not been synced yet';
+  const id = req.questId;
+  if (!scope.includes(id)) return `quest ${id} is not one the agent tracks`;
+  const config = book.config(id);
+  if (config === null) return `the server's quest book has no quest ${id}`;
+  const name = `"${plainText(config.name)}"`;
+  switch (req.kind) {
+    case 'submit':
+    case 'check': {
+      if (book.completed(id)) return `${name} is already completed`;
+      if (!book.active(id)) return `${name} is not active on the server`;
+      if (!book.unlocked(id)) return `${name} is locked`;
+      if (req.kind === 'submit') return null;
+      const task = config.tasks.find((t) => t.index === req.taskIndex);
+      if (task?.type !== QUEST_TASK.checkbox) {
+        return `task ${req.taskIndex} of ${name} is not a checkbox`;
+      }
+      return book.taskComplete(id, req.taskIndex) ? `the checkbox of ${name} is ticked` : null;
+    }
+    case 'claim': {
+      if (!book.completed(id)) return `${name} is not completed`;
+      if (book.claimed(id)) return `the rewards of ${name} are already claimed`;
+      const items = claimRewardItems(config, req.choice);
+      return typeof items === 'string' ? `${name}: ${items}` : null;
+    }
+  }
+}
+
+/** The quest's choice reward, if it has exactly one; a string when it has more. */
+export function choiceRewardOf(config: BqQuestConfig): BqRewardConfig | null | string {
+  const choices = config.rewards.filter((r) => r.type === QUEST_REWARD.choice);
+  if (choices.length > 1) return 'more than one choice reward';
+  return choices[0] ?? null;
+}
+
+/**
+ * The items a claim gives, by inventory name: every item reward's items and the chosen item
+ * of the choice reward. A string when the choice does not fit the rewards.
+ */
+export function claimRewardItems(
+  config: BqQuestConfig,
+  choice: number | null,
+): Map<string, number> | string {
+  const choiceReward = choiceRewardOf(config);
+  if (typeof choiceReward === 'string') return choiceReward;
+  if (choiceReward === null && choice !== null) return 'it has no choice reward';
+  if (choiceReward !== null && (choice === null || choice >= choiceReward.choices.length)) {
+    return `choose one of the ${choiceReward.choices.length} items of its choice reward`;
+  }
+  const out = new Map<string, number>();
+  const add = (i: BqItem): void => {
+    const q = questItemOf(i);
+    out.set(q.item, (out.get(q.item) ?? 0) + q.count);
+  };
+  for (const r of config.rewards) {
+    if (r.type === QUEST_REWARD.choice) {
+      const picked = choice === null ? undefined : r.choices[choice];
+      if (picked !== undefined) add(picked);
+    } else r.items.forEach(add);
+  }
+  return out;
+}
+
+/** "0 done; 1 [3/8 minecraft:dirt]" for messages. */
+export function describeQuestTasks(book: QuestBookModel, id: string): string {
+  const config = book.config(id);
+  if (config === null) return 'unknown quest';
+  return config.tasks
+    .map((t) => {
+      if (book.taskComplete(id, t.index)) return `${t.index} done`;
+      const progress = book.taskProgress(id, t.index);
+      const items = t.items
+        .map((i, k) => `${progress[k] ?? 0}/${questItemOf(i).count} ${questItemOf(i).item}`)
+        .join(', ');
+      return `${t.index} ${t.type.replace(/^bq_standard:/, '')}${items === '' ? '' : ` [${items}]`}`;
+    })
+    .join('; ')
+    .slice(0, 300);
 }

@@ -403,6 +403,11 @@ export class MockMinecraftClient implements MinecraftClient {
       case 'PAUSE_AND_ASK_USER':
         this.userMessages.push(action.args.question);
         return ok('user notified', { acknowledged: true });
+
+      case 'SUBMIT_QUEST':
+      case 'CHECK_QUEST_BOX':
+      case 'CLAIM_QUEST_REWARD':
+        return failed('mock: the quest book is not simulated', 'NOT_IMPLEMENTED');
     }
   }
 

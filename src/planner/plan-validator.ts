@@ -1,3 +1,4 @@
+import { isQuestBookActionType } from '../domain/quest-book.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 import { evaluateStaticSpec, type SafetyContext } from '../safety/safety-policy.ts';
 import { errorMessage } from '../util/json.ts';
@@ -20,7 +21,9 @@ export interface PlanValidation {
  *  1. strict schema (allowlisted action specs only, bounded args, no extra fields),
  *  2. configured step limit,
  *  3. static safety checks on EVERY step (protected items, approved food/fuel,
- *     boundary, known safe locations).
+ *     boundary, known safe locations);
+ *  4. no quest-book clicks (SUBMIT_QUEST, CHECK_QUEST_BOX, CLAIM_QUEST_REWARD): the play loop
+ *     makes those itself, deterministically, from the server's quest book.
  * The step that is about to execute is additionally checked against live state by
  * the executor (evaluateAction) at execution time.
  */
@@ -38,6 +41,13 @@ export function validatePlan(raw: unknown, ctx: SafetyContext, maxSteps: number)
   const schemaIssues: string[] = [];
   if (plan.steps.length > maxSteps) {
     schemaIssues.push(`plan has ${plan.steps.length} steps; the limit is ${maxSteps}`);
+  }
+  for (const s of plan.steps) {
+    if (isQuestBookActionType(s.action.type)) {
+      schemaIssues.push(
+        `step ${s.step}: ${s.action.type} is a quest-book click; the play loop makes those, not plans`,
+      );
+    }
   }
   const stepViolations = plan.steps
     .map((s) => ({ step: s.step, violations: evaluateStaticSpec(s.action, ctx) }))

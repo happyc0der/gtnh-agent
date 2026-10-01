@@ -1,4 +1,5 @@
 import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
+import { isQuestBookActionType } from '../domain/quest-book.ts';
 import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
@@ -154,7 +155,8 @@ export function buildPlannerRequest(input: {
   return PlannerRequestSchema.parse({
     state: sanitizeStateForPlanner(input.state),
     task: input.state.currentTask,
-    allowedActions: [...ACTION_TYPES],
+    // Quest-book clicks are the play loop's, never a plan's (plan-validator.ts refuses them).
+    allowedActions: ACTION_TYPES.filter((t) => !isQuestBookActionType(t)),
     safetyConstraints: {
       boundaryMin: config.boundary.min,
       boundaryMax: config.boundary.max,

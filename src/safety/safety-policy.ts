@@ -22,6 +22,7 @@ import { stableStringify } from '../util/json.ts';
 import { checkHazardClearance, checkWithinBoundary } from './coordinate-boundaries.ts';
 import { classifyActionType } from './forbidden-actions.ts';
 import { checkProtectedItems } from './protected-items.ts';
+import { questBookViolations } from './quest-book-rules.ts';
 
 /** Everything the policy needs besides the action and state. Pure data; no I/O. */
 export interface SafetyContext {
@@ -377,6 +378,9 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
     case 'INSPECT_MACHINE':
     case 'CRAFT_ITEM': // its ingredients are checked as protected items above
     case 'PAUSE_AND_ASK_USER':
+    case 'SUBMIT_QUEST': // what a submit takes depends on the quest book: see dynamicChecks
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
       break;
   }
   return v;
@@ -514,6 +518,11 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
       }
       break;
     }
+    case 'SUBMIT_QUEST':
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
+      v.push(...questBookViolations(action, state, ctx.protectedItems));
+      break;
     case 'OBSERVE_STATE':
     case 'WAIT':
     case 'EAT_FOOD':

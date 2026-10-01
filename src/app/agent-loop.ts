@@ -507,6 +507,55 @@ export async function runUserAction(
   });
 }
 
+/**
+ * Runs ONE quest-book click that the play loop chose itself (SUBMIT_QUEST, CHECK_QUEST_BOX or
+ * CLAIM_QUEST_REWARD), through the same executor as a cycle: schema, the hard safety policy
+ * and preconditions against a fresh observation, then execution and verification. The play
+ * loop decides these deterministically from the server's quest book, so the decision step and
+ * the planner are skipped. The action is recorded under the quest's task with origin
+ * `deterministic-router`, so the repeated-failure rule applies to it; task state is left to
+ * the play loop.
+ */
+export async function runQuestBookAction(
+  deps: AgentDeps,
+  spec: ActionSpec,
+  reason: string,
+  taskId: string | null,
+): Promise<CycleResult> {
+  const { config, repos, clock, newId } = deps;
+  const { cycleId, finish, errorResult } = startCycle(deps, 'qbk', { questBookAction: spec.type });
+  const observed = await observeState(deps, cycleId, undefined);
+  if ('error' in observed) return errorResult(observed.error);
+  const { state, stateSnapshotId } = observed;
+
+  const ctx = buildSafetyContext(config, repos, clock.now());
+  const stateViolations = assessStateReliability(state, ctx);
+  if (stateViolations.length > 0) repos.violations.insertMany(cycleId, null, stateViolations);
+  const action = createAction(
+    { spec, reason, origin: 'deterministic-router', taskId },
+    { newId, now: () => clock.now() },
+  );
+  const outcome = await newExecutor(deps).execute(action, state, ctx, cycleId);
+  rememberContainers(repos, outcome.stateAfter);
+  return finish({
+    status: outcome.status,
+    needsUserAttention: outcome.status !== 'succeeded',
+    stateSnapshotId,
+    stateViolations,
+    decision: null,
+    planner: null,
+    action: {
+      actionId: action.actionId,
+      type: action.type,
+      args: action.args,
+      origin: action.origin,
+      reason: action.reason,
+    },
+    outcome,
+    summary: outcomeSummary(`QUEST BOOK -> ${action.type}`, outcome, outcome.status),
+  });
+}
+
 interface PlanStepRef {
   planId: number;
   /** 0-based index of the step being executed. */

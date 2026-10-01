@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  runQuestBookAction,
+  syncConfigToDatabase,
+  type AgentDeps,
+} from '../../../src/app/agent-loop.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
-import { defaultConfig, type MinecraftConfig } from '../../../src/config/env.ts';
+import { defaultConfig, type AgentConfig, type MinecraftConfig } from '../../../src/config/env.ts';
+import { createAction, type ActionSpec } from '../../../src/domain/actions.ts';
 import type { GameState } from '../../../src/domain/game-state.ts';
 import type { QuestBook } from '../../../src/domain/quest-book.ts';
+import { mintValidatedAction } from '../../../src/domain/validated-action.ts';
+import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
+import { createRepositories } from '../../../src/persistence/repositories.ts';
+import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { systemClock } from '../../../src/util/clock.ts';
+import { sequentialIds } from '../../../src/util/ids.ts';
 import type { FakeQuest } from './fake-better-questing.ts';
 import { FakeGtnhServer, type FakeServerOptions } from './fake-server.ts';
 
@@ -77,36 +88,55 @@ export async function startQuestServer(
   mc: Partial<MinecraftConfig> = {},
   scope: readonly string[] = SCOPE,
   withQuestBook = true,
-): Promise<{ server: FakeGtnhServer; client: Gtnh1710Client }> {
+): Promise<{ server: FakeGtnhServer; client: Gtnh1710Client; config: AgentConfig }> {
   const server = new FakeGtnhServer({
     items: ITEMS,
-    ...(withQuestBook ? { questBook: { quests: BOOK, loopTicks: 4 } } : {}),
+    ...(withQuestBook
+      ? { questBook: { quests: BOOK, loopTicks: 4, oreDict: { logWood: ['minecraft:log'] } } }
+      : {}),
     ...serverOptions,
   });
   servers.push(server);
   const port = await server.listen();
-  const config = {
-    ...defaultConfig({
-      minecraft: {
-        host: '127.0.0.1',
-        port,
-        enableLiveConnection: true,
-        serverIdentityMarker: 'gtnh-agent-test',
-        connectTimeoutMs: 5_000,
-        initialStateGraceMs: 2_000,
-      },
-    }).minecraft,
-    ...mc,
-  };
+  const base = defaultConfig({
+    minecraft: {
+      host: '127.0.0.1',
+      port,
+      enableLiveConnection: true,
+      serverIdentityMarker: 'gtnh-agent-test',
+      connectTimeoutMs: 5_000,
+      initialStateGraceMs: 2_000,
+    },
+    safety: { protectedItems: ['minecraft:diamond'] },
+  });
+  const config: AgentConfig = { ...base, minecraft: { ...base.minecraft, ...mc } };
   const client = new Gtnh1710Client({
-    config,
+    config: config.minecraft,
     clock: systemClock,
     retryDelayMs: 50,
     questScope: scope,
+    questBookTimeoutMs: 1_500,
   });
   clients.push(client);
-  return { server, client };
+  return { server, client, config };
 }
+
+/** The executor's dependencies for running quest-book clicks against the client. */
+function executorDeps(config: AgentConfig, client: Gtnh1710Client): AgentDeps {
+  const repos = createRepositories(openDatabase(IN_MEMORY), systemClock);
+  syncConfigToDatabase(config, repos);
+  return {
+    config,
+    client,
+    repos,
+    decisionProvider: new DeterministicDecisionProvider(),
+    planner: null,
+    clock: systemClock,
+    newId: sequentialIds(),
+  };
+}
+
+const ENABLED: Partial<MinecraftConfig> = { questBook: { enabled: true } };
 
 /** Observes until `test` holds for the quest book (or two seconds pass). */
 export async function bookWhen(
@@ -233,5 +263,179 @@ describe('the quest book, read from Better Questing on a scripted server', () =>
     await client.connect();
     const state = await bookWhen(client);
     expect(state.questBook.known && state.questBook.value.quests.map((q) => q.id)).toEqual(['0:4']);
+  });
+});
+
+/** The client perform() of a hand-minted action (the executor is tested separately). */
+async function performDirect(client: Gtnh1710Client, spec: ActionSpec) {
+  const action = createAction(
+    { spec, reason: 'test', origin: 'test', taskId: null },
+    { newId: sequentialIds(), now: () => new Date() },
+  );
+  return client.perform(mintValidatedAction(action, null, new Date()));
+}
+
+const checks = (r: Awaited<ReturnType<typeof runQuestBookAction>>): string[] =>
+  r.outcome?.verification?.checks.map((c) => `${c.passed ? 'PASS' : 'FAIL'} ${c.name}`) ?? [];
+
+describe('quest-book clicks, through the executor, judged by the server', () => {
+  it('submits, ticks a box and claims rewards (with a choice), each verified by the server records', async () => {
+    const { server, client, config } = await startQuestServer(
+      {
+        inventory: [
+          { slot: 36, id: 3, count: 8, damage: 0 }, // dirt, held BEFORE the quest was active
+          { slot: 37, id: 13, count: 2, damage: 0 }, // gravel
+          { slot: 38, id: 17, count: 5, damage: 2 }, // birch logs: logWood
+          { slot: 39, id: 264, count: 1, damage: 0 }, // a protected diamond
+        ],
+      },
+      ENABLED,
+    );
+    await client.connect();
+    await bookWhen(client);
+    const deps = executorDeps(config, client);
+    const sim = server.questBookSim;
+    if (sim === null) throw new Error('no quest book');
+
+    // 1. The dirt was held before the quest became active: only a submit makes the server count it.
+    expect(sim.quest('0:0').tasks[0]?.progress).toEqual([0]);
+    const submitted = await runQuestBookAction(
+      deps,
+      { type: 'SUBMIT_QUEST', args: { questId: '0:0' } },
+      'all 8 dirt are held',
+      'quest-0:0',
+    );
+    expect(submitted.status).toBe('succeeded');
+    expect(checks(submitted)).toEqual(
+      expect.arrayContaining(['PASS quest-completed', 'PASS only-handed-in-items']),
+    );
+    expect(sim.quest('0:0')).toMatchObject({ completed: true, claimed: false });
+
+    // 2. Claim its reward: exactly one apple arrives.
+    const claimed = await runQuestBookAction(
+      deps,
+      { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:0', choice: null } },
+      'claim',
+      'quest-0:0',
+    );
+    expect(claimed.status).toBe('succeeded');
+    expect(checks(claimed)).toEqual(
+      expect.arrayContaining(['PASS reward-claimed', 'PASS reward-items']),
+    );
+    expect(claimed.outcome?.execution?.data['gained']).toBe('1 x minecraft:apple');
+
+    // 3. "Sticks 'n Stones" hands in two logs (logWood): refused while a diamond is held.
+    await bookWhen(client, (b) => b.quests.find((q) => q.id === '0:2')?.active === true);
+    const refused = await runQuestBookAction(
+      deps,
+      { type: 'SUBMIT_QUEST', args: { questId: '0:2' } },
+      'logs',
+      'quest-0:2',
+    );
+    expect(refused.summary).toMatch(/rejected \[PROTECTED_ITEM\]/);
+    server.chestSim.take(39, 1); // the diamond goes elsewhere (as if the player stored it)
+    await new Promise((r) => setTimeout(r, 100));
+    const handedIn = await runQuestBookAction(
+      deps,
+      { type: 'SUBMIT_QUEST', args: { questId: '0:2' } },
+      'logs',
+      'quest-0:2',
+    );
+    expect(handedIn.status).toBe('succeeded');
+    expect(handedIn.outcome?.execution?.data['handedIn']).toBe('2 x minecraft:log@2');
+    expect(checks(handedIn)).toEqual(expect.arrayContaining(['PASS only-handed-in-items']));
+
+    // 4. The checkbox quest: tick it; the server's quest loop completes it.
+    await bookWhen(client, (b) => b.quests.find((q) => q.id === '0:4')?.active === true);
+    const ticked = await runQuestBookAction(
+      deps,
+      { type: 'CHECK_QUEST_BOX', args: { questId: '0:4', taskIndex: 0 } },
+      'read it',
+      'quest-0:4',
+    );
+    expect(ticked.status).toBe('succeeded');
+
+    // 5. Its choice reward: select the cookie, then claim.
+    await bookWhen(client, (b) => b.quests.find((q) => q.id === '0:4')?.completed === true);
+    const chosen = await runQuestBookAction(
+      deps,
+      { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:4', choice: 1 } },
+      'cookie',
+      'quest-0:4',
+    );
+    expect(chosen.status).toBe('succeeded');
+    expect(chosen.outcome?.execution?.data['gained']).toBe('1 x minecraft:cookie');
+
+    expect(sim.receivedIds()).toEqual([
+      'betterquesting:main_sync',
+      'betterquesting:quest_action',
+      'betterquesting:quest_action',
+      'betterquesting:quest_action',
+      'bq_standard:task_checkbox',
+      'bq_standard:choice_reward',
+      'betterquesting:quest_action',
+    ]);
+    expect(sim.received.map((m) => m.payload['action'])).toEqual([
+      undefined,
+      1,
+      0,
+      1,
+      undefined,
+      undefined,
+      0,
+    ]);
+    expect(sim.dropped).toEqual([]);
+    expect(deps.repos.actions.recent(10, 'quest-0:2').map((a) => [a.origin, a.status])).toEqual([
+      ['deterministic-router', 'succeeded'],
+      ['deterministic-router', 'rejected'],
+    ]);
+  });
+
+  it('refuses without sending anything: disabled, outside the scope, inactive, locked or done', async () => {
+    const off = await startQuestServer({});
+    await off.client.connect();
+    await bookWhen(off.client);
+    expect(
+      await performDirect(off.client, { type: 'SUBMIT_QUEST', args: { questId: '0:0' } }),
+    ).toMatchObject({
+      ok: false,
+      code: 'NOT_IMPLEMENTED',
+    });
+
+    const { server, client } = await startQuestServer({}, ENABLED, ['0:0', '0:2']);
+    await client.connect();
+    await bookWhen(client);
+    const refuse = async (spec: ActionSpec, message: RegExp): Promise<void> => {
+      const r = await performDirect(client, spec);
+      expect(r).toMatchObject({ ok: false, code: 'REFUSED' });
+      expect(r.message).toMatch(message);
+    };
+    await refuse({ type: 'SUBMIT_QUEST', args: { questId: '0:4' } }, /not one the agent tracks/);
+    await refuse({ type: 'SUBMIT_QUEST', args: { questId: '0:2' } }, /is not active on the server/);
+    await refuse(
+      { type: 'CHECK_QUEST_BOX', args: { questId: '0:0', taskIndex: 0 } },
+      /task 0 of "Your First Night" is not a checkbox/,
+    );
+    await refuse(
+      { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:0', choice: null } },
+      /is not completed/,
+    );
+    expect(server.questBookSim?.receivedIds()).toEqual(['betterquesting:main_sync']);
+    expect(off.server.questBookSim?.receivedIds()).toEqual(['betterquesting:main_sync']);
+  });
+
+  it('a submit the server does not complete fails, and says what the server counted', async () => {
+    const { client } = await startQuestServer(
+      { inventory: [{ slot: 36, id: 3, count: 5, damage: 0 }] },
+      ENABLED,
+    );
+    await client.connect();
+    await bookWhen(client);
+    const r = await performDirect(client, { type: 'SUBMIT_QUEST', args: { questId: '0:0' } });
+    expect(r).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(r.message).toBe(
+      'the server did not record "Your First Night" as completed within 1.5 s of the submit ' +
+        '(tasks: 0 retrieval [5/8 minecraft:dirt])',
+    );
   });
 });

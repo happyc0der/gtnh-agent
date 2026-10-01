@@ -19,6 +19,12 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
       // Every item the recipe MAY consume: the client picks among them, so all must be allowed.
       return ingredientRequirements(RECIPES[spec.args.recipe]).flatMap((r) => [...r.anyOf]);
     // DIG_BLOCK uses an empty hand and only adds the block's drop to the inventory.
+    // SUBMIT_QUEST may hand items in, but which depends on the quest book: the rule that
+    // keeps protected items out of a submit is in quest-book-rules.ts. A checkbox and a
+    // claim take nothing.
+    case 'SUBMIT_QUEST':
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
     case 'OBSERVE_STATE':
     case 'MOVE_TO':
     case 'WAIT':

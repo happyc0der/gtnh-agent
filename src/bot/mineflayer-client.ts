@@ -171,6 +171,9 @@ export class MineflayerClient implements MinecraftClient {
       case 'REFUEL_KNOWN_GENERATOR':
       case 'DIG_BLOCK':
       case 'CRAFT_ITEM':
+      case 'SUBMIT_QUEST':
+      case 'CHECK_QUEST_BOX':
+      case 'CLAIM_QUEST_REWARD':
         return Promise.resolve(
           failed(`${action.type} is not implemented for Mineflayer yet`, 'NOT_IMPLEMENTED'),
         );
