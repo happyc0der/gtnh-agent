@@ -294,6 +294,16 @@ describe('GATHER ends', () => {
     for (const block of DIGGABLE_BLOCKS) expect(gatherDrops(block).length).toBeGreaterThan(0);
   });
 
+  it('a GATHER of a food garden digs any food garden, and counts any produce', () => {
+    // Seen live: a GATHER of a stalk garden walked to the gardens world memory remembered,
+    // which were gourd gardens, and ended "none left in view".
+    expect(givesSame('harvestcraft:gourdgarden', 'harvestcraft:stalkgarden')).toBe(true);
+    const produce = gatherDrops('harvestcraft:stalkgarden');
+    for (const item of gatherDrops('harvestcraft:gourdgarden')) expect(produce).toContain(item);
+    // Not across kinds: a garden is no sand.
+    expect(givesSame('harvestcraft:gourdgarden', 'minecraft:sand')).toBe(false);
+  });
+
   it('digs any listed block that gives the item: a GATHER of dirt digs the grass floor', () => {
     // Seen live: GATHER 8 dirt found "no-target" on a floor of grass.
     const grassy = makeState((w) => {

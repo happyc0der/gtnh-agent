@@ -507,6 +507,16 @@ describe('trimStaleSteps: no step runs on a view its own plan replaced', () => {
     );
   });
 
+  it("after a GATHER, drops a meal: eating is System 1's, when the food is in hand", () => {
+    // Seen live: "EAT_FOOD harvestcraft:beanItem" after a garden GATHER, refused each time.
+    const eat: Action = { type: 'EAT_FOOD', args: { item: 'minecraft:apple' } };
+    const r = trimStaleSteps(planOf(gather, eat));
+    expect(r.plan.steps.map((s) => s.action.type)).toEqual(['GATHER']);
+    expect(r.note).toBe('dropped step 2 after the GATHER at step 1');
+    // A meal before any GATHER stays.
+    expect(trimStaleSteps(planOf(eat, gather)).note).toBeNull();
+  });
+
   it('drops a walk right before a GATHER (it walks to its blocks by itself)', () => {
     // Seen live: MOVE_TO the dirt block's own position (not walkable), then GATHER dirt.
     const r = trimStaleSteps(planOf(walk, gather));

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { MAX_EXPLORE_DISTANCE, MIN_EXPLORE_DISTANCE, type ActionSpec } from '../domain/actions.ts';
-import { DiggableBlockSchema, type DiggableBlock } from '../domain/blocks.ts';
+import { DiggableBlockSchema, isGardenBlock, type DiggableBlock } from '../domain/blocks.ts';
 import {
   attackRefusal,
   BARE_HAND,
@@ -15,7 +15,7 @@ import {
   type BlockPosition,
   type Position,
 } from '../domain/common.ts';
-import { animalDrops } from '../domain/food.ts';
+import { animalDrops, FOOD_GARDENS, GARDEN_DROPS } from '../domain/food.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
 import { DIG_YIELDS } from '../goals/route-book.ts';
@@ -169,10 +169,17 @@ export type GatherEnd = 'done' | 'bound' | 'no-target';
  * (food.ts ANIMAL_DROPS), can put into the inventory.
  */
 export function gatherDrops(source: DiggableBlock | GatherSource): string[] {
-  if (typeof source === 'string') return DIG_YIELDS[source].map((y) => y.item);
-  if ('animal' in source) return animalDrops(source.animal);
-  return DIG_YIELDS[source.block].map((y) => y.item);
+  if (typeof source !== 'string' && 'animal' in source) return animalDrops(source.animal);
+  const block = typeof source === 'string' ? source : source.block;
+  // A food garden's step is about food, not one kind of garden: any food garden it finds is
+  // dug and any produce counts (seen live: a GATHER of a stalk garden walked to the gardens
+  // world memory remembered, which were gourd gardens, and ended "none left in view").
+  if (isGardenBlock(block) && FOOD_GARDENS.includes(block)) return ALL_GARDEN_PRODUCE;
+  return DIG_YIELDS[block].map((y) => y.item);
 }
+
+/** What any food garden drops (food.ts GARDEN_DROPS), each item once. */
+const ALL_GARDEN_PRODUCE: string[] = [...new Set(FOOD_GARDENS.flatMap((g) => GARDEN_DROPS[g]))];
 
 /**
  * Whether digging `candidate` gives what digging `block` gives: grass gives dirt, so a

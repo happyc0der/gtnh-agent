@@ -140,7 +140,13 @@ function trimAfter(plan: Plan): { plan: Plan; note: string | null } {
       after = `the EXPLORE at step ${s.step}`;
       break;
     }
-    if (gatherStep !== null && NAMES_THE_VIEW.has(s.action.type)) {
+    // A meal after a GATHER is System 1's to decide (it eats when hungry with food in hand):
+    // planned now, it names produce not yet held, and is refused (seen live: "EAT_FOOD
+    // harvestcraft:beanItem" after a garden GATHER, again and again).
+    if (
+      gatherStep !== null &&
+      (NAMES_THE_VIEW.has(s.action.type) || s.action.type === 'EAT_FOOD')
+    ) {
       keep = i;
       after = `the GATHER at step ${gatherStep}`;
       break;
