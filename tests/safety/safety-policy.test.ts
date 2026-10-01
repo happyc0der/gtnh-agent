@@ -93,6 +93,25 @@ describe('rule 2: lava/void hazards', () => {
     ).toEqual([]);
   });
 
+  it('keeps only contact range from blocks that hurt on contact (cactus)', () => {
+    const cactus = { kind: 'damaging_block' as const, position: { x: 13.5, y: 64.5, z: 10.5 } };
+    const near = (x: number) =>
+      makeState((w) => {
+        w.hazards = [cactus];
+        w.player.position = { x, y: 64, z: 10.5 };
+      });
+    // Three blocks away: no danger, and a walk may end there; lava that close would be one.
+    expect(assessDangers(near(10.5), safetyCtx()).map((v) => v.code)).toEqual([]);
+    expect(
+      codes(
+        { type: 'MOVE_TO', args: { target: { x: 10.5, y: 64, z: 10.5 }, tolerance: 1 } },
+        near(0),
+      ),
+    ).toEqual([]);
+    // Right next to it: a danger.
+    expect(assessDangers(near(12.5), safetyCtx()).map((v) => v.code)).toEqual(['HAZARD_PROXIMITY']);
+  });
+
   it('treats a lava/void flag without a position as a hazard', () => {
     const state = { ...makeState() };
     state.environmentHazards = known({

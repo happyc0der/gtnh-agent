@@ -175,7 +175,8 @@ and [docs/action-contract.md](docs/action-contract.md).
 - Localhost/private addresses only. Public IPs and non-allowlisted hostnames are rejected at config
   load, and `MC_ENABLE_LIVE_CONNECTION` defaults to `false`. The same applies to the model server
   (`OLLAMA_URL`).
-- A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
+- A ±256-block boundary in the overworld; lava/void avoidance radius 6 (1.5 for cacti and other
+  blocks that hurt only on contact); retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
 - Only 18 action types exist. No dropping, combat, lava, network/multiblock changes or
   rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs,

@@ -229,7 +229,8 @@ The other world-changing actions return `NOT_IMPLEMENTED`. See
 2. **Unreliable state** (critical field unknown, older than `maxStateAgeMs`, from the future, or
    internally inconsistent) → refused, pause. Only `PAUSE_AND_ASK_USER` and `OBSERVE_STATE` remain available.
 3. **Danger gate.** Outside the boundary/dimension, nothing but pause/observe. Near lava, fire,
-   harmful fluids, damaging blocks (cactus, spikes, ...) or void,
+   harmful fluids or void (within `hazardAvoidanceRadius`), right next to a block that hurts on
+   contact (cactus, spikes, ...: within 1.5 blocks; walks never stand next to one),
    hostile mobs or **unidentified entities** (fail closed: an entity type the agent cannot classify
    counts as hostile), only `RETURN_TO_SAFE_LOCATION`. With low health/hunger only, also `EAT_FOOD`.
    `PLACE_BLOCK` is deliberately not an escape (see above).
