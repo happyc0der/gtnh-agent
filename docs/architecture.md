@@ -174,6 +174,13 @@ the next goal's journal tells the planner how to get out (dig a wall, head level
 If no shelter is possible (no blocks to build it), play stops before dark and `cli play`
 waits offline until sunrise.
 
+**A mob near home.** When System 1 pauses only because a mob is near (`HOSTILES_NEARBY` or
+`UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand
+the pause to a person: it sets the task active again, notes it in the journal, and `cli play`
+waits offline for 30 s (an offline player cannot be hurt) and plays on, at most 6 times in a
+row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play.ts`). Every new session re-checks the
+state from scratch, so a mob that is still there pauses it again.
+
 **Checkpoints and compaction.** Long work is done in chunks. The planner plans only the next
 one or two route steps; when they are done the agent checkpoints and asks again with fresh
 stock. Each task keeps a journal written by code at every checkpoint: a plan made, done or
