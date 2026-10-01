@@ -3587,10 +3587,9 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       slot = free;
     }
-    if (slot !== this.#world.heldSlot) {
-      this.#send(outbound.selectHotbarSlot(slot));
-      this.#world.setHeldSlot(slot);
-    }
+    // Always (re)select it: the server eats what it thinks is in hand.
+    this.#send(outbound.selectHotbarSlot(slot));
+    this.#world.setHeldSlot(slot);
     const held = this.#hotbar(slot);
     if (held == null) return refuse(`the ${item} left the hotbar`, 'FAILED');
     const before = held.count;
