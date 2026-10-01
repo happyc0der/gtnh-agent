@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runUserAction, syncConfigToDatabase } from '../../../src/app/agent-loop.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type AgentConfig } from '../../../src/config/env.ts';
@@ -35,10 +38,17 @@ const CHEST_ITEMS: FakeChest['items'] = [
 
 const servers: FakeGtnhServer[] = [];
 const clients: Gtnh1710Client[] = [];
+// Each test has its own stop file, so a halted agent (data/STOP) never affects the tests.
+let dir = '';
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'gtnh-chests-'));
+});
 
 afterEach(async () => {
   for (const c of clients.splice(0)) await c.disconnect();
   for (const s of servers.splice(0)) await s.close();
+  rmSync(dir, { recursive: true, force: true });
 });
 
 async function start(
@@ -62,6 +72,7 @@ async function start(
       serverIdentityMarker: 'gtnh-agent-test',
       connectTimeoutMs: 5_000,
       initialStateGraceMs: 2_000,
+      movement: { stopFile: join(dir, 'STOP') },
       containers: {
         enabled: options.containersEnabled ?? true,
         chests: {

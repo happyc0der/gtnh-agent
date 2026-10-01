@@ -1827,6 +1827,7 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'chat':
       case 'spawn-position':
       case 'update-health':
+      case 'time-update':
       case 'respawn':
       case 'held-item':
       case 'set-slot':
