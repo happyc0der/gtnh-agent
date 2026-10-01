@@ -308,10 +308,23 @@ export function standSpotFor(
 export const WALK_BREAKABLE_BLOCKS: ReadonlySet<DiggableBlock> = new Set<DiggableBlock>([
   'minecraft:leaves',
   'minecraft:leaves2',
+  'BiomesOPlenty:leaves1',
+  'BiomesOPlenty:leaves2',
+  'BiomesOPlenty:leaves3',
+  'BiomesOPlenty:leaves4',
+  'BiomesOPlenty:colorizedLeaves1',
+  'BiomesOPlenty:colorizedLeaves2',
+  'BiomesOPlenty:appleLeaves',
+  'BiomesOPlenty:persimmonLeaves',
 ]);
 
-/** At most this many blocks broken per walk: a bush or two in the way, never a tunnel. */
-export const MAX_WALK_BREAKS = 4;
+/**
+ * At most this many blocks broken per walk: a bush, or a way two blocks high through a belt
+ * of leaves a few blocks deep (seen live: a Bamboo Forest's leaves, five columns deep and
+ * sixteen high, stood between the agent and the gravel it had seen on a sand slope). The
+ * walker still goes round when that is shorter: each leaf costs about 3 blocks of walking.
+ */
+export const MAX_WALK_BREAKS = 12;
 
 /**
  * Whether the player standing at `feet` may break the block at `cell` to walk on: leaves

@@ -381,14 +381,15 @@ describe('breaking leaves on the way (WalkBreaks)', () => {
   });
 
   it(`breaks at most ${MAX_WALK_BREAKS} blocks per walk`, () => {
-    const strip: Fence = { min: { x: -8, y: 60, z: 0 }, max: { x: 8, y: 70, z: 0 } };
+    const end = MAX_WALK_BREAKS + 4;
+    const strip: Fence = { min: { x: -8, y: 60, z: 0 }, max: { x: end, y: 70, z: 0 } };
     const breaks = walkBreaks({ fence: strip, maxHeightAboveFence: 4 });
     const hedge = (long: number): WalkWorld => {
       const blocks: Record<string, number> = {};
       for (let x = 1; x <= long; x++) blocks[`${x},64,0`] = ID.leaves;
       return terrain(() => 63, blocks);
     };
-    const to = at(6.5, 64, 0.5);
+    const to = at(end - 0.5, 64, 0.5);
     expect(
       brokenBy(planTerrainWalk(hedge(MAX_WALK_BREAKS), strip, FROM, to, 64, breaks)),
     ).toHaveLength(MAX_WALK_BREAKS);

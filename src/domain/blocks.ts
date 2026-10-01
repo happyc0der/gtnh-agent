@@ -2,15 +2,24 @@ import { z } from 'zod';
 
 /**
  * The ONLY blocks DIG_BLOCK may break, by 1.7.10 registry name: vanilla natural blocks
- * that a bare hand harvests (their material needs no tool). Nothing modded, nothing with a
- * tile entity, nothing that is part of a build. Each block's hardness and falling behaviour
- * are kept next to this list (src/domain/dig-time.ts); a test keeps the two identical.
+ * that a bare hand harvests (their material needs no tool), and modded natural blocks read
+ * in their mod's code to be the same (Biomes O' Plenty's leaves). Nothing with a tile
+ * entity, nothing that is part of a build. Each block's hardness and falling behaviour are
+ * kept next to this list (src/domain/dig-time.ts); a test keeps the two identical.
  */
 export const DIGGABLE_BLOCKS = [
   'minecraft:log',
   'minecraft:log2',
   'minecraft:leaves',
   'minecraft:leaves2',
+  'BiomesOPlenty:leaves1',
+  'BiomesOPlenty:leaves2',
+  'BiomesOPlenty:leaves3',
+  'BiomesOPlenty:leaves4',
+  'BiomesOPlenty:colorizedLeaves1',
+  'BiomesOPlenty:colorizedLeaves2',
+  'BiomesOPlenty:appleLeaves',
+  'BiomesOPlenty:persimmonLeaves',
   'minecraft:dirt',
   'minecraft:grass',
   'minecraft:sand',
