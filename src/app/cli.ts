@@ -49,6 +49,7 @@ import {
   type PlayLimits,
   MAX_MOB_WAITS,
   MOB_WAIT_MS,
+  untilSunrise,
 } from './play.ts';
 import { createProviders } from './providers.ts';
 import { describeQuests, freeSlotsOf, updateQuests } from './quest-commands.ts';
@@ -510,9 +511,12 @@ async function main(argv: string[]): Promise<number> {
             ...(decided === null ? {} : { system1: decided }),
           };
           mobWaits = out.mobNearby === null ? 0 : mobWaits + 1;
+          // Until the next sunrise: also from a day that night will end soon (seen live: with
+          // no shelter possible two minutes before dusk, it slept 15 s and came back, again
+          // and again, until the evening).
           const sleepMs =
             out.night !== null
-              ? (out.night.minutesUntilDay + 0.25) * 60_000
+              ? (untilSunrise(out.night) + 0.25) * 60_000
               : out.mobNearby !== null && mobWaits <= MAX_MOB_WAITS
                 ? MOB_WAIT_MS
                 : 0;
@@ -529,7 +533,7 @@ async function main(argv: string[]): Promise<number> {
           }
           process.stderr.write(
             out.night !== null
-              ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on\n`
+              ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on (${out.stopReason.slice(0, 200)})\n`
               : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits}/${MAX_MOB_WAITS}), then playing on\n`,
           );
           const wakeAt = Date.now() + sleepMs;

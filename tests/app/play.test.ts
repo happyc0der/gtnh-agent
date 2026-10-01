@@ -7,6 +7,7 @@ import {
   describePlayEvent,
   mobPause,
   nightSoon,
+  untilSunrise,
   runPlay,
   SHELTER_LEAD_MINUTES,
   type PlayDeps,
@@ -637,6 +638,16 @@ describe('autonomous play', () => {
       noStop,
     );
     expect(result.stopReason).toBe('reached the limit of 4 sessions');
+  });
+
+  it('sleeps until the next sunrise: from a day with night soon, through the evening and night', () => {
+    // Seen live: two minutes before dusk with no shelter possible, play slept 15 s (the day's
+    // minutesUntilDay is 0) and came back, again and again, until the evening.
+    const soon = worldTime(10_800, true);
+    expect(nightSoon(soon)).toBe(true);
+    expect(soon.minutesUntilDay).toBe(0);
+    expect(untilSunrise(soon)).toBe(11);
+    expect(untilSunrise(worldTime(18_000, true))).toBe(5);
   });
 
   it("starts on the shelter inside DIG_DOWN's time window, so the pit is never refused for the hour", () => {
