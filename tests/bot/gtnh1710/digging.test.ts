@@ -98,6 +98,7 @@ const ID = {
   log: 17,
   leaves: 18,
   glass: 20,
+  tallgrass: 31,
   torch: 50,
   chest: 54,
   modded: 4000,
@@ -114,6 +115,7 @@ const NAMES = new Map<number, string>([
   [ID.gravel, 'minecraft:gravel'],
   [ID.log, 'minecraft:log'],
   [ID.leaves, 'minecraft:leaves'],
+  [ID.tallgrass, 'minecraft:tallgrass'],
   [ID.glass, 'minecraft:glass'],
   [ID.torch, 'minecraft:torch'],
   [ID.chest, 'minecraft:chest'],
@@ -214,6 +216,17 @@ describe('checkDig on terrain', () => {
 });
 
 describe('checkDig', () => {
+  it('a plant beside the block is fine; one on top of it would drop, so it refuses', () => {
+    // Seen live: tall grass beside the ground block ruled out every night pit around.
+    const beside = { [k(1, 200, 0)]: ID.dirt, [k(2, 200, 0)]: ID.tallgrass };
+    expect(checkDig(world(beside), AREA, FEET, { x: 1, y: 200, z: 0 }).ok).toBe(true);
+    const onTop = { [k(1, 200, 0)]: ID.dirt, [k(1, 201, 0)]: ID.tallgrass };
+    expect(checkDig(world(onTop), AREA, FEET, { x: 1, y: 200, z: 0 })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/touches minecraft:tallgrass at \(1, 201, 0\)/) as unknown,
+    });
+  });
+
   it('allows an allowlisted block next to the player, with only air and plain blocks around it', () => {
     const r = checkDig(world({ [k(1, 200, 0)]: ID.dirt }), AREA, FEET, { x: 1, y: 200, z: 0 });
     expect(r).toMatchObject({ ok: true, block: 'minecraft:dirt', blockId: ID.dirt });

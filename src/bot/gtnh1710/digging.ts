@@ -55,7 +55,9 @@ export const MAX_DIG_REACH = 4.5;
  * do not fall, flow or hang on their neighbours (the walker's known full blocks), plus the
  * allowlist itself and air. Anything else next to the target (water, a torch, a flower,
  * a chest, a machine, any modded block, an unnamed id) refuses the dig: removing the block
- * could flood the hole, drop an attached block or change a build.
+ * could flood the hole, drop an attached block or change a build. Beside it (not on top),
+ * the plants the body walks through are fine too (digDoesNotDisturb): they stand on the
+ * block under them, not on the dug one.
  */
 export const DIG_NEIGHBOURS: ReadonlySet<string> = new Set<string>([
   'minecraft:air',
@@ -205,9 +207,9 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
     const nname = nid === 0 ? 'minecraft:air' : world.blockName(nid);
     if (nname === undefined)
       return refuse(`it touches block id ${nid} at ${fmt(n)}, which the registry does not name`);
-    if (!DIG_NEIGHBOURS.has(nname)) {
+    if (!digDoesNotDisturb(nname, dy)) {
       return refuse(
-        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block)`,
+        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, and plants only beside it)`,
       );
     }
   }
@@ -294,6 +296,16 @@ export const DIG_DOWN_SURROUNDINGS: ReadonlySet<string> = new Set<string>([
   ...DIG_NEIGHBOURS,
   ...PASSABLE_BLOCKS,
 ]);
+
+/**
+ * Whether block `name` may touch a dug block from face (dx, dy, dz): DIG_NEIGHBOURS, or a
+ * plant the body walks through on a side face (seen live: tall grass beside the ground block
+ * ruled out every night pit around; a plant hangs on the block under it, so only one on top
+ * of the dug block would drop).
+ */
+function digDoesNotDisturb(name: string, dy: number): boolean {
+  return DIG_NEIGHBOURS.has(name) || (dy === 0 && PASSABLE_BLOCKS.has(name));
+}
 
 const nameAt = (world: WalkWorld, x: number, y: number, z: number): string | undefined => {
   const id = world.blockAt(x, y, z);
@@ -422,9 +434,9 @@ export function checkDigDown(
     const nname = nameAt(world, n.x, n.y, n.z);
     if (nname === undefined)
       return refuse(`the block next to it at ${fmt(n)} is not loaded or not named`);
-    if (!DIG_NEIGHBOURS.has(nname)) {
+    if (!digDoesNotDisturb(nname, dy)) {
       return refuse(
-        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block)`,
+        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, and plants only beside it)`,
       );
     }
     // Sand or gravel beside it, with nothing under it, would fall when the block goes.

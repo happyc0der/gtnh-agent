@@ -183,12 +183,17 @@ export function enclosedIn(world: WalkWorld, feet: Vec3): boolean | null {
  * Why the ground around a pit at column (x, z) would not make natural walls, or null: the
  * 3 x 3 columns around it must be plain full blocks from the ground layer down to the pit's
  * floor level, and sand or gravel there must stand on a plain full block (a block update
- * would drop it, opening the wall).
+ * would drop it, opening the wall). In the ground layer itself, the roof's, a cell may also
+ * be air or a plant the body passes (a neighbour column one lower, under tall grass): the
+ * player's body is below it, walled in, and a mob standing there is too high to reach it.
+ * The roof still needs a solid side to be placed against (checkPlace, below).
  */
 function wallProblem(world: WalkWorld, x: number, groundY: number, z: number): string | null {
   for (const [dx, dz] of AROUND) {
     for (let k = 0; k < NIGHT_PIT_DEPTH; k++) {
       const p = { x: x + dx, y: groundY - k, z: z + dz };
+      // Seen live 2026-10-01: tall grass beside the roof cell ruled out every pit nearby.
+      if (k === 0 && passProblem(world, p.x, p.y, p.z) === null) continue;
       const name = nameAt(world, p);
       if (name === undefined) return `the ground at ${fmt(p)} is not loaded or not named`;
       if (!WALKABLE_SURFACES.has(name)) {

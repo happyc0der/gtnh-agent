@@ -237,6 +237,17 @@ describe('the night pit plan', () => {
     expect(plan.steps).toHaveLength(5);
   });
 
+  it('takes a pit beside a column one lower, tall grass in the ground layer (seen live)', () => {
+    // The roof's layer may hold a plant beside it: the player is walled in below it.
+    const plan = planNightPit(land({ [k(-1, 63, 0)]: ID.tallgrass }), FEET, {}, OPTS);
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.site).toEqual({ x: 0, z: 0, groundY: 63 });
+    expect(specs(plan.steps).at(-1)).toEqual({
+      type: 'PLACE_BLOCK',
+      args: { position: { x: 0, y: 63, z: 0 }, item: 'minecraft:dirt' },
+    });
+  });
+
   it('refuses where the ground is not natural, solid ground down to the floor all around', () => {
     // Stone at the top: DIG_DOWN takes only dirt, grass, sand, gravel and clay.
     expect(reasonOf(planNightPit(land({}, { top: ID.stone }), FEET, {}, OPTS))).toMatch(
