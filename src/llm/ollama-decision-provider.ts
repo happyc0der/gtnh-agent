@@ -132,7 +132,7 @@ The rules, in order. The FIRST rule whose check is true decides; all later rules
 3. danger: dangers contains HAZARD_PROXIMITY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY. If defend is true, decide DEFEND (reasons HOSTILES_NEARBY, HOSTILE_IN_REACH; add ALREADY_AT_SAFE_LOCATION when home is "here", NO_SAFE_LOCATION when it is "unknown"). Otherwise, if home is "away", decide RETREAT_HOME (reason HAZARD_NEARBY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY); otherwise PAUSE_AND_ASK_USER (add ALREADY_AT_SAFE_LOCATION or NO_SAFE_LOCATION).
 4. lowHealth: lowHealth is true. If canHeal is true, decide REST (reason LOW_HEALTH); otherwise, if home is "away", RETREAT_HOME (reason LOW_HEALTH); otherwise PAUSE_AND_ASK_USER.
 5. hungryWithFood: hungry is true AND approvedFoodCarried is true. Decide EAT (reason HUNGRY).
-6. starvingWithoutFood: starving is true AND approvedFoodCarried is false AND gettingFood is false. If home is "away", decide RETREAT_HOME, otherwise PAUSE_AND_ASK_USER (reasons HUNGRY, NO_APPROVED_FOOD).
+6. starvingWithoutFood: starving is true AND approvedFoodCarried is false AND gettingFood is false. Decide PAUSE_AND_ASK_USER (reasons HUNGRY, NO_APPROVED_FOOD), wherever home is: a walk home burns food and finds none there.
 7. inventoryNearlyFull: inventoryNearlyFull is true. If dumpContainerKnown and somethingToDeposit are both true, decide EMPTY_INVENTORY (reason INVENTORY_NEARLY_FULL); otherwise PAUSE_AND_ASK_USER (add NO_DUMP_CONTAINER or NOTHING_DEPOSITABLE).
 8. generatorNeedsFuel: generatorNeedsFuel is true. Decide REFUEL_GENERATOR (reasons GENERATOR_OUT_OF_FUEL, APPROVED_FUEL_AVAILABLE).
 9. taskNotActive: task is not "active". Decide PAUSE_AND_ASK_USER (reason NO_ACTIVE_TASK).

@@ -190,7 +190,10 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
       if (gettingFood(state)) {
         facts['gettingFood'] = true;
       } else {
-        return retreatOrPause(['HUNGRY', 'NO_APPROVED_FOOD'], CONFIDENCE.vitals);
+        // No food trip now (the evening, the night): pause where it is. A walk home burns
+        // food and finds none there (seen live: at food 2, the retreat home walked 143
+        // blocks at dusk; on Hard a food bar at 0 starves the player to death).
+        return decide('PAUSE_AND_ASK_USER', CONFIDENCE.vitals, ['HUNGRY', 'NO_APPROVED_FOOD']);
       }
     }
     // Mildly hungry with no food: not yet dangerous; continue with lower-priority rules.

@@ -148,13 +148,14 @@ describe('System1 deterministic router', () => {
       expect(route((w) => void (w.player.hunger = 10), off).decision).not.toBe('EAT');
     });
 
-    it('starving without approved food -> RETREAT_HOME', () => {
+    it('starving without approved food, away from home -> PAUSE (a walk home burns food)', () => {
+      // Seen live: at food 2 the retreat home walked 143 blocks; home has no food.
       const d = route((w) => {
         w.player.hunger = 3;
         w.player.position = { x: 40, y: 64, z: 40 };
         delete w.inventory.items['minecraft:bread'];
       });
-      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
       expect(d.reasonCodes).toEqual(['HUNGRY', 'NO_APPROVED_FOOD']);
     });
 
@@ -174,7 +175,7 @@ describe('System1 deterministic router', () => {
           },
         },
       );
-      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
     });
 
     it('mildly hungry without food continues with other rules', () => {
@@ -206,12 +207,12 @@ describe('System1 deterministic router', () => {
       expect(d.factsUsed).toMatchObject({ hunger: 2, approvedFood: null, gettingFood: true });
     });
 
-    it('starving without food, on the food task in the evening: retreats as before', () => {
+    it('starving without food, on the food task in the evening: pauses where it is', () => {
       const d = route((w) => {
         starvingOnFoodTask(w);
         w.timeOfDay = 12_500;
       });
-      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
       expect(d.reasonCodes).toEqual(['HUNGRY', 'NO_APPROVED_FOOD']);
     });
 
@@ -245,7 +246,7 @@ describe('System1 deterministic router', () => {
         delete w.inventory.items['minecraft:bread'];
         w.inventory.items['minecraft:apple'] = 4;
       }, ctx);
-      expect(d.decision).toBe('RETREAT_HOME');
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
       expect(d.reasonCodes).toEqual(['HUNGRY', 'NO_APPROVED_FOOD']);
     });
   });

@@ -301,8 +301,8 @@ export const SCENARIOS: readonly Scenario[] = [
   ),
   scenario(
     'starving-no-food-task',
-    'Food 2 and nothing to eat, on a quest task (not the food task), away from home: retreats home as before.',
-    { decision: 'RETREAT_HOME', actionType: 'RETURN_TO_SAFE_LOCATION', status: 'succeeded' },
+    'Food 2 and nothing to eat, on a quest task (not the food task), away from home: pauses where it is (a walk home burns food and finds none).',
+    { decision: 'PAUSE_AND_ASK_USER', actionType: 'PAUSE_AND_ASK_USER', status: 'paused' },
     (w) => {
       w.player.hunger = 2;
       w.player.position = { x: 40, y: 64, z: 40 };
