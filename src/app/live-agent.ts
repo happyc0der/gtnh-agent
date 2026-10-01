@@ -134,6 +134,7 @@ export function summarizeObservation(
             }
           : { unavailable: wideHazardScan.reason },
     diggable: summarizeDiggable(state),
+    interactables: summarizeInteractables(state),
     machines: machines
       .map((m) => ({
         m,
@@ -453,6 +454,115 @@ export async function runLiveDig(
           return {
             result,
             diggable: summarizeDiggable(state),
+            inventory: state.inventory.known ? state.inventory.value.items : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Interacting with blocks
+// ---------------------------------------------------------------------------
+
+export interface LiveInteractResult {
+  results: CycleResult[];
+  /** The block window after the last action, and the blocks the agent may use. */
+  window: GameState['blockWindow'];
+  interactables: string[];
+  inventory: Record<string, number> | null;
+  info: ConnectionInfo;
+}
+
+/** One line per interactable block: profile, block, position (and a furnace's state). */
+export function summarizeInteractables(state: GameState): string[] {
+  if (!state.interactables.known) return [`unknown: ${state.interactables.reason}`];
+  return state.interactables.value.blocks.map((b) => {
+    const p = `(${b.position.x}, ${b.position.y}, ${b.position.z})`;
+    const seen = b.furnace?.seen;
+    const furnace =
+      b.furnace === undefined
+        ? ''
+        : ` ${b.furnace.burning ? 'burning' : 'not burning'}` +
+          (seen == null
+            ? ''
+            : `; in ${seen.input?.count ?? 0} ${seen.input?.item ?? '-'}, fuel ${seen.fuel?.count ?? 0} ${seen.fuel?.item ?? '-'}, out ${seen.output?.count ?? 0} ${seen.output?.item ?? '-'}`);
+    return `${b.profile ?? 'observe-only'} ${b.block} at ${p}${furnace}`;
+  });
+}
+
+/**
+ * Opens a block (INTERACT_BLOCK) and optionally smelts in it or takes its output, as checked
+ * user actions in one connection: each validated, executed and verified like the agent's own.
+ * Stops after the first action that does not succeed.
+ */
+export async function runLiveInteract(
+  config: AgentConfig,
+  dbPath: string,
+  at: BlockPosition,
+  then:
+    | { kind: 'smelt'; input: string; quantity: number; fuel: string; fuelQuantity: number }
+    | { kind: 'take'; item: string }
+    | null,
+  log?: (line: string) => void,
+): Promise<LiveInteractResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const deps = {
+            config,
+            client,
+            repos,
+            decisionProvider: new DeterministicDecisionProvider(),
+            planner: null,
+            clock: systemClock,
+            newId: randomIds,
+          };
+          const specs: ActionSpec[] = [{ type: 'INTERACT_BLOCK', args: { position: at } }];
+          if (then?.kind === 'smelt') {
+            specs.push({
+              type: 'SMELT',
+              args: {
+                position: at,
+                input: then.input,
+                quantity: then.quantity,
+                fuel: then.fuel,
+                fuelQuantity: then.fuelQuantity,
+              },
+            });
+          }
+          if (then?.kind === 'take') {
+            specs.push({ type: 'TAKE_OUTPUT', args: { position: at, item: then.item } });
+          }
+          const results: CycleResult[] = [];
+          for (const spec of specs) {
+            const result = await runUserAction(
+              deps,
+              spec,
+              `requested by the operator: interact --at ${at.x},${at.y},${at.z}`,
+            );
+            results.push(result);
+            if (result.status !== 'succeeded') break;
+          }
+          const state = await client.observe();
+          return {
+            results,
+            window: state.blockWindow,
+            interactables: summarizeInteractables(state),
             inventory: state.inventory.known ? state.inventory.value.items : null,
             info: client.info(),
           };

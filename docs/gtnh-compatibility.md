@@ -446,6 +446,170 @@ inverted, so `mWorks:1b` means switched off.
 GregTech also sends one ORES packet (type 3) per GT ore block in range: 2,597 in 8 s on the test
 world. These are not decoded yet.
 
+## Interacting with blocks (2026-09-30)
+
+`INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT` right-click a block and work in its window.
+`CRAFT_ITEM`, `OPEN_CONTAINER`, `DEPOSIT_ITEM` and `WITHDRAW_ITEM` can also use blocks the
+observation found. What the agent knows about each kind of block is data: an interaction profile
+in `src/domain/interactions.ts` ([how profiles work](architecture.md#interacting-with-blocks)).
+
+Everything below was checked in the installed code (_verified_), not live: the shared test server
+was not used. The fake server simulates it (`tests/bot/gtnh1710/gtnh-interact.test.ts`). The
+sources are:
+
+- the 1.7.10 server jar with Forge 10.13.4.1614's binpatches applied (as for crafting);
+- Forge's universal jar;
+- the mod jars in `mods/` (read with `javap`).
+
+Block ids are this world's (`agent-test/level.dat`, FML `ItemData`).
+
+**How windows open:**
+
+- **A vanilla window** opens with S2D (window id, inventory type, title, slot count, whether the
+  title is literal), then S30 with every slot:
+
+  | Block          | S2D type | Title               | Slot count announced                  |
+  | -------------- | -------- | ------------------- | ------------------------------------- |
+  | Chest          | 0        | `container.chest`   | 27 or 54                              |
+  | Crafting table | 1        | `Crafting`          | 9 (the window has 10 container slots) |
+  | Furnace        | 2        | `container.furnace` | 3                                     |
+
+- **A mod GUI** opens with Forge's OpenGui message instead. It comes on channel `FML`,
+  discriminator 1: int window id, the mod id (VarInt length + UTF-8), int GUI id, then int x, y
+  and z.
+  - `FMLNetworkHandler.openGui` takes the next window id, then **closes the open container first**
+    (`EntityPlayerMP.closeContainer`, so an open crafting table drops its grid).
+  - It then sends OpenGui, then the slots (S30).
+  - OpenGui carries no slot count and no title. The client takes the size from S30, and what
+    each slot is for from the profile.
+- **S31 Window Property:** u8 window id, i16 property, i16 value. The value is signed, so larger
+  values wrap.
+- **A profile accepts only a window it knows:** the exact opener (S2D type and announced count, or
+  FML mod id and GUI id) and the exact slot count (its container slots + the player's 36). Any
+  other window is closed again and the action fails.
+
+**Furnace** (`minecraft:furnace` 61, `minecraft:lit_furnace` 62; server jar unless noted):
+
+| Fact                                                                                                                                                                                         | Evidence                                           |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Both are `BlockFurnace`. Lighting or going out swaps the block and keeps the tile entity, so `lit_furnace` means "burning" without opening it.                                               | `BlockFurnace.updateFurnaceBlockState`             |
+| An empty-hand right-click sends S2D (type 2, `container.furnace` unless renamed, 3 slots).                                                                                                   | `EntityPlayerMP.displayGUIFurnace` (Forge-patched) |
+| Slots: 0 input, 1 fuel, 2 output, 3-29 player main, 30-38 hotbar. Forge does not patch `ContainerFurnace`.                                                                                   | `ContainerFurnace`                                 |
+| No `onContainerClosed` override: the furnace keeps its items when the window closes or the player leaves.                                                                                    | `ContainerFurnace`                                 |
+| The fuel slot is a plain `Slot`, so the server accepts anything there. The agent puts only approved fuels.                                                                                   | `ContainerFurnace`                                 |
+| `SlotFurnace.isItemValid` is false: nothing can be put into the output. Taking from it gives experience.                                                                                     | `SlotFurnace`                                      |
+| S31 properties: 0 = ticks the current item has cooked (done at 200), 1 = burn ticks left, 2 = total burn ticks of the fuel item burning now. Sent when the window opens and on every change. | `ContainerFurnace.detectAndSendChanges`            |
+| 200 ticks per item. A fuel item is lit only while something can smelt, the next one as soon as the current one ends. Cooking resets when the fire goes out.                                  | `TileEntityFurnace.updateEntity`                   |
+
+**Furnace fuels** (`TileEntityFurnace.getItemBurnTime`, Forge-patched):
+
+- GTNH's `MinetweakerFurnaceFix` (GTNewHorizonsCoreMod) lets any fuel handler's positive value win.
+  About twenty mods add fuel handlers or `FuelBurnTimeEvent` subscribers. None changes the vanilla
+  fuels the agent uses: GregTech's handler gives `gemCoal` and `gemCharcoal` 1600, as vanilla.
+- So, per item (`furnaceFuelTicks`):
+
+  | Fuel                                | Burn ticks | Items smelted |
+  | ----------------------------------- | ---------- | ------------- |
+  | Coal, charcoal (`minecraft:coal@1`) | 1600       | 8             |
+  | Planks, logs                        | 300        | 1.5           |
+  | Wooden slabs                        | 150        | 0.75          |
+  | Sticks, saplings                    | 100        | 0.5           |
+  | Coal block                          | 16000      | 80            |
+  | Blaze rod                           | 2400       | 12            |
+
+  Once a fuel burns, property 2 shows the server's own value.
+
+- GTNH's CustomFuels (`config/GTNewHorizons/CustomFuels.xml`) makes **diamonds** burn: 102,400
+  ticks, diamond blocks 1,024,000. That is more than the S31 short holds, so their timers would
+  show wrapped. Diamonds are protected in the default config, and only approved fuels go in.
+- Lava buckets are never used: the policy refuses any lava interaction.
+- The default `approvedFuels` lists `minecraft:charcoal`, which is not a 1.7.10 item. Charcoal is
+  `minecraft:coal@1`.
+
+**What a furnace makes is decided by the server.** For example, GregTech removes log-to-charcoal
+smelting (`ProcessingLog` calls `removeFurnaceSmelting` for each log whose result is charcoal), and
+ores are processed in GregTech machines. The agent has no smelting table: `TAKE_OUTPUT` takes only
+the item the output slot shows. The planner is told never to assume a result it has not seen.
+
+**Mods that touch furnaces** (checked; none changes the above):
+
+- GregTech's mixin on `TileEntityFurnace` only adds pollution.
+- EnderCore's `ContainerFurnace` transformer changes shift-clicks, which the agent never uses.
+- Et Futurum changes the furnace's sounds.
+
+**The other profiles:**
+
+| Profile            | Block (id)                          | Opener                                   | Window                                                                                                     |
+| ------------------ | ----------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `crafting_table`   | `minecraft:crafting_table` (58)     | S2D type 1, `Crafting`, 9                | 0 result, 1-9 grid; the grid is dropped on close ([Crafting](#crafting-2026-09-30)).                       |
+| `chest`            | `minecraft:chest` (54)              | S2D type 0, 27 or 54                     | Storage. Verified live ([Chests](#chests-2026-09-30)).                                                     |
+| `trapped_chest`    | `minecraft:trapped_chest` (146)     | as a chest                               | Never opened (see below).                                                                                  |
+| `iron_chest`       | `IronChest:BlockIronChest` (1222)   | FML `IronChest`, GUI id = the chest type | Storage; the size depends on the type (see below).                                                         |
+| `hungry_chest`     | `Thaumcraft:blockChestHungry` (250) | S2D type 0, `Hungry Chest`, 27           | Storage.                                                                                                   |
+| `crafting_station` | `TConstruct:CraftingStation` (524)  | FML `TConstruct`, GUI 11                 | 0 result, 1-9 grid, player 10-45, then the slots of an adjacent chest, if any. Looked at only (see below). |
+
+- **Trapped chest:** `BlockChest` type 1 provides power, and its weak power is the tile entity's
+  `numPlayersUsing`, which opening raises. Opening one emits a redstone signal, so it is never
+  opened.
+- **Iron Chests 6.1.6:**
+  - `BlockIronChest.onBlockActivated` calls `openGui(IronChest, type.ordinal(), ...)`. Nothing opens
+    when the block above is solid underneath, or an ocelot sits on it.
+  - Sizes by GUI id: 0 IRON 54, 1 GOLD 81, 2 DIAMOND 108, 3 COPPER 45, 4 STEEL 72, 5 CRYSTAL 108,
+    6 OBSIDIAN 108, 7 DIRTCHEST9000 1, 8 NETHERITE 135, 9 DARKSTEEL 135, 10 SILVER 72.
+  - `ContainerIronChest` lays out the chest slots (`ValidatingSlot`), then the player's 27 and 9.
+    It keeps the items when closed.
+  - The dirt chest's one slot takes only dirt, so the agent only ever takes from it.
+- **Thaumcraft 4.2.3.5a hungry chest:** `BlockChestHungry.onBlockActivated` calls
+  `displayGUIChest(TileChestHungry)`: a plain chest window, items kept. It also swallows item
+  entities that touch it; the agent never drops items.
+- **Tinkers' crafting station** (TConstruct 1.13.57-GTNH; in the Age 0 quest book as "A Better
+  Crafting Table"):
+  - `CraftingStationBlock` opens `openGui(TConstruct, 11, ...)` unless the player sneaks.
+  - The grid lives in the station: `InventoryCraftingStation.getStackInSlotOnClosing` returns
+    null, so closing keeps it there, and it may already hold another player's items.
+  - An adjacent chest adds its slots after the player's 36.
+  - So `INTERACT_BLOCK` only looks at it for now. Crafting there needs both handled, and is next.
+
+**Room for later, not built:**
+
+- **Mod payloads.** Some GUIs need a packet besides clicks: Tinkers' stencil table chooses its
+  pattern on channel `TConstruct`. A profile has `modPayloads` for such typed actions; none uses
+  it, and the client cannot send any.
+- **State from tile-entity data.** A Tinkers smeltery's contents come from tile-entity data, not
+  slots. Profiles have `stateSource: 'window'` today.
+- **Profiles by metadata or GregTech machine id.** Profiles are chosen by block name only.
+
+### Storage blocks in GTNH 2.8.4
+
+How the server's storage blocks are opened and used, and what the agent does with each. Ids are
+this world's.
+
+| Blocks (id)                                                                                                                                                                                                                                                                                                                                                                                                                           | How they are used (_verified_ in the jars unless "not checked")                                                                                                                                                                                                                                                                                                                                                                                                                                             | Agent                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minecraft:chest` (54), `IronChest:BlockIronChest` (1222), `Thaumcraft:blockChestHungry` (250)                                                                                                                                                                                                                                                                                                                                        | Window with plain storage slots (above).                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Profiles.** Listed in `GameState.storage`; usable with the container actions.                                                                                                     |
+| `minecraft:trapped_chest` (146)                                                                                                                                                                                                                                                                                                                                                                                                       | Chest window, but opening emits redstone.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Known, never opened.                                                                                                                                                                |
+| `gregtech:gt.blockmachines` (2693): super chests (machine ids 135-139), quantum chests (125-129), super tanks (130-134), quantum tanks (120-124)                                                                                                                                                                                                                                                                                      | One block for every GregTech machine; GregTech's TILE_ENTITY packet says which machine it is ([Machines](#machines-2026-09-30)). Right-click opens a ModularUI 1 window (`MTEDigitalChestBase.addUIWidgets`), through FML OpenGui with mod `modularui`. Its GUI id is handed out at start-up (`InternalUIMapper.register`), so it is not a constant. Only an input and an output slot are real slots. The stored count (up to 2^31) is synced by ModularUI's own packets (`clientItemCount`), not by slots. | **Next.** Needs a profile keyed by machine id, ModularUI window matching, and ModularUI's sync decoded for the count. Not listed as storage.                                        |
+| `StorageDrawers:fullDrawers1/2/4` (3954-3956), `halfDrawers2/4`, `fullCustom1/2/4`, `halfCustom2/4`, `controller` (3959), `controllerSlave`, and the `StorageDrawersBop`, `…Forestry`, `…Natura`, `…Misc` variants                                                                                                                                                                                                                    | Not a window. `BlockDrawers.onBlockActivated`: on the front face only, the drawer under the cursor (`getDrawerSlot`, by hit position) takes the held item. A second right-click within 10 ticks puts **every matching item of the inventory** in (`TileEntityDrawers.interactPutItemsIntoSlot`). A left-click takes items out, sent by the client as the mod's own packet (`BlockClickMessage`). An empty-hand sneak-click opens a GUI. The contents come in the tile entity's S35 update (its whole NBT).  | **Next:** its own interaction kind (facing, hit position, held item, a mod packet to take out, contents from S35). Never right-clicked now, not even on the observe-only allowlist. |
+| `JABBA:barrel` (3652)                                                                                                                                                                                                                                                                                                                                                                                                                 | Not a window. Right-click: `TileEntityBarrel.rightClick`. With an empty hand it calls `manualStackAdd` (items from the player's inventory go in); sneaking toggles the lock; held upgrades and tools configure it. Left-click (`leftClick`) takes items out.                                                                                                                                                                                                                                                | **Next**, like drawers. Never right-clicked now.                                                                                                                                    |
+| `EnderStorage:enderChest` (4084)                                                                                                                                                                                                                                                                                                                                                                                                      | Shared by colour frequency (`EnderItemStorage`). Its window opens through CodeChickenCore's `ServerUtils.openSMPContainer` with its own packet: neither S2D nor OpenGui.                                                                                                                                                                                                                                                                                                                                    | **Next** (needs that packet decoded). Never right-clicked now: the client would not recognise the window, and the server would keep it open.                                        |
+| `appliedenergistics2:tile.BlockDrive` (606), `tile.BlockChest` (607), `tile.BlockInterface` (608), `tile.BlockController` (604); terminals are parts on `tile.BlockCableBus` (603)                                                                                                                                                                                                                                                    | FML OpenGui (`Platform.openGUI`, mod `appliedenergistics2`). The GUI id encodes the GUI type and the clicked side. The ME drive's window has 10 cell slots + 36. A network's items are synced by AE2's own packets, not slots.                                                                                                                                                                                                                                                                              | **Observe-only** (`MC_INTERACT_OBSERVE_ONLY=appliedenergistics2:*`): opened, recorded, closed. Nothing inside is clicked.                                                           |
+| `TConstruct:CraftingStation` (524)                                                                                                                                                                                                                                                                                                                                                                                                    | Above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | **Profile**, looked at only.                                                                                                                                                        |
+| Backpacks (items): `Forestry:minerBag`, `foresterBag`, `hunterBag`, `builderBag`, `adventurerBag`, `lepidopteristBag` (and T2), `Backpack:backpack`, `adventurebackpack:adventureBackpack`, `Railcraft:backpack.*`, `MagicBees:backpack.*`                                                                                                                                                                                            | Opened by using the item in hand, not a block (not checked further).                                                                                                                                                                                                                                                                                                                                                                                                                                        | **Next.** The agent clicks only with an empty hand.                                                                                                                                 |
+| `Railcraft:machine.beta` (1069)                                                                                                                                                                                                                                                                                                                                                                                                       | One block for many machines, told apart by metadata. They include the void chest (`TileChestVoid`, destroys what goes in) and the metals chest (`TileChestMetals`, converts nuggets, ingots and blocks).                                                                                                                                                                                                                                                                                                    | **Never a storage profile by block name.** It would need a profile by metadata.                                                                                                     |
+| `minecraft:ender_chest` (130), `minecraft:hopper` (154), dispensers and droppers                                                                                                                                                                                                                                                                                                                                                      | Not checked.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | No profile yet.                                                                                                                                                                     |
+| `Forestry:apicultureChest` (1021), `Forestry:lepidopterology` (1047), `Forestry:arboriculture` (1041, by metadata), `ExtraUtilities:chestFull` (441), `chestMini` (440), `filing` (469), `trashcan` (478), `BiblioCraft:tile.BiblioFramedChest` (1669) and shelves, `avaritiaddons:InfinityChest` (1667), `cookingforblockheads:fridge` (4091), `ProjRed\|Exploration:projectred.exploration.barrel`, `TConstruct:CraftingSlab` (525) | Not checked. By its name, `ExtraUtilities:trashcan` destroys items.                                                                                                                                                                                                                                                                                                                                                                                                                                         | No profile yet. Each needs its own check before a profile.                                                                                                                          |
+| `irontank:*Tank` (3642-3651)                                                                                                                                                                                                                                                                                                                                                                                                          | Fluid tanks, not item storage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Not handled.                                                                                                                                                                        |
+
+**Credit:** the window model (a block's slots, then the player's inventory range, plus a result
+slot) follows the ideas of [prismarine-windows](https://github.com/PrismarineJS/prismarine-windows)
+and Mineflayer's furnace and crafting plugins (both MIT). No code was copied. Their numbers are for
+later Minecraft versions (Mineflayer's furnace properties are 1.8's), so every number here was
+checked in the 1.7.10 and GTNH jars.
+
+**Not verified:** any of this live. Iron Chests chests, hungry chests and the crafting station
+were only checked in their jars and the fake server. As with chests, spawn protection would stop
+a non-operator from opening blocks near spawn.
+
 ## Entity tracking (2026-09-30)
 
 Verified with `scripts/entity-survey.ts` (20 s of live traffic) and `pnpm cli observe --live --radius 64`:
@@ -552,8 +716,9 @@ Minecraft. GTNH adds hundreds of mods. None of the following is guaranteed to wo
 1. ~~Item identifiers~~ **Verified:** names come from the per-world FML registry; `@damage` is
    appended when non-zero (GT meta-items encode their sub-type there; for tools it is wear).
 2. ~~A "container" can be opened and have items moved by a generic window API~~ **Verified for
-   vanilla chests** (see "Chests"). Still likely false for many GTNH containers, which is why
-   only plain `minecraft:chest` blocks are accepted.
+   vanilla chests** (see "Chests"). False for many GTNH containers (drawers, barrels, GregTech's
+   digital chests, ender chests: see "Storage blocks in GTNH 2.8.4"), which is why only blocks
+   with a checked interaction profile are used (see "Interacting with blocks").
 3. A generator's accepted fuels and fuel level are knowable. In reality this may need GUI scraping,
    a server-side helper mod, or manual configuration.
 4. ~~Machine `status` can be observed~~ **Partly verified** (see "Machines"): GregTech machines
@@ -602,5 +767,7 @@ with backups, never on a public server.
 Everything in-game. `MockMinecraftClient` simulates the player, inventory, one chest, one
 generator with fuel, one machine, one crafting table (and server recipes that differ from the
 agent's table), a few diggable blocks, hazards, hostiles and a clock, with injectable failures
-and "reports success but changes nothing" behaviour. All item and machine names in the mock are
-placeholders, not verified GTNH identifiers.
+and "reports success but changes nothing" behaviour. Furnaces in the mock cook on the clock (200
+ticks per item, vanilla fuel times) from a placeholder smelting table, and observe-only blocks
+open a fixed window. All item and machine names in the mock are placeholders, not verified GTNH
+identifiers.

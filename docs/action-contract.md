@@ -49,6 +49,9 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 | `REFUEL_KNOWN_GENERATOR`  | generator, fuel, 1–64                          | generator known and within reach; enough fuel                    | fuel approved, not protected, and in that generator's `acceptedFuels`                                                                                                                                                                         | Fuel left inventory (−qty) and generator not `out_of_fuel`.    |
 | `DIG_BLOCK`               | block position (integers, y 0–255)             | block within reach of the eyes; a free inventory slot            | an observed, allowlisted diggable block (`NOT_DIGGABLE`); whole block inside boundary; clear of known hazards; not under the player or a falling block over its head or one with sand/gravel on top (`UNSAFE_DIG`); not allowed during danger | The block is observed turning into air (`BLOCK_REMOVED`).      |
 | `CRAFT_ITEM`              | recipe id, 1–64 times, table id or null        | enough ingredients; 3x3 needs a known table within reach         | no ingredient kind the recipe may use is protected; the table is known                                                                                                                                                                        | Result +count×times, ingredients −cells×times, nothing else.   |
+| `INTERACT_BLOCK`          | block position                                 | block within reach of the eyes                                   | an observed block with a profile that may be opened, or on the observe-only allowlist (`NOT_INTERACTABLE`); whole block inside boundary; not allowed during danger                                                                            | Its window was seen; profile matches; observe-only closed.     |
+| `SMELT`                   | furnace position, input, 1–64, fuel, 0–64      | furnace within reach; enough input and fuel (counted together)   | a listed furnace (`NOT_INTERACTABLE`); fuel approved (`NOT_APPROVED_FUEL`), never lava; input and fuel not protected; inside boundary; not allowed during danger                                                                              | Inventory −input −fuel exactly; furnace open with the input.   |
+| `TAKE_OUTPUT`             | furnace position, item                         | furnace within reach; an empty inventory slot                    | a listed furnace (`NOT_INTERACTABLE`); item not protected; inside boundary; not allowed during danger                                                                                                                                         | Inventory + the count taken, exactly; nothing else changed.    |
 | `PAUSE_AND_ASK_USER`      | question ≤ 500 chars                           | none                                                             | always permitted                                                                                                                                                                                                                              | Client acknowledged. The loop marks the task `paused`.         |
 
 **Not in the allowlist, by design:** lava interaction, dropping items, combat, placing blocks,
@@ -93,6 +96,41 @@ recipe table (`src/domain/recipes.ts`) only says what to put where; the server d
 See [architecture: crafting](architecture.md#crafting). The other world-changing actions return
 `NOT_IMPLEMENTED`.
 
+`INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT` need `MC_ENABLE_INTERACT=true` (otherwise
+`NOT_IMPLEMENTED`). They use only blocks with an interaction profile, or blocks on the operator's
+observe-only list (`MC_INTERACT_OBSERVE_ONLY`), which are only looked at
+([architecture: interacting with blocks](architecture.md#interacting-with-blocks)):
+
+- **Refused** (`REFUSED`, nothing clicked) when the block is not loaded, has no profile and is not
+  on the observe-only list, or is never opened (a trapped chest, a lever or door, drawers,
+  barrels, ender chests...). Also when it is out of 4.5 blocks' reach from the eyes, outside the
+  fence's columns or heights, with no empty hotbar slot, while a walk, dig, chest or crafting
+  operation runs, or after `halt()` or with the stop file.
+  - `SMELT`, also: not a furnace, lava, a fuel with no known burn time, more items than the
+    inventory has or a slot can take (stacks with NBT data never count), or a slot that already
+    holds another item.
+  - `TAKE_OUTPUT`, also: not a furnace, an empty output, another item or NBT data there, or no
+    empty inventory slot.
+- **Opening** is an empty-hand right-click. The window must be exactly one the profile knows;
+  otherwise it is closed and the action fails (`FAILED`). An observe-only window is recorded
+  (`cli layouts`) and closed at once; nothing in it is ever clicked.
+- **`SMELT`** puts the fuel in first, then the input, with predictable clicks only, and plans both
+  before the first click. A furnace may light and use an item between two clicks: the server then
+  rejects the click and re-sends the window, and the client finishes from the player's own counts,
+  so exactly the asked amounts leave the inventory.
+- **`TAKE_OUTPUT`** takes the whole output stack into an empty inventory slot and reports how many
+  arrived.
+- The window stays open so the executor can verify it, and the furnace's contents show in the
+  observation. The next dig, chest, crafting or window action closes it first (never with a full
+  cursor). A furnace keeps its items.
+
+Blocks the observation found also work with the older actions: `CRAFT_ITEM` with
+`crafting_table:<x>.<y>.<z>` (a vanilla crafting table inside the fence, with
+`MC_ENABLE_CRAFTING=true`), and `OPEN_CONTAINER`, `DEPOSIT_ITEM` and `WITHDRAW_ITEM` with
+`<profile>:<x>.<y>.<z>` (a chest, an Iron Chests chest or a hungry chest, with
+`MC_ENABLE_CONTAINERS=true` and `MC_ENABLE_INTERACT=true`). Nothing is ever put into an Iron Chests
+dirt chest.
+
 `DIG_BLOCK` needs `MC_ENABLE_DIGGING=true` and the movement fence (otherwise `NOT_IMPLEMENTED`).
 
 - **Refused** (`REFUSED`, nothing sent) when the block:
@@ -128,8 +166,8 @@ The other world-changing actions return `NOT_IMPLEMENTED`. See
 4. **Coverage.** Observations declare how far they looked (`nearbyThreats.scanRadius`,
    `environmentHazards.scanRadius`). If the entity scan is smaller than `hostileThreatRadius`, or
    the hazard scan smaller than `hazardAvoidanceRadius`, the state is treated as unknown (pause).
-5. **Protected items** can never be eaten, deposited, withdrawn, burned or crafted with (every
-   kind a recipe may use counts). `ns:item` also protects every `ns:item@meta` variant. Config
+5. **Protected items** can never be eaten, deposited, withdrawn, burned, smelted, taken from a
+   furnace or crafted with (every kind a recipe may use counts). `ns:item` also protects every `ns:item@meta` variant. Config
    items are copied into the database and never silently removed.
 6. **Repeated failures.** Once an identical action (type + canonical args) chosen by the agent
    has failed `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is

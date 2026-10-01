@@ -91,6 +91,11 @@ export const VIOLATION_CODES = [
   'NOT_DIGGABLE',
   /** DIG_BLOCK on a block whose removal could hurt the player (support, falling blocks). */
   'UNSAFE_DIG',
+  /**
+   * INTERACT_BLOCK / SMELT / TAKE_OUTPUT on a block the observation does not list as one the
+   * action may use (no profile for it, not allowlisted, not observed, or the wrong kind).
+   */
+  'NOT_INTERACTABLE',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

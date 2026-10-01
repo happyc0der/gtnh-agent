@@ -28,7 +28,13 @@ describe('migrations', () => {
   it('apply once and are idempotent', () => {
     expect(runMigrations(db)).toEqual([]);
     const versions = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+    expect(versions).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+      { version: 4 },
+      { version: 5 },
+    ]);
   });
 
   it('create every required table', () => {

@@ -7,6 +7,7 @@ import {
   type ActionType,
 } from '../domain/actions.ts';
 import { FALLING_DIGGABLE_BLOCKS } from '../domain/blocks.ts';
+import { parseObservedStorageId, profileForBlock } from '../domain/interactions.ts';
 import type { BlockPosition } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import {
@@ -348,6 +349,31 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
       }
       break;
     }
+    case 'INTERACT_BLOCK':
+    case 'TAKE_OUTPUT':
+      v.push(...blockOutsideBoundary(spec.type, spec.args.position, config));
+      break;
+    case 'SMELT': {
+      v.push(...blockOutsideBoundary(spec.type, spec.args.position, config));
+      const { fuel, fuelQuantity } = spec.args;
+      if (fuel === LAVA_BUCKET || spec.args.input === LAVA_BUCKET) {
+        v.push({
+          code: 'FORBIDDEN_MODIFICATION',
+          severity: 'pause',
+          message: 'SMELT never uses lava (lava interaction is not allowed)',
+          details: { item: LAVA_BUCKET },
+        });
+      }
+      if (fuelQuantity > 0 && !config.approvedFuels.includes(fuel)) {
+        v.push({
+          code: 'NOT_APPROVED_FUEL',
+          severity: 'block',
+          message: `${fuel} is not an approved fuel`,
+          details: { item: fuel },
+        });
+      }
+      break;
+    }
     case 'RETURN_TO_SAFE_LOCATION': {
       const location = ctx.locations.get(spec.args.locationName);
       if (location === undefined || location.kind !== 'safe') {
@@ -380,6 +406,31 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
       break;
   }
   return v;
+}
+
+const LAVA_BUCKET = 'minecraft:lava_bucket';
+
+/** OUT_OF_BOUNDS when the whole target block is not inside the configured boundary. */
+function blockOutsideBoundary(
+  type: ActionType,
+  b: BlockPosition,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  if (isBlockInsideBox(b, config.boundary)) return [];
+  return [
+    {
+      code: 'OUT_OF_BOUNDS',
+      severity: 'block',
+      message: `${type} target block ${formatPosition(b)} is not inside the configured boundary`,
+      details: {
+        x: b.x,
+        y: b.y,
+        z: b.z,
+        min: formatPosition(config.boundary.min),
+        max: formatPosition(config.boundary.max),
+      },
+    },
+  ];
 }
 
 /** Violations for an action type that is not allowed while dangers are present. */
@@ -484,6 +535,7 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
       if (!state.storage.some((s) => s.id === action.args.containerId)) {
         v.push(unknownTarget('Container', action.args.containerId));
       }
+      v.push(...observedStorageOutside(action.type, action.args.containerId, state, config));
       break;
     case 'INSPECT_MACHINE':
       if (!state.machines.some((m) => m.id === action.args.machineId)) {
@@ -498,8 +550,21 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
       if (tableId !== null && !state.craftingTables.some((t) => t.id === tableId)) {
         v.push(unknownTarget('Crafting table', tableId));
       }
+      // A crafting table the observation found (not configured): inside the work area too.
+      const observed = state.craftingTables.find(
+        (t) => t.id === tableId && t.id.startsWith(OBSERVED_TABLE_PREFIX),
+      );
+      if (observed?.position.known === true) {
+        const p = observed.position.value;
+        v.push(...blockOutsideBoundary(action.type, { x: p.x, y: p.y, z: p.z }, config));
+      }
       break;
     }
+    case 'INTERACT_BLOCK':
+    case 'SMELT':
+    case 'TAKE_OUTPUT':
+      v.push(...interactChecks(action.type, action.args.position, state));
+      break;
     case 'REFUEL_KNOWN_GENERATOR': {
       const generator = state.power.generators.find((g) => g.id === action.args.generatorId);
       if (generator === undefined) {
@@ -605,6 +670,78 @@ function digChecks(
     ),
   );
   return v;
+}
+
+/** Ids of crafting tables the observation found (not configured): `crafting_table:x.y.z`. */
+export const OBSERVED_TABLE_PREFIX = 'crafting_table:';
+
+/** A storage block the observation found (not configured) must lie inside the work area. */
+function observedStorageOutside(
+  type: ActionType,
+  containerId: string,
+  state: GameState,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  if (parseObservedStorageId(containerId) === null) return [];
+  const listed = state.storage.find((s) => s.id === containerId);
+  if (listed === undefined || !listed.position.known) return [];
+  const p = listed.position.value;
+  return blockOutsideBoundary(type, { x: p.x, y: p.y, z: p.z }, config);
+}
+
+/**
+ * Window-action rules the observation can answer. The block must be listed in
+ * `interactables` (observed: a profile, or the operator's observe-only allowlist), and its
+ * profile must be one the action may use: SMELT and TAKE_OUTPUT need a furnace;
+ * INTERACT_BLOCK any profile that may be opened (never a trapped chest), or an
+ * observe-only block. The live client re-checks the block, reach, the fence and the window
+ * that opens.
+ */
+function interactChecks(
+  type: 'INTERACT_BLOCK' | 'SMELT' | 'TAKE_OUTPUT',
+  target: BlockPosition,
+  state: GameState,
+): SafetyViolation[] {
+  const where = formatPosition(target);
+  const details = { x: target.x, y: target.y, z: target.z };
+  if (!state.interactables.known) {
+    return [
+      {
+        code: 'UNKNOWN_TARGET',
+        severity: 'pause',
+        message: `Nearby blocks to interact with are not observed (${state.interactables.reason}); nothing can be opened`,
+        details,
+      },
+    ];
+  }
+  const listed = state.interactables.value.blocks.find(
+    (b) => b.position.x === target.x && b.position.y === target.y && b.position.z === target.z,
+  );
+  const refuse = (message: string): SafetyViolation[] => [
+    { code: 'NOT_INTERACTABLE', severity: 'pause', message, details },
+  ];
+  if (listed === undefined) {
+    return refuse(
+      `The block at ${where} is not an observed block the agent may interact with (it needs an interaction profile or the observe-only allowlist)`,
+    );
+  }
+  const profile = listed.profile === null ? null : profileForBlock(listed.block);
+  if (listed.profile !== null && (profile === null || profile.id !== listed.profile)) {
+    return refuse(`${listed.block} at ${where} does not match its profile ${listed.profile}`);
+  }
+  if (profile !== null && profile.open.how === 'never') {
+    return refuse(`${listed.block} at ${where} is never opened: ${profile.open.reason}`);
+  }
+  if (type === 'INTERACT_BLOCK') {
+    if (profile !== null && !profile.usedBy.includes('INTERACT_BLOCK')) {
+      return refuse(`${listed.block} at ${where} may not be opened with INTERACT_BLOCK`);
+    }
+    return [];
+  }
+  if (profile === null || !profile.usedBy.includes(type)) {
+    return refuse(`${type} needs a furnace; the block at ${where} is ${listed.block}`);
+  }
+  return [];
 }
 
 /**

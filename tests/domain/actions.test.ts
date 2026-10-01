@@ -34,6 +34,21 @@ const oneOfEach: ActionSpec[] = [
   },
   { type: 'DIG_BLOCK', args: { position: { x: -8, y: 200, z: -11 } } },
   { type: 'CRAFT_ITEM', args: { recipe: 'chest', times: 2, craftingTableId: 'table.main' } },
+  { type: 'INTERACT_BLOCK', args: { position: { x: -6, y: 200, z: -9 } } },
+  {
+    type: 'SMELT',
+    args: {
+      position: { x: -6, y: 200, z: -9 },
+      input: 'minecraft:cobblestone',
+      quantity: 8,
+      fuel: 'minecraft:planks',
+      fuelQuantity: 6,
+    },
+  },
+  {
+    type: 'TAKE_OUTPUT',
+    args: { position: { x: -6, y: 200, z: -9 }, item: 'minecraft:stone' },
+  },
   { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
 ];
 

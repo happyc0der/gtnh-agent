@@ -131,6 +131,8 @@ export class MineflayerClient implements MinecraftClient {
       machines: [],
       storage: [],
       craftingTables: [],
+      interactables: unknown('block windows are not implemented for Mineflayer'),
+      blockWindow: null,
       openContainerId: null,
       currentTask: null,
       knownRecipeState: null,
@@ -170,6 +172,9 @@ export class MineflayerClient implements MinecraftClient {
       case 'REFUEL_KNOWN_GENERATOR':
       case 'DIG_BLOCK':
       case 'CRAFT_ITEM':
+      case 'INTERACT_BLOCK':
+      case 'SMELT':
+      case 'TAKE_OUTPUT':
         return Promise.resolve(
           failed(`${action.type} is not implemented for Mineflayer yet`, 'NOT_IMPLEMENTED'),
         );

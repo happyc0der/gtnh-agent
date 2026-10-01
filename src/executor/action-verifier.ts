@@ -1,6 +1,6 @@
 import type { Action, Postcondition } from '../domain/actions.ts';
 import type { ClientActionResult } from '../bot/minecraft-client.ts';
-import type { GameState } from '../domain/game-state.ts';
+import type { GameState, InteractableBlock } from '../domain/game-state.ts';
 import { distance, formatPosition } from '../domain/geometry.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 
@@ -241,6 +241,90 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'BLOCK_WINDOW_SEEN': {
+      const w = windowAt(after, post.position);
+      const listed = interactableAt(before, post.position);
+      check(
+        'window-seen',
+        w !== null && Date.parse(w.observedAt) >= Date.parse(action.timestamp),
+        w === null
+          ? `no window of the block at ${formatPosition(post.position)} was seen`
+          : `${w.block} (${w.opener}, ${w.slotCount} slots) seen at ${w.observedAt}`,
+      );
+      if (w !== null && listed !== undefined) {
+        check(
+          'window-profile',
+          w.profile === listed.profile,
+          `window profile ${w.profile ?? 'none (observe-only)'}, observed block ${listed.block} has ${listed.profile ?? 'none'}`,
+        );
+        // A profiled window stays open; an observe-only one is closed right after it is seen.
+        check(
+          'window-state',
+          listed.profile === null ? !w.open : w.open,
+          w.open ? 'the window is open' : 'the window was closed after it was seen',
+        );
+      }
+      break;
+    }
+
+    case 'FURNACE_LOADED': {
+      if (!before.inventory.known || !after.inventory.known) {
+        check('inventory-known', false, 'inventory unknown before or after loading the furnace');
+        break;
+      }
+      const expected = new Map<string, number>([[post.input, -post.quantity]]);
+      if (post.fuelQuantity > 0) {
+        expected.set(post.fuel, (expected.get(post.fuel) ?? 0) - post.fuelQuantity);
+      }
+      inventoryDeltas(before.inventory.value.items, after.inventory.value.items, expected, check);
+      const w = windowAt(after, post.position);
+      check(
+        'furnace-open',
+        w !== null && w.profile === 'furnace' && w.open,
+        w === null ? 'no furnace window seen' : `${w.block}: ${w.open ? 'open' : 'closed'}`,
+      );
+      if (w !== null) {
+        const input = w.slots.find((s) => s.role === 'input');
+        const output = w.slots.find((s) => s.role === 'output');
+        check(
+          'furnace-holds-input',
+          input?.item === post.input || output !== undefined,
+          `input slot: ${input === undefined ? 'empty' : `${input.count} ${input.item}`}`,
+        );
+      }
+      break;
+    }
+
+    case 'FURNACE_OUTPUT_TAKEN': {
+      if (!before.inventory.known || !after.inventory.known) {
+        check('inventory-known', false, 'inventory unknown before or after taking the output');
+        break;
+      }
+      const taken = execution.data['taken'];
+      const item = execution.data['item'];
+      const valid = typeof taken === 'number' && Number.isInteger(taken) && taken >= 1;
+      check(
+        'client-took',
+        valid && item === post.item,
+        `client reported ${String(taken)} x ${String(item)}`,
+      );
+      if (valid) {
+        inventoryDeltas(
+          before.inventory.value.items,
+          after.inventory.value.items,
+          new Map([[post.item, taken]]),
+          check,
+        );
+      }
+      const w = windowAt(after, post.position);
+      check(
+        'furnace-open',
+        w !== null && w.profile === 'furnace' && w.open,
+        w === null ? 'no furnace window seen' : `${w.block}: ${w.open ? 'open' : 'closed'}`,
+      );
+      break;
+    }
+
     case 'USER_NOTIFIED':
       check(
         'user-acknowledged',
@@ -250,4 +334,55 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
   }
   return done();
+}
+
+const samePosition = (
+  a: { x: number; y: number; z: number },
+  b: { x: number; y: number; z: number },
+): boolean => a.x === b.x && a.y === b.y && a.z === b.z;
+
+/** The block window an observation shows for this position, or null. */
+function windowAt(s: GameState, p: { x: number; y: number; z: number }): GameState['blockWindow'] {
+  const w = s.blockWindow;
+  return w !== null && samePosition(w.position, p) ? w : null;
+}
+
+function interactableAt(
+  s: GameState,
+  p: { x: number; y: number; z: number },
+): InteractableBlock | undefined {
+  return s.interactables.known
+    ? s.interactables.value.blocks.find((b) => samePosition(b.position, p))
+    : undefined;
+}
+
+/** Exact inventory changes: each listed item by its delta, every other item unchanged. */
+function inventoryDeltas(
+  b: Readonly<Record<string, number>>,
+  a: Readonly<Record<string, number>>,
+  expected: ReadonlyMap<string, number>,
+  check: (name: string, passed: boolean, detail: string) => void,
+): void {
+  for (const [item, delta] of expected) {
+    const qb = b[item] ?? 0;
+    const qa = a[item] ?? 0;
+    check(
+      `inventory-delta ${item}`,
+      qa - qb === delta,
+      `${item}: ${qb} -> ${qa}, expected ${delta > 0 ? '+' : ''}${delta}`,
+    );
+  }
+  const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(
+    (name) => !expected.has(name) && (a[name] ?? 0) !== (b[name] ?? 0),
+  );
+  check(
+    'other-items-unchanged',
+    changed.length === 0,
+    changed.length === 0
+      ? 'no other item changed'
+      : `also changed: ${changed
+          .slice(0, 5)
+          .map((name) => `${name} ${b[name] ?? 0} -> ${a[name] ?? 0}`)
+          .join(', ')}`,
+  );
 }

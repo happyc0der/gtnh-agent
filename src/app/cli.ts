@@ -16,6 +16,7 @@ import {
   runLiveChest,
   runLiveCycle,
   runLiveDig,
+  runLiveInteract,
   runLiveSession,
   runLiveMove,
   setMovementHalted,
@@ -65,6 +66,14 @@ Usage:
       BREAK one allowlisted block (logs, leaves, dirt, grass, sand, gravel, clay) inside the
       fence with an empty hand (needs MC_ENABLE_DIGGING=true and a fence), as a checked user
       action; prints the diggable blocks and the inventory afterwards. Ctrl+C stops it.
+  node src/app/cli.ts interact --live --at <x,y,z> [--smelt <item> --count N --fuel <item> --fuel-count M | --take <item>]
+      OPEN a block with an interaction profile (furnace, crafting table, chest, Iron Chests...)
+      or one on the observe-only allowlist (needs MC_ENABLE_INTERACT=true) with an empty hand,
+      and print its window; optionally put items to smelt and fuel into a furnace, or take
+      its output. Checked user actions, like dig and chest.
+  node src/app/cli.ts layouts [--db <path>]
+      Window layouts learned from blocks the agent opened (per block): the material for a
+      new interaction profile (docs/architecture.md, "Interacting with blocks").
   node src/app/cli.ts run --live [--max-cycles N] [--max-minutes M] [--db <path>] [--verbose]
       BOUNDED auto-run of the current task on one connection: ordinary cycles back to back,
       stopping when the task is done or anything needs you (a pause, rejection, failure,
@@ -165,6 +174,10 @@ async function main(argv: string[]): Promise<number> {
       container: { type: 'string' },
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
+      smelt: { type: 'string' },
+      fuel: { type: 'string' },
+      'fuel-count': { type: 'string', default: '0' },
+      take: { type: 'string' },
       count: { type: 'string', default: '1' },
       seconds: { type: 'string', default: '60' },
       every: { type: 'string', default: '5' },
@@ -451,6 +464,72 @@ async function main(argv: string[]): Promise<number> {
         inventory: out.inventory,
       });
       return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'interact': {
+      if (!values.live) {
+        process.stderr.write(
+          'interact opens a block on the test server; pass --live to confirm.\n',
+        );
+        return 1;
+      }
+      const at = values.at === undefined ? null : parseBlockPosition(values.at);
+      if (at === null) {
+        process.stderr.write(
+          'interact requires --at <x,y,z> (use --at=-8,200,-11 for negatives)\n',
+        );
+        return 1;
+      }
+      if (values.smelt !== undefined && values.take !== undefined) {
+        process.stderr.write('use either --smelt or --take, not both\n');
+        return 1;
+      }
+      const quantity = Number(values.count);
+      const fuelQuantity = Number(values['fuel-count']);
+      if (values.smelt !== undefined && (!Number.isInteger(quantity) || quantity < 1)) {
+        process.stderr.write('--count must be a positive whole number\n');
+        return 1;
+      }
+      if (!Number.isInteger(fuelQuantity) || fuelQuantity < 0) {
+        process.stderr.write('--fuel-count must be a whole number (0 adds no fuel)\n');
+        return 1;
+      }
+      if (values.smelt !== undefined && fuelQuantity > 0 && values.fuel === undefined) {
+        process.stderr.write('--fuel-count needs --fuel <item>\n');
+        return 1;
+      }
+      const out = await runLiveInteract(
+        config,
+        dbPath,
+        at,
+        values.smelt !== undefined
+          ? {
+              kind: 'smelt',
+              input: values.smelt,
+              quantity,
+              fuel: values.fuel ?? values.smelt,
+              fuelQuantity,
+            }
+          : values.take !== undefined
+            ? { kind: 'take', item: values.take }
+            : null,
+        log,
+      );
+      print({
+        actions: out.results.map((r) => (values.full ? r : compact('live-interact', dbPath, r))),
+        window: out.window,
+        interactables: out.interactables,
+        inventory: out.inventory,
+      });
+      return out.results.every((r) => r.status === 'succeeded') ? 0 : 1;
+    }
+    case 'layouts': {
+      const db = openDatabase(dbPath);
+      try {
+        print(createRepositories(db, systemClock).windowLayouts.list());
+        return 0;
+      } finally {
+        db.close();
+      }
     }
     case 'halt':
       print(setMovementHalted(config, true, values.reason));

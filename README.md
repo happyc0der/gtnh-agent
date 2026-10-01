@@ -26,6 +26,14 @@ whether each is enabled and running, from GregTech's own network channel; stored
 With everything critical observable, a live cycle pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
 1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
+**Interacting with blocks (2026-09-30, fake server only so far):** with interacting enabled,
+`INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT` open blocks the agent has an interaction profile for
+(furnaces, crafting tables, chests, Iron Chests chests, Thaumcraft hungry chests, Tinkers' crafting
+stations), smelt in furnaces and take their output. Each profile is data checked in the server's
+jars; blocks without one are only looked at, and only if you list them. Found chests and crafting
+tables also work with the chest and crafting actions. See
+[Interacting with blocks](#interacting-with-blocks).
+
 **Walking and chests (2026-09-30):** with movement explicitly enabled and a fence configured,
 `MOVE_TO` and `RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence (no jumping,
 climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, `WITHDRAW_ITEM` and
@@ -89,6 +97,9 @@ cp agent.config.example.json agent.config.json
 | Bounded auto-run of the current task         | `pnpm cli run --live [--max-cycles 20] [--max-minutes 10]`                                |
 | The agent's Age 0 quest book and next goal   | `pnpm cli quests [--live]`                                                                |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
+| Open a block (furnace, Iron Chests chest...) | `pnpm cli interact --live --at=-6,200,-8`                                                 |
+| Take a furnace's output                      | `pnpm cli interact --live --at=-6,200,-8 --take <item>`                                   |
+| Window layouts learned from opened blocks    | `pnpm cli layouts`                                                                        |
 | **Dig** one allowlisted block in the pen     | `pnpm cli dig --live --at=-8,200,-11`                                                     |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
@@ -151,15 +162,20 @@ and [docs/action-contract.md](docs/action-contract.md).
   (`OLLAMA_URL`).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 13 action types exist. No block placing, dropping, combat, lava, network/multiblock
+- Only 16 action types exist. No block placing, dropping, combat, lava, network/multiblock
   changes or rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks
   vanilla logs, leaves, dirt, grass, sand, gravel and clay.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
 - Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
   and only if the block is a plain `minecraft:chest` (see below).
-- Crafting is off unless `MC_ENABLE_CRAFTING=true`; only crafting tables listed in the config are
-  used, and a result is taken only if the server shows exactly what the recipe table expects.
+- Crafting is off unless `MC_ENABLE_CRAFTING=true`; only crafting tables listed in the config or
+  found inside the fence are used, and a result is taken only if the server shows exactly what the
+  recipe table expects.
+- Interacting with blocks is off unless `MC_ENABLE_INTERACT=true`. Only blocks with an interaction
+  profile are used; others only if you list them, and then only looked at. Trapped chests, levers,
+  doors, drawers, barrels and ender chests are never right-clicked. Furnaces get only approved
+  fuels, never lava (see below).
 - Digging is off unless `MC_ENABLE_DIGGING=true` **and** the fence is set. It only breaks
   allowlisted blocks inside the fence, never the floor, and never anything touching water, a
   chest, a machine or any other non-plain block (see below).
@@ -281,6 +297,51 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#crafting)):
 - Only predictable clicks are used, each confirmed by the server, and results always go into an
   empty slot.
 - Protected items are never used as ingredients, and neither are stacks with NBT data.
+
+### Interacting with blocks
+
+GTNH has thousands of blocks that open a window, each different. `INTERACT_BLOCK`, `SMELT` and
+`TAKE_OUTPUT` use only blocks the agent has an interaction profile for: data that says how the
+block opens, what each slot of its window is for, and what the agent may do there
+(`src/domain/interactions.ts`). Profiles today:
+
+- furnaces;
+- crafting tables;
+- chests (never trapped chests);
+- Iron Chests chests (all 11 types);
+- Thaumcraft hungry chests;
+- Tinkers' crafting stations (looked at only).
+
+Every fact was checked in the server's jars, and it has run against the fake server only (see
+[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#interacting-with-blocks-2026-09-30), which
+also surveys GTNH's storage blocks).
+
+- Settings: `MC_ENABLE_INTERACT=true`. A block without a profile can be looked at if you list it:
+  `MC_INTERACT_OBSERVE_ONLY=appliedenergistics2:*` (exact names or whole mods).
+- `pnpm cli interact --live --at=x,y,z` opens a block and prints its window. To use a furnace, add
+  `--smelt minecraft:sand --count 8 --fuel minecraft:coal --fuel-count 1` (items and fuel in), or
+  `--take <item>` (its output out).
+- `observe --live` lists the blocks the agent may use, with a furnace's contents as last seen.
+  `pnpm cli layouts` lists the windows learned from blocks the agent opened.
+- In a plan: `SMELT` (`position`, `input`, `quantity`, `fuel`, `fuelQuantity`), then other steps
+  or `WAIT`, then `TAKE_OUTPUT` (`position`, `item`).
+- Found storage blocks work with `OPEN_CONTAINER`, `WITHDRAW_ITEM` and `DEPOSIT_ITEM` as
+  `<profile>:<x>.<y>.<z>` (with `MC_ENABLE_CONTAINERS=true` too). Found crafting tables work with
+  `CRAFT_ITEM` as `crafting_table:<x>.<y>.<z>`.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#interacting-with-blocks)):
+
+- Only a block the observation lists, with a profile that allows the action, can be asked for. A
+  listed block without a profile is only looked at: its window is recorded and closed at once,
+  and nothing inside is clicked.
+- Never right-clicked: trapped chests (redstone), levers, doors, buttons, beds..., drawers and
+  barrels (a right-click can move the player's items), and ender chests (a window the client cannot
+  recognise).
+- An empty hand, and only a window that is exactly the profile's. Predictable clicks only, each
+  confirmed by the server; the cursor is never left holding items.
+- Only approved fuels, never lava. Protected items are never smelted, burned or taken.
+- What a furnace makes is up to the server (GTNH changes smelting), so the agent takes only what
+  the output slot shows, and every count is verified exactly.
 
 ### Digging
 
