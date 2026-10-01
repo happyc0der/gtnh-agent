@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runSingleCycle, syncConfigToDatabase } from '../../src/app/agent-loop.ts';
+import { readDeadEnds } from '../../src/app/dead-ends.ts';
 import { runMockScenario } from '../../src/app/mock-agent.ts';
 import { findScenario, MOCK_CONFIG, SCENARIOS, type Scenario } from '../../src/app/scenarios.ts';
 import type { MockMinecraftClient } from '../../src/bot/mock-minecraft-client.ts';
@@ -312,6 +313,8 @@ describe('world memory and exploring', () => {
       minecraft: { movement: { enabled: true, mode: 'follow' } },
     });
     syncConfigToDatabase(config, repos);
+    // World memory knows the logs that EXPLORE heads for.
+    repos.worldMemory.remember([sighting]);
     const state = await client.observe();
     const taskId = state.currentTask?.taskId ?? '';
     // The EXPLORE of explorePlan failed twice from where the player stands (seen live: toward
@@ -393,6 +396,10 @@ describe('world memory and exploring', () => {
     expect(repos.memory.journal(taskId).map((e) => e.text)).toContainEqual(
       expect.stringContaining('which code would refuse (it failed 2 time(s) from where'),
     );
+    // A dead end: asked again, the planner no longer sees the logs it could not get to.
+    expect(readDeadEnds(repos.memory).map((d) => d.toward)).toEqual([{ x: 3, z: 70 }]);
+    expect(requests[0]?.exploration?.places.map((p) => [p.x, p.z])).toEqual([[3, 70]]);
+    expect(requests[1]?.exploration?.places).toEqual([]);
   });
 
   it('asks once more when code would refuse its first step for any reason it can change', async () => {

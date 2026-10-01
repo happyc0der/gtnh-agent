@@ -1054,7 +1054,14 @@ function refusedFirstStep(
   state: GameState,
   ctx: SafetyContext,
   taskId: string,
-): { step: string; why: string; note: string } | null {
+): {
+  step: string;
+  why: string;
+  note: string;
+  action: Pick<Action, 'type' | 'args'>;
+  /** What the last failure of this very step said, when it is a repeated failure. */
+  lastFailure: string | null;
+} | null {
   const first = plan.steps[0]?.action;
   if (first === undefined || first.type === GATHER) return null;
   const action = createAction(
@@ -1068,6 +1075,7 @@ function refusedFirstStep(
     return null;
   }
   let why = [...report.violations.map((v) => v.message), ...report.preconditionFailures].join('; ');
+  let lastFailure: string | null = null;
   if (report.violations.some((v) => v.code === 'REPEATED_FAILURE')) {
     const from = state.player.position.known ? state.player.position.value : null;
     const fingerprint = actionFingerprint(first, from);
@@ -1084,6 +1092,7 @@ function refusedFirstStep(
     const here = fingerprint === actionFingerprint(first) ? '' : ' from where the player stands';
     if (typeof e === 'object' && e !== null && 'message' in e && typeof e.message === 'string') {
       why = `it failed ${failures} time(s)${here}: ${e.message}`;
+      lastFailure = e.message;
     }
   }
   const step = `${first.type} ${stableStringify(first.args)}`.slice(0, 120);
@@ -1091,7 +1100,13 @@ function refusedFirstStep(
   const tail = '. Plan something else: another target or kind of step.';
   // Why, in the room the journal line leaves.
   const room = MAX_JOURNAL_LINE - head.length - tail.length - 3;
-  return { step, why, note: `${head} (${why.slice(0, Math.max(0, room))})${tail}` };
+  return {
+    step,
+    why,
+    note: `${head} (${why.slice(0, Math.max(0, room))})${tail}`,
+    action: first,
+    lastFailure,
+  };
 }
 
 /** What the planner is told when it escalated for want of a place while exploring was open. */
@@ -1176,26 +1191,29 @@ async function consultPlanner(
   }
 
   const limit = config.planner.recentHistoryLimit;
-  const exploration = explorationFor(config, repos, state, ctx.now);
-  const request = buildPlannerRequest({
-    state,
-    safety: ctx,
-    maxPlanSteps: config.planner.maxPlanSteps,
-    ...(exploration === undefined ? {} : { exploration }),
-    recentActions: repos.actions
-      .recent(limit, taskId)
-      .flatMap((a) =>
-        isAllowlistedActionType(a.actionType)
-          ? [{ actionType: a.actionType, status: a.status, reason: a.reason.slice(0, 200) }]
-          : [],
-      ),
-    recentFailures: repos.actions
-      .failureSummary(taskId, limit)
-      .flatMap((f) =>
-        isAllowlistedActionType(f.actionType) ? [{ ...f, actionType: f.actionType }] : [],
-      ),
-    journal: repos.memory.journal(taskId).map((e) => e.text),
-  });
+  const requestNow = (): PlannerRequest => {
+    const exploration = explorationFor(config, repos, state, ctx.now);
+    return buildPlannerRequest({
+      state,
+      safety: ctx,
+      maxPlanSteps: config.planner.maxPlanSteps,
+      ...(exploration === undefined ? {} : { exploration }),
+      recentActions: repos.actions
+        .recent(limit, taskId)
+        .flatMap((a) =>
+          isAllowlistedActionType(a.actionType)
+            ? [{ actionType: a.actionType, status: a.status, reason: a.reason.slice(0, 200) }]
+            : [],
+        ),
+      recentFailures: repos.actions
+        .failureSummary(taskId, limit)
+        .flatMap((f) =>
+          isAllowlistedActionType(f.actionType) ? [{ ...f, actionType: f.actionType }] : [],
+        ),
+      journal: repos.memory.journal(taskId).map((e) => e.text),
+    });
+  };
+  const request = requestNow();
 
   const ask = async (req: PlannerRequest): Promise<PlannerResponse> => {
     try {
@@ -1303,7 +1321,19 @@ async function consultPlanner(
         MAX_JOURNAL_LINE,
       ),
     );
-    const again = await ask({ ...request, journal: [...request.journal, refused.note] });
+    // An EXPLORE that found no way further from here is a dead end (dead-ends.ts): remember
+    // it now, so the request asked again no longer offers the places around its point.
+    let base = request;
+    if (refused.lastFailure !== null) {
+      rememberDeadEnd(
+        repos.memory,
+        refused.action,
+        { ok: false, message: refused.lastFailure },
+        state.player.position.known ? state.player.position.value : null,
+      );
+      base = requestNow();
+    }
+    const again = await ask({ ...base, journal: [...base.journal, refused.note] });
     repos.events.append(cycleId, 'PLAN', { provider: planner.name, response: again });
     const checked =
       again.kind === 'plan' ? validatePlan(again.plan, ctx, config.planner.maxPlanSteps) : null;
