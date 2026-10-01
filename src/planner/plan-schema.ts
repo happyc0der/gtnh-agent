@@ -23,7 +23,7 @@ import { GatherStepSchema } from './gather.ts';
 /** Hard ceiling on plan length. Config may lower it (planner.maxPlanSteps), never raise it. */
 export const MAX_PLAN_STEPS = 16;
 
-/** Diggable blocks passed to the planner (the nearest ones). */
+/** Diggable blocks passed to the planner (the nearest of each kind: nearestOfEachKind). */
 export const MAX_COMPACT_RESOURCES = 32;
 /** Creatures passed to the planner (the nearest ones). */
 export const MAX_COMPACT_ENTITIES = 16;

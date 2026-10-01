@@ -5,7 +5,12 @@ import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
 import { defaultConfig } from '../../src/config/env.ts';
 import type { PlaceableItem } from '../../src/domain/blocks.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
-import { PlanSchema, plannerResponseJsonSchema, type Plan } from '../../src/planner/plan-schema.ts';
+import {
+  MAX_COMPACT_RESOURCES,
+  PlanSchema,
+  plannerResponseJsonSchema,
+  type Plan,
+} from '../../src/planner/plan-schema.ts';
 import {
   parsePlannerOutput,
   trimStaleSteps,
@@ -183,6 +188,27 @@ describe('planner request and mock planner', () => {
     const hidden = sanitizeStateForPlanner(makeState((w) => void (w.unobservable = ['blocks'])));
     expect(hidden.diggableBlocks).toEqual([]);
     expect(hidden.unknownFields).toContain('nearbyBlocks');
+  });
+
+  it('shares the diggable list between kinds, so a log behind many grass blocks shows', () => {
+    const base = makeState();
+    if (!base.nearbyBlocks.known) throw new Error('blocks unknown');
+    const grass = Array.from({ length: 40 }, (_, i) => ({
+      block: 'minecraft:grass' as const,
+      position: { x: 2 + (i % 8), y: 64, z: 2 + Math.floor(i / 8) },
+    }));
+    const log = { block: 'minecraft:log' as const, position: { x: 14, y: 65, z: 14 } };
+    const compact = sanitizeStateForPlanner({
+      ...base,
+      nearbyBlocks: {
+        known: true,
+        value: { ...base.nearbyBlocks.value, resources: [...grass, log] },
+      },
+    });
+    expect(compact.diggableBlocks).toHaveLength(MAX_COMPACT_RESOURCES);
+    expect(compact.diggableBlocks.filter((b) => b.block === 'minecraft:log')).toHaveLength(1);
+    // Still nearest first: the log, farthest, comes last.
+    expect(compact.diggableBlocks.at(-1)?.block).toBe('minecraft:log');
   });
 
   it('lists the tools DIG_BLOCK may hold, best first, with the digs they have left', () => {

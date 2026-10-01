@@ -1,6 +1,6 @@
 import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
 import { isQuestBookActionType } from '../domain/quest-book.ts';
-import { DIGGABLE_BLOCKS, PLACEABLE_ITEMS } from '../domain/blocks.ts';
+import { DIGGABLE_BLOCKS, nearestOfEachKind, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import { attackRefusal } from '../domain/combat.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
@@ -143,17 +143,18 @@ export function sanitizeStateForPlanner(
       : null,
     hazards: hazards ? { lavaNearby: hazards.lavaNearby, voidNearby: hazards.voidNearby } : null,
     // A block with no stand spot (standAt null, computed by the adapter) cannot be dug from
-    // anywhere now (e.g. sand on top would fall): it is not offered.
-    diggableBlocks: (blocks?.resources ?? [])
-      .filter((r) => r.standAt !== null)
-      .slice(0, MAX_COMPACT_RESOURCES)
-      .map((r) => ({
-        block: r.block,
-        position: { ...r.position },
-        reach:
-          position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
-        standAt: r.standAt ?? null,
-      })),
+    // anywhere now (e.g. sand on top would fall): it is not offered. Shared fairly between
+    // kinds, so every kind in view shows.
+    diggableBlocks: nearestOfEachKind(
+      (blocks?.resources ?? []).filter((r) => r.standAt !== null),
+      (r) => r.block,
+      MAX_COMPACT_RESOURCES,
+    ).map((r) => ({
+      block: r.block,
+      position: { ...r.position },
+      reach: position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
+      standAt: r.standAt ?? null,
+    })),
     tools: inventory ? plannerTools(inventory.items, protectedItems) : [],
     placeableCells: (blocks?.placeable ?? []).slice(0, MAX_COMPACT_PLACEABLE).map((c) => ({
       position: { ...c.position },

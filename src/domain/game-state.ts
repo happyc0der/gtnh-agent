@@ -154,7 +154,7 @@ export const EnvironmentHazardsSchema = z.strictObject({
 });
 export type EnvironmentHazards = z.infer<typeof EnvironmentHazardsSchema>;
 
-/** Largest `nearbyBlocks.resources` list; beyond it the declared scan radius shrinks. */
+/** Largest `nearbyBlocks.resources` list, shared fairly between kinds of block. */
 export const MAX_REPORTED_RESOURCES = 64;
 /** Largest `nearbyBlocks.removed` list. */
 export const MAX_REPORTED_REMOVED = 16;
@@ -207,9 +207,9 @@ export type PlacedBlock = z.infer<typeof PlacedBlockSchema>;
  */
 export const NearbyBlocksSchema = z.strictObject({
   /**
-   * How far (blocks, from the player's feet to block centres) the scan looked. `resources`
-   * is complete within it: a visible block that qualifies but is not listed there is not a
-   * diggable block.
+   * How far (blocks, from the player's feet to block centres) the scan looked. Of each kind
+   * `resources` lists the nearest within it, not every one (a fair share of the list), so a
+   * kind that is not listed has no visible block within it.
    */
   scanRadius: z.number().min(0).max(64),
   /** Diggable blocks within `scanRadius` (see above), nearest first. */

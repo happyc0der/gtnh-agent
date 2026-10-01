@@ -441,23 +441,57 @@ describe('resource scan', () => {
     ]);
   });
 
-  it('when too many are found, keeps the nearest and shrinks the declared radius', () => {
-    // A 13 x 13 layer of dirt just above the player's feet level.
+  it('when too many are found, shares the list fairly: every kind shows, each its nearest', () => {
+    // A 13 x 13 layer of dirt just above the player's feet level, and one log farther out
+    // (seen live: grass and sand crowded the logs a GATHER wanted out of the list).
     const blocks: Record<string, number> = {};
     for (let x = -6; x <= 6; x++) for (let z = -6; z <= 6; z++) blocks[k(x, 107, z)] = BLOCK.dirt;
+    blocks[k(9, 108, 9)] = BLOCK.log;
     const scan = scanResources(storeOf(blocks), table, feet, 16, 20);
     if (!scan.ok) throw new Error(scan.reason);
-    expect(scan.resources.length).toBeGreaterThan(0);
-    expect(scan.resources.length).toBeLessThanOrEqual(20);
-    expect(scan.scanRadius).toBeLessThan(16);
-    // Complete within the declared radius: every block that close is listed.
+    expect(scan.resources).toHaveLength(20);
+    expect(scan.scanRadius).toBe(16);
+    const count = (block: string): number => scan.resources.filter((r) => r.block === block).length;
+    // The floor sample (8 grass), the log, and the rest of the room the nearest dirt.
+    expect([count('minecraft:grass'), count('minecraft:log'), count('minecraft:dirt')]).toEqual([
+      GROUND_DIRT_SAMPLE,
+      1,
+      11,
+    ]);
+    const distances = scan.resources.map((r) => r.distance);
+    expect(distances).toEqual([...distances].sort((a, b) => a - b));
+    // Of the dirt, the nearest: none left out is nearer than one listed.
     const listed = new Set(scan.resources.map((r) => k(r.position.x, r.position.y, r.position.z)));
+    const farthestListed = Math.max(
+      ...scan.resources.filter((r) => r.block === 'minecraft:dirt').map((r) => r.distance),
+    );
     for (let x = -6; x <= 6; x++) {
       for (let z = -6; z <= 6; z++) {
-        const d = Math.hypot(x, 1.5, z);
-        if (d <= scan.scanRadius) expect(listed.has(k(x, 107, z)), k(x, 107, z)).toBe(true);
+        if (listed.has(k(x, 107, z))) continue;
+        const d = Math.hypot(x + 0.5 - feet.x, 107.5 - feet.y, z + 0.5 - feet.z);
+        expect(d, k(x, 107, z)).toBeGreaterThanOrEqual(farthestListed);
       }
     }
+  });
+
+  it('with more kinds than it may list, leaves out the farthest kind and shrinks the radius', () => {
+    const store = storeOf({
+      [k(2, 106, 0)]: BLOCK.sand,
+      [k(-3, 107, 0)]: BLOCK.log,
+      [k(5, 107, 0)]: BLOCK.dirt,
+    });
+    const scan = scanResources(store, table, feet, 16, 3);
+    if (!scan.ok) throw new Error(scan.reason);
+    // The floor grass (about 1.1 away), the sand (2.1) and the log (3.4): the dirt (5.2) is
+    // left out, so the declared radius stops short of it.
+    expect(scan.resources.map((r) => r.block)).toEqual([
+      'minecraft:grass',
+      'minecraft:sand',
+      'minecraft:log',
+    ]);
+    const dirt = Math.hypot(5.5 - feet.x, 107.5 - feet.y, 0.5 - feet.z);
+    expect(scan.scanRadius).toBeLessThan(dirt);
+    expect(scan.scanRadius).toBeGreaterThan(dirt - 0.01);
   });
 
   it('is unknown while a chunk in range is missing', () => {

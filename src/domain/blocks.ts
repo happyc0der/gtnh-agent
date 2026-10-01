@@ -32,6 +32,33 @@ export function isDiggableBlock(name: string): name is DiggableBlock {
 }
 
 /**
+ * At most `max` of `nearestFirst`, shared fairly between kinds: every kind's nearest before
+ * any kind's second nearest, and so on. The result stays nearest first. Seen live: on a
+ * grassy hillside the 64 nearest blocks were 31 grass, 27 sand and 6 leaves, so the logs a
+ * GATHER wanted were never listed. Only when there are more kinds than `max` is a kind left
+ * out, the one whose nearest is farthest.
+ */
+export function nearestOfEachKind<T>(
+  nearestFirst: readonly T[],
+  kindOf: (item: T) => string,
+  max: number,
+): T[] {
+  if (nearestFirst.length <= max) return [...nearestFirst];
+  const seen = new Map<string, number>();
+  return nearestFirst
+    .map((item, order) => {
+      const kind = kindOf(item);
+      const rank = seen.get(kind) ?? 0;
+      seen.set(kind, rank + 1);
+      return { item, order, rank };
+    })
+    .sort((a, b) => a.rank - b.rank || a.order - b.order)
+    .slice(0, Math.max(0, max))
+    .sort((a, b) => a.order - b.order)
+    .map((r) => r.item);
+}
+
+/**
  * The ONLY items PLACE_BLOCK may place, by the name the inventory reports (`@damage` for the
  * wood types): plain full vanilla blocks a bare player gets early. Nothing modded, nothing
  * with a tile entity, a GUI or a redstone function. Each becomes the block of the same

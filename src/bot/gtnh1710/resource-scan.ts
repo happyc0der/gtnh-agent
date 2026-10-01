@@ -1,4 +1,4 @@
-import { DIGGABLE_BLOCKS, type DiggableBlock } from '../../domain/blocks.ts';
+import { DIGGABLE_BLOCKS, nearestOfEachKind, type DiggableBlock } from '../../domain/blocks.ts';
 import { MAX_REPORTED_RESOURCES } from '../../domain/game-state.ts';
 import type { ChunkStore } from './chunk-data.ts';
 import type { Registry } from './registry.ts';
@@ -60,10 +60,11 @@ export const GROUND_DIRT_SAMPLE = 8;
  * GROUND_RESOURCES one level below it; nearest first (ties by position). Like a player, the
  * scan sees only EXPOSED blocks: at least one face touches air (no x-ray through the
  * ground). The blocks under the player itself are left out: they are never dug. Fail
- * closed: any
- * column in range that has not arrived or could not be decoded makes the scan unknown. At
- * most `max` are listed; beyond that the declared radius shrinks below the first block left
- * out, so the list is always complete within the radius it declares.
+ * closed: any column in range that has not arrived or could not be decoded makes the scan
+ * unknown. At most `max` are listed, shared fairly between kinds (nearestOfEachKind): of
+ * each kind its nearest, so a kind that is not listed has no visible block within the
+ * declared radius. Only when more kinds are found than `max` does that radius shrink, below
+ * the nearest block of the first kind left out.
  */
 export function scanResources(
   store: ChunkStore,
@@ -147,9 +148,11 @@ export function scanResources(
     a.position.z - b.position.z;
   found.push(...groundDirt.sort(byDistance).slice(0, GROUND_DIRT_SAMPLE));
   found.sort(byDistance);
-  if (found.length <= max) return { ok: true, scanRadius: radius, resources: found };
-  const firstLeftOut = (found[max] as FoundResource).distance;
-  const kept = found.slice(0, max).filter((f) => f.distance < firstLeftOut);
-  const coverage = Math.max(0, Math.floor((firstLeftOut - 1e-6) * 1000) / 1000);
+  const listed = nearestOfEachKind(found, (f) => f.block, max);
+  const kinds = new Set(listed.map((f) => f.block));
+  const leftOut = found.find((f) => !kinds.has(f.block));
+  if (leftOut === undefined) return { ok: true, scanRadius: radius, resources: listed };
+  const kept = listed.filter((f) => f.distance < leftOut.distance);
+  const coverage = Math.max(0, Math.floor((leftOut.distance - 1e-6) * 1000) / 1000);
   return { ok: true, scanRadius: coverage, resources: kept };
 }

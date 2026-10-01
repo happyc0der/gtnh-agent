@@ -5,7 +5,7 @@ import {
   type PlannerResponse,
 } from '../planner/plan-schema.ts';
 import { parsePlannerOutput } from '../planner/plan-validator.ts';
-import type { DiggableBlock } from '../domain/blocks.ts';
+import { nearestOfEachKind, type DiggableBlock } from '../domain/blocks.ts';
 import { BARE_HAND_SPEED, digWaitTicks } from '../domain/dig-time.ts';
 import {
   ingredientRequirements,
@@ -134,7 +134,13 @@ export function fitPlannerRequest(
     (x) => (x.journal.length > 6 ? { ...x, journal: x.journal.slice(-6) } : null),
     (x) =>
       x.state.diggableBlocks.length > 12
-        ? { ...x, state: { ...x.state, diggableBlocks: x.state.diggableBlocks.slice(0, 12) } }
+        ? {
+            ...x,
+            state: {
+              ...x.state,
+              diggableBlocks: nearestOfEachKind(x.state.diggableBlocks, (b) => b.block, 12),
+            },
+          }
         : null,
     (x) => (x.gtnhChanges.length > 4 ? { ...x, gtnhChanges: x.gtnhChanges.slice(0, 4) } : null),
     (x) => (x.recentActions.length > 0 ? { ...x, recentActions: [] } : null),
