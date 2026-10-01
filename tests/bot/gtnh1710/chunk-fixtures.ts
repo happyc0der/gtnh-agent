@@ -90,6 +90,57 @@ export type BlockFn = (x: number, y: number, z: number) => number;
 /** Block metadata of a position (world x, y, z). */
 export type MetaFn = (x: number, y: number, z: number) => number;
 const NO_META: MetaFn = () => 0;
+/** Block light and sky light of a position (world x, y, z), 0-15 each. */
+export type LightFn = (x: number, y: number, z: number) => { block: number; sky: number };
+/** No light at all (what every test world had before light was kept). */
+const NO_LIGHT: LightFn = () => ({ block: 0, sky: 0 });
+
+/**
+ * Light as an open world has it by day: full sky light above each column's highest block,
+ * none at or below it (no light comes in from the side), and `blockLight` (default none).
+ */
+export function openSkyLight(
+  world: BlockFn,
+  blockLight: (x: number, y: number, z: number) => number = () => 0,
+): LightFn {
+  const tops = new Map<string, number>();
+  const top = (x: number, z: number): number => {
+    const key = `${x},${z}`;
+    let t = tops.get(key);
+    if (t === undefined) {
+      t = -1;
+      for (let y = 255; y >= 0; y--) {
+        if (world(x, y, z) !== 0) {
+          t = y;
+          break;
+        }
+      }
+      tops.set(key, t);
+    }
+    return t;
+  };
+  return (x, y, z) => ({ block: blockLight(x, y, z), sky: y > top(x, z) ? 15 : 0 });
+}
+
+/** A section's block light and sky light nibble arrays (the low nibble for an even index). */
+function lightArrays(
+  cx: number,
+  cz: number,
+  sec: number,
+  light: LightFn,
+): { block: Buffer; sky: Buffer } {
+  const block = Buffer.alloc(2048);
+  const sky = Buffer.alloc(2048);
+  if (light === NO_LIGHT) return { block, sky };
+  for (let i = 0; i < 4096; i++) {
+    const [x, y, z] = cellOf(cx, cz, sec, i);
+    const l = light(x, y, z);
+    const shift = (i & 1) === 0 ? 0 : 4;
+    block[i >> 1] = (block[i >> 1] as number) | ((l.block & 15) << shift);
+    sky[i >> 1] = (sky[i >> 1] as number) | ((l.sky & 15) << shift);
+  }
+  return { block, sky };
+}
 
 /** Bedrock at y=0 and a grass floor at y=105 (the fake spawn stands on it at y=106). */
 export function flatWorld(
@@ -131,8 +182,9 @@ const cellOf = (cx: number, cz: number, sec: number, i: number): [number, number
 ];
 
 /**
- * One column in NotEnoughIDs layout (u16 ids, u16 metadata from `meta`, block light, sky
- * light, biomes: one byte per column, index z << 4 | x, from `biomeAt`, or all 0).
+ * One column in NotEnoughIDs layout (u16 ids, u16 metadata from `meta`, block light and sky
+ * light from `light` (default none), biomes: one byte per column, index z << 4 | x, from
+ * `biomeAt`, or all 0). Like the server, it sends only the sections holding a block.
  */
 export function neidColumn(
   cx: number,
@@ -142,10 +194,13 @@ export function neidColumn(
   biomes = true,
   biomeAt?: BiomeFn,
   meta: MetaFn = NO_META,
+  light: LightFn = NO_LIGHT,
 ): ColumnBytes {
   let mask = 0;
   const idArrays: Buffer[] = [];
   const metaArrays: Buffer[] = [];
+  const blockLights: Buffer[] = [];
+  const skyLights: Buffer[] = [];
   for (let sec = 0; sec < 16; sec++) {
     const ids = Buffer.alloc(8192);
     const metas = Buffer.alloc(8192);
@@ -163,14 +218,16 @@ export function neidColumn(
       mask |= 1 << sec;
       idArrays.push(ids);
       metaArrays.push(metas);
+      const l = lightArrays(cx, cz, sec, light);
+      blockLights.push(l.block);
+      if (skyLight) skyLights.push(l.sky);
     }
   }
-  const n = idArrays.length;
   const data = Buffer.concat([
     ...idArrays,
     ...metaArrays,
-    Buffer.alloc(2048 * n), // block light
-    Buffer.alloc(skyLight ? 2048 * n : 0),
+    ...blockLights,
+    ...skyLights,
     biomeBytesOf(cx, cz, biomes, biomeAt),
   ]);
   return { header: { chunkX: cx, chunkZ: cz, primaryBitMask: mask, addBitMask: 0 }, data };
@@ -178,9 +235,9 @@ export function neidColumn(
 
 /**
  * One column in vanilla 1.7.10 layout (S21PacketChunkData): the sent sections' id low bytes,
- * their metadata (a nibble per block, the low one for an even index), block light, sky light,
- * the add arrays (id high nibbles) of the sections holding an id above 255, biomes. The
- * arguments are neidColumn's.
+ * their metadata (a nibble per block, the low one for an even index), block light, sky light
+ * (nibbles too), the add arrays (id high nibbles) of the sections holding an id above 255,
+ * biomes. The arguments are neidColumn's.
  */
 export function vanillaColumn(
   cx: number,
@@ -190,12 +247,15 @@ export function vanillaColumn(
   biomes = true,
   biomeAt?: BiomeFn,
   meta: MetaFn = NO_META,
+  light: LightFn = NO_LIGHT,
 ): ColumnBytes {
   let mask = 0;
   let addMask = 0;
   const lows: Buffer[] = [];
   const metas: Buffer[] = [];
   const adds: Buffer[] = [];
+  const blockLights: Buffer[] = [];
+  const skyLights: Buffer[] = [];
   for (let sec = 0; sec < 16; sec++) {
     const low = Buffer.alloc(4096);
     const nibbles = Buffer.alloc(2048);
@@ -221,17 +281,19 @@ export function vanillaColumn(
     mask |= 1 << sec;
     lows.push(low);
     metas.push(nibbles);
+    const l = lightArrays(cx, cz, sec, light);
+    blockLights.push(l.block);
+    if (skyLight) skyLights.push(l.sky);
     if (high) {
       addMask |= 1 << sec;
       adds.push(add);
     }
   }
-  const n = lows.length;
   const data = Buffer.concat([
     ...lows,
     ...metas,
-    Buffer.alloc(2048 * n), // block light
-    Buffer.alloc(skyLight ? 2048 * n : 0),
+    ...blockLights,
+    ...skyLights,
     ...adds,
     biomeBytesOf(cx, cz, biomes, biomeAt),
   ]);

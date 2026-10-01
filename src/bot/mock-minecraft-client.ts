@@ -10,8 +10,10 @@ import {
 import { COMPASS } from '../domain/world-memory.ts';
 import {
   BARE_HAND,
+  calmSpiderBlocker,
   MAX_BURST_MS,
   MAX_SWINGS_PER_BURST,
+  recentHurtMs,
   strikeReach,
   SWING_INTERVAL_TICKS,
   type EntityCategory,
@@ -173,6 +175,13 @@ export interface MockMob {
   owned?: boolean | null;
   baby?: boolean | null;
   lastHurtAt?: string | null;
+  /**
+   * The light at it would leave it calm (the live client's judgement: a vanilla spider in
+   * light 12 or more). The mock adds the rest of the rule (calmSpiderBlocker: a vanilla
+   * spider, beyond its leap, the player not hurt lately), so a spider that came close or a
+   * bite makes it count again, as live.
+   */
+  calm?: boolean;
 }
 
 /** Legacy `hostiles` / `unclassified` positions are listed with these ids (index added). */
@@ -238,7 +247,8 @@ export interface MockWorld {
   /**
    * Creatures with ids and health (ATTACK_ENTITY targets them). They count in the threat
    * numbers like `hostiles` and `unclassified`, which are listed as nameless zombies
-   * (minecraft:Zombie, health unknown) and unidentified mobs.
+   * (minecraft:Zombie, health unknown) and unidentified mobs; calm spiders (MockMob.calm)
+   * are listed but not counted.
    */
   mobs?: MockMob[];
   /** What ATTACK_ENTITY strikes with; a bare hand by default. */
@@ -318,9 +328,10 @@ export class MockMinecraftClient implements MinecraftClient {
     const pos = w.player.position;
     const timestamp = new Date(this.#clock.now().getTime() - w.observationLagMs).toISOString();
 
-    const entities = this.#nearbyEntities();
+    const entities = this.#nearbyEntities(timestamp);
+    // Calm spiders are listed, but they threaten nobody (like the live client).
     const hostileDistances = entities
-      .filter((e) => e.category === 'hostile')
+      .filter((e) => e.category === 'hostile' && !e.calm)
       .map((e) => e.distance);
     const unclassifiedDistances = entities
       .filter((e) => e.category === 'unclassified')
@@ -449,12 +460,15 @@ export class MockMinecraftClient implements MinecraftClient {
 
   /**
    * Every creature within the scan, nearest first: `mobs`, plus the legacy `hostiles` (as
-   * zombies of unknown health) and `unclassified` positions, with stable ids.
+   * zombies of unknown health) and `unclassified` positions, with stable ids. A mob the test
+   * marks calm is calm only where the live client's rule allows it (calmSpiderBlocker, with
+   * the player's last hurt measured from the observation's `timestamp`).
    */
-  #nearbyEntities(): NearbyEntity[] {
+  #nearbyEntities(timestamp: string): NearbyEntity[] {
     const w = this.world;
     const pos = w.player.position;
-    const listed: Array<Omit<NearbyEntity, 'distance'>> = [
+    const hurt = recentHurtMs(w.player.lastHurtAt ?? null, timestamp);
+    const listed: Array<Omit<NearbyEntity, 'distance' | 'calm'> & { calmLight: boolean }> = [
       ...(w.mobs ?? []).map((m) => ({
         id: m.id,
         type: m.type,
@@ -466,6 +480,7 @@ export class MockMinecraftClient implements MinecraftClient {
         owned: m.owned === undefined ? (m.category === 'passive' ? false : null) : m.owned,
         baby: m.baby === undefined ? (m.category === 'passive' ? false : null) : m.baby,
         lastHurtAt: m.lastHurtAt ?? null,
+        calmLight: m.calm === true,
       })),
       ...w.hostiles.map((p, i) => ({
         id: MOCK_HOSTILE_ID_BASE + i,
@@ -477,6 +492,7 @@ export class MockMinecraftClient implements MinecraftClient {
         owned: null,
         baby: null,
         lastHurtAt: null,
+        calmLight: false,
       })),
       ...w.unclassified.map((p, i) => ({
         id: MOCK_UNCLASSIFIED_ID_BASE + i,
@@ -488,10 +504,15 @@ export class MockMinecraftClient implements MinecraftClient {
         owned: null,
         baby: null,
         lastHurtAt: null,
+        calmLight: false,
       })),
     ];
     return listed
-      .map((e) => ({ ...e, distance: distance(pos, e.position) }))
+      .map(({ calmLight, ...e }) => {
+        const d = distance(pos, e.position);
+        const calm = calmLight && calmSpiderBlocker({ ...e, distance: d }, hurt) === null;
+        return { ...e, distance: d, calm };
+      })
       .filter((e) => e.distance <= SCAN_RADIUS)
       .sort((a, b) => a.distance - b.distance || a.id - b.id);
   }
@@ -525,6 +546,9 @@ export class MockMinecraftClient implements MinecraftClient {
     }
     const at = this.#clock.now().toISOString();
     mob.lastHurtAt = at;
+    // A spider that was struck has the player as its target, in any light (the live client
+    // never counts one it saw hurt as calm again).
+    mob.calm = false;
     const killed = health <= 0;
     if (killed) {
       w.mobs = mobs.filter((m) => m !== mob);

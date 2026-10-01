@@ -1286,6 +1286,83 @@ may stand next to them.
 `moveEntity` would not match the client's steps), farmland crops (HarvestCraft's and vanilla's
 grow on farmland, which the walker never stands on), and every block not checked.
 
+## Spiders in the light (2026-10-01)
+
+Seen live: one spider in daylight sent the agent 108 blocks back to its spawn. A 1.7.10 spider
+looks for a player only in the dark, and a person ignores one in daylight; the agent now does
+too (`calm` in `nearbyEntities`; see [architecture: combat](architecture.md#combat)). Every rule
+below is _verified_ with `javap` on `minecraft_server.1.7.10.jar` with Forge 10.13.4.1614's
+binpatches applied (every source checksum matched; names from FML's
+`deobfuscation_data-1.7.10.lzma`), and in the mod jars. It has run against the fake server
+only; the live test is next.
+
+- **Targeting** (`yn`, EntitySpider; Forge does not patch it). `findPlayerToAttack` (`bR`,
+  `func_70782_k`) takes the closest vulnerable player within 16 blocks (`ahb.b(sa, 16.0)`) only
+  while `getBrightness(1.0F) < 0.5F`. `EntityCreature.updateEntityActionState` (`td.bq`) asks
+  it only while the spider has no target, keeps a target while it is alive (a player who
+  leaves the server is not), and calls `attackEntity` only while the spider can see it. That
+  (`yn.a(sa, F)`, `func_70785_a`) drops the target with a 1% chance when the brightness is
+  above 0.5, and otherwise leaps at it from 2 to 6 blocks (one chance in 10 a tick) or bites
+  it within 2 (`EntityMob.attackEntity`). A blow makes the attacker the target in any light
+  (`EntityMob.attackEntityFrom`, `yg`). EntityCaveSpider (`xy`) extends EntitySpider, is
+  0.7 x 0.5, and overrides neither method (only its attributes, the poison bite, spawn data).
+- **Brightness** (`sa.d(F)`, Entity.getBrightness): `World.getLightBrightness` at
+  `floor(posX)`, `floor(posY - yOffset + boxHeight * 0.66)`, `floor(posZ)`, or 0 when that
+  column is not loaded. Only players and the client's interpolation write `yOffset` (`sa.L`):
+  0 for mobs. EntitySpider is 1.4 x 0.9: the block its body stands in.
+- **Light level** (`ahb.k` → `ahb.b(IIIZ)`, World.getBlockLightValue): for a block with
+  `getUseNeighborBrightness` (slabs, stairs, farmland, and blocks without light opacity) the
+  brightest of the five blocks above and beside it; below the world 0, above it the top
+  block; otherwise `Chunk.getBlockLightValue` (`apx.b(IIII)`): a missing section gives
+  `15 - skylightSubtracted` (0 without a sky), else the brighter of
+  `skyLight - skylightSubtracted` and the block light.
+- **The threshold** (`aqo.a()`, WorldProvider.generateLightBrightnessTable): level `l` has
+  brightness `(1 - f) / (f * 3 + 1)` with `f = 1 - l / 15` (the overworld adds no minimum):
+  11 gives 0.4074, 12 gives 0.50000006 in floats. So a spider may target a player at light 11
+  or less, and is calm at 12 or more. The overworld's provider (`aqq`, WorldProviderSurface)
+  overrides only its name; BiomesOPlenty replaces it (in WorldTypeBOP's constructor) with
+  `WorldProviderSurfaceBOP`, which overrides only the spawn-point check.
+- **The darkness of the time of day** (`ahb.a(F)`, calculateSkylightSubtracted): Forge makes
+  it `(int)((1 - provider.getSunBrightnessFactor(1.0F)) * 11)`, and the provider returns
+  World's: the celestial angle (`aqo.a(JF)`), `1 - (MathHelper.cos(angle * 2 pi) * 2 + 0.5)`
+  clamped to 0-1 (`qh.b`: a 65,536-entry sine table), times `1 - rain * 5/16` and
+  `1 - thunder * rain * 5/16`. `WorldServer.tick` (`mt.b`) stores it every tick. Under a clear
+  sky that is 0 by day, 4 (sky light 11) from tick 12541 to 23458, and 11 at night; in the
+  rain at noon 3 (sky light 12), in a thunderstorm 5 (10). `src/bot/gtnh1710/light.ts`
+  mirrors it in floats.
+- **The weather on the wire** (`gv`, S2B: u8 reason, f32 value). `WorldServer.updateWeather`
+  (`mt.o`; Forge sends it to the dimension's players only) sends 7 (the rain strength) and 8
+  (the thunder strength) every tick either changes (they fade by 0.01 a tick), and when it
+  starts or stops raining 1 or 2, then both. At a join or respawn,
+  `ServerConfigurationManager.updateTimeAndWeatherForPlayer` (`oi.b`) sends S03 and, only
+  while the rain is above 0.2, 1, 7 and 8, with the thunder WEIGHTED by the rain.
+- **The light on the wire.** `S21PacketChunkData.func_149269_a` (`gx`, for S21 and S26) copies
+  every sent section's block light (`apz.k`), then, where the world has a sky, its sky light
+  (`apz.l`): 2048-byte nibble arrays indexed like the metadata. A section holding only air is
+  not sent in ground-up data (`!groundUp || !isEmpty()`), and neither is its light.
+
+**Mods** (all 211 jars scanned for EntitySpider, EntityCaveSpider, the srg names of every
+method above, and providers that replace dimension 0's):
+
+- ArchaicFix's Phosphor backport (`enablePhosphor=true` here) runs the queued light updates at
+  the start of `Chunk.getBlockLightValue` and of `func_149269_a`: the formula is unchanged and
+  the light sent is current. A section it creates gets full sky light in every column whose
+  height is at or below it (`LightingHooks.initSkylightForSection`).
+- Hodgepodge's `MixinWorldLightValue` only makes the chunk lookup null-safe; NotEnoughIDs'
+  S21 mixin replaces only the id and metadata copies.
+- Darkerer (darker nights) and Galacticraft's `getRainStrength` change only the client;
+  TConstruct's `OverworldProvider` (always midnight) is never registered; Et Futurum's
+  `darkspawns` changes only spawning.
+- Infernal Mobs' modifiers act on the mob's own target (`getEntityToAttack`), never on the
+  closest player.
+- **Special Mobs** (`SpecialMobs-3.6.3`; `spider_rates` keeps about one spider spawn in five
+  vanilla: `_vanilla=3` against 12 for the variants). `Entity_SpecialSpider` and
+  `Entity_SpecialCaveSpider` override `findPlayerToAttack`: one rolled hostile at spawn
+  (`hostile_spiders=0.1`, `hostile_cavespiders=1.0`) sets `fakeDarkness`, and its
+  `getBrightness` then answers 0: it targets in any light. The client cannot see that roll,
+  so **Special Mobs spiders are never calm**. Other mods' spiders (Twilight Forest's,
+  Thaumcraft's, BOP's jungle spider...) were not checked and are never calm either.
+
 ## Quest book (Better Questing) (2026-09-30)
 
 The "Finish Age 0" benchmark is scored from the quest book's OWN records: the quests Better

@@ -31,7 +31,8 @@ export type DefenseAssessment =
  *     entity, low health or food): never fight. A creeper or a crowd is named as the reason
  *     to flee.
  *  2. The target is the nearest hostile within the threat radius that may be attacked at all
- *     (an identified melee or ranged mob: never a creeper, enderman, pigman, silverfish...).
+ *     (an identified melee or ranged mob: never a creeper, enderman, pigman, silverfish...),
+ *     and never a calm spider: hostilesWithin leaves those out (a blow would provoke it).
  *  3. With somewhere to retreat to, retreating is the answer, unless the target is already
  *     within striking distance and dies in at most QUICK_FIGHT_HITS full hits (its health is
  *     known): turning away would only take its blows.

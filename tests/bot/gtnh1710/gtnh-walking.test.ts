@@ -16,7 +16,7 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { SqliteActionLog } from '../../../src/executor/action-log.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK, FOLIAGE, TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
+import { BLOCK, flatWorld, FOLIAGE, openSkyLight, TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
 import { DEFAULT_MODS, FakeGtnhServer, spawnFrame, type FakeServerOptions } from './fake-server.ts';
 
 // The fake world is a grass floor at y=105 with the player at (-4.5, 106, -7.5): the same
@@ -217,6 +217,18 @@ describe('Gtnh1710Client walking', () => {
       { x: -2.5, y: FEET_Y, z: -5.5 },
     );
     expect(retreat).toMatchObject({ ok: true, code: 'OK' });
+  });
+
+  it('a calm spider (in daylight, beyond its leap) does not stop a walk; the same one at night does', async () => {
+    // 6.5 blocks east of the start, and farther with every step toward the north-west.
+    const spider = { kind: 'mob' as const, entityId: 701, mobType: 52, x: 2, y: FEET_Y, z: -7.5 };
+    const options = { light: openSkyLight(flatWorld()), entities: [spider] };
+    const day = await start({ ...options, dayTicks: 6000 });
+    expect(await perform(day.client, moveTo(-8.5, -11.5))).toMatchObject({ ok: true, code: 'OK' });
+    const night = await start({ ...options, dayTicks: 18_000 });
+    const result = await perform(night.client, moveTo(-8.5, -11.5));
+    expect(result).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(result.message).toMatch(/hostile entity minecraft:Spider 6\.5 blocks away/);
   });
 
   it('stops before lava that appears next to the way ahead', async () => {

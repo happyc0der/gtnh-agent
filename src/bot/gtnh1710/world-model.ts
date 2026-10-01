@@ -1,5 +1,12 @@
 import { isPlaceableBlock, type PlaceableBlock } from '../../domain/blocks.ts';
-import { BARE_HAND } from '../../domain/combat.ts';
+import {
+  BARE_HAND,
+  calmSpiderBlocker,
+  LIGHT_SHY_SPIDERS,
+  recentHurtMs,
+  SPIDER_CALM_LIGHT,
+  SPIDER_TARGET_RANGE,
+} from '../../domain/combat.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
@@ -54,6 +61,7 @@ import {
   type ColumnView,
 } from './chunk-data.ts';
 import { scanHazards, type HazardScan } from './hazard-scan.ts';
+import { lightPointY, skylightSubtracted } from './light.ts';
 import type { WindowSnapshot } from './container.ts';
 import {
   FURNACE_PROPERTY,
@@ -105,6 +113,44 @@ const BLOCK_PACKETS: ReadonlySet<number> = new Set([0x21, 0x22, 0x23, 0x26]);
 /** Packet ids whose loss would leave the entity picture incomplete. */
 const ENTITY_PACKETS: ReadonlySet<number> = new Set([0x0c, 0x0e, 0x0f, 0x13, 0x15, 0x17, 0x18]);
 
+/**
+ * The client sees a mob where the server last sent it: every 3 ticks, and only once it moved
+ * 1/8 block (EntityTrackerEntry, 1/32-block positions), so a walking spider may be half a
+ * block or more from there. A spider's light is the darkest of the blocks within this
+ * distance of its light point that it could be in (air).
+ */
+const SPIDER_POSITION_MARGIN = 0.5;
+/** ...and a spider this much beyond SPIDER_TARGET_RANGE still counts as within it. */
+const SPIDER_RANGE_MARGIN = 2;
+/** The clock may be a second or two off the server's: darkness is the darkest within this. */
+const LIGHT_TIME_MARGIN_TICKS = 40;
+/** World.getBlockLightValue's neighbours for a block that takes their brightness. */
+const NEIGHBOUR_LIGHT: ReadonlyArray<readonly [number, number, number]> = [
+  [0, 1, 0],
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
+/**
+ * Packets after which a spider may have found the player in the dark (#watchSpiders): the
+ * spider moved, the player moved, the clock or the weather changed, or the blocks did.
+ */
+const SPIDER_WATCH_PACKETS: ReadonlySet<PlayPacket['type']> = new Set<PlayPacket['type']>([
+  'spawn-mob',
+  'entity-move',
+  'entity-teleport',
+  'entity-status',
+  'server-position',
+  'time-update',
+  'change-game-state',
+  'chunk-data',
+  'chunk-bulk',
+  'block-change',
+  'multi-block-change',
+]);
+
 export interface TrackedEntity {
   kind: 'player' | 'mob' | 'object' | 'modded';
   classification: Classification;
@@ -123,6 +169,11 @@ export interface TrackedEntity {
   lastHurtAt?: Date | null;
   /** When the server said it died (S19 status 3); it is removed about 20 ticks later. */
   diedAt?: Date | null;
+  /**
+   * A vanilla spider (LIGHT_SHY_SPIDERS) that may have picked this player as its target on
+   * this connection, and why (#watchSpiders): it never counts as calm again.
+   */
+  mayTarget?: string | null;
 }
 
 /** A recent death the server announced (S19 status 3). */
@@ -143,6 +194,8 @@ export interface NearbyEntity {
   name: string;
   category: Classification['category'];
   distance: number;
+  /** A calm spider (WorldModel#isCalm): listed, but no threat. */
+  calm: boolean;
 }
 
 export function dimensionName(id: number): string {
@@ -323,6 +376,16 @@ export class WorldModel {
   #lastHurtAt: Date | null = null;
   /** The last S03: the day time then, whether it advances, and when it arrived. */
   #time: { dayTicks: number; daylightCycle: boolean; at: Date } | null = null;
+  /**
+   * The weather as the server keeps it (#applyWeather): the rain and thunder strengths, 0-1;
+   * the thunder null while not known. Null while not known at all.
+   */
+  #weather: { rain: number; thunder: number | null } | null = null;
+  /**
+   * Where the (re)join's weather stands: its time update is awaited, or its weather (sent
+   * right after that) is arriving; null once past both.
+   */
+  #loginWeather: 'awaiting-time' | 'burst' | null = 'awaiting-time';
   #heldSlot = 0;
   #window: Array<ItemStackData | null> | null = null;
   #containers: readonly ContainerDefinition[] = [];
@@ -347,6 +410,8 @@ export class WorldModel {
   #inventoryProblem: string | null = null;
   readonly #chat: string[] = [];
   readonly #entities = new Map<number, TrackedEntity>();
+  /** The tracked vanilla spiders (LIGHT_SHY_SPIDERS), by entity id. */
+  readonly #spiders = new Set<number>();
   /** Deaths the server announced on this connection, most recent first. */
   #deaths: DeathRecord[] = [];
   #selfEntityId: number | null = null;
@@ -937,6 +1002,12 @@ export class WorldModel {
         // entity's health, name tag and age become unknown until they are sent again.
         for (const e of this.#entities.values()) e.metadata = new Map();
         return;
+      case 0x2b:
+        // A weather update was lost: the sky's darkness is not known for this connection
+        // (no spider counts as calm from now on).
+        this.#weather = null;
+        this.#loginWeather = null;
+        return;
       default:
         if (BLOCK_PACKETS.has(packetId)) {
           this.#hazardProblem ??= `undecodable block packet 0x${packetId.toString(16)}: ${reason}`;
@@ -1026,10 +1097,15 @@ export class WorldModel {
   }
 
   /**
-   * Every tracked entity within `radius` of the player, nearest first. An entity the server
-   * said died (it lies in its death animation until it is removed) is no longer counted.
+   * Every tracked entity within `radius` of the player, nearest first, with whether it is a
+   * calm spider as of `now` (#isCalm; by default the last packet's time). An entity the
+   * server said died (it lies in its death animation until it is removed) is no longer
+   * counted.
    */
-  nearbyEntities(radius = ENTITY_SCAN_RADIUS): NearbyEntity[] {
+  nearbyEntities(
+    radius = ENTITY_SCAN_RADIUS,
+    now: Date = this.#lastPacketAt ?? new Date(0),
+  ): NearbyEntity[] {
     const pos = this.#position;
     if (pos === null) return [];
     const out: NearbyEntity[] = [];
@@ -1037,16 +1113,202 @@ export class WorldModel {
       if (e.diedAt != null) continue;
       const distance = Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z);
       if (distance <= radius) {
+        const reported = Number(distance.toFixed(2));
         out.push({
           entityId,
           kind: e.kind,
           name: e.classification.name,
           category: e.classification.category,
-          distance: Number(distance.toFixed(2)),
+          distance: reported,
+          calm: this.#isCalm(e, reported, now),
         });
       }
     }
     return out.sort((a, b) => a.distance - b.distance);
+  }
+
+  // -------------------------------------------------------------------------
+  // Spiders in the light (src/domain/combat.ts, LIGHT_SHY_SPIDERS; docs/gtnh-compatibility.md)
+
+  /** Its height, when the entity is a vanilla spider. */
+  #lightShy(e: TrackedEntity): { height: number } | undefined {
+    if (e.kind !== 'mob' || e.classification.category !== 'hostile') return undefined;
+    return LIGHT_SHY_SPIDERS.get(e.classification.name);
+  }
+
+  /**
+   * Whether a tracked entity is a calm spider now: a vanilla spider that has not shown on
+   * this connection that it may have the player as its target (#watchSpiders), that
+   * calmSpiderBlocker allows (beyond its leap, the player not hurt lately, both as the
+   * GameState reports them: `distance` rounded, the hurt measured from the last packet, the
+   * observation's timestamp), and in light of at least SPIDER_CALM_LIGHT now.
+   */
+  #isCalm(e: TrackedEntity, distance: number, now: Date): boolean {
+    const shy = this.#lightShy(e);
+    if (shy === undefined || e.mayTarget != null || (e.hurtCount ?? 0) > 0) return false;
+    const hurt = recentHurtMs(
+      this.#lastHurtAt === null ? null : this.#lastHurtAt.toISOString(),
+      this.#lastPacketAt ?? now,
+    );
+    const seen = {
+      type: e.classification.name,
+      category: 'hostile' as const,
+      kind: 'mob' as const,
+    };
+    if (calmSpiderBlocker({ ...seen, distance }, hurt) !== null) return false;
+    const light = this.#spiderLight(e, shy.height, now, 'darkest');
+    return light !== undefined && light >= SPIDER_CALM_LIGHT;
+  }
+
+  /**
+   * EntitySpider.findPlayerToAttack takes the closest player within 16 blocks whenever the
+   * spider has no target and is in the dark, and it keeps that target in the light: it drops
+   * it with a 1% chance a tick, and only while it can see the player, until the player leaves
+   * the server (EntityCreature.updateEntityActionState, EntitySpider.attackEntity). A blow
+   * makes the attacker its target, in any light. So a vanilla spider this connection saw in
+   * the dark within that reach (plus SPIDER_RANGE_MARGIN), or saw hurt, may be after the
+   * player from then on: it never counts as calm again on this connection. Checked whenever
+   * a spider, the player, the clock, the weather or the blocks change (SPIDER_WATCH_PACKETS),
+   * and at every observation. Only what is known marks it: light not known yet (a column
+   * still arriving) marks nothing, and the brightest reading of what is uncertain counts
+   * (the clock as it is, a thunder not known as none: between the rain and thunder updates
+   * of one weather change the thunder is briefly not known). The spider is not calm while
+   * any of that is uncertain all the same (#isCalm takes the darkest reading).
+   */
+  #watchSpiders(at: Date): void {
+    const pos = this.#position;
+    for (const id of this.#spiders) {
+      const e = this.#entities.get(id);
+      if (e === undefined || e.mayTarget != null) continue;
+      const shy = this.#lightShy(e);
+      if (shy === undefined) continue;
+      if ((e.hurtCount ?? 0) > 0) {
+        e.mayTarget = 'it was seen hurt';
+        continue;
+      }
+      if (pos === null) continue;
+      const d = Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z);
+      if (d > SPIDER_TARGET_RANGE + SPIDER_RANGE_MARGIN) continue;
+      const light = this.#spiderLight(e, shy.height, at, 'brightest');
+      if (light !== undefined && light < SPIDER_CALM_LIGHT) {
+        e.mayTarget = `it was seen in light ${light}, ${d.toFixed(1)} blocks from the player`;
+      }
+    }
+  }
+
+  /**
+   * The light at a spider as Entity.getBrightness reads it (the block of its light point:
+   * light.ts), the darkest of the blocks within SPIDER_POSITION_MARGIN of that point that it
+   * could be in (air), since the client sees it where it was a moment ago; with the sky's
+   * darkness read `reading` (#skylightSubtracted). Undefined when any of those is not
+   * known, or outside the overworld (the threshold is the overworld's brightness table's).
+   */
+  #spiderLight(
+    e: TrackedEntity,
+    height: number,
+    at: Date,
+    reading: 'darkest' | 'brightest',
+  ): number | undefined {
+    if (this.#dimension !== 0 || this.#hazardProblem !== null) return undefined;
+    const subtracted = this.#skylightSubtracted(at, reading);
+    if (subtracted === undefined) return undefined;
+    const y = lightPointY(e.y, height);
+    const home = { x: Math.floor(e.x), y: Math.floor(y), z: Math.floor(e.z) };
+    let darkest = this.#blockLight(home.x, home.y, home.z, subtracted);
+    if (darkest === undefined) return undefined;
+    const m = SPIDER_POSITION_MARGIN;
+    const near = (v: number): number[] => [...new Set([Math.floor(v - m), Math.floor(v + m)])];
+    for (const bx of near(e.x)) {
+      for (const by of near(y)) {
+        for (const bz of near(e.z)) {
+          if (bx === home.x && by === home.y && bz === home.z) continue;
+          const id = this.#store.blockAt(bx, by, bz);
+          if (id === undefined) return undefined;
+          if (id !== 0) continue; // a block the spider cannot be in
+          const light = this.#blockLight(bx, by, bz, subtracted);
+          if (light === undefined) return undefined;
+          darkest = Math.min(darkest, light);
+        }
+      }
+    }
+    return darkest;
+  }
+
+  /**
+   * World.getBlockLightValue at a block: its own light, or for a block that takes its
+   * neighbours' brightness (Block.getUseNeighborBrightness: slabs, stairs, farmland, and
+   * blocks light passes through, such as glass and plants) the brightest of the five above
+   * and beside it. Which blocks those are the client does not know, so for any block but air
+   * it is the darker of the two (fail closed). Undefined when a light it needs is not known.
+   */
+  #blockLight(x: number, y: number, z: number, subtracted: number): number | undefined {
+    const own = this.#ownLight(x, y, z, subtracted);
+    if (own === undefined) return undefined;
+    const id = this.#store.blockAt(x, y, z);
+    if (id === undefined) return undefined;
+    if (id === 0) return own;
+    let brightest = 0;
+    for (const [dx, dy, dz] of NEIGHBOUR_LIGHT) {
+      const light = this.#ownLight(x + dx, y + dy, z + dz, subtracted);
+      if (light === undefined) return undefined;
+      brightest = Math.max(brightest, light);
+    }
+    return Math.min(own, brightest);
+  }
+
+  /** Chunk.getBlockLightValue as World calls it: 0 below the world, the top block above it. */
+  #ownLight(x: number, y: number, z: number, subtracted: number): number | undefined {
+    if (y < 0) return 0;
+    return this.#store.lightValue(x, Math.min(y, 255), z, subtracted);
+  }
+
+  /**
+   * World.skylightSubtracted (light.ts) for the clock at `at`. Undefined while the time or
+   * the weather is not known. Read `darkest`: the most within LIGHT_TIME_MARGIN_TICKS of the
+   * clock while the daylight cycle runs (the clock may be a little off the server's), and a
+   * storm while it rains and the thunder is not known. Read `brightest`: the clock as it is,
+   * and no thunder that is not known.
+   */
+  #skylightSubtracted(at: Date, reading: 'darkest' | 'brightest' = 'darkest'): number | undefined {
+    const t = this.#time;
+    const w = this.#weather;
+    if (t === null || w === null) return undefined;
+    const elapsed = t.daylightCycle
+      ? Math.max(0, Math.floor((at.getTime() - t.at.getTime()) / 50))
+      : 0;
+    const ticks = t.dayTicks + elapsed;
+    const darkest = reading === 'darkest';
+    const thunder = w.thunder ?? (darkest && w.rain > 0 ? 1 : 0);
+    const margins =
+      darkest && t.daylightCycle ? [-LIGHT_TIME_MARGIN_TICKS, 0, LIGHT_TIME_MARGIN_TICKS] : [0];
+    let most = 0;
+    for (const d of margins) {
+      const time = (((ticks + d) % 24_000) + 24_000) % 24_000;
+      most = Math.max(most, skylightSubtracted(time, w.rain, thunder));
+    }
+    return most;
+  }
+
+  /**
+   * S2B's weather, as WorldServer.updateWeather sends it (Forge: to the dimension's players):
+   * 7 the rain strength and 8 the thunder strength, each every tick it changes (they fade by
+   * 0.01 a tick), and 1 or 2, then both, when it starts or stops raining. At a (re)join,
+   * ServerConfigurationManager.updateTimeAndWeatherForPlayer sends the time (S03) and then,
+   * only while the rain is above 0.2, 1, 7 and 8, with the thunder WEIGHTED by the rain
+   * (getWeightedThunderStrength): the raw thunder is that over the rain. Without them it is
+   * not raining, and the thunder is not known until it is next sent (it only matters while
+   * it rains: #skylightSubtracted then assumes a storm).
+   */
+  #applyWeather(reason: number, value: number): void {
+    const w = this.#weather;
+    if (w === null) return; // before the (re)join's time update, or lost: not known
+    const strength = Math.min(1, Math.max(0, value));
+    if (reason === 7) w.rain = strength;
+    else if (reason === 8) {
+      if (this.#loginWeather !== 'burst') w.thunder = strength;
+      else w.thunder = w.rain > 0 ? Math.min(1, strength / w.rain) : null;
+    }
+    // 1 and 2 (it starts or stops raining) are followed at once by both strengths.
   }
 
   /** Snapshot of every tracked entity (diagnostics and research tools). */
@@ -1104,25 +1366,44 @@ export class WorldModel {
   #track(entityId: number, entity: TrackedEntity): void {
     if (entityId === this.#selfEntityId) return;
     this.#entities.set(entityId, entity);
+    if (this.#lightShy(entity) === undefined) this.#spiders.delete(entityId);
+    else this.#spiders.add(entityId);
   }
 
   apply(packet: PlayPacket, at: Date): void {
     this.touch(at);
+    // The (re)join's weather comes right after its time update, before anything else.
+    if (this.#loginWeather === 'burst' && packet.type !== 'change-game-state') {
+      this.#loginWeather = null;
+    }
+    this.#applyPacket(packet, at);
+    if (SPIDER_WATCH_PACKETS.has(packet.type)) this.#watchSpiders(at);
+  }
+
+  #applyPacket(packet: PlayPacket, at: Date): void {
     switch (packet.type) {
       case 'join-game':
         this.#joined = true;
         this.#dimension = packet.dimension;
         this.#selfEntityId = packet.entityId;
         this.#entities.clear();
+        this.#spiders.clear();
         this.#deaths = [];
         this.#machines.clear();
+        this.#weather = null;
+        this.#loginWeather = 'awaiting-time';
         return;
       case 'respawn':
         // New dimension or death respawn: position is unknown until the server sends it,
-        // and the server re-sends every entity (and machine) in range.
+        // and the server re-sends every entity (and machine) in range, and the time and
+        // weather. (After a death the player is a new entity, which no spider has as its
+        // target yet; the agent never travels between dimensions: the policy pauses.)
         this.#dimension = packet.dimension;
         this.#position = null;
         this.#entities.clear();
+        this.#spiders.clear();
+        this.#weather = null;
+        this.#loginWeather = 'awaiting-time';
         this.#deaths = [];
         this.#machines.clear();
         this.#store.clear();
@@ -1145,14 +1426,14 @@ export class WorldModel {
           return;
         }
         try {
-          const { sections, meta, biomes } = decodeChunkColumnWithBiomes(
+          const { sections, meta, light, biomes } = decodeChunkColumnWithBiomes(
             packet.header,
             packet.groundUp,
             packet.compressed,
             this.#chunkFormat,
           );
           if (packet.groundUp) {
-            this.#store.setColumn(chunkX, chunkZ, sections, at.getTime(), biomes, meta);
+            this.#store.setColumn(chunkX, chunkZ, sections, at.getTime(), biomes, meta, light);
           } else {
             this.#store.updateSections(
               chunkX,
@@ -1161,6 +1442,7 @@ export class WorldModel {
               packet.header.primaryBitMask,
               at.getTime(),
               meta,
+              light,
             );
           }
         } catch (error) {
@@ -1187,6 +1469,7 @@ export class WorldModel {
               at.getTime(),
               c.biomes,
               c.meta,
+              c.light,
             );
           }
         } catch (error) {
@@ -1266,7 +1549,10 @@ export class WorldModel {
         });
         return;
       case 'destroy-entities':
-        for (const id of packet.entityIds) this.#entities.delete(id);
+        for (const id of packet.entityIds) {
+          this.#entities.delete(id);
+          this.#spiders.delete(id);
+        }
         return;
       case 'entity-move': {
         const e = this.#entities.get(packet.entityId);
@@ -1291,6 +1577,14 @@ export class WorldModel {
         return;
       case 'time-update':
         this.#time = { dayTicks: packet.dayTicks, daylightCycle: packet.daylightCycle, at };
+        if (this.#loginWeather === 'awaiting-time') {
+          // The (re)join's time update: its weather follows at once, only while it rains.
+          this.#weather = { rain: 0, thunder: null };
+          this.#loginWeather = 'burst';
+        }
+        return;
+      case 'change-game-state':
+        this.#applyWeather(packet.reason, packet.value);
         return;
       case 'held-item':
         if (packet.slot >= 0 && packet.slot <= 8) this.#heldSlot = packet.slot;
@@ -1391,6 +1685,7 @@ export class WorldModel {
   }
 
   toGameState(now: Date): GameState {
+    this.#watchSpiders(now);
     const pos = this.#position;
     const interactables = this.#interactables();
     const state: GameState = {
@@ -1579,8 +1874,9 @@ export class WorldModel {
     if (!this.#joined) return unknown('not joined yet');
     const notReady = this.#entitiesNotReadyReason(now);
     if (notReady !== null) return unknown(notReady);
-    const nearby = this.nearbyEntities(ENTITY_SCAN_RADIUS);
-    const hostile = nearby.filter((e) => e.category === 'hostile');
+    const nearby = this.nearbyEntities(ENTITY_SCAN_RADIUS, now);
+    // A calm spider threatens nobody (it is still listed in nearbyEntities).
+    const hostile = nearby.filter((e) => e.category === 'hostile' && !e.calm);
     const unclassified = nearby.filter((e) => e.category === 'unclassified');
     return known({
       scanRadius: ENTITY_SCAN_RADIUS,
@@ -1599,8 +1895,8 @@ export class WorldModel {
     const threats = this.#threats(now);
     if (!threats.known) return unknown(threats.reason);
     const entities: StateEntity[] = [];
-    for (const n of this.nearbyEntities(ENTITY_SCAN_RADIUS)) {
-      const e = this.combatEntity(n.entityId);
+    for (const n of this.nearbyEntities(ENTITY_SCAN_RADIUS, now)) {
+      const e = this.combatEntity(n.entityId, now);
       if (e !== null) {
         entities.push({
           id: e.id,
@@ -1613,6 +1909,8 @@ export class WorldModel {
           owned: e.owned,
           baby: e.baby,
           lastHurtAt: e.lastHurtAt,
+          // As #threats counted it.
+          calm: n.calm,
         });
       }
       if (entities.length >= MAX_REPORTED_ENTITIES) break;
@@ -1629,10 +1927,14 @@ export class WorldModel {
   }
 
   /**
-   * A tracked entity as the GameState lists it (and as the combat code checks it), or null
-   * when it is not tracked, not listed (a dropped item, an arrow) or the position is unknown.
+   * A tracked entity as the GameState lists it (and as the combat code checks it), calm as
+   * of `now` (by default the last packet's time), or null when it is not tracked, not listed
+   * (a dropped item, an arrow) or the position is unknown.
    */
-  combatEntity(entityId: number): (StateEntity & { hurtCount: number; dead: boolean }) | null {
+  combatEntity(
+    entityId: number,
+    now: Date = this.#lastPacketAt ?? new Date(0),
+  ): (StateEntity & { hurtCount: number; dead: boolean }) | null {
     const e = this.#entities.get(entityId);
     const pos = this.#position;
     if (e === undefined || pos === null) return null;
@@ -1640,17 +1942,19 @@ export class WorldModel {
     if (category === null) return null;
     const type = e.kind === 'player' ? 'player' : e.classification.name;
     const vitals = vitalsOf(type, e.metadata ?? null);
+    const distance = Number(Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z).toFixed(2));
     return {
       id: entityId,
       type,
       category,
       kind: e.kind === 'modded' ? 'mob' : e.kind,
       position: { x: e.x, y: e.y, z: e.z },
-      distance: Number(Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z).toFixed(2)),
+      distance,
       health: vitals.health,
       owned: vitals.owned,
       baby: vitals.baby,
       lastHurtAt: e.lastHurtAt == null ? null : e.lastHurtAt.toISOString(),
+      calm: this.#isCalm(e, distance, now),
       hurtCount: e.hurtCount ?? 0,
       dead: e.diedAt != null,
     };
@@ -1765,6 +2069,8 @@ export class WorldModel {
   /** Walking: the client moved the player (the server only reports corrections, as S08). */
   setOwnPosition(p: Vec3): void {
     this.#position = { x: p.x, feetY: p.y, z: p.z };
+    // Walking toward a spider in the dark brings it within its reach.
+    this.#watchSpiders(this.#lastPacketAt ?? new Date(0));
   }
 
   get health(): number | null {
@@ -1803,6 +2109,15 @@ export class WorldModel {
   /** Block metadata at a position (diagnostics/tests); undefined while not known. */
   metaAt(x: number, y: number, z: number): number | undefined {
     return this.#store.metaAt(x, y, z);
+  }
+
+  /**
+   * The light level World.getBlockLightValue gives a block at `now` (diagnostics/tests;
+   * #blockLight), the time of day's darkness included; undefined while not known.
+   */
+  lightLevelAt(x: number, y: number, z: number, now: Date): number | undefined {
+    const subtracted = this.#skylightSubtracted(now);
+    return subtracted === undefined ? undefined : this.#blockLight(x, y, z, subtracted);
   }
 
   /** One loaded column with its biomes, for world surveys; undefined while unknown. */

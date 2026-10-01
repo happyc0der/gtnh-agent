@@ -112,7 +112,9 @@ lately (a point every 4 blocks, the last 48, never in a night task), and the new
 48 blocks back, on the far side of the player from the nearest creature and clear of every one
 by the threat radius plus 4, becomes the safe location `trail` for that cycle. Two failed
 retreats along the trail from the same block send it home instead. Seen live: one spider sent
-the agent 108 blocks back to its spawn.
+the agent 108 blocks back to its spawn. That spider was in daylight, where a spider leaves a
+player alone: such a calm spider is no threat at all now (see
+[Combat](#combat)), and trail points stay 10 blocks from one (its leap, 6, plus 4).
 
 ### A model at decision points
 
@@ -613,8 +615,9 @@ blocks at the player's feet level, all on one level (a fence with a height range
    block, and nothing dangerous (or unloaded, or unnamed) touches those blocks. Stretches are
    checked exactly: the swept body, not samples.
 3. Every 0.2-block step is re-checked just before it is sent (the world may have changed). The walk
-   stops on a server correction, a health drop, a hostile/unidentified entity within
-   `threatRadius` (not for a retreat, which is how the agent escapes one), the stop file, `halt()`
+   stops on a server correction, a health drop, a hostile (not a calm spider: see
+   [Combat](#combat)) or unidentified entity within `threatRadius` (not for a retreat, which is
+   how the agent escapes one), the stop file, `halt()`
    (Ctrl+C) or a lost connection. After the last step it waits 5 ticks for a server correction
    before reporting success, and the executor then verifies the position.
 
@@ -919,8 +922,8 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
    - It selects the slot (C09), sends C07 start, and waits the vanilla dig time at the tool's
      speed x 1.25 + 2 ticks: sand takes 21 ticks by hand, 12 with a wooden shovel.
    - Every tick it re-checks everything above, plus: the stop file, `halt()`, the connection,
-     a server correction, a health drop, a hostile or unidentified entity within
-     `threatRadius`, any update for the block (the server's refusal is a re-send), and that the
+     a server correction, a health drop, a hostile (not a calm spider) or unidentified entity
+     within `threatRadius`, any update for the block (the server's refusal is a re-send), and that the
      tool in hand has not changed.
    - On any problem it sends C07 cancel and fails.
 5. **The finish and the verdict.** It sends C07 finish, then waits for the server's block
@@ -1044,8 +1047,8 @@ In layers:
      west, east, above, whose face towards the cell faces the eyes and whose centre is within
      5.5 of the feet and of the point 2 above them. Never a chest, crafting table, machine or
      modded block: the server activates the clicked block first, and those would open;
-   - no hostile or unidentified entity within `threatRadius`, no health drop or server
-     correction since it started, and neither `halt()` nor the stop file.
+   - no hostile (but a calm spider) or unidentified entity within `threatRadius`, no health
+     drop or server correction since it started, and neither `halt()` nor the stop file.
 4. **The hand.** The selected hotbar slot if it holds the item, else the first hotbar slot
    that does, else a stack from the main inventory goes into the first empty hotbar slot with
    two confirmed window-0 clicks (a failed click puts the stack back). With neither, or only
@@ -1246,17 +1249,57 @@ going when the player is hit. Seen live: a giant skeleton shot the agent from be
 threat radius; its retreat stopped at the first arrow, nothing then counted as danger, and it
 walked back into range (20 health to 8).
 
+**Spiders in the light.** A 1.7.10 spider looks for a player only where its light is 11 or
+less; in brighter light it leaves players alone unless provoked (rules and evidence:
+[GTNH compatibility](gtnh-compatibility.md#spiders-in-the-light-2026-10-01)). Seen live: the
+agent retreated from one in daylight, once 108 blocks to its spawn. So a spider is **calm**
+(`nearbyEntities[].calm`): listed, but not counted in `nearbyThreats` (no `HOSTILES_NEARBY`),
+not stopping the client's walks, digs or placements, and never attacked. The rule, in layers:
+
+- **Who** (`LIGHT_SHY_SPIDERS`, `src/domain/combat.ts`): vanilla `minecraft:Spider` and
+  `minecraft:CaveSpider` only. Special Mobs' spiders roll "always hostile" at spawn, unseen by
+  the client, and other mods' spiders were not checked: never calm.
+- **The light, as the server computes it** (the world model): the client keeps each chunk
+  section's block light and sky light as sent (`chunk-data.ts`: a nibble per block, or one
+  value for a uniform section), the time (S03) and the weather (S2B rain and thunder
+  strengths). The light at the spider is `World.getBlockLightValue` at the block 0.66 of its
+  height above its feet: the brighter of sky light less the time of day's darkness
+  (`skylightSubtracted`, mirrored in floats in `light.ts`: 0 by day, 3 in the rain, 5 in a
+  storm, 11 at night) and block light; for a block that may take its neighbours' brightness
+  (anything but air) the darker of its own and theirs. A section not sent holds only air:
+  full sky light where nothing is above it, else not known. Fail closed: the darkest of the
+  air blocks within half a block of that point (the client sees a mob where it was a moment
+  ago), the darkest time within 2 s of the clock, a storm while it rains and the thunder is
+  not known; anything not known (a column not arrived, the time, a lost weather update),
+  or another dimension: not calm.
+- **Calm** when that light is 12 or more, and (`calmSpiderBlocker`, checked by the live
+  client, the mock and the safety policy alike) it is farther than 6 blocks (its leap: one
+  that has the player as its target keeps it in the light, and the client cannot see a
+  target), and the player was not hurt in the last 15 s (`HURT_DANGER_MS`, measured from the
+  observation's time).
+- **Never again on this connection** once it may have the player as its target
+  (`#watchSpiders`, at every move of a spider or the player, clock or weather update, block
+  change and observation): seen in light 11 or less within 18 blocks of the player
+  (`findPlayerToAttack` reaches 16; 2 more for the tracking lag), or seen hurt (a blow makes
+  the attacker its target). Only what is known marks it (the clock as it is, a thunder not
+  known as none). A spider keeps its target until the player leaves the server, so the
+  morning after a night in the pit, the spiders that waited around it still count.
+- **Consistency** (`assessStateReliability`): `nearbyThreats` counts the hostiles that are not
+  calm, and an entity marked calm that `calmSpiderBlocker` refuses is `STATE_INCONSISTENT`.
+  Snapshots stored before `calm` existed read every spider as not calm.
+
 1. **Observation.** `nearbyEntities` lists every entity within the entity scan (16 blocks),
    nearest first, at most 32: id, type, category (hostile, passive, unclassified, player), kind
    (mob, player, object), distance, health (the server's DataWatcher), whether it is owned (a
-   name tag, a saddle) or a baby, and when the server last showed it hurt. It also lists the
-   deaths seen since joining. It is unknown in older snapshots and whenever the threats are, and
-   the safety policy checks it against `nearbyThreats` (same radius, same counts).
+   name tag, a saddle) or a baby, when the server last showed it hurt, and whether it is a
+   calm spider. It also lists the deaths seen since joining. It is unknown in older snapshots
+   and whenever the threats are, and the safety policy checks it against `nearbyThreats`
+   (same radius, same counts: calm spiders are in neither count).
    `player.weapon` is the best allowlisted weapon in the hotbar, or a bare hand (unknown when
-   the hotbar is, or holds neither). The planner sees the creatures with `attackable`, the
-   weapon and the current `fightProblems`.
+   the hotbar is, or holds neither). The planner sees the creatures with `calm` and
+   `attackable` (false for a calm spider), the weapon and the current `fightProblems`.
 2. **System 1** considers fighting only when hostiles are the only danger. `assessDefense`
-   decides:
+   decides (calm spiders are neither a crowd nor a target: `hostilesWithin` leaves them out):
    - **flee** (retreat or pause, adding `CREEPER_NEARBY` or `TOO_MANY_HOSTILES` to the reasons)
      when anything that explodes, or might (an unidentified entity), is within
      `creeperFleeRadius`, or more than `maxHostilesToFight` hostiles are near;
@@ -1275,14 +1318,15 @@ walked back into range (20 health to 8).
    pause when there is no hostile it may fight.
 
 3. **The executor validates as usual** (`attackChecks`): the target is listed (`TARGET_GONE` is
-   stale, so a planner's plan is re-made), may be attacked at all (`NOT_ATTACKABLE`), is inside
-   the boundary, the moment is safe (`UNSAFE_ATTACK`), farm animals only for a task and never
-   with hostiles near, no protected weapon is carried; preconditions: within 8 blocks. The
-   danger gate allows `ATTACK_ENTITY` only when hostiles are the only danger.
+   stale, so a planner's plan is re-made), may be attacked at all (`NOT_ATTACKABLE`), is not a
+   calm spider (`NOT_ATTACKABLE`, block: a blow would provoke it), is inside the boundary, the
+   moment is safe (`UNSAFE_ATTACK`), farm animals only for a task and never with hostiles near,
+   no protected weapon is carried; preconditions: within 8 blocks. The danger gate allows
+   `ATTACK_ENTITY` only when hostiles are the only danger.
 4. **The client re-checks it all** on its own entity picture: combat enabled, a fence, presence
-   ticks, no walk, chest, crafting, dig or other fight; the target tracked, attackable, inside
-   the fence and within 8 blocks; nothing that may explode within 16 blocks and nothing
-   unidentified within `threatRadius`.
+   ticks, no walk, chest, crafting, dig or other fight; the target tracked, attackable, not
+   calm, inside the fence and within 8 blocks; nothing that may explode within 16 blocks and
+   nothing unidentified within `threatRadius`.
 5. **The burst.** It selects the best allowlisted weapon in the hotbar (vanilla axes, never a
    stack with NBT data) or an empty slot, never anything else: a held item's own left-click
    code could do anything. Then, every tick, while the target is within reach (a bare hand

@@ -129,7 +129,7 @@ export function summarizeEntities(state: GameState, limit = 12): Record<string, 
       return (
         `#${x.id} ${x.type} ${x.distance.toFixed(1)} m` +
         `${x.health === null ? '' : `, health ${x.health}`}` +
-        `${refusal === null ? ', attackable' : `: never (${refusal})`}`
+        `${refusal !== null ? `: never (${refusal})` : x.calm ? ', calm: no threat, not provoked' : ', attackable'}`
       );
     }),
     recentDeaths: e.recentDeaths.map((d) => `#${d.id} ${d.type} at ${d.at}`),
@@ -164,7 +164,7 @@ export function summarizeObservation(
     interactables: summarizeInteractables(state),
     nearbyEntities: nearby.map(
       (e) =>
-        `${e.distance.toFixed(1).padStart(5)} m  ${e.category.padEnd(12)} ${e.name} #${e.entityId}`,
+        `${e.distance.toFixed(1).padStart(5)} m  ${e.category.padEnd(12)} ${e.name} #${e.entityId}${e.calm ? ' (calm)' : ''}`,
     ),
     combat: summarizeEntities(state),
     hazards: state.environmentHazards.known
@@ -943,7 +943,10 @@ export function describeView(client: Gtnh1710Client, state: GameState): string {
   const entities = client.world
     .nearbyEntities(16)
     .slice(0, 4)
-    .map((e) => `${e.name}#${e.entityId}[${e.category}] ${e.distance.toFixed(1)}m`)
+    .map(
+      (e) =>
+        `${e.name}#${e.entityId}[${e.category}${e.calm ? ', calm' : ''}] ${e.distance.toFixed(1)}m`,
+    )
     .join(', ');
   // Other players exactly as the agent tracks them (compare with their own F3 X/Y/Z).
   const players = client.world

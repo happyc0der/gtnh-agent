@@ -480,6 +480,13 @@ export type PlayPacket =
    * day time negated (and -1 for 0) while the doDaylightCycle game rule is off.
    */
   | { type: 'time-update'; worldAge: number; dayTicks: number; daylightCycle: boolean }
+  /**
+   * S2B Change Game State (u8 reason, f32 value; verified in the server jar). The weather:
+   * 1 it starts raining, 2 it stops, 7 the rain strength, 8 the thunder strength (0-1; see
+   * the world model for when each is sent). Other reasons (bed, game mode, credits, demo,
+   * the arrow-hit sound) are not used.
+   */
+  | { type: 'change-game-state'; reason: number; value: number }
   | { type: 'respawn'; dimension: number; difficulty: number; gamemode: number; levelType: string }
   | ({ type: 'server-position'; onGround: boolean } & ServerPosition)
   | { type: 'held-item'; slot: number }
@@ -788,6 +795,8 @@ export function decodePlay(
     }
     case 0x05:
       return { type: 'spawn-position', x: r.i32(), y: r.i32(), z: r.i32() };
+    case 0x2b:
+      return { type: 'change-game-state', reason: r.u8(), value: r.f32() };
     case 0x06:
       return { type: 'update-health', health: r.f32(), food: r.i16(), saturation: r.f32() };
     case 0x07:
