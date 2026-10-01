@@ -556,6 +556,8 @@ describe('autonomous play', () => {
           ],
       needs: sheltered ? {} : { 'minecraft:sand': 1 },
       problem: null,
+      walled: false,
+      exit: [],
     });
     const events: PlayEvent[] = [];
     const base = deps(repos, world);
@@ -591,6 +593,49 @@ describe('autonomous play', () => {
       /^morning: the player is inside its night shelter/,
     );
     expect(result.night).toBeNull();
+  });
+
+  it('in the morning digs out of the shelter first (the blueprint names the wall), then plays on', async () => {
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    let walled = true;
+    const exit = [
+      { position: { x: -1, y: 65, z: 0 }, role: 'head wall' as const },
+      { position: { x: -1, y: 64, z: 0 }, role: 'feet wall' as const },
+    ];
+    const base = deps(repos, world);
+    const events: PlayEvent[] = [];
+    await runPlay(
+      {
+        ...base,
+        time: () => Promise.resolve(worldTime(1_000, true)), // morning
+        shelter: () =>
+          Promise.resolve({
+            sheltered: false,
+            todo: [],
+            needs: {},
+            problem: null,
+            walled,
+            exit: walled ? exit : [],
+          }),
+        session: (limits, hooks) => {
+          if (repos.memory.getValue(CURRENT_TASK_KEY) === 'leave-shelter') {
+            expect(repos.memory.taskBlueprint('leave-shelter')).toEqual([
+              '1. DIG_BLOCK the head wall at (-1, 65, 0)',
+              '2. DIG_BLOCK the feet wall at (-1, 64, 0), then the way west is open',
+            ]);
+            walled = false;
+          }
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(events.filter((e) => e.kind === 'goal').map((e) => describePlayEvent(e))).toEqual([
+      'goal: "leave the shelter"',
+      'goal: "Q2" - missing 100 minecraft:sand (new task)',
+    ]);
   });
 
   it('scouts once first when it can explore and little is seen, then plays the quests', async () => {

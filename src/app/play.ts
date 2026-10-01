@@ -16,7 +16,7 @@ import {
   type GameState,
   type WorldTime,
 } from '../domain/game-state.ts';
-import { describeShelter, type ShelterStatus } from '../goals/shelter.ts';
+import { describeShelter, describeShelterExit, type ShelterStatus } from '../goals/shelter.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { DecisionResult } from '../domain/decisions.ts';
@@ -459,6 +459,8 @@ export async function runPlay(
   let lastStop = '';
   /** Shelter sessions tonight (reset in daylight). */
   let shelterTries = 0;
+  /** Sessions this morning trying to dig out of last night's shelter. */
+  let exitTries = 0;
   /** A note for the next goal's journal (e.g. how to leave the night shelter). */
   let wakeNote: string | null = null;
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
@@ -469,6 +471,65 @@ export async function runPlay(
   let loopWaits = 0;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
+  /**
+   * One bounded session on a task whose route is a code-made blueprint (the night shelter,
+   * the way out of it in the morning): the planner follows the listed steps.
+   */
+  const blueprintSession = async (b: {
+    taskId: string;
+    goal: string;
+    subgoal: string;
+    steps: string[];
+    label: string;
+    text: string;
+    missing: Record<string, number>;
+    maxCycles: number;
+  }): Promise<SessionResult> => {
+    deps.repos.transaction(() => {
+      deps.repos.tasks.ensure({ id: b.taskId, goal: b.goal, subgoal: b.subgoal, status: 'active' });
+      deps.repos.tasks.setStatus(b.taskId, 'active');
+      deps.repos.memory.setTaskBlueprint(b.taskId, b.steps);
+      deps.repos.memory.setTaskRequirements(b.taskId, null);
+      deps.repos.memory.setValue(CURRENT_TASK_KEY, b.taskId);
+    });
+    emit({
+      kind: 'goal',
+      quest: b.label,
+      goal: b.text,
+      missing: b.missing,
+      taskId: b.taskId,
+      created: false,
+    });
+    const session = sessions + 1;
+    const result = await deps.session(
+      { ...limits.session, maxCycles: Math.min(limits.session.maxCycles, b.maxCycles) },
+      {
+        stopRequested: hooks.stopRequested,
+        onCycle: (r, index) => {
+          lastDecision = r.decision ?? null;
+          emit({
+            kind: 'cycle',
+            session,
+            index,
+            summary: r.summary,
+            decision: null,
+            newPlan:
+              r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
+            detail: r.outcome?.execution?.message ?? null,
+          });
+        },
+      },
+    );
+    sessions = session;
+    emit({
+      kind: 'session-end',
+      session,
+      stopKind: result.stopKind,
+      stopReason: result.stopReason,
+      cycles: result.cycles.length,
+    });
+    return result;
+  };
   /** Ends play for a mob near home: the paused task is active again (see mobPause). */
   const waitOutMob = (taskId: string, reasons: string): PlayResult => {
     deps.repos.tasks.setStatus(taskId, 'active');
@@ -569,56 +630,15 @@ export async function runPlay(
           return done(`${nightReason(clock)}; no shelter: ${why}`, clock);
         }
         shelterTries += 1;
-        const taskId = 'night-shelter';
-        const steps = describeShelter(status);
-        deps.repos.transaction(() => {
-          deps.repos.tasks.ensure({
-            id: taskId,
-            goal: 'Night is coming: build a shelter around yourself (the route), then stay inside until morning',
-            subgoal: `${status.todo.length} blocks to place before dark`,
-            status: 'active',
-          });
-          deps.repos.tasks.setStatus(taskId, 'active');
-          deps.repos.memory.setTaskBlueprint(taskId, steps);
-          deps.repos.memory.setTaskRequirements(taskId, null);
-          deps.repos.memory.setValue(CURRENT_TASK_KEY, taskId);
-        });
-        emit({
-          kind: 'goal',
-          quest: 'shelter for the night',
-          goal: `place ${status.todo.length} blocks`,
+        const result = await blueprintSession({
+          taskId: 'night-shelter',
+          goal: 'Night is coming: build a shelter around yourself (the route), then stay inside until morning',
+          subgoal: `${status.todo.length} blocks to place before dark`,
+          steps: describeShelter(status),
+          label: 'shelter for the night',
+          text: `place ${status.todo.length} blocks`,
           missing: status.needs,
-          taskId,
-          created: false,
-        });
-        const session = sessions + 1;
-        const result = await deps.session(
-          {
-            ...limits.session,
-            maxCycles: Math.min(limits.session.maxCycles, status.todo.length * 2 + 2),
-          },
-          {
-            stopRequested: hooks.stopRequested,
-            onCycle: (r, index) =>
-              emit({
-                kind: 'cycle',
-                session,
-                index,
-                summary: r.summary,
-                decision: null,
-                newPlan:
-                  r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
-                detail: r.outcome?.execution?.message ?? null,
-              }),
-          },
-        );
-        sessions = session;
-        emit({
-          kind: 'session-end',
-          session,
-          stopKind: result.stopKind,
-          stopReason: result.stopReason,
-          cycles: result.cycles.length,
+          maxCycles: status.todo.length * 2 + 2,
         });
         if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
           return done(result.stopReason);
@@ -627,6 +647,33 @@ export async function runPlay(
       }
     }
     shelterTries = 0;
+
+    // Morning in last night's shelter (walls all around, roofed or not): dig out first, as a
+    // person does. The blueprint names the two blocks of one wall, head level first.
+    if (deps.shelter !== undefined) {
+      const status = await deps.shelter();
+      if (status !== null && status.walled && status.exit.length > 0) {
+        if (exitTries >= limits.maxStuckSessions) {
+          return done(`the player could not dig out of its shelter in ${exitTries} sessions`);
+        }
+        exitTries += 1;
+        const result = await blueprintSession({
+          taskId: 'leave-shelter',
+          goal: 'Morning: dig your way out of the night shelter (the route), then carry on',
+          subgoal: `dig ${status.exit.length} wall blocks`,
+          steps: describeShelterExit(status),
+          label: 'leave the shelter',
+          text: `dig ${status.exit.length} blocks`,
+          missing: {},
+          maxCycles: status.exit.length * 2 + 2,
+        });
+        if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
+          return done(result.stopReason);
+        }
+        continue;
+      }
+    }
+    exitTries = 0;
 
     // What to work on this round: the player's own goal, or the next quest.
     let current: {

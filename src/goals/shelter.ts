@@ -91,6 +91,13 @@ export interface ShelterStatus {
   needs: Record<string, number>;
   /** Why the box cannot be built from what is carried (or the area is unknown), else null. */
   problem: string | null;
+  /** All eight walls are solid: the player cannot walk out (roofed or not). */
+  walled: boolean;
+  /**
+   * When walled: the two blocks to dig to get out, in order: the west wall's head-level block,
+   * then the one below it (the roof support stands on the east wall). Empty otherwise.
+   */
+  exit: ShelterCell[];
 }
 
 /**
@@ -112,13 +119,21 @@ export function shelterStatus(
       todo: [],
       needs: {},
       problem: 'the blocks around the player are not loaded',
+      walled: false,
+      exit: [],
     };
   }
+  const walled = cells
+    .filter((c) => c.role === 'feet wall' || c.role === 'head wall')
+    .every((c) => solid(c) === true);
+  const west = (role: ShelterCell['role']): ShelterCell[] =>
+    cells.filter((c) => c.role === role && c.position.x < Math.floor(feet.x));
+  const exit = walled ? [...west('head wall'), ...west('feet wall')] : [];
   // The box: walls and roof. The support only matters while the roof is still open and
   // nothing beside the roof cell is solid already.
   const box = cells.filter((c) => c.role !== 'roof support');
   if (box.every((c) => solid(c) === true)) {
-    return { sheltered: true, todo: [], needs: {}, problem: null };
+    return { sheltered: true, todo: [], needs: {}, problem: null, walled, exit };
   }
   const roof = cells.find((c) => c.role === 'roof');
   const supported =
@@ -165,13 +180,24 @@ export function shelterStatus(
           cell.role === 'roof'
             ? 'no block for the roof (cobblestone, dirt, sandstone, planks or logs)'
             : 'not enough wall blocks (sand, dirt, logs or gravel)',
+        walled,
+        exit,
       };
     }
     todo.push({ ...cell, item });
     needs[item] = (needs[item] ?? 0) + 1;
     willBeSolid.add(key(p));
   }
-  return { sheltered: false, todo, needs, problem: null };
+  return { sheltered: false, todo, needs, problem: null, walled, exit };
+}
+
+/** The way out of a walled shelter, as route steps for the planner (empty when not walled). */
+export function describeShelterExit(status: ShelterStatus): string[] {
+  return status.exit.map(
+    (c, i) =>
+      `${i + 1}. DIG_BLOCK the ${c.role} at (${c.position.x}, ${c.position.y}, ${c.position.z})` +
+      (i === status.exit.length - 1 ? ', then the way west is open' : ''),
+  );
 }
 
 /** The shelter as route steps for the planner. */
