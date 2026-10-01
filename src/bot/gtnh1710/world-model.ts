@@ -8,6 +8,7 @@ import {
   MAX_REPORTED_PLACEABLE,
   MAX_REPORTED_PLACED,
   MAX_REPORTED_REMOVED,
+  MAX_REPORTED_RESOURCES,
   worldTime,
   type GameState,
   type NearbyEntity as StateEntity,
@@ -19,6 +20,7 @@ import { toolInfo, usesLeft } from '../../domain/tools.ts';
 import { PLACE_TARGETS, scanPlaceable } from './placing.ts';
 import {
   buildDiggableTable,
+  buildSeeThroughTable,
   diggableOf,
   RESOURCE_SCAN_RADIUS,
   scanResources,
@@ -376,6 +378,8 @@ export class WorldModel {
   #hazardProblem: string | null = null;
   /** Registry id -> diggable block (resource-scan.ts); rebuilt when the registry arrives. */
   #diggable: Uint8Array | null = null;
+  /** Blocks a face may touch and still be in view (resource-scan.ts buildSeeThroughTable). */
+  #seeThrough: Uint8Array | null = null;
   /** Where the server turned a diggable block into air, most recent first. */
   #removed: Array<{ x: number; y: number; z: number }> = [];
   /** Where the server turned an empty cell into a placeable block, most recent first. */
@@ -421,6 +425,7 @@ export class WorldModel {
     this.#registry = registry;
     this.#blockCodes = buildBlockCodeTable(registry);
     this.#diggable = buildDiggableTable(registry);
+    this.#seeThrough = buildSeeThroughTable(registry);
     this.#interactTable = buildInteractableTable(registry, this.#observePatterns);
   }
 
@@ -1720,7 +1725,14 @@ export class WorldModel {
     const table = this.#diggable;
     if (table === null) return unknown('block registry not received yet');
     const feet = { x: pos.x, y: pos.feetY, z: pos.z };
-    const scan = scanResources(this.#store, table, feet);
+    const scan = scanResources(
+      this.#store,
+      table,
+      feet,
+      RESOURCE_SCAN_RADIUS,
+      MAX_REPORTED_RESOURCES,
+      this.#seeThrough ?? undefined,
+    );
     if (!scan.ok) return unknown(scan.reason);
     const near = (p: { x: number; y: number; z: number }): boolean =>
       Math.hypot(p.x + 0.5 - feet.x, p.y + 0.5 - feet.y, p.z + 0.5 - feet.z) <=

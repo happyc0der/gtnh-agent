@@ -16,6 +16,7 @@ import { DIG_STATUS, outbound } from '../../../src/bot/gtnh1710/packets.ts';
 import { parseModIdData } from '../../../src/bot/gtnh1710/registry.ts';
 import {
   buildDiggableTable,
+  buildSeeThroughTable,
   diggableOf,
   GROUND_DIRT_SAMPLE,
   scanResources,
@@ -149,6 +150,15 @@ const AREA: DigArea = {
 };
 const FEET: Vec3 = { x: 0.5, y: 200, z: 0.5 };
 const k = (x: number, y: number, z: number): string => `${x},${y},${z}`;
+/** The six faces of a block. */
+const DIG_NEIGHBOURS_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
 
 // A terrain fence (a height range): digging goes from one below the feet up.
 const TERRAIN: DigArea = {
@@ -607,6 +617,23 @@ describe('resource scan', () => {
     const dirt = Math.hypot(5.5 - feet.x, 107.5 - feet.y, 0.5 - feet.z);
     expect(scan.scanRadius).toBeLessThan(dirt);
     expect(scan.scanRadius).toBeGreaterThan(dirt - 0.01);
+  });
+
+  it('sees a trunk log through the leaves around it (a face touching leaves is in view)', () => {
+    // Seen live: in bushy Hot Forest trees every trunk log touched leaves on all sides.
+    const blocks: Record<string, number> = { [k(3, 107, 0)]: BLOCK.log };
+    for (const [dx, dy, dz] of DIG_NEIGHBOURS_OFFSETS)
+      blocks[k(3 + dx, 107 + dy, dz)] = BLOCK.leaves;
+    const store = storeOf(blocks);
+    const logs = (scan: ReturnType<typeof scanResources>) =>
+      scan.ok
+        ? scan.resources.filter((r) => r.block === 'minecraft:log').map((r) => r.position)
+        : [];
+    expect(logs(scanResources(store, table, feet))).toEqual([]);
+    const seeThrough = buildSeeThroughTable(registryOf(DIG_TEST_BLOCK_REGISTRY));
+    expect(logs(scanResources(store, table, feet, 16, 64, seeThrough))).toEqual([
+      { x: 3, y: 107, z: 0 },
+    ]);
   });
 
   it('is unknown while a chunk in range is missing', () => {

@@ -2,6 +2,7 @@ import { DIGGABLE_BLOCKS, nearestOfEachKind, type DiggableBlock } from '../../do
 import { MAX_REPORTED_RESOURCES } from '../../domain/game-state.ts';
 import type { ChunkStore } from './chunk-data.ts';
 import type { Registry } from './registry.ts';
+import { SIGHT, sightOf } from './world-survey.ts';
 
 /** Blocks around the player searched for diggable blocks (a sphere around the feet). */
 export const RESOURCE_SCAN_RADIUS = 16;
@@ -24,6 +25,21 @@ export function buildDiggableTable(registry: Registry): Uint8Array {
   for (const [id, name] of registry.blocks) {
     const k = (DIGGABLE_BLOCKS as readonly string[]).indexOf(name);
     if (k >= 0 && id > 0 && id < 65536) table[id] = k + 1;
+  }
+  return table;
+}
+
+/**
+ * Registry id -> 1 when a face touching that block is in view: leaves and plants, which sight
+ * crosses (world-survey.ts sightOf), but not water (a riverbed block shows through it, yet
+ * nothing dug there is safe). Seen live: in bushy Hot Forest trees every trunk log touches
+ * leaves on all sides, so with air alone no log below the canopy was ever listed.
+ */
+export function buildSeeThroughTable(registry: Registry): Uint8Array {
+  const table = new Uint8Array(65536);
+  for (const [id, name] of registry.blocks) {
+    if (id <= 0 || id >= 65536 || /water|lava/.test(name)) continue;
+    if (sightOf(name) !== SIGHT.blocked) table[id] = 1;
   }
   return table;
 }
@@ -72,6 +88,7 @@ export function scanResources(
   feet: { x: number; y: number; z: number },
   radius = RESOURCE_SCAN_RADIUS,
   max = MAX_REPORTED_RESOURCES,
+  seeThrough?: Uint8Array,
 ): ResourceScan {
   const r2 = radius * radius;
   const minX = Math.floor(feet.x - radius);
@@ -84,13 +101,18 @@ export function scanResources(
   // hold the player up.
   const ownX = [Math.floor(feet.x - 0.3), Math.floor(feet.x + 0.3)];
   const ownZ = [Math.floor(feet.z - 0.3), Math.floor(feet.z + 0.3)];
+  // A face is in view when it touches air, or leaves or a plant (buildSeeThroughTable).
+  const open = (x: number, y: number, z: number): boolean => {
+    const id = store.blockAt(x, y, z);
+    return id === 0 || (id !== undefined && seeThrough !== undefined && seeThrough[id] === 1);
+  };
   const exposed = (x: number, y: number, z: number): boolean =>
-    store.blockAt(x + 1, y, z) === 0 ||
-    store.blockAt(x - 1, y, z) === 0 ||
-    store.blockAt(x, y + 1, z) === 0 ||
-    store.blockAt(x, y - 1, z) === 0 ||
-    store.blockAt(x, y, z + 1) === 0 ||
-    store.blockAt(x, y, z - 1) === 0;
+    open(x + 1, y, z) ||
+    open(x - 1, y, z) ||
+    open(x, y + 1, z) ||
+    open(x, y - 1, z) ||
+    open(x, y, z + 1) ||
+    open(x, y, z - 1);
   const maxY = Math.min(255, Math.floor(feet.y + radius));
 
   let missing = 0;

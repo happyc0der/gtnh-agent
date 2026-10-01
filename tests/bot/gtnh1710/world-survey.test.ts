@@ -171,6 +171,23 @@ describe('what a survey counts', () => {
     expect(xray?.counts.ore).toBe(1); // standing in the cave, the near one is seen
   });
 
+  it('sees a trunk through the leaves around it, and only a little way into a canopy', () => {
+    // Seen live: in bushy trees only the canopy's logs were ever seen, too high to dig.
+    const blocks: Record<string, number> = { '6,64,6': BLOCK.log, '6,65,6': BLOCK.log };
+    for (const [x, z] of [
+      [5, 6],
+      [7, 6],
+      [6, 5],
+      [6, 7],
+    ] as const) {
+      blocks[`${x},64,${z}`] = BLOCK.leaves;
+      blocks[`${x},65,${z}`] = BLOCK.leaves;
+    }
+    blocks['6,66,6'] = BLOCK.leaves;
+    const s = surveyChunk(worldOf(storeOf(ground(blocks), () => 230)), tables, 0, 0, EYE);
+    expect(s?.counts.log).toBe(2);
+  });
+
   it('sees nothing beyond its range, and nothing of unloaded chunks', () => {
     const store = storeOf(ground({}), () => 2, 1);
     const w = worldOf(store);

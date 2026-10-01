@@ -261,8 +261,13 @@ export function surveyChunk(
   };
   const seen = (kind: SurveyKind, x: number, y: number, z: number): boolean => {
     for (const [fx, fy, fz] of kind === 'water' ? TOP_ONLY : FACES) {
-      if (world.blockAt(x + fx, y + fy, z + fz) !== 0) continue;
-      // Just past the face, in the air cell next to it.
+      // A face touching air, or what sight crosses: leaves round a trunk, plants, water over a
+      // riverbed (seen live: in bushy trees only the canopy's logs were ever seen).
+      const n = world.blockAt(x + fx, y + fy, z + fz);
+      if (n === undefined || (n !== 0 && sight(x + fx, y + fy, z + fz) === SIGHT.blocked)) {
+        continue;
+      }
+      // Just past the face, in the cell next to it (the line's end cell is not checked).
       const p = { x: x + 0.5 + 0.51 * fx, y: y + 0.5 + 0.51 * fy, z: z + 0.5 + 0.51 * fz };
       if (Math.hypot(p.x - eye.x, p.y - eye.y, p.z - eye.z) > SURVEY_RANGE) continue;
       if (clearLine(eye, p, sight)) return true;
