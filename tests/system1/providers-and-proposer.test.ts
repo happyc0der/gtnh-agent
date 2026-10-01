@@ -75,7 +75,7 @@ describe('decision providers', () => {
       const state = makeState(); // nothing unsafe, full health and food, an active task
       const router = routeDecision(state, routerCtx());
       expect(isBindingRouterDecision(router)).toBe(false);
-      for (const chosen of ['PAUSE_AND_ASK_USER', 'RETREAT_HOME', 'EAT'] as const) {
+      for (const chosen of ['PAUSE_AND_ASK_USER', 'RETREAT_HOME', 'EAT', 'DEFEND'] as const) {
         const d = await new SafetyFirstDecisionProvider(MockDecisionProvider.always(chosen)).decide(
           state,
           routerCtx(),

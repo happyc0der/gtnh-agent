@@ -47,6 +47,7 @@ const FACT_CHECKED_DECISIONS: ReadonlySet<Decision> = new Set<Decision>([
   'PAUSE_AND_ASK_USER',
   'RETREAT_HOME',
   'EAT',
+  'DEFEND',
 ]);
 
 /**
@@ -55,7 +56,7 @@ const FACT_CHECKED_DECISIONS: ReadonlySet<Decision> = new Set<Decision>([
  *    decision wins and the inner provider is not asked;
  *  - the inner provider's output is schema-validated; invalid output or an exception
  *    becomes PAUSE_AND_ASK_USER;
- *  - an inner pause, retreat or meal the facts rule out (FACT_CHECKED_DECISIONS) is replaced
+ *  - an inner pause, retreat, meal or fight the facts rule out (FACT_CHECKED_DECISIONS) is replaced
  *    by the router's decision, and factsUsed.overruled says what the provider chose.
  */
 export class SafetyFirstDecisionProvider implements DecisionProvider {

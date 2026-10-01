@@ -438,6 +438,12 @@ describe('a mob near home', () => {
     expect(
       mobPause('needs-attention', pause(['HOSTILES_NEARBY', 'ALREADY_AT_SAFE_LOCATION'])),
     ).toBe('HOSTILES_NEARBY, ALREADY_AT_SAFE_LOCATION');
+    expect(
+      mobPause(
+        'needs-attention',
+        pause(['HOSTILES_NEARBY', 'CREEPER_NEARBY', 'ALREADY_AT_SAFE_LOCATION']),
+      ),
+    ).toBe('HOSTILES_NEARBY, CREEPER_NEARBY, ALREADY_AT_SAFE_LOCATION');
     expect(mobPause('needs-attention', pause(['HUNGRY', 'NO_APPROVED_FOOD']))).toBeNull();
     expect(mobPause('needs-attention', pause(['HOSTILES_NEARBY', 'LOW_HEALTH']))).toBeNull();
     expect(mobPause('cycle-failed', pause(['HOSTILES_NEARBY']))).toBeNull();
