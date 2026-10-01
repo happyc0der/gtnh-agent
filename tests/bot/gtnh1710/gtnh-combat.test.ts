@@ -239,11 +239,13 @@ describe('Gtnh1710Client fighting', () => {
   }, 15_000);
 
   it('waits for a zombie to come within reach, and stops as soon as the player is hit', async () => {
+    // 4.4 blocks west: out of reach, but inside the fence from the start (a target outside
+    // the fence is refused, and under load the fake mob's first steps may come late).
     const { server, client } = await start({
-      combat: { mobs: [zombie(301, 5, 20, { chase: { speed: 0.12, damage: 3 } })] },
+      combat: { mobs: [zombie(301, -4.4, 20, { chase: { speed: 0.12, damage: 3 } })] },
     });
     const result = await attack(client, 301);
-    expect(result).toMatchObject({ ok: true, data: { kills: 0, damageTaken: 3 } });
+    expect(result, result.message).toMatchObject({ ok: true, data: { kills: 0, damageTaken: 3 } });
     expect(result.data['hits']).toBeGreaterThanOrEqual(1);
     expect(result.message).toMatch(/stopped: the player took 3 damage/);
     // Every strike was within a bare hand's reach (Battlegear2 cancels beyond 2.3).

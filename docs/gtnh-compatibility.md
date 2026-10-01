@@ -590,6 +590,10 @@ power)` and full exposure, × 1.5 for a player on Hard (the test server's diffic
   claims (off on the test server). **Et Futurum** only adds sounds. **ArchaicFix** lets a click
   on a block without a collision box (grass, flowers) hit the entity behind it; the agent sends
   no block clicks while fighting.
+- **OpenBlocks graves** (from `config/OpenBlocks.cfg`, not checked in code): if the agent dies,
+  its items go into a grave block where it died (`storeContents=true`), and graves now and then
+  spawn skeletons around them (`spawnSkeletons=true`). The agent cannot recover a grave; a death
+  needs a human.
 - **Server settings:** `difficulty=3` (Hard), `pvp=true`.
 
 _Assumptions, to check live:_
