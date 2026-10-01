@@ -38,9 +38,21 @@ const TASK_PROGRESS: ReadonlySet<Decision> = new Set([
   'WAIT_FOR_MACHINE',
 ]);
 
+/** Why a run stopped, for callers that decide what comes next (the play loop). */
+export type SessionStopKind =
+  | 'no-task'
+  | 'task-finished'
+  | 'task-halted'
+  | 'limit'
+  | 'stop-requested'
+  | 'cycle-failed'
+  | 'needs-attention'
+  | 'non-task-decision';
+
 export interface SessionResult {
   cycles: Array<{ cycleId: string; summary: string }>;
   stopReason: string;
+  stopKind: SessionStopKind;
   taskId: string | null;
   taskStatus: string | null;
   elapsedMs: number;
@@ -73,9 +85,10 @@ export async function runSession(
   const taskId = deps.repos.memory.getValue(CURRENT_TASK_KEY);
   const taskStatus = (): string | null =>
     taskId === null ? null : (deps.repos.tasks.get(taskId)?.status ?? null);
-  const done = (stopReason: string): SessionResult => ({
+  const done = (stopKind: SessionStopKind, stopReason: string): SessionResult => ({
     cycles,
     stopReason,
+    stopKind,
     taskId,
     taskStatus: taskStatus(),
     elapsedMs: Date.now() - started,
@@ -83,25 +96,34 @@ export async function runSession(
 
   for (;;) {
     const status = taskStatus();
-    if (taskId === null || status === null) return done('there is no current task (cli task-add)');
-    if (status === 'completed') return done('the task is completed');
-    if (status !== 'active') return done(`the task is ${status}`);
+    if (taskId === null || status === null) {
+      return done('no-task', 'there is no current task (cli task-add)');
+    }
+    if (status === 'completed') return done('task-finished', 'the task is completed');
+    if (status !== 'active') return done('task-halted', `the task is ${status}`);
     if (cycles.length >= limits.maxCycles)
-      return done(`reached the limit of ${limits.maxCycles} cycles`);
+      return done('limit', `reached the limit of ${limits.maxCycles} cycles`);
     if (Date.now() - started >= limits.maxMinutes * 60_000) {
-      return done(`reached the limit of ${limits.maxMinutes} minutes`);
+      return done('limit', `reached the limit of ${limits.maxMinutes} minutes`);
     }
     const stop = hooks.stopRequested();
-    if (stop !== null) return done(stop);
+    if (stop !== null) return done('stop-requested', stop);
 
     const result = await runSingleCycle(deps);
     cycles.push({ cycleId: result.cycleId, summary: result.summary });
     hooks.onCycle?.(result, cycles.length);
 
-    if (result.status !== 'succeeded') return done(`stopped after: ${result.summary}`);
-    if (result.needsUserAttention) return done(`needs attention after: ${result.summary}`);
+    if (result.status !== 'succeeded' || result.needsUserAttention) {
+      // A cycle that asks for a human is reported as such even when it also failed.
+      return done(
+        result.needsUserAttention ? 'needs-attention' : 'cycle-failed',
+        result.status !== 'succeeded'
+          ? `stopped after: ${result.summary}`
+          : `needs attention after: ${result.summary}`,
+      );
+    }
     if (result.decision === null || !TASK_PROGRESS.has(result.decision.decision)) {
-      return done(`stopped after a non-task decision: ${result.summary}`);
+      return done('non-task-decision', `stopped after a non-task decision: ${result.summary}`);
     }
     if (limits.pauseMs > 0) await new Promise((r) => setTimeout(r, limits.pauseMs));
   }

@@ -12,6 +12,7 @@ import {
 } from '../goals/quest-goals.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
+import type { TaskStatus } from '../domain/tasks.ts';
 
 /**
  * The agent's quest book: which Age 0 quests it has completed (kept in agent memory), and
@@ -75,18 +76,28 @@ export function updateQuests(
 }
 
 /**
- * Makes the goal the current task (created active, or brought up to date with what is
- * still missing). The planner then plans for it; no plan is written here.
+ * Makes the goal the current task: created active, or brought up to date with what is
+ * still missing. An existing task keeps its status: a quest task that was paused, blocked
+ * or closed stays that way (only a human resumes it), and the caller sees the status.
+ * The planner then plans for it; no plan is written here.
  */
-export function adoptGoal(repos: Repositories, goal: Goal): { taskId: string; created: boolean } {
+export function adoptGoal(
+  repos: Repositories,
+  goal: Goal,
+): { taskId: string; created: boolean; status: TaskStatus } {
   const taskId = questTaskId(goal.quest.id);
   const existing = repos.tasks.get(taskId);
-  repos.transaction(() => {
-    repos.tasks.ensure({ id: taskId, goal: goal.text, subgoal: goal.subgoal, status: 'active' });
-    if (existing !== null && existing.status !== 'active') repos.tasks.setStatus(taskId, 'active');
-    repos.memory.setValue(CURRENT_TASK_KEY, taskId);
+  const task = repos.transaction(() => {
+    const t = repos.tasks.ensure({
+      id: taskId,
+      goal: goal.text,
+      subgoal: goal.subgoal,
+      status: 'active',
+    });
+    if (t.status === 'active') repos.memory.setValue(CURRENT_TASK_KEY, taskId);
+    return t;
   });
-  return { taskId, created: existing === null };
+  return { taskId, created: existing === null, status: task.status };
 }
 
 /** The quest book as the agent sees it, for the CLI. */
