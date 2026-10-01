@@ -200,6 +200,25 @@ export const PlacedBlockSchema = z.strictObject({
 export type PlacedBlock = z.infer<typeof PlacedBlockSchema>;
 
 /**
+ * The ground in the player's own column (for DIG_DOWN, the night pit only): the block the
+ * player stands on and the one under it, by registry name. Reported only while the player's
+ * body stands in that one column, on top of the block.
+ */
+export const UnderFeetSchema = z.strictObject({
+  /** The block the player stands on: the one DIG_DOWN digs. */
+  position: BlockPositionSchema,
+  block: z.string().min(1).max(128),
+  /** The block under it: where the player lands after DIG_DOWN. */
+  landing: z.string().min(1).max(128),
+  /**
+   * The landing holds the player: a plain full block, and when it is sand or gravel, a
+   * plain full block holds it up in turn (else it would fall into a hole under it).
+   */
+  landingHolds: z.boolean(),
+});
+export type UnderFeet = z.infer<typeof UnderFeetSchema>;
+
+/**
  * Blocks near the player that matter for digging and placing, from the blocks the server
  * sent. Only allowlisted blocks a player could see (a face touching air) are listed as
  * resources: at or above the player's feet level, plus sand, gravel and clay one level below
@@ -232,6 +251,12 @@ export const NearbyBlocksSchema = z.strictObject({
    * verified against this.
    */
   placed: z.array(PlacedBlockSchema).max(MAX_REPORTED_PLACED).default([]),
+  /**
+   * The ground under the player (DIG_DOWN), or null when the player's body is not in one
+   * column on a block top, or a block is not loaded or named. Absent when the adapter does
+   * not report it (digging disabled), and in snapshots stored before it existed.
+   */
+  underFeet: UnderFeetSchema.nullable().optional(),
 });
 export type NearbyBlocks = z.infer<typeof NearbyBlocksSchema>;
 

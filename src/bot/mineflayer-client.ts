@@ -175,6 +175,7 @@ export class MineflayerClient implements MinecraftClient {
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
       case 'DIG_BLOCK':
+      case 'DIG_DOWN':
       case 'PLACE_BLOCK':
       case 'CRAFT_ITEM':
       case 'INTERACT_BLOCK':

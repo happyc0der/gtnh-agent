@@ -45,9 +45,11 @@ const FORBIDDEN_KEYWORDS = [
 /**
  * Action types the operator allows although they contain a forbidden keyword, matched
  * EXACTLY (case included). DIG_BLOCK breaks one allowlisted natural block, PLACE_BLOCK
- * places one allowlisted plain block (both approved 2026-09-30) and ATTACK_ENTITY strikes
- * one observed hostile or farm animal (src/domain/combat.ts; asked for 2026-09-30). Every
- * other type with a forbidden keyword (BREAK_BLOCK, MINE_ORE, DIG_AREA, dig_block,
+ * places one allowlisted plain block (both approved 2026-09-30), ATTACK_ENTITY strikes
+ * one observed hostile or farm animal (src/domain/combat.ts; asked for 2026-09-30) and
+ * DIG_DOWN digs the block under the player's feet for the night pit only (approved
+ * 2026-10-01; the policy allows it only as code's own night-shelter step). Every other type
+ * with a forbidden keyword (BREAK_BLOCK, MINE_ORE, DIG_AREA, dig_block, DIG_DOWN_MANY,
  * PLACE_BLOCKS, PLACE_TNT, place_block, ATTACK_PLAYER, KILL_ENTITY, attack_entity, ...)
  * stays forbidden.
  */
@@ -55,6 +57,7 @@ const OPERATOR_APPROVED_TYPES: ReadonlySet<string> = new Set([
   'DIG_BLOCK',
   'PLACE_BLOCK',
   'ATTACK_ENTITY',
+  'DIG_DOWN',
 ]);
 
 export type ActionTypeClass = 'allowlisted' | 'forbidden' | 'unsupported';

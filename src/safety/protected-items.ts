@@ -27,7 +27,8 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
     case 'TAKE_OUTPUT':
       // Taking a protected item out of a furnace moves it, like a withdrawal.
       return [spec.args.item];
-    // DIG_BLOCK uses an empty hand and only adds the block's drop to the inventory.
+    // DIG_BLOCK and DIG_DOWN hold an allowed tool (never a protected one: the executor hands
+    // the protected items to the client) or an empty hand, and only add the block's drop.
     // INTERACT_BLOCK opens a window and looks; it never moves an item.
     // ATTACK_ENTITY wears the weapon it strikes with: the client picks it from the hotbar at
     // run time, so the policy checks every allowlisted weapon the player carries instead
@@ -48,6 +49,7 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
     case 'OPEN_CONTAINER':
     case 'INSPECT_MACHINE':
     case 'DIG_BLOCK':
+    case 'DIG_DOWN':
     case 'PAUSE_AND_ASK_USER':
       return [];
   }

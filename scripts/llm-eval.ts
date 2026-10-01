@@ -352,6 +352,9 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
       case 'CLAIM_QUEST_REWARD':
         bad(`${a.type} is a quest-book click (the play loop's, never a plan's)`);
         break;
+      case 'DIG_DOWN':
+        bad("DIG_DOWN is the night pit's own step (code's blueprint, never a plan's)");
+        break;
       case 'OBSERVE_STATE':
       case 'MOVE_TO':
       case 'EXPLORE':

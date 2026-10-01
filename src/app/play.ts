@@ -17,7 +17,13 @@ import {
   type WorldTime,
 } from '../domain/game-state.ts';
 import { describeShelter, describeShelterExit, type ShelterStatus } from '../goals/shelter.ts';
+import {
+  LEAVE_SHELTER_TASK_ID,
+  NIGHT_SHELTER_TASK_ID,
+  type ShelterStep,
+} from '../domain/night-shelter.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
+import { setKnownSteps } from './known-steps.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { DecisionResult } from '../domain/decisions.ts';
 import { describeSystem1Stats, type System1Stats } from '../system1/model-cadence.ts';
@@ -104,10 +110,12 @@ export interface PlayDeps {
   /** Reads the world's clock now (null when unknown). Without it, play ignores the time. */
   time?: () => Promise<WorldTime | null>;
   /**
-   * What a night shelter around the player still needs (null when unknown). With it, play
-   * shelters at dusk and waits for the morning inside; without it, play stops before dark.
+   * What a night shelter around the player still needs (null when unknown): at night
+   * ('night') the shelter to make and its steps, in the morning ('morning') whether the
+   * player is walled in and the way out. With it, play shelters at dusk and waits for the
+   * morning inside; without it, play stops before dark.
    */
-  shelter?: () => Promise<ShelterStatus | null>;
+  shelter?: (purpose?: 'night' | 'morning') => Promise<ShelterStatus | null>;
   /** Waits (injectable for tests). */
   sleep?: (ms: number) => Promise<void>;
   /**
@@ -206,8 +214,8 @@ export type PlayEvent =
 export interface PlayResult {
   stopReason: string;
   /**
-   * Play stopped because it is getting dark: the agent cannot shelter yet (no block
-   * placing), so it leaves the surface before the mobs come. The clock at that moment.
+   * Play stopped because it is getting dark and no shelter can be made (or play has none),
+   * so the agent leaves (goes offline until sunrise) before the mobs come. The clock then.
    */
   night: WorldTime | null;
   /**
@@ -402,8 +410,8 @@ async function waitForMorning(
 
 function nightReason(t: WorldTime): string {
   return (
-    `it is ${t.phase} (${t.minutesUntilDay} min until sunrise): the agent cannot shelter yet ` +
-    '(no block placing), so it leaves before the mobs come'
+    `it is ${t.phase} (${t.minutesUntilDay} min until sunrise): without a shelter the agent ` +
+    'leaves (goes offline) before the mobs come'
   );
 }
 
@@ -478,13 +486,17 @@ export async function runPlay(
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
   /**
    * One bounded session on a task whose route is a code-made blueprint (the night shelter,
-   * the way out of it in the morning): the planner follows the listed steps.
+   * the way out of it in the morning). Its steps run as known safe steps (known-steps.ts):
+   * code proposes each, the executor validates, executes and verifies it, and the planner is
+   * not asked. The last verified step completes the task, which ends the session.
    */
   const blueprintSession = async (b: {
     taskId: string;
     goal: string;
     subgoal: string;
     steps: string[];
+    /** The same steps as actions, in order. */
+    known: readonly ShelterStep[];
     label: string;
     text: string;
     missing: Record<string, number>;
@@ -494,6 +506,7 @@ export async function runPlay(
       deps.repos.tasks.ensure({ id: b.taskId, goal: b.goal, subgoal: b.subgoal, status: 'active' });
       deps.repos.tasks.setStatus(b.taskId, 'active');
       deps.repos.memory.setTaskBlueprint(b.taskId, b.steps);
+      setKnownSteps(deps.repos, b.taskId, b.known);
       deps.repos.memory.setTaskRequirements(b.taskId, null);
       deps.repos.memory.setValue(CURRENT_TASK_KEY, b.taskId);
     });
@@ -616,7 +629,7 @@ export async function runPlay(
       if (deps.shelter === undefined) {
         if (isDark(clock)) return done(nightReason(clock), clock);
       } else {
-        const status = await deps.shelter();
+        const status = await deps.shelter('night');
         if (status === null)
           return done(`${nightReason(clock)}: the shelter cannot be checked`, clock);
         if (status.sheltered) {
@@ -628,8 +641,11 @@ export async function runPlay(
           if (stop !== null) return done(stop);
           emit({ kind: 'night', message: 'morning: leaving the shelter' });
           wakeNote =
-            'morning: the player is inside its night shelter (walls around it, a roof above): ' +
-            'to get out, dig one wall, the head-level block first, then the one below it';
+            status.kind === 'pit'
+              ? 'morning: the player is at the bottom of its night pit (natural walls, a roof ' +
+                'above): code digs the roof and a staircase out before the day starts'
+              : 'morning: the player is inside its night shelter (walls around it, a roof ' +
+                'above): code digs one wall out before the day starts';
           continue;
         }
         if (status.problem !== null || shelterTries >= limits.maxStuckSessions) {
@@ -637,15 +653,21 @@ export async function runPlay(
           return done(`${nightReason(clock)}; no shelter: ${why}`, clock);
         }
         shelterTries += 1;
+        const pit = status.kind === 'pit';
         const result = await blueprintSession({
-          taskId: 'night-shelter',
-          goal: 'Night is coming: build a shelter around yourself (the route), then stay inside until morning',
-          subgoal: `${status.todo.length} blocks to place before dark`,
+          taskId: NIGHT_SHELTER_TASK_ID,
+          goal: pit
+            ? 'Night is coming: dig a pit three blocks down under yourself and roof it (code does it), then stay inside until morning'
+            : 'Night is coming: build a shelter around yourself (code does it), then stay inside until morning',
+          subgoal: `${status.steps.length} step(s) before dark`,
           steps: describeShelter(status),
+          known: status.steps,
           label: 'shelter for the night',
-          text: `place ${status.todo.length} blocks`,
+          text: pit
+            ? `dig a pit (${status.steps.length} steps)`
+            : `place ${status.steps.length} blocks`,
           missing: status.needs,
-          maxCycles: status.todo.length * 2 + 2,
+          maxCycles: status.steps.length * 2 + 2,
         });
         if (result.stopKind === 'stop-requested') return done(result.stopReason);
         if (result.stopKind === 'needs-attention') {
@@ -657,25 +679,35 @@ export async function runPlay(
         continue;
       }
     }
+    if (shelterTries > 0) setKnownSteps(deps.repos, NIGHT_SHELTER_TASK_ID, null);
     shelterTries = 0;
 
     // Morning in last night's shelter (walls all around, roofed or not): dig out first, as a
-    // person does. The blueprint names the two blocks of one wall, head level first.
+    // person does. Code plans the way out (the pit: the roof, then a staircase; the box: one
+    // wall, head level first) and runs it as known safe steps.
     if (deps.shelter !== undefined) {
-      const status = await deps.shelter();
+      const status = await deps.shelter('morning');
+      if (status !== null && status.walled && status.exit.length === 0) {
+        return done(
+          `the player is walled in, and code found no way out: ${status.problem ?? 'unknown'}`,
+        );
+      }
       if (status !== null && status.walled && status.exit.length > 0) {
         if (exitTries >= limits.maxStuckSessions) {
           return done(`the player could not dig out of its shelter in ${exitTries} sessions`);
         }
         exitTries += 1;
-        const out = status.exit.at(-1)?.position;
+        const last = status.exit.at(-1)?.spec;
+        const out = last?.type === 'MOVE_TO' ? last.args.target : undefined;
+        const digs = status.exit.filter((s) => s.spec.type === 'DIG_BLOCK').length;
         const result = await blueprintSession({
-          taskId: 'leave-shelter',
-          goal: 'Morning: dig your way out of the night shelter (the route), then carry on',
-          subgoal: `dig ${status.exit.length} wall blocks`,
+          taskId: LEAVE_SHELTER_TASK_ID,
+          goal: 'Morning: dig your way out of the night shelter (code does it), then carry on',
+          subgoal: `dig ${digs} block(s), then walk out`,
           steps: describeShelterExit(status),
+          known: status.exit,
           label: 'leave the shelter',
-          text: `dig ${status.exit.length} blocks`,
+          text: `dig ${digs} blocks`,
           missing: {},
           maxCycles: status.exit.length * 2 + 2,
         });
@@ -686,7 +718,7 @@ export async function runPlay(
         // failed from inside them say nothing about now.
         wakeNote =
           `morning: the player dug out of its night shelter` +
-          (out === undefined ? '' : ` through (${out.x}, ${out.y}, ${out.z})`) +
+          (out === undefined ? '' : ` to (${out.x}, ${out.y}, ${out.z})`) +
           ': walking and EXPLORE work again; failures from inside its walls no longer apply';
         continue;
       }

@@ -1,16 +1,27 @@
+import type { PlaceableItem } from '../domain/blocks.ts';
+import type { ShelterStep } from '../domain/night-shelter.ts';
+
 /**
- * A night shelter, the way a first-night player makes one: a 1 x 1 box around where the
- * player stands, four walls at feet level and four at head level, and a roof above the
- * head. Pure: what the box needs, given what is solid around the player and what it carries.
+ * The night shelter, as play sees it, and the raised box, its second choice.
  *
- * A block is placed by clicking a face of a block next to its cell, and the roof cell
- * touches no wall (the head walls are diagonally below it). So, as a player does, a support
- * block goes on top of one head wall first, and the roof is placed against its side (seen
- * live on 2026-10-01: without it the roof cell was never placeable).
+ * The first choice is the night pit (src/domain/night-shelter.ts; planned with the live
+ * client's own rules in src/bot/gtnh1710/night-pit.ts): three digs straight down and a roof
+ * in the ground layer, against the natural ground beside it. Where the ground does not allow
+ * a pit, the raised box: a 1 x 1 box around where the player stands, four walls at feet
+ * level, four at head level, and a roof above the head. Pure: what the box needs, given what
+ * is solid around the player and what it carries.
  *
- * Walls are blocks a bare hand can dig again (sand, dirt, logs...), so the agent can dig its
- * way out in the morning (head level first, so nothing falls). The roof is never sand or
- * gravel: they would fall onto the player (and placing refuses them there).
+ * A block is placed by clicking a face of a block next to its cell that looks at the eyes.
+ * The box's roof cell touches no wall (the head walls are diagonally below it), and from
+ * inside the box the walls' top faces are above the eyes (feet + 1.62 < feet + 2), so no
+ * block can be put beside the roof cell either (seen live on 2026-10-01: a roof support on a
+ * wall was never placeable). The box therefore works only where something solid already
+ * touches the roof cell from the side or above (a cliff, a tree trunk): there the roof is
+ * placed against it. On open ground the box cannot be roofed, and play digs the pit instead.
+ *
+ * Walls are blocks a bare hand digs again (sand, dirt, logs...), so the agent can dig its way
+ * out in the morning. The roof is never sand or gravel: they would fall onto the player (and
+ * placing refuses them there).
  */
 
 export interface SolidLookup {
@@ -20,33 +31,59 @@ export interface SolidLookup {
 
 export interface ShelterCell {
   position: { x: number; y: number; z: number };
-  role: 'feet wall' | 'head wall' | 'roof support' | 'roof';
+  role: 'feet wall' | 'head wall' | 'roof';
 }
 
 /** Wall blocks a bare hand digs again, in order of preference (sand first: plentiful). */
-export const SHELTER_WALL_ITEMS = [
+export const SHELTER_WALL_ITEMS: readonly PlaceableItem[] = [
   'minecraft:sand',
   'minecraft:dirt',
   'minecraft:log',
   'minecraft:log2',
   'minecraft:gravel',
-] as const;
+];
 
 /** Roof blocks: anything placeable that does not fall. */
-export const SHELTER_ROOF_ITEMS = [
+export const SHELTER_ROOF_ITEMS: readonly PlaceableItem[] = [
   'minecraft:cobblestone',
   'minecraft:dirt',
   'minecraft:sandstone',
   'minecraft:planks',
   'minecraft:log',
   'minecraft:log2',
-] as const;
+];
 
 const FALLING: ReadonlySet<string> = new Set(['minecraft:sand', 'minecraft:gravel']);
 
 /**
+ * What play needs to know about the night shelter: whether the player is enclosed, what code
+ * still does to finish it (its steps, which run as known safe steps: each an ordinary action
+ * the executor validates), and in the morning whether the player is walled in and the way
+ * out.
+ */
+export interface ShelterStatus {
+  /** The kind of shelter: a pit dug into the ground (first choice), or the raised box. */
+  kind: 'pit' | 'box';
+  /** Walls all around and a roof: mobs cannot reach the player. */
+  sheltered: boolean;
+  /** What code still does to finish it, in order. */
+  steps: ShelterStep[];
+  /** Blocks the remaining steps place, by item. */
+  needs: Record<string, number>;
+  /** Why no shelter can be made here (or the area is unknown), else null. */
+  problem: string | null;
+  /**
+   * All eight walls are solid (roofed or not), or, in the morning, the player is still down in
+   * its night pit's column: it cannot walk out without digging.
+   */
+  walled: boolean;
+  /** When walled: the way out, in order (digs, then the walk out). Empty otherwise. */
+  exit: ShelterStep[];
+}
+
+/**
  * The cells of the box around feet block (fx, fy, fz), in building order: four feet walls,
- * four head walls, the roof support (on top of the east head wall), then the roof.
+ * four head walls, then the roof.
  */
 export function shelterCells(feet: { x: number; y: number; z: number }): ShelterCell[] {
   const fx = Math.floor(feet.x);
@@ -67,43 +104,29 @@ export function shelterCells(feet: { x: number; y: number; z: number }): Shelter
       position: { x: fx + dx, y: fy + 1, z: fz + dz },
       role: 'head wall' as const,
     })),
-    { position: { x: fx + 1, y: fy + 2, z: fz }, role: 'roof support' as const },
     { position: { x: fx, y: fy + 2, z: fz }, role: 'roof' as const },
   ];
 }
 
-/** The four cells beside the roof: one of them must be solid for the roof to be placed. */
-function besideRoof(roof: { x: number; y: number; z: number }): Array<[number, number, number]> {
+/** The four cells beside the roof and the one above it: what the roof is placed against. */
+function aroundRoof(roof: { x: number; y: number; z: number }): Array<[number, number, number]> {
   return [
     [roof.x + 1, roof.y, roof.z],
     [roof.x - 1, roof.y, roof.z],
     [roof.x, roof.y, roof.z + 1],
     [roof.x, roof.y, roof.z - 1],
+    [roof.x, roof.y + 1, roof.z],
   ];
 }
 
-export interface ShelterStatus {
-  /** Every cell of the box is solid: mobs cannot reach the player. */
-  sheltered: boolean;
-  /** Cells still open, in building order, each with the block to put there. */
-  todo: Array<ShelterCell & { item: string }>;
-  /** Blocks the remaining cells need, by item. */
-  needs: Record<string, number>;
-  /** Why the box cannot be built from what is carried (or the area is unknown), else null. */
-  problem: string | null;
-  /** All eight walls are solid: the player cannot walk out (roofed or not). */
-  walled: boolean;
-  /**
-   * When walled: the two blocks to dig to get out, in order: the west wall's head-level block,
-   * then the one below it (the roof support stands on the east wall). Empty otherwise.
-   */
-  exit: ShelterCell[];
-}
+const at = (p: { x: number; y: number; z: number }): string => `(${p.x}, ${p.y}, ${p.z})`;
 
 /**
- * What the box around `feet` still needs. Walls take the first wall item carried in enough
- * quantity (mixing kinds when one is short); the roof takes a non-falling block. A falling
- * wall block needs a solid cell below it (the ground, or the wall below it).
+ * What the box around `feet` still needs (kind 'box'). Walls take the first wall item carried
+ * in enough quantity (mixing kinds when one is short); the roof takes a non-falling block,
+ * placed against something already solid beside or above its cell. A falling wall block
+ * needs a solid cell below it (the ground, or the wall below it). The way out is not planned
+ * here: the live adapter plans it with the client's own rules (night-pit.ts).
  */
 export function shelterStatus(
   world: SolidLookup,
@@ -113,37 +136,42 @@ export function shelterStatus(
   const cells = shelterCells(feet);
   const solid = (c: ShelterCell): boolean | undefined =>
     world.solidAt(c.position.x, c.position.y, c.position.z);
+  const base = { kind: 'box' as const, exit: [] as ShelterStep[] };
   if (cells.some((c) => solid(c) === undefined)) {
     return {
+      ...base,
       sheltered: false,
-      todo: [],
+      steps: [],
       needs: {},
       problem: 'the blocks around the player are not loaded',
       walled: false,
-      exit: [],
     };
   }
   const walled = cells
     .filter((c) => c.role === 'feet wall' || c.role === 'head wall')
     .every((c) => solid(c) === true);
-  const west = (role: ShelterCell['role']): ShelterCell[] =>
-    cells.filter((c) => c.role === role && c.position.x < Math.floor(feet.x));
-  const exit = walled ? [...west('head wall'), ...west('feet wall')] : [];
-  // The box: walls and roof. The support only matters while the roof is still open and
-  // nothing beside the roof cell is solid already.
-  const box = cells.filter((c) => c.role !== 'roof support');
-  if (box.every((c) => solid(c) === true)) {
-    return { sheltered: true, todo: [], needs: {}, problem: null, walled, exit };
+  if (cells.every((c) => solid(c) === true)) {
+    return { ...base, sheltered: true, steps: [], needs: {}, problem: null, walled };
   }
-  const roof = cells.find((c) => c.role === 'roof');
-  const supported =
-    roof === undefined ||
+  const roof = cells.find((c) => c.role === 'roof') as ShelterCell;
+  const roofed =
     solid(roof) === true ||
-    besideRoof(roof.position).some(([x, y, z]) => world.solidAt(x, y, z) === true);
-  const open = cells.filter((c) => solid(c) !== true && (c.role !== 'roof support' || !supported));
+    aroundRoof(roof.position).some(([x, y, z]) => world.solidAt(x, y, z) === true);
+  if (!roofed) {
+    return {
+      ...base,
+      sheltered: false,
+      steps: [],
+      needs: {},
+      problem:
+        `nothing beside or above the box's roof cell ${at(roof.position)} to place the roof ` +
+        'against (open ground): a box cannot be roofed from inside it',
+      walled,
+    };
+  }
 
   const left = new Map(Object.entries(inventory));
-  const take = (choices: readonly string[]): string | null => {
+  const take = (choices: readonly PlaceableItem[]): PlaceableItem | null => {
     for (const item of choices) {
       const n = left.get(item) ?? 0;
       if (n > 0) {
@@ -153,57 +181,49 @@ export function shelterStatus(
     }
     return null;
   };
-  const todo: ShelterStatus['todo'] = [];
+  const steps: ShelterStep[] = [];
   const needs: Record<string, number> = {};
   // Cells that will be solid once the earlier ones are built (falling blocks need support).
   const willBeSolid = new Set<string>();
   const key = (p: { x: number; y: number; z: number }): string => `${p.x},${p.y},${p.z}`;
-  for (const cell of open) {
+  for (const cell of cells.filter((c) => solid(c) !== true)) {
     const p = cell.position;
     const below =
       world.solidAt(p.x, p.y - 1, p.z) === true || willBeSolid.has(key({ ...p, y: p.y - 1 }));
-    const walls = SHELTER_WALL_ITEMS.filter((i) => below || !FALLING.has(i));
-    // The support sits outside the box: any wall block that stays put, or any roof block.
     const choices =
       cell.role === 'roof'
         ? SHELTER_ROOF_ITEMS
-        : cell.role === 'roof support'
-          ? [...walls, ...SHELTER_ROOF_ITEMS.filter((i) => !walls.some((w) => w === i))]
-          : walls;
+        : SHELTER_WALL_ITEMS.filter((i) => below || !FALLING.has(i));
     const item = take(choices);
     if (item === null) {
       return {
+        ...base,
         sheltered: false,
-        todo,
+        steps,
         needs,
         problem:
           cell.role === 'roof'
             ? 'no block for the roof (cobblestone, dirt, sandstone, planks or logs)'
             : 'not enough wall blocks (sand, dirt, logs or gravel)',
         walled,
-        exit,
       };
     }
-    todo.push({ ...cell, item });
+    steps.push({
+      spec: { type: 'PLACE_BLOCK', args: { position: { ...p }, item } },
+      text: `place ${item} at ${at(p)} (${cell.role})`,
+    });
     needs[item] = (needs[item] ?? 0) + 1;
     willBeSolid.add(key(p));
   }
-  return { sheltered: false, todo, needs, problem: null, walled, exit };
+  return { ...base, sheltered: false, steps, needs, problem: null, walled };
 }
 
-/** The way out of a walled shelter, as route steps for the planner (empty when not walled). */
-export function describeShelterExit(status: ShelterStatus): string[] {
-  return status.exit.map(
-    (c, i) =>
-      `${i + 1}. DIG_BLOCK the ${c.role} at (${c.position.x}, ${c.position.y}, ${c.position.z})` +
-      (i === status.exit.length - 1 ? ', then the way west is open' : ''),
-  );
-}
-
-/** The shelter as route steps for the planner. */
+/** The shelter's remaining steps as route lines for the planner (and the journal). */
 export function describeShelter(status: ShelterStatus): string[] {
-  return status.todo.map(
-    (c, i) =>
-      `${i + 1}. place ${c.item} at (${c.position.x}, ${c.position.y}, ${c.position.z}) (${c.role})`,
-  );
+  return status.steps.map((s, i) => `${i + 1}. ${s.text}`);
+}
+
+/** The way out of a walled shelter, as route lines (empty when not walled). */
+export function describeShelterExit(status: ShelterStatus): string[] {
+  return status.exit.map((s, i) => `${i + 1}. ${s.text}`);
 }

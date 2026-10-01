@@ -257,6 +257,16 @@ export function checkPreconditions(
       break;
     }
 
+    case 'DIG_DOWN': {
+      // The block under the feet is always within reach; its drop needs somewhere to go.
+      requirePosition();
+      requireInventory();
+      if (inventory !== null && inventory.usedSlots >= inventory.capacitySlots) {
+        failures.push('inventory is full (no room for the drop)');
+      }
+      break;
+    }
+
     case 'PLACE_BLOCK': {
       // Reach is measured from the eyes to the cell, like digging.
       const p = requirePosition();

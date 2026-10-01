@@ -232,6 +232,46 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'DUG_DOWN': {
+      // The block is gone (seen turning into air, still air), and the player stands in its
+      // cell: one block lower, on the block under it.
+      const p = post.position;
+      const where = formatPosition(p);
+      if (!after.nearbyBlocks.known) {
+        check(
+          'block-removed',
+          false,
+          `nearby blocks unknown after digging down: ${after.nearbyBlocks.reason}`,
+        );
+      } else {
+        const blocks = after.nearbyBlocks.value;
+        const same = (q: { x: number; y: number; z: number }): boolean =>
+          q.x === p.x && q.y === p.y && q.z === p.z;
+        const removed = blocks.removed.some(same);
+        const still = blocks.resources.find((r) => same(r.position));
+        check(
+          'block-removed',
+          removed && still === undefined,
+          removed && still === undefined
+            ? `${where} was observed turning into air`
+            : `${where} was not observed turning into air`,
+        );
+      }
+      if (!after.player.position.known) {
+        check('player-dropped', false, 'player position unknown after digging down');
+      } else {
+        const a = after.player.position.value;
+        const inCell =
+          Math.floor(a.x) === p.x && Math.floor(a.z) === p.z && Math.abs(a.y - p.y) < 0.01;
+        check(
+          'player-dropped',
+          inCell,
+          `feet at (${a.x.toFixed(2)}, ${a.y.toFixed(2)}, ${a.z.toFixed(2)}), expected on top of the block under ${where}`,
+        );
+      }
+      break;
+    }
+
     case 'BLOCK_PLACED': {
       const p = post.position;
       const where = formatPosition(p);

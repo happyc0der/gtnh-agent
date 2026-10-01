@@ -49,10 +49,24 @@ export const ACTION_TYPES = [
   'SUBMIT_QUEST',
   'CHECK_QUEST_BOX',
   'CLAIM_QUEST_REWARD',
+  // The night pit's own step (approved 2026-10-01): code's blueprint only, never a plan.
+  'DIG_DOWN',
 ] as const;
 
 export const ActionTypeSchema = z.enum(ACTION_TYPES);
 export type ActionType = z.infer<typeof ActionTypeSchema>;
+
+/**
+ * Action types only code proposes, never a plan: validatePlan refuses them in a plan, and
+ * planners are not offered them. DIG_DOWN digs the block under the player's own feet, for
+ * the night pit only (src/domain/night-shelter.ts). The quest-book clicks are likewise the
+ * play loop's own (src/domain/quest-book.ts).
+ */
+export const CODE_ONLY_ACTION_TYPES: readonly ActionType[] = ['DIG_DOWN'];
+
+export function isCodeOnlyActionType(type: string): boolean {
+  return (CODE_ONLY_ACTION_TYPES as readonly string[]).includes(type);
+}
 
 export const ACTION_ORIGINS = ['deterministic-router', 'planner', 'user', 'test'] as const;
 export const ActionOriginSchema = z.enum(ACTION_ORIGINS);
@@ -225,6 +239,16 @@ export const PauseAndAskUserSpec = z.strictObject({
   type: z.literal('PAUSE_AND_ASK_USER'),
   args: z.strictObject({ question: z.string().min(1).max(500) }),
 });
+/**
+ * Dig the block the player stands on (`position`, exactly under its feet) and drop exactly
+ * one block onto the plain full block under it. The night pit only: code's own blueprint
+ * step for the night-shelter task, never a plan's (approved 2026-10-01). See
+ * docs/action-contract.md.
+ */
+export const DigDownSpec = z.strictObject({
+  type: z.literal('DIG_DOWN'),
+  args: z.strictObject({ position: BlockPositionSchema }),
+});
 /** Better Questing's task and reward indexes (what task_checkbox and choice_reward name). */
 const QuestIndexSchema = z.int().min(0).max(1023);
 /**
@@ -273,6 +297,7 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   SubmitQuestSpec,
   CheckQuestBoxSpec,
   ClaimQuestRewardSpec,
+  DigDownSpec,
 ]);
 export type ActionSpec = z.infer<typeof ActionSpecSchema>;
 export type ActionSpecOf<T extends ActionType> = Extract<ActionSpec, { type: T }>;
@@ -387,6 +412,11 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
     questId: QuestIdSchema,
     choice: QuestIndexSchema.nullable(),
   }),
+  /**
+   * The observation saw the block at the position turn into air (still air), and the
+   * player's feet now stand in that cell: on the block under it, exactly one block lower.
+   */
+  z.strictObject({ kind: z.literal('DUG_DOWN'), position: BlockPositionSchema }),
 ]);
 export type Postcondition = z.infer<typeof PostconditionSchema>;
 
@@ -483,6 +513,8 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
         questId: spec.args.questId,
         choice: spec.args.choice,
       };
+    case 'DIG_DOWN':
+      return { kind: 'DUG_DOWN', position: spec.args.position };
   }
 }
 
@@ -524,6 +556,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   SubmitQuestSpec.extend(actionMetadata),
   CheckQuestBoxSpec.extend(actionMetadata),
   ClaimQuestRewardSpec.extend(actionMetadata),
+  DigDownSpec.extend(actionMetadata),
 ]);
 export type Action = z.infer<typeof ActionSchema>;
 

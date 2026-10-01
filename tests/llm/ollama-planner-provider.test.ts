@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACTION_TYPES } from '../../src/domain/actions.ts';
+import { ACTION_TYPES, isCodeOnlyActionType } from '../../src/domain/actions.ts';
 import { isQuestBookActionType } from '../../src/domain/quest-book.ts';
 import { OllamaClient } from '../../src/llm/ollama-client.ts';
 import {
@@ -51,11 +51,16 @@ describe('OllamaPlannerProvider', () => {
   });
 
   it('the prompt names every action with its args, and the placing rule', () => {
-    // Quest-book clicks are the play loop's, never a plan's: the prompt leaves them out.
-    for (const type of ACTION_TYPES.filter((t) => !isQuestBookActionType(t))) {
+    // Quest-book clicks are the play loop's and DIG_DOWN the night pit's, never a plan's:
+    // the prompt does not offer them.
+    for (const type of ACTION_TYPES.filter(
+      (t) => !isQuestBookActionType(t) && !isCodeOnlyActionType(t),
+    )) {
       expect(PLANNER_SYSTEM_PROMPT, type).toContain(`- ${type} {`);
     }
     expect(PLANNER_SYSTEM_PROMPT).not.toContain('SUBMIT_QUEST');
+    expect(PLANNER_SYSTEM_PROMPT).not.toContain('- DIG_DOWN {');
+    expect(PLANNER_SYSTEM_PROMPT).toContain('DIG_DOWN is never in a plan');
     expect(PLANNER_SYSTEM_PROMPT).toContain(
       '- PLACE_BLOCK {"position":{"x":0,"y":64,"z":0},"item":"minecraft:dirt"}',
     );

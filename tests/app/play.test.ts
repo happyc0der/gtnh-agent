@@ -6,12 +6,18 @@ import {
   DEFAULT_PLAY_LIMITS,
   describePlayEvent,
   mobPause,
+  nightSoon,
   runPlay,
+  SHELTER_LEAD_MINUTES,
   type PlayDeps,
   type PlayEvent,
 } from '../../src/app/play.ts';
 import type { DecisionResult } from '../../src/domain/decisions.ts';
+import { NIGHT_PIT_WINDOW_MINUTES, nightPitTime } from '../../src/domain/night-shelter.ts';
 import { completedQuests, questTaskId } from '../../src/app/quest-commands.ts';
+import { nextKnownStep } from '../../src/app/known-steps.ts';
+import type { ShelterStep } from '../../src/domain/night-shelter.ts';
+import type { ShelterStatus } from '../../src/goals/shelter.ts';
 import { SCOUT_TASK_ID } from '../../src/app/scouting.ts';
 import { worldTime, type GameState } from '../../src/domain/game-state.ts';
 import type { QuestBook } from '../../src/domain/quest-book.ts';
@@ -534,47 +540,61 @@ describe('autonomous play', () => {
     ]);
   });
 
-  it('at dusk builds the shelter (the planner gets the blueprint), then waits inside for the morning', async () => {
+  it('at dusk digs the night pit as code-made known steps, then waits inside for the morning', async () => {
     const repos = open();
-    const world: World = {
-      inventory: { 'minecraft:sand': 20, 'minecraft:cobblestone': 2 },
-      sessions: [],
-      calls: 0,
-    };
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
     let sheltered = false;
     let tick = 11_000; // 1.7 min before night: shelter time
-    const status = () => ({
+    const pitSteps: ShelterStep[] = [
+      {
+        spec: { type: 'DIG_DOWN', args: { position: { x: 0, y: 63, z: 0 } } },
+        text: 'dig down: the minecraft:grass under the feet at (0, 63, 0)',
+      },
+      {
+        spec: {
+          type: 'PLACE_BLOCK',
+          args: { position: { x: 0, y: 63, z: 0 }, item: 'minecraft:dirt' },
+        },
+        text: 'place minecraft:dirt at (0, 63, 0): the roof, against the ground beside it',
+      },
+    ];
+    const status = (purpose?: 'night' | 'morning'): ShelterStatus => ({
+      kind: 'pit',
       sheltered,
-      todo: sheltered
-        ? []
-        : [
-            {
-              position: { x: 1, y: 64, z: 0 },
-              role: 'feet wall' as const,
-              item: 'minecraft:sand',
-            },
-          ],
-      needs: sheltered ? {} : { 'minecraft:sand': 1 },
+      steps: sheltered ? [] : pitSteps,
+      needs: sheltered ? {} : { 'minecraft:dirt': 1 },
       problem: null,
-      walled: false,
+      walled: purpose === 'morning' ? false : sheltered,
       exit: [],
     });
+    const purposes: string[] = [];
     const events: PlayEvent[] = [];
     const base = deps(repos, world);
     const result = await runPlay(
       {
         ...base,
         time: () => Promise.resolve(worldTime(tick, true)),
-        shelter: () => Promise.resolve(status()),
+        shelter: (purpose) => {
+          purposes.push(purpose ?? 'none');
+          return Promise.resolve(status(purpose));
+        },
         sleep: () => {
           tick = 100; // the night passes: morning
           return Promise.resolve();
         },
         session: (limits, hooks) => {
           if (repos.memory.getValue(CURRENT_TASK_KEY) === 'night-shelter') {
+            // The planner's route, and the same steps as actions for code to run.
             expect(repos.memory.taskBlueprint('night-shelter')).toEqual([
-              '1. place minecraft:sand at (1, 64, 0) (feet wall)',
+              '1. dig down: the minecraft:grass under the feet at (0, 63, 0)',
+              '2. place minecraft:dirt at (0, 63, 0): the roof, against the ground beside it',
             ]);
+            expect(nextKnownStep(repos, 'night-shelter')).toMatchObject({
+              spec: pitSteps[0]?.spec,
+              index: 0,
+              total: 2,
+            });
+            expect(limits.maxCycles).toBe(6);
             sheltered = true;
           }
           return base.session(limits, hooks);
@@ -583,14 +603,19 @@ describe('autonomous play', () => {
       { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
       { ...noStop, onEvent: (e) => events.push(e) },
     );
+    expect(events.filter((e) => e.kind === 'goal').map((e) => describePlayEvent(e))[0]).toBe(
+      'goal: "shelter for the night" - missing 1 minecraft:dirt',
+    );
     const night = events.filter((e) => e.kind === 'night').map((e) => describePlayEvent(e));
     expect(night).toEqual([
       'night: sheltered: waiting for the morning (10.8 min)',
       'night: morning: leaving the shelter',
     ]);
-    // The morning goal's journal says how to get out.
+    expect(purposes.slice(0, 3)).toEqual(['night', 'night', 'morning']);
+    // The night's steps are cleared in the morning; the next goal's journal says what happened.
+    expect(nextKnownStep(repos, 'night-shelter')).toBeNull();
     expect(repos.memory.journal('quest-2').at(-1)?.text).toMatch(
-      /^morning: the player is inside its night shelter/,
+      /^morning: the player is at the bottom of its night pit/,
     );
     expect(result.night).toBeNull();
   });
@@ -614,6 +639,17 @@ describe('autonomous play', () => {
     expect(result.stopReason).toBe('reached the limit of 4 sessions');
   });
 
+  it("starts on the shelter inside DIG_DOWN's time window, so the pit is never refused for the hour", () => {
+    expect(SHELTER_LEAD_MINUTES).toBeLessThanOrEqual(NIGHT_PIT_WINDOW_MINUTES);
+    for (let tick = 0; tick < 24_000; tick += 50) {
+      const t = worldTime(tick, true);
+      if (nightSoon(t)) expect(nightPitTime(t), `tick ${tick}`).toBe(true);
+    }
+    // Dawn and the rest of the day are outside it.
+    expect(nightPitTime(worldTime(23_500, true))).toBe(false);
+    expect(nightPitTime(worldTime(6_000, true))).toBe(false);
+  });
+
   it('leaves before the dark when a shelter step stops for a person (a refusal)', async () => {
     const repos = open();
     const world: World = {
@@ -628,12 +664,15 @@ describe('autonomous play', () => {
         time: () => Promise.resolve(clock),
         shelter: () =>
           Promise.resolve({
+            kind: 'box' as const,
             sheltered: false,
-            todo: [
+            steps: [
               {
-                position: { x: 1, y: 66, z: 0 },
-                role: 'roof support' as const,
-                item: 'minecraft:sand',
+                spec: {
+                  type: 'PLACE_BLOCK' as const,
+                  args: { position: { x: 1, y: 66, z: 0 }, item: 'minecraft:sand' as const },
+                },
+                text: 'place minecraft:sand: (1, 66, 0)',
               },
             ],
             needs: { 'minecraft:sand': 1 },
@@ -650,13 +689,44 @@ describe('autonomous play', () => {
     expect(result.stopReason).toMatch(/no shelter: stop: needs-attention/);
   });
 
-  it('in the morning digs out of the shelter first (the blueprint names the wall), then plays on', async () => {
+  it('goes offline for the night when no shelter can be made (the night fallback)', async () => {
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const result = await runPlay(
+      {
+        ...deps(open(), world),
+        time: () => Promise.resolve(worldTime(12_400, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'box',
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: 'no pit (stone); no box (open ground)',
+            walled: false,
+            exit: [],
+          }),
+      },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(result.stopReason).toMatch(/no shelter: no pit \(stone\); no box \(open ground\)$/);
+    expect(result.night).toMatchObject({ phase: 'evening' });
+    expect(world.calls).toBe(0);
+  });
+
+  it('in the morning digs out of the shelter first (code-made steps), then plays on', async () => {
     const repos = open();
     const world: World = { inventory: {}, sessions: [], calls: 0 };
     let walled = true;
-    const exit = [
-      { position: { x: -1, y: 65, z: 0 }, role: 'head wall' as const },
-      { position: { x: -1, y: 64, z: 0 }, role: 'feet wall' as const },
+    const exit: ShelterStep[] = [
+      {
+        spec: { type: 'DIG_BLOCK', args: { position: { x: 0, y: 63, z: 0 } } },
+        text: 'dig the minecraft:dirt at (0, 63, 0) (the roof)',
+      },
+      {
+        spec: { type: 'MOVE_TO', args: { target: { x: 3.5, y: 64, z: 0.5 }, tolerance: 0.5 } },
+        text: 'walk out to (3, 64, 0)',
+      },
     ];
     const base = deps(repos, world);
     const events: PlayEvent[] = [];
@@ -666,8 +736,9 @@ describe('autonomous play', () => {
         time: () => Promise.resolve(worldTime(1_000, true)), // morning
         shelter: () =>
           Promise.resolve({
+            kind: 'pit',
             sheltered: false,
-            todo: [],
+            steps: [],
             needs: {},
             problem: null,
             walled,
@@ -676,9 +747,10 @@ describe('autonomous play', () => {
         session: (limits, hooks) => {
           if (repos.memory.getValue(CURRENT_TASK_KEY) === 'leave-shelter') {
             expect(repos.memory.taskBlueprint('leave-shelter')).toEqual([
-              '1. DIG_BLOCK the head wall at (-1, 65, 0)',
-              '2. DIG_BLOCK the feet wall at (-1, 64, 0), then the way west is open',
+              '1. dig the minecraft:dirt at (0, 63, 0) (the roof)',
+              '2. walk out to (3, 64, 0)',
             ]);
+            expect(nextKnownStep(repos, 'leave-shelter')?.spec).toEqual(exit[0]?.spec);
             walled = false;
           }
           return base.session(limits, hooks);
@@ -691,6 +763,33 @@ describe('autonomous play', () => {
       'goal: "leave the shelter"',
       'goal: "Q2" - missing 100 minecraft:sand (new task)',
     ]);
+    expect(repos.memory.journal('quest-2').at(-1)?.text).toBe(
+      'morning: the player dug out of its night shelter to (3.5, 64, 0.5): walking and EXPLORE work again; failures from inside its walls no longer apply',
+    );
+  });
+
+  it('stops and says so when walled in with no way out', async () => {
+    const result = await runPlay(
+      {
+        ...deps(open(), { inventory: {}, sessions: [], calls: 0 }),
+        time: () => Promise.resolve(worldTime(1_000, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit',
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: 'step 1, upper block (1, 63, 0): minecraft:stone is not on the dig allowlist',
+            walled: true,
+            exit: [],
+          }),
+      },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(result.stopReason).toMatch(
+      /^the player is walled in, and code found no way out: step 1, upper block/,
+    );
   });
 
   it('scouts once first when it can explore and little is seen, then plays the quests', async () => {

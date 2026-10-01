@@ -259,15 +259,36 @@ no known place yet is explored for, not escalated.
 remembered) count as "stored": the route fetches from them, nearest first, before it
 gathers or crafts (withdraw steps), and the planner sees what each container holds.
 
-**Nights.** Two real minutes before night (and at night), play turns to a shelter
-(`src/goals/shelter.ts`): a 1 x 1 box around the player, four walls at feet level and four at
-head level from blocks a bare hand digs again (sand first), and a roof that does not fall
-(cobblestone, dirt, planks...). Code works out what is still open and what to place there;
-that blueprint is the planner's route, and the planner places the blocks (PLACE_BLOCK is
-refused once mobs are near, hence the lead time). Enclosed, the agent waits for sunrise, then
-the next goal's journal tells the planner how to get out (dig a wall, head level first).
-If no shelter is possible (no blocks to build it), play stops before dark and `cli play`
-waits offline until sunrise.
+**Nights.** Two real minutes before night (and at night), play turns to a shelter. Code plans
+it and runs it, step by step, as known safe steps (see
+[Code-made blueprints](#code-made-blueprints-known-safe-steps)); the planner is not asked
+(seen live on 2026-10-01: a planner skipped the blueprint's order and tried the roof first).
+
+- **The night pit** (first choice; [Digging down](#digging-down-the-night-pit)), as a
+  first-night player digs one on flat ground: from feet level y, three `DIG_DOWN`s, falling a
+  block each time, to feet at y-3; then the roof, placed in the y-1 cell (the ground layer it
+  dug through) against the natural ground beside it, whose inner faces look at the eyes
+  (y-1.38). The roof is dirt or a log, which the agent digs again in the morning (the digs
+  themselves give dirt). Code picks the spot (the player's column, or one next to it the
+  walker reaches) and checks before digging, with the live client's own rules on a what-if copy
+  of the world (`src/bot/gtnh1710/night-pit.ts`): every dig down (exactly one block, no fluid,
+  hazard or unloaded block near), natural walls (the 3 x 3 columns around plain full blocks
+  down to y-3, sand and gravel only on solid ground), the roof's placement, and a way out for
+  the morning. The pit's spot is kept in agent memory (`night_pit`), so a pit interrupted
+  half-way is finished, not started again.
+- **The raised box** (second choice, `src/goals/shelter.ts`): four walls at feet level and four
+  at head level around the player, then the roof. From inside it no wall's top face looks at
+  the eyes, and nothing touches the roof cell, so the box works only where something solid
+  already touches the roof cell from the side or above (a cliff, a trunk); on open ground it
+  cannot be roofed (the old roof support was never placeable, seen live).
+- **Neither** (stone underfoot, water near, no roof block...): play stops before dark with the
+  reasons, and `cli play` waits offline until sunrise.
+
+Enclosed, the agent waits for sunrise. In the morning, walled in, code plans the way out with
+the same rules (`planShelterExit`): from the pit, the roof and a staircase (two digs for each
+step up, the upper block first), then a walk onto open ground; from the box, one wall (head
+level first) and a walk out. Play runs it as known steps before the day's goal, and the goal's
+journal says the walls are open again. Walled in with no way out, play stops and says why.
 
 **A mob near home.** When System 1 pauses only because a mob is near (`HOSTILES_NEARBY` or
 `UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand
@@ -524,6 +545,26 @@ The plan's explanation and the journal (`new plan #N: ... (k steps; code dropped
 say what was dropped, and the next plan starts from what the agent then sees. The whole plan
 is validated before anything is dropped, so an unsafe step anywhere still rejects it. A plan a
 human wrote (`cli task-add --plan`) is never trimmed.
+
+### Code-made blueprints: known safe steps
+
+Some work is planned by code, not by the planner: the night shelter and the way out of it in
+the morning (see [Nights](#routes-nights-and-the-play-loop)). Code writes the steps as
+ordinary action specs, with one line each; `src/app/known-steps.ts` keeps them in agent memory
+(`task_steps:<taskId>`, with how many are done), and the play loop stores them when it starts
+the session (the lines also stay the task's blueprint, the planner's route, as before).
+
+- `overlayAgentMemory` makes the next step the state's `knownRecipeState.nextKnownSafeStep`.
+  System 1's rule 6 then decides `EXECUTE_KNOWN_SAFE_STEP`, and the proposer runs it with origin
+  `deterministic-router`. Whatever a model decides, the planner is not asked while a blueprint
+  has steps left: `REQUEST_PLANNER` runs the next step too. Dangers, vitals and upkeep still come
+  first, as for any plan.
+- Every step is validated (schema, safety policy, preconditions, the repeated-failure rule),
+  executed, verified and logged like any action. The safety policy checks `DIG_DOWN` against
+  exactly this next step.
+- A verified step advances the blueprint, and the last one completes the task, which ends the
+  session. A step that does not succeed stays next: the cycle fails, the session ends, and play
+  plans again from what it then sees. A step refused only as stale does not block the task.
 
 ## Walking
 
@@ -818,6 +859,52 @@ Walking, chests and digging never run at the same time. `halt()` and the stop fi
   chopping.
 - Enchanted or renamed tools (NBT data), GregTech tools and TConstruct tools: never held. Their
   data would have to be decoded first.
+
+## Digging down: the night pit
+
+`DIG_DOWN` (approved 2026-10-01) digs the block under the player's own feet and drops the player
+exactly one block. It exists for the night pit only (`src/domain/night-shelter.ts`); every
+other dig still never touches the ground the player stands on. In layers:
+
+1. **Only code proposes it.** The pit's blueprint (`src/bot/gtnh1710/night-pit.ts`, run by the
+   play loop as known safe steps) is the only source. Plans never contain it (`validatePlan`
+   refuses it; planners are not offered it, and the planner prompt says so).
+2. **Observation.** With digging enabled, `nearbyBlocks.underFeet` reports the block the player
+   stands on and the one under it, and whether that landing holds the player (a plain full
+   block; sand or gravel only on another). It is null while the body stands across columns or
+   not on a block top.
+3. **The safety policy** (`digDownChecks`) refuses it unless it is the night pit's own step
+   (`NIGHT_PIT_ONLY`, pause): origin `deterministic-router`, the current task is the
+   night-shelter task, the action is exactly that task's next known step, and it is evening,
+   night or the last 4 real minutes before night (an unknown time: `STATE_UNKNOWN`). It must
+   be exactly the block under the feet, reported as dirt, grass, sand, gravel or clay over a
+   landing that holds (`NOT_DIGGABLE`, `UNSAFE_DIG`), inside the boundary and clear of known
+   hazards; never during danger.
+4. **The client** (`checkDigDown` in `digging.ts`, before the dig and every tick, fail closed):
+   - a fence with a height range (never the pen), the landing level inside it;
+   - exactly the block under the feet; the body, with the server's floating-check margin
+     (0.3625), in that one column, on its top;
+   - the block is dirt, grass, sand, gravel or clay; the landing a plain full block (a cave,
+     a fluid or a plant under it would mean a longer fall), and under sand or gravel another;
+   - only air and plain blocks touch the dug block (no plant on it: the feet cell is air), and
+     no sand or gravel beside it stands on nothing;
+   - every cell of the 3 x 3 columns from the landing's level up to the head's is loaded and
+     named and holds air, a plant or a plain block: no water or other fluid, no modded block,
+     no hazard; one level lower, no hazard either.
+5. **The dig** is `DIG_BLOCK`'s, with these rules instead of `checkDig`'s: the best allowed tool
+   or an empty hand, the dig time, every tick re-checked, success only on the server's change to
+   air with no re-send.
+6. **The fall** (`#fallInto`). The client does not otherwise simulate physics, so it falls as a
+   game client would, like the gravity check (`#keepSupported`) does: after `checkSupport`
+   shows nothing holds the player and the floor is exactly one block down, with no hazard next
+   to the landing, it sends the vanilla-gravity positions (`fallDistances`: 5 packets for one
+   block, on the ground only at the last), then waits 5 ticks for a server correction. Walking
+   must be enabled. The drop falls into the hole with the player and is picked up there.
+7. **Verification** (`DUG_DOWN`): the block is observed turning into air (still air), and the
+   player's feet are in its cell, one block lower.
+
+Walking, chests, crafting, digging (and digging down), placing and fighting never run at the
+same time.
 
 ## Placing
 
@@ -1131,7 +1218,9 @@ creeper: System 1 retreats home instead).
 | One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Fighting adds one packet to the live client's list: C02 Use Entity with the "attack" action
-(never "interact"), only with `MC_ENABLE_COMBAT=true` and the fence.
+(never "interact"), only with `MC_ENABLE_COMBAT=true` and the fence. Digging down (`DIG_DOWN`,
+the night pit only) adds no packet: it sends a dig's C07 start and finish, then the fall as
+walking steps (C06), with digging and walking enabled and a fence with a height range.
 
 ## Directory map
 

@@ -5,9 +5,11 @@ import {
   type DiggableBlock,
 } from '../../domain/blocks.ts';
 import { diggableInfo } from '../../domain/dig-time.ts';
+import type { UnderFeet } from '../../domain/game-state.ts';
+import { isDigDownBlock } from '../../domain/night-shelter.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
-import { standProblem } from './terrain.ts';
+import { FLOAT_CHECK_HALF_WIDTH, PASSABLE_BLOCKS, standProblem } from './terrain.ts';
 import {
   sweptColumns,
   WALKABLE_SURFACES,
@@ -267,4 +269,205 @@ export function standSpotFor(
     }
   }
   return best?.spot ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Digging down: the block under the player's own feet (DIG_DOWN, the night pit only)
+
+/**
+ * What the cells around a dig-down may hold (the dug block, the landing, and the player's
+ * body before and after the drop): air, plants, plain full blocks and the dig allowlist.
+ * Never a fluid (water would pour into the hole), a hazard, a modded, unnamed or unloaded
+ * block.
+ */
+export const DIG_DOWN_SURROUNDINGS: ReadonlySet<string> = new Set<string>([
+  ...DIG_NEIGHBOURS,
+  ...PASSABLE_BLOCKS,
+]);
+
+const nameAt = (world: WalkWorld, x: number, y: number, z: number): string | undefined => {
+  const id = world.blockAt(x, y, z);
+  return id === undefined ? undefined : id === 0 ? 'minecraft:air' : world.blockName(id);
+};
+
+/**
+ * True when the player's body, with the server's floating-check margin, stands in exactly
+ * one block column: digging the block under it then drops it straight into the hole.
+ */
+export function inOneColumn(feet: Vec3): boolean {
+  const w = FLOAT_CHECK_HALF_WIDTH;
+  return (
+    Math.floor(feet.x - w) === Math.floor(feet.x + w) &&
+    Math.floor(feet.z - w) === Math.floor(feet.z + w)
+  );
+}
+
+/** Feet exactly on a block top (where walks end), not mid-step or mid-fall. */
+export function onBlockTop(feet: Vec3): boolean {
+  return Math.abs(feet.y - Math.round(feet.y)) <= 1e-6;
+}
+
+/**
+ * Why a player landing on the block at (x, y, z) would not stop exactly there, or null: it
+ * must be one of the walker's plain full blocks, and sand or gravel needs a plain full block
+ * under it too (a block update would drop it into a hole below, with the player on it).
+ */
+export function landingProblem(world: WalkWorld, x: number, y: number, z: number): string | null {
+  const at = { x, y, z };
+  const name = nameAt(world, x, y, z);
+  if (name === undefined) return `the block under it at ${fmt(at)} is not loaded or not named`;
+  if (!WALKABLE_SURFACES.has(name)) {
+    return (
+      `${name} is under it at ${fmt(at)}, not a plain full block: the player would not land ` +
+      'exactly one block lower (a cave, a fluid or a plant drops it farther)'
+    );
+  }
+  if (FALLING_DIGGABLE_BLOCKS.has(name as DiggableBlock)) {
+    const below = nameAt(world, x, y - 1, z);
+    if (below === undefined || !WALKABLE_SURFACES.has(below)) {
+      return `${name} under it at ${fmt(at)} has ${below ?? 'an unknown block'} under it: it could fall with the player on it`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether the player standing at `feet` may dig the block under its own feet, `target`, and
+ * drop exactly one block onto the block under that (DIG_DOWN, the night pit only). Fail
+ * closed. It refuses:
+ *  - a fence on one level (the pen keeps its floor), a target outside the fence's columns,
+ *    or a landing outside its heights;
+ *  - anything but the block right under the feet, with the player on top of it and its body
+ *    (with the server's 0.0625 margin) in that one column;
+ *  - a block that is not dirt, grass, sand, gravel or clay;
+ *  - a landing that is not a plain full block (a cave, a fluid, a plant: a longer fall),
+ *    or sand or gravel with nothing solid under it;
+ *  - anything but air and plain blocks touching the dug block (as checkDig), or sand or
+ *    gravel beside it with nothing under it (it would fall when the block goes);
+ *  - in every cell around the dug block, the landing and the body before and after the
+ *    drop (3 x 3 columns, from the landing's level to the head's): anything not loaded or
+ *    not named, a hazard (lava, fire, harmful fluids, damaging blocks), a fluid such as
+ *    water, or any other block but air, plants and plain blocks; and hazards one level
+ *    lower still.
+ * Checked before the dig starts and again every tick while digging.
+ */
+export function checkDigDown(
+  world: WalkWorld,
+  area: DigArea,
+  feet: Vec3,
+  target: BlockPos,
+): DigCheck {
+  const refuse = (reason: string): DigCheck => ({ ok: false, reason });
+  const { x, y, z } = target;
+  if (![x, y, z].every(Number.isInteger) || y < 2 || y > 254) {
+    return refuse(`${fmt(target)} is not a block the agent digs down into`);
+  }
+  const { fence } = area;
+  if (fence.min.y === fence.max.y) {
+    return refuse('digging down needs a terrain fence (a height range): the pen keeps its floor');
+  }
+  if (x < fence.min.x || x > fence.max.x || z < fence.min.z || z > fence.max.z) {
+    return refuse(`${fmt(target)} is outside the fence's columns`);
+  }
+  // The feet land in the dug cell: it must be a level the fence holds.
+  if (y < fence.min.y || y > fence.max.y) {
+    return refuse(
+      `landing with the feet at y=${y} would leave the fence's heights y=${fence.min.y}..${fence.max.y}`,
+    );
+  }
+  const feetLevel = Math.floor(feet.y + 1e-6);
+  if (!onBlockTop(feet)) {
+    return refuse(`the player's feet are at y=${feet.y.toFixed(3)}, not on a block top`);
+  }
+  if (x !== Math.floor(feet.x) || z !== Math.floor(feet.z) || y !== feetLevel - 1) {
+    return refuse(`${fmt(target)} is not the block under the player's feet`);
+  }
+  if (!inOneColumn(feet)) {
+    return refuse(
+      `the player at (${feet.x.toFixed(2)}, ${feet.z.toFixed(2)}) stands across more than one column: it would not drop into the hole (walk to the column's centre first)`,
+    );
+  }
+
+  const id = world.blockAt(x, y, z);
+  if (id === undefined) return refuse(`${fmt(target)} is not loaded`);
+  if (id === 0) return refuse(`${fmt(target)} is air: the player does not stand on it`);
+  const name = world.blockName(id);
+  if (name === undefined) {
+    return refuse(`${fmt(target)} holds block id ${id}, which the registry does not name`);
+  }
+  if (!isDiggableBlock(name) || !isDigDownBlock(name)) {
+    return refuse(
+      `${fmt(target)} is ${name}: digging down takes only dirt, grass, sand, gravel or clay`,
+    );
+  }
+
+  // Exactly one block down, onto something that stays put.
+  const landing = landingProblem(world, x, y - 1, z);
+  if (landing !== null) return refuse(landing);
+
+  // Everything touching it must be known and inert (as for any dug block). The cell above
+  // is the player's feet cell.
+  for (const [dx, dy, dz] of FACES) {
+    const n = { x: x + dx, y: y + dy, z: z + dz };
+    const nname = nameAt(world, n.x, n.y, n.z);
+    if (nname === undefined)
+      return refuse(`the block next to it at ${fmt(n)} is not loaded or not named`);
+    if (!DIG_NEIGHBOURS.has(nname)) {
+      return refuse(
+        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block)`,
+      );
+    }
+    // Sand or gravel beside it, with nothing under it, would fall when the block goes.
+    if (dy === 0 && FALLING_DIGGABLE_BLOCKS.has(nname as DiggableBlock)) {
+      const under = nameAt(world, n.x, n.y - 1, n.z);
+      if (under === undefined || !WALKABLE_SURFACES.has(under)) {
+        return refuse(`${nname} beside it at ${fmt(n)} has nothing solid under it: it would fall`);
+      }
+    }
+  }
+
+  // The cells around the dug block, the landing and the body before and after the drop.
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dy = -2; dy <= 2; dy++) {
+        const n = { x: x + dx, y: y + dy, z: z + dz };
+        const nid = world.blockAt(n.x, n.y, n.z);
+        if (nid === undefined) return refuse(`a block near it at ${fmt(n)} is not loaded`);
+        if (world.hazardCode(nid) !== BLOCK_CODE.safe) {
+          return refuse(`it is near ${world.blockName(nid) ?? `block id ${nid}`} at ${fmt(n)}`);
+        }
+        if (dy === -2) continue; // below the landing: only hazards matter
+        const nname = nid === 0 ? 'minecraft:air' : world.blockName(nid);
+        if (nname === undefined || !DIG_DOWN_SURROUNDINGS.has(nname)) {
+          return refuse(
+            `${nname ?? `block id ${nid}`} at ${fmt(n)} is near it (only air, plants and plain blocks may be around a dig down: no fluid)`,
+          );
+        }
+      }
+    }
+  }
+
+  const reach = reachTo(feet, target);
+  return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+}
+
+/**
+ * The ground in the player's own column, as the observation reports it (DIG_DOWN), or null
+ * when the player is not on a block top in one column, or a block is not loaded or named.
+ */
+export function underFeetOf(world: WalkWorld, feet: Vec3): UnderFeet | null {
+  if (!onBlockTop(feet) || !inOneColumn(feet)) return null;
+  const x = Math.floor(feet.x);
+  const z = Math.floor(feet.z);
+  const y = Math.floor(feet.y + 1e-6) - 1;
+  if (y < 1) return null;
+  const block = nameAt(world, x, y, z);
+  const landing = nameAt(world, x, y - 1, z);
+  if (block === undefined || landing === undefined) return null;
+  return {
+    position: { x, y, z },
+    block,
+    landing,
+    landingHolds: landingProblem(world, x, y - 1, z) === null,
+  };
 }
