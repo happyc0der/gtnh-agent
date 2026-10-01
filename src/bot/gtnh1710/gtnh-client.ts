@@ -94,11 +94,14 @@ import { rewardSlotsNeeded } from '../../domain/quest-items.ts';
 import {
   checkDig,
   checkDigDown,
+  checkWalkBreak,
+  DIG_SETTLE_TICKS,
   eyesOf,
   faceTowards,
   reachTo,
   standSpotFor,
   underFeetOf,
+  walkBreaks,
   type DigArea,
   type DigCheck,
 } from './digging.ts';
@@ -161,6 +164,7 @@ import {
   type WalkPlan,
   type WalkWorld,
 } from './walking.ts';
+import { passProblem } from './passable.ts';
 import {
   bodyProblem,
   checkSupport,
@@ -172,6 +176,7 @@ import {
   standProblem,
   terrainSteps,
   type TerrainStep,
+  type WalkBreaks,
 } from './terrain.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
 import {
@@ -214,9 +219,16 @@ const DIG_OUTCOME_TIMEOUT_MS = 2_000;
  * "air" to the digging player BEFORE it asks mods whether the break may happen, and re-sends
  * the block if one cancels it, so the first "air" alone is not proof.
  */
-const DIG_SETTLE_MS = 5 * TICK_MS;
+const DIG_SETTLE_MS = DIG_SETTLE_TICKS * TICK_MS;
 /** How long the drop may take to reach the inventory: a 10-tick pickup delay, plus falling. */
 const DROP_WAIT_MS = 2_000;
+/**
+ * After a walk broke leaves on its way: how long after the last break it waits before it
+ * reports (the drop's 10-tick pickup delay, plus 5), so what they drop now and then (a
+ * sapling, an apple) reaches the inventory during the walk, not during the next action,
+ * whose own drop and inventory checks it would confuse.
+ */
+const BREAK_DROP_WAIT_MS = 15 * TICK_MS;
 /** After the click: how long to wait for the server's block change at the cell. */
 const PLACE_OUTCOME_TIMEOUT_MS = 2_000;
 /**
@@ -256,6 +268,15 @@ function describeGain(gained: ReadonlyArray<[string, number]>): string {
     .map(([item, n]) => `${n} x ${item}`)
     .join(', ')
     .slice(0, 200);
+}
+
+/** What a walk broke: "2 leaves on the way: (1, 64, 0), (1, 65, 0)". */
+function describeBroken(cells: readonly BlockPosition[]): string {
+  const n = cells.length;
+  return (
+    `${n === 1 ? 'a leaf block' : `${n} leaves`} on the way: ` +
+    cells.map((c) => `(${c.x}, ${c.y}, ${c.z})`).join(', ')
+  );
 }
 
 /** Yaw and pitch (degrees, Minecraft's convention) from the eyes to a point. */
@@ -379,6 +400,9 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    boundary: #fence()), and every step is re-checked just before it is sent; it stops on
  *    a server correction, a health drop, a nearby threat (MOVE_TO, EXPLORE), a blocked or
  *    dangerous way ahead, the stop file, halt(), or a lost connection;
+ *  - a MOVE_TO over terrain may break a few leaves in its way when digging is enabled, each
+ *    one as DIG_BLOCK digs (checkWalkBreak re-checked before and during the dig, success only
+ *    on the server's change to air); a break refused or not confirmed stops the walk;
  *  - window work never leaves items on the cursor or in a crafting grid when it can help it
  *    (the server drops both when a window closes or the player leaves);
  *  - a dig breaks one allowlisted block that digging.ts has checked, and re-checks it every
@@ -647,11 +671,12 @@ export class Gtnh1710Client implements MinecraftClient {
       // Only stand spots a walk from here reaches (seen live: logs walled in by leaves,
       // cactus and foliage were offered, and every walk to them failed). Terrain fences only:
       // a one-level fence (the pen) walks by planWalk, which the flood does not model. When
-      // the player cannot walk at all, blocks in reach stay diggable where it stands.
+      // the player cannot walk at all, blocks in reach stay diggable where it stands. A
+      // walk may break leaves on its way (#walkBreaks), as a MOVE_TO there then does.
       const reachable =
         fence.min.y === fence.max.y
           ? undefined
-          : reachableFeet(world, fence, feet, cfg.movement.maxPathLength);
+          : reachableFeet(world, fence, feet, cfg.movement.maxPathLength, this.#walkBreaks(fence));
       const walkable = reachable !== undefined && reachable.size > 0 ? reachable : undefined;
       blocks = {
         ...blocks,
@@ -691,7 +716,12 @@ export class Gtnh1710Client implements MinecraftClient {
         // Recorded by the agent; deliberately not sent as in-game chat.
         return Promise.resolve(ok('pause recorded (not sent in-game)', { acknowledged: true }));
       case 'MOVE_TO':
-        return this.#walkTo(action.args.target, { stopForThreats: true });
+        // Over terrain with digging enabled it may break a few leaves in its way.
+        return this.#walkTo(action.args.target, {
+          stopForThreats: true,
+          breakLeaves: true,
+          protectedItems: new Set(validated.protectedItems),
+        });
       case 'EXPLORE':
         return this.#explore(action.args);
       case 'RETURN_TO_SAFE_LOCATION':
@@ -2147,17 +2177,22 @@ export class Gtnh1710Client implements MinecraftClient {
     before: Readonly<Record<string, number>>,
     tool: ToolInfo | null,
   ): Promise<Array<[string, number]>> {
+    await this.#waitFor(() => this.#gainSince(before, tool).length > 0, DROP_WAIT_MS);
+    return this.#gainSince(before, tool);
+  }
+
+  /** Items gained since `before`, now (the tool used, if any, left out: see #dropGain). */
+  #gainSince(
+    before: Readonly<Record<string, number>>,
+    tool: ToolInfo | null,
+  ): Array<[string, number]> {
     const isTool = (item: string): boolean =>
       tool !== null && (item === tool.item || item.startsWith(`${tool.item}@`));
-    const increase = (): Array<[string, number]> => {
-      const now = this.#world.inventoryItems() ?? {};
-      return Object.entries(now)
-        .filter(([item]) => !isTool(item))
-        .map(([item, n]): [string, number] => [item, n - (before[item] ?? 0)])
-        .filter(([, d]) => d > 0);
-    };
-    await this.#waitFor(() => increase().length > 0, DROP_WAIT_MS);
-    return increase();
+    const now = this.#world.inventoryItems() ?? {};
+    return Object.entries(now)
+      .filter(([item]) => !isTool(item))
+      .map(([item, n]): [string, number] => [item, n - (before[item] ?? 0)])
+      .filter(([, d]) => d > 0);
   }
 
   async #digOnce(
@@ -2196,86 +2231,11 @@ export class Gtnh1710Client implements MinecraftClient {
     const where = `(${target.x}, ${target.y}, ${target.z})`;
     this.#digging = true;
     try {
-      // A chest left open by an earlier action is closed first (never with a full cursor).
-      if (this.#world.openWindow !== null) {
-        const closed = this.#closeOpenWindow();
-        if (closed !== null) return done(failed(`not ${verb}: ${closed.message}`, 'REFUSED'));
-      }
-      const world = this.#world.walkWorld();
-      const feet = this.#world.ownPosition;
-      if (world === null || feet === null) {
-        return done(failed(`not ${verb}: block data or position unknown`, 'REFUSED'));
-      }
-      const first = rule(world, feet);
-      if (!first.ok) return done(failed(`not ${verb}: ${first.reason}`, 'REFUSED'));
-      // What to hold: the best allowlisted tool for this block that one more use cannot
-      // break (src/domain/tools.ts), moved into the hotbar if needed; else an empty hand.
-      const hand = await this.#chooseHand(first.block, protectedItems);
-      if (!hand.ok) return done(failed(`not ${verb}: ${hand.reason}`, hand.code));
-      if (hand.slot !== this.#world.heldSlot) {
-        this.#send(outbound.selectHotbarSlot(hand.slot));
-        this.#world.setHeldSlot(hand.slot);
-      }
+      const dug = await this.#digChecked(target, rule, protectedItems, verb, null);
+      if (!dug.ok) return done(dug.result);
+      const { world, check, hand, held, itemsBefore, ticks, guard } = dug;
       const tool = hand.tool;
-      // Choosing the hand may have taken a few clicks: check again before starting.
-      const check = rule(world, this.#world.ownPosition ?? feet);
-      if (!check.ok) return done(failed(`not ${verb}: ${check.reason}`, 'REFUSED'));
-      const held =
-        tool === null ? null : { slot: hand.slot, stack: this.#hotbar(hand.slot) ?? null };
-
-      const itemsBefore = this.#world.inventoryItems();
-      const ticks = digWaitTicks(check.block, tool === null ? BARE_HAND_SPEED : tool.speed);
-      const holding =
-        tool === null ? 'an empty hand' : `${tool.item} (${usesLeft(tool, hand.damage)} uses left)`;
-      const guard = {
-        placementsAtStart: this.#confirmedPositions,
-        healthAtStart: this.#world.health,
-      };
-      const clock = this.#opts.clock;
-      const watch = this.#world.watchBlock(target.x, target.y, target.z);
       const { x, y, z } = target;
-      let verdict: { ok: true } | { ok: false; result: ClientActionResult };
-      try {
-        this.#log(`digging ${check.block} at ${where} with ${holding}: ${ticks} ticks`);
-        // Face the block, as a player does (other players see where the head points).
-        const look = lookAt(eyesOf(feet), centreOf(target));
-        this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
-        this.#lastYaw = look.yaw;
-        const self = this.#world.selfEntityId;
-        if (self !== null) this.#send(outbound.swingArm(self));
-        this.#send(outbound.digBlock(DIG_STATUS.start, x, y, z, check.face));
-        const startedAt = clock.now().getTime();
-        let tick = 0;
-        while (clock.now().getTime() - startedAt < ticks * TICK_MS) {
-          await delay(TICK_MS);
-          tick += 1;
-          // A digging client swings its arm every few ticks; the server shows it to others.
-          if (self !== null && tick % 4 === 0 && this.#phase === 'play') {
-            this.#send(outbound.swingArm(self));
-          }
-          const problem = this.#digProblem(rule, check.blockId, watch, guard, held);
-          if (problem !== null) {
-            if (this.#phase === 'play') {
-              this.#send(outbound.digBlock(DIG_STATUS.cancel, x, y, z, check.face));
-            }
-            this.#log(`dig stopped: ${problem}`);
-            return done(
-              failed(`dig of ${check.block} at ${where} stopped: ${problem}`, 'FAILED', {
-                x,
-                y,
-                z,
-                block: check.block,
-              }),
-            );
-          }
-        }
-        const sentAt = watch.updates.length;
-        this.#send(outbound.digBlock(DIG_STATUS.finish, x, y, z, check.face));
-        verdict = await this.#digVerdict(watch, sentAt, check.block, where);
-      } finally {
-        this.#world.unwatch(watch);
-      }
-      if (!verdict.ok) return done(verdict.result);
 
       // DIG_DOWN: the block under the feet is gone; fall onto the one below it at once.
       if (down) {
@@ -2351,6 +2311,122 @@ export class Gtnh1710Client implements MinecraftClient {
     } finally {
       this.#digging = false;
     }
+  }
+
+  /**
+   * The dig itself, as DIG_BLOCK, DIG_DOWN and a walk's breaks all make it (the caller holds
+   * #digging and has checked its blockers). A window left open is closed first (never with a
+   * full cursor); `rule` is checked on the latest blocks, the hand chosen (#chooseHand) and
+   * `rule` checked again; then it faces the block, swings, sends C07 start, waits the dig time
+   * (digWaitTicks at the tool's speed) with `rule`, the guard, the block and the tool in hand
+   * re-checked every tick (C07 cancel on any problem), sends C07 finish and takes the server's
+   * verdict (#digVerdict: air, and no re-send). The guard is the caller's (a walk's own),
+   * else taken just before the start.
+   */
+  async #digChecked(
+    target: BlockPosition,
+    rule: (world: WalkWorld, at: Vec3) => DigCheck,
+    protectedItems: ReadonlySet<string>,
+    verb: string,
+    callerGuard: { placementsAtStart: number; healthAtStart: number | null } | null,
+  ): Promise<
+    | { ok: false; result: ClientActionResult }
+    | {
+        ok: true;
+        world: WalkWorld;
+        check: Extract<DigCheck, { ok: true }>;
+        hand: Hand;
+        held: { slot: number; stack: Stack | null } | null;
+        itemsBefore: Readonly<Record<string, number>> | null;
+        ticks: number;
+        guard: { placementsAtStart: number; healthAtStart: number | null };
+      }
+  > {
+    const done = (result: ClientActionResult): { ok: false; result: ClientActionResult } => ({
+      ok: false,
+      result,
+    });
+    const where = `(${target.x}, ${target.y}, ${target.z})`;
+    // A chest left open by an earlier action is closed first (never with a full cursor).
+    if (this.#world.openWindow !== null) {
+      const closed = this.#closeOpenWindow();
+      if (closed !== null) return done(failed(`not ${verb}: ${closed.message}`, 'REFUSED'));
+    }
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    if (world === null || feet === null) {
+      return done(failed(`not ${verb}: block data or position unknown`, 'REFUSED'));
+    }
+    const first = rule(world, feet);
+    if (!first.ok) return done(failed(`not ${verb}: ${first.reason}`, 'REFUSED'));
+    // What to hold: the best allowlisted tool for this block that one more use cannot
+    // break (src/domain/tools.ts), moved into the hotbar if needed; else an empty hand.
+    const hand = await this.#chooseHand(first.block, protectedItems);
+    if (!hand.ok) return done(failed(`not ${verb}: ${hand.reason}`, hand.code));
+    if (hand.slot !== this.#world.heldSlot) {
+      this.#send(outbound.selectHotbarSlot(hand.slot));
+      this.#world.setHeldSlot(hand.slot);
+    }
+    const tool = hand.tool;
+    // Choosing the hand may have taken a few clicks: check again before starting.
+    const check = rule(world, this.#world.ownPosition ?? feet);
+    if (!check.ok) return done(failed(`not ${verb}: ${check.reason}`, 'REFUSED'));
+    const held = tool === null ? null : { slot: hand.slot, stack: this.#hotbar(hand.slot) ?? null };
+
+    const itemsBefore = this.#world.inventoryItems();
+    const ticks = digWaitTicks(check.block, tool === null ? BARE_HAND_SPEED : tool.speed);
+    const holding =
+      tool === null ? 'an empty hand' : `${tool.item} (${usesLeft(tool, hand.damage)} uses left)`;
+    const guard = callerGuard ?? {
+      placementsAtStart: this.#confirmedPositions,
+      healthAtStart: this.#world.health,
+    };
+    const clock = this.#opts.clock;
+    const watch = this.#world.watchBlock(target.x, target.y, target.z);
+    const { x, y, z } = target;
+    let verdict: { ok: true } | { ok: false; result: ClientActionResult };
+    try {
+      this.#log(`digging ${check.block} at ${where} with ${holding}: ${ticks} ticks`);
+      // Face the block, as a player does (other players see where the head points).
+      const look = lookAt(eyesOf(feet), centreOf(target));
+      this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
+      this.#lastYaw = look.yaw;
+      const self = this.#world.selfEntityId;
+      if (self !== null) this.#send(outbound.swingArm(self));
+      this.#send(outbound.digBlock(DIG_STATUS.start, x, y, z, check.face));
+      const startedAt = clock.now().getTime();
+      let tick = 0;
+      while (clock.now().getTime() - startedAt < ticks * TICK_MS) {
+        await delay(TICK_MS);
+        tick += 1;
+        // A digging client swings its arm every few ticks; the server shows it to others.
+        if (self !== null && tick % 4 === 0 && this.#phase === 'play') {
+          this.#send(outbound.swingArm(self));
+        }
+        const problem = this.#digProblem(rule, check.blockId, watch, guard, held);
+        if (problem !== null) {
+          if (this.#phase === 'play') {
+            this.#send(outbound.digBlock(DIG_STATUS.cancel, x, y, z, check.face));
+          }
+          this.#log(`dig stopped: ${problem}`);
+          return done(
+            failed(`dig of ${check.block} at ${where} stopped: ${problem}`, 'FAILED', {
+              x,
+              y,
+              z,
+              block: check.block,
+            }),
+          );
+        }
+      }
+      const sentAt = watch.updates.length;
+      this.#send(outbound.digBlock(DIG_STATUS.finish, x, y, z, check.face));
+      verdict = await this.#digVerdict(watch, sentAt, check.block, where);
+    } finally {
+      this.#world.unwatch(watch);
+    }
+    if (!verdict.ok) return done(verdict.result);
+    return { ok: true, world, check, hand, held, itemsBefore, ticks, guard };
   }
 
   /**
@@ -3458,9 +3534,13 @@ export class Gtnh1710Client implements MinecraftClient {
 
   /**
    * Plans a walk without moving (for previews and dry runs), with a text map of the fence.
-   * Works whether or not movement is enabled; null when no fence is configured.
+   * Works whether or not movement is enabled; null when no fence is configured. With
+   * `breakLeaves` it plans as MOVE_TO does (#walkBreaks).
    */
-  previewWalk(target: Position | null): { plan: WalkPlan | null; map: string[] } | null {
+  previewWalk(
+    target: Position | null,
+    breakLeaves = false,
+  ): { plan: WalkPlan | null; map: string[] } | null {
     const m = this.#opts.config.movement;
     const fence = this.#fence().fence;
     if (fence === null) return null;
@@ -3471,8 +3551,11 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     if (fence.min.y !== fence.max.y) {
       // Terrain fences: plan only (the text map shows a single level).
+      const breaks = breakLeaves ? this.#walkBreaks(fence) : undefined;
       const t =
-        target === null ? null : planTerrainWalk(world, fence, from, target, m.maxPathLength);
+        target === null
+          ? null
+          : planTerrainWalk(world, fence, from, target, m.maxPathLength, breaks);
       return {
         plan:
           t === null
@@ -3521,9 +3604,35 @@ export class Gtnh1710Client implements MinecraftClient {
     return null;
   }
 
+  /**
+   * The leaves a terrain walk may break on its way (digging.ts walkBreaks), or undefined:
+   * only with digging enabled (and presence ticks, which digging needs), on a fence with a
+   * height range, and with an empty hotbar slot to break them with (no allowlisted tool is
+   * faster on leaves, so the hand is empty; without one every break would be refused).
+   * #withWorkAreas offers stand spots with it and MOVE_TO plans with it, so a stand spot a
+   * walk reaches by breaking leaves is one a MOVE_TO plans to the same way.
+   */
+  #walkBreaks(fence: Fence): WalkBreaks | undefined {
+    const cfg = this.#opts.config;
+    if (!cfg.digging.enabled || !cfg.presenceTicks || fence.min.y === fence.max.y) {
+      return undefined;
+    }
+    if (this.#emptyHotbarSlot() === null) return undefined;
+    return walkBreaks(
+      { fence, maxHeightAboveFence: cfg.digging.maxHeightAboveFence },
+      this.#opts.explorationBoundary ?? null,
+    );
+  }
+
   async #walkTo(
     target: Readonly<Position> | null,
-    options: { stopForThreats: boolean },
+    options: {
+      stopForThreats: boolean;
+      /** MOVE_TO: over terrain, with digging enabled, break leaves in the way (#walkBreaks). */
+      breakLeaves?: boolean;
+      /** Never held for a break (the validated action's protected items). */
+      protectedItems?: ReadonlySet<string>;
+    },
   ): Promise<ClientActionResult> {
     const m = this.#opts.config.movement;
     const blocker = this.#movementBlocker();
@@ -3540,95 +3649,195 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     // A fence on one level walks the flat pen way; a fence with a height range walks terrain.
     const terrain = fence.min.y !== fence.max.y;
-    let steps: TerrainStep[];
+    // The steps, move by move, each with what to break before it (terrain walks only).
+    let moves: Array<{ breaks: readonly BlockPosition[]; steps: TerrainStep[] }>;
     let length: number;
     if (terrain) {
-      const plan = planTerrainWalk(world, fence, from, target, m.maxPathLength);
+      const breaks = options.breakLeaves === true ? this.#walkBreaks(fence) : undefined;
+      const plan = planTerrainWalk(world, fence, from, target, m.maxPathLength, breaks);
       if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
-      steps = terrainSteps(from, plan.moves);
+      let end = from;
+      moves = plan.moves.map((move) => {
+        const steps = terrainSteps(end, [move]);
+        end = move.to;
+        return { breaks: move.breaks ?? [], steps };
+      });
       length = plan.length;
       const kinds = plan.moves.map((x) => x.kind);
+      const toBreak = moves.reduce((n, mv) => n + mv.breaks.length, 0);
       this.#log(
-        `walking ${length.toFixed(2)} blocks over terrain in ${steps.length} steps ` +
-          `(${kinds.filter((k) => k === 'step-up').length} up, ${kinds.filter((k) => k === 'drop').length} down)`,
+        `walking ${length.toFixed(2)} blocks over terrain in ${moves.reduce((n, mv) => n + mv.steps.length, 0)} steps ` +
+          `(${kinds.filter((k) => k === 'step-up').length} up, ${kinds.filter((k) => k === 'drop').length} down)` +
+          (toBreak > 0 ? `, breaking ${toBreak} block(s) on the way` : ''),
       );
     } else {
       const plan = planWalk(world, fence, from, target, m.maxPathLength);
       if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
-      steps = stepsAlong(plan.waypoints).map((pos) => ({ pos, onGround: true }));
+      const steps = stepsAlong(plan.waypoints).map((pos) => ({ pos, onGround: true }));
+      moves = [{ breaks: [], steps }];
       length = plan.length;
       this.#log(
         `walking ${length.toFixed(2)} blocks in ${steps.length} steps (${plan.waypoints.length - 1} stretch(es))`,
       );
     }
-    const placementsAtStart = this.#confirmedPositions;
-    const healthAtStart = this.#world.health;
+    const steps = moves.flatMap((mv) => mv.steps);
+    const guard = {
+      placementsAtStart: this.#confirmedPositions,
+      // An escape (threats do not stop it) keeps going when hit, too (seen live: a retreat
+      // from a skeleton stopped at its first arrow, and the next walk led back into range).
+      healthAtStart: options.stopForThreats ? this.#world.health : null,
+      stopForThreats: options.stopForThreats,
+      terrain,
+    };
+    // What it broke on its way, when it broke the last one, and the inventory before the
+    // walk: what the leaves dropped (a sapling, an apple) is reported with the walk.
+    const broken: BlockPosition[] = [];
+    let lastBreakAt: number | null = null;
+    const itemsBefore = moves.some((mv) => mv.breaks.length > 0)
+      ? this.#world.inventoryItems()
+      : null;
     let at: Vec3 = from;
     let taken = 0;
     const stopped = (reason: string): ClientActionResult => {
       const where = this.#world.ownPosition ?? at;
       this.#log(`walk stopped after ${taken}/${steps.length} steps: ${reason}`);
-      return failed(`walk stopped after ${taken} of ${steps.length} steps: ${reason}`, 'FAILED', {
-        stepsTaken: taken,
-        stepsPlanned: steps.length,
-        x: where.x,
-        y: where.y,
-        z: where.z,
-      });
+      return failed(
+        (
+          `walk stopped after ${taken} of ${steps.length} steps: ${reason}` +
+          (broken.length === 0 ? '' : `; it broke ${describeBroken(broken)}`)
+        ).slice(0, 500),
+        'FAILED',
+        {
+          stepsTaken: taken,
+          stepsPlanned: steps.length,
+          x: where.x,
+          y: where.y,
+          z: where.z,
+          ...(broken.length === 0 ? {} : { broken: broken.length }),
+        },
+      );
     };
 
     this.#walking = true;
     this.#stopIdle();
     try {
-      for (const step of steps) {
-        const next = step.pos;
-        const reason = this.#stepProblem(world, fence, at, next, {
-          placementsAtStart,
-          // An escape (threats do not stop it) keeps going when hit, too (seen live: a retreat
-          // from a skeleton stopped at its first arrow, and the next walk led back into range).
-          healthAtStart: options.stopForThreats ? healthAtStart : null,
-          stopForThreats: options.stopForThreats,
-          terrain,
-        });
-        if (reason !== null) return stopped(reason);
-        const facing =
-          Math.hypot(next.x - at.x, next.z - at.z) > 1e-9 ? yawTowards(at, next) : this.#lastYaw;
-        this.#lastYaw = facing;
-        this.#send(
-          outbound.playerMove(
-            { x: next.x, feetY: next.y, z: next.z, yaw: facing, pitch: 0 },
-            step.onGround,
-          ),
-        );
-        this.#world.setOwnPosition(next);
-        at = next;
-        taken += 1;
-        await delay(WALK_TICK_MS);
+      for (const move of moves) {
+        if (move.breaks.length > 0) {
+          const before = broken.length;
+          const problem = await this.#breakOnTheWay(
+            move.breaks,
+            fence,
+            guard,
+            options.protectedItems ?? new Set(),
+            broken,
+          );
+          if (broken.length > before) lastBreakAt = this.#opts.clock.now().getTime();
+          if (problem !== null) return stopped(problem);
+        }
+        for (const step of move.steps) {
+          const next = step.pos;
+          const reason = this.#stepProblem(world, fence, at, next, guard);
+          if (reason !== null) return stopped(reason);
+          const facing =
+            Math.hypot(next.x - at.x, next.z - at.z) > 1e-9 ? yawTowards(at, next) : this.#lastYaw;
+          this.#lastYaw = facing;
+          this.#send(
+            outbound.playerMove(
+              { x: next.x, feetY: next.y, z: next.z, yaw: facing, pitch: 0 },
+              step.onGround,
+            ),
+          );
+          this.#world.setOwnPosition(next);
+          at = next;
+          taken += 1;
+          await delay(WALK_TICK_MS);
+        }
       }
       // A correction (S08) or a kick arrives within a few ticks of a move the server rejects.
-      for (let i = 0; i < SETTLE_TICKS; i++) {
+      // After breaks it also stays until what they dropped could be picked up.
+      const until = lastBreakAt === null ? 0 : lastBreakAt + BREAK_DROP_WAIT_MS;
+      for (let i = 0; i < SETTLE_TICKS || this.#opts.clock.now().getTime() < until; i++) {
         if (this.#phase !== 'play') return stopped('the connection closed');
-        if (this.#confirmedPositions !== placementsAtStart) {
+        if (this.#confirmedPositions !== guard.placementsAtStart) {
           return stopped('the server corrected the final position');
         }
         this.#send(outbound.playerIdle(ON_GROUND));
         await delay(WALK_TICK_MS);
       }
       if (this.#phase !== 'play') return stopped('the connection closed');
-      if (this.#confirmedPositions !== placementsAtStart) {
+      if (this.#confirmedPositions !== guard.placementsAtStart) {
         return stopped('the server corrected the final position');
       }
-      return ok(`walked ${length.toFixed(2)} blocks in ${steps.length} steps`, {
-        steps: steps.length,
-        distance: Number(length.toFixed(3)),
-        x: at.x,
-        y: at.y,
-        z: at.z,
-      });
+      const gained =
+        itemsBefore === null || broken.length === 0 ? [] : this.#gainSince(itemsBefore, null);
+      const drops = describeGain(gained);
+      return ok(
+        (
+          `walked ${length.toFixed(2)} blocks in ${steps.length} steps` +
+          (broken.length === 0 ? '' : `; broke ${describeBroken(broken)}`) +
+          (gained.length === 0 ? '' : `; picked up ${drops}`)
+        ).slice(0, 500),
+        {
+          steps: steps.length,
+          distance: Number(length.toFixed(3)),
+          x: at.x,
+          y: at.y,
+          z: at.z,
+          ...(broken.length === 0 ? {} : { broken: broken.length, drops }),
+        },
+      );
     } finally {
       this.#walking = false;
       if (this.#phase === 'play') this.#startIdle();
     }
+  }
+
+  /**
+   * Breaks what a terrain walk's next move needs out of its way (planned by planTerrainWalk
+   * with #walkBreaks: leaves only), standing where the walk has got to, exactly as DIG_BLOCK
+   * digs (#digChecked): checkWalkBreak (checkDig's rules, leaves only, inside the safety
+   * boundary) on the blocks the server sent just before each dig and every tick while
+   * digging, with the walk's own guard; the dig time; C07 start and finish; success only on
+   * the server's change to air with no re-send. The walk's checks come first
+   * (#walkInterruption: the stop file, halt(), a correction, health, threats), and presence
+   * ticks go on while the player stands and digs. A cell that is open already (a leaf
+   * decayed) is passed over. Null when the way is open, else why the walk must stop;
+   * `broken` collects what it broke.
+   */
+  async #breakOnTheWay(
+    cells: readonly BlockPosition[],
+    fence: Fence,
+    guard: { placementsAtStart: number; healthAtStart: number | null; stopForThreats: boolean },
+    protectedItems: ReadonlySet<string>,
+    broken: BlockPosition[],
+  ): Promise<string | null> {
+    const cfg = this.#opts.config;
+    const area: DigArea = { fence, maxHeightAboveFence: cfg.digging.maxHeightAboveFence };
+    const boundary = this.#opts.explorationBoundary ?? null;
+    for (const cell of cells) {
+      const where = `(${cell.x}, ${cell.y}, ${cell.z})`;
+      if (!cfg.digging.enabled) return 'digging is disabled (MC_ENABLE_DIGGING)';
+      const interrupted = this.#walkInterruption(guard);
+      if (interrupted !== null) return interrupted;
+      const world = this.#world.walkWorld();
+      if (world === null) return 'the block data became unknown';
+      if (passProblem(world, cell.x, cell.y, cell.z) === null) continue;
+      this.#digging = true;
+      // The player stands while it digs: presence ticks go on, as for any dig.
+      const presence = setInterval(() => this.#send(outbound.playerIdle(ON_GROUND)), IDLE_TICK_MS);
+      try {
+        const rule = (w: WalkWorld, feet: Vec3): DigCheck =>
+          checkWalkBreak(w, area, feet, cell, boundary);
+        const dug = await this.#digChecked(cell, rule, protectedItems, 'digging', guard);
+        if (!dug.ok) return `breaking ${where} out of the way failed: ${dug.result.message}`;
+        broken.push({ x: cell.x, y: cell.y, z: cell.z });
+        this.#log(`broke the ${dug.check.block} at ${where} out of the way`);
+      } finally {
+        clearInterval(presence);
+        this.#digging = false;
+      }
+    }
+    return null;
   }
 
   /** Why the next step must not be taken, or null. Checked immediately before every step. */
@@ -3644,6 +3853,27 @@ export class Gtnh1710Client implements MinecraftClient {
       terrain: boolean;
     },
   ): string | null {
+    const interrupted = this.#walkInterruption(guard);
+    if (interrupted !== null) return interrupted;
+    // Terrain steps change height (steps up, drops), so check the body where it will be,
+    // at that height; the flat walker checks the whole swept stretch.
+    const problem = guard.terrain
+      ? bodyProblem(world, fence, to)
+      : segmentProblem(world, fence, from, to);
+    return problem === null ? null : `the way ahead is not clear: ${problem}`;
+  }
+
+  /**
+   * Why a walk must stop now, whatever the way ahead, or null; checked before every step and
+   * every block it breaks on its way: the connection, anything that blocks walking (the stop
+   * file, halt()...), a server correction or a health drop since it started, and with
+   * `stopForThreats` a hostile or unidentified entity within threatRadius.
+   */
+  #walkInterruption(guard: {
+    placementsAtStart: number;
+    healthAtStart: number | null;
+    stopForThreats: boolean;
+  }): string | null {
     if (this.#phase !== 'play') return 'the connection closed';
     const blocker = this.#movementBlocker();
     if (blocker !== null) return blocker;
@@ -3666,12 +3896,7 @@ export class Gtnh1710Client implements MinecraftClient {
         return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
       }
     }
-    // Terrain steps change height (steps up, drops), so check the body where it will be,
-    // at that height; the flat walker checks the whole swept stretch.
-    const problem = guard.terrain
-      ? bodyProblem(world, fence, to)
-      : segmentProblem(world, fence, from, to);
-    return problem === null ? null : `the way ahead is not clear: ${problem}`;
+    return null;
   }
 
   // -------------------------------------------------------------------------
@@ -3883,7 +4108,8 @@ export class Gtnh1710Client implements MinecraftClient {
       const walk = await this.#walkTo(target, { stopForThreats: false });
       // A path longer than one walk may take is walked in hops too, like a far location (seen
       // live: 49 blocks around a slope with the limit at 32, refused twice, play stopped).
-      if (walk.ok || !follow || !/the path is [\d.]+ blocks long/.test(walk.message)) return walk;
+      const tooLong = /the path is [\d.]+ blocks long|inside the fence within \d+ blocks/;
+      if (walk.ok || !follow || !tooLong.test(walk.message)) return walk;
     }
     let trip: Trip;
     this.#exploring = true;

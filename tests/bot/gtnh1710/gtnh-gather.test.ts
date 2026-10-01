@@ -140,4 +140,114 @@ describe('GATHER on the live client (fake server)', () => {
       /^GATHER 3 minecraft:sand done; 3 dug, 3\/3 gathered, 4 action\(s\)/,
     );
   }, 45_000);
+
+  it('a log walled in by leaves: the walk to its stand spot breaks through, then the dig', async () => {
+    // Seen live 2026-10-01 (a Hot Forest): the logs stood behind one- and two-block-high leaf
+    // bushes, no walk reached a stand spot, and the agent gave up on the forest. Here a
+    // two-high wall of leaves crosses the fence at x = -3, with the log beyond it, out of reach.
+    // Every leaf drops a sapling, which must not pass for the log's drop.
+    const log = { x: -1, y: 106, z: -11 };
+    const world = new Map<string, number>([[key(log), BLOCK.log]]);
+    for (let z = TERRAIN.min.z; z <= TERRAIN.max.z; z++) {
+      for (const y of [106, 107]) world.set(`-3,${y},${z}`, BLOCK.leaves);
+    }
+    server = new FakeGtnhServer({
+      blocks: [...DIG_TEST_BLOCK_REGISTRY, [6, 'minecraft:sapling']],
+      blockOverrides: world,
+      dig: { drops: { 'minecraft:leaves': { item: 'minecraft:sapling', count: 1 } } },
+    });
+    const config = defaultConfig({
+      minecraft: {
+        host: '127.0.0.1',
+        port: await server.listen(),
+        enableLiveConnection: true,
+        serverIdentityMarker: 'gtnh-agent-test',
+        connectTimeoutMs: 5_000,
+        initialStateGraceMs: 2_000,
+        movement: { enabled: true, fence: TERRAIN, stopFile: join(dir, 'STOP') },
+        digging: { enabled: true },
+      },
+    });
+    client = new Gtnh1710Client({ config: config.minecraft, clock: systemClock, retryDelayMs: 50 });
+    await client.connect();
+    // The log gets a stand spot: one a walk reaches by breaking leaves.
+    const seen = await client.observe();
+    const listed = seen.nearbyBlocks.known
+      ? seen.nearbyBlocks.value.resources.find((r) => key(r.position) === key(log))
+      : undefined;
+    expect(listed?.standAt?.x).toBeGreaterThan(-3);
+
+    const repos = createRepositories(openDatabase(IN_MEMORY), systemClock);
+    syncConfigToDatabase(config, repos);
+    addTask(repos, config, {
+      taskId: 'gather-log',
+      goal: 'Gather 1 log',
+      plan: undefined,
+      now: new Date(),
+    });
+    const planner = new MockPlannerProvider([
+      {
+        name: 'gather',
+        when: {},
+        response: {
+          kind: 'plan',
+          plan: {
+            goal: 'Gather 1 log',
+            steps: [
+              {
+                step: 1,
+                action: { type: 'GATHER', args: { block: 'minecraft:log', count: 1 } },
+                rationale: 'The log in view.',
+              },
+            ],
+            requiresUserApproval: false,
+            explanation: 'One GATHER step.',
+            failureHandling: {
+              onStepFailure: 'REPLAN',
+              maxRetriesPerStep: 1,
+              escalationMessage: 'Could not gather the log.',
+            },
+          },
+        },
+      },
+    ]);
+    const deps = {
+      config,
+      client,
+      repos,
+      decisionProvider: new DeterministicDecisionProvider(),
+      planner,
+      clock: systemClock,
+      newId: sequentialIds(),
+    };
+    const results: CycleResult[] = [];
+    while (results.length < 6 && repos.plans.get(1)?.status !== 'completed') {
+      results.push(await runSingleCycle(deps));
+    }
+    expect(results.map((r) => r.summary)).toEqual([
+      'REQUEST_PLANNER -> MOVE_TO -> succeeded',
+      'REQUEST_PLANNER -> DIG_BLOCK -> succeeded',
+    ]);
+    expect(repos.plans.get(1)?.status).toBe('completed');
+    expect(results[0]?.outcome?.execution?.data).toMatchObject({
+      broken: 2,
+      drops: '2 x minecraft:sapling',
+    });
+    // The dig reports the log, not the saplings the walk picked up.
+    expect(results[1]?.outcome?.execution?.data).toMatchObject({
+      block: 'minecraft:log',
+      dropCollected: true,
+      drops: '1 x minecraft:log',
+    });
+    expect(server.digSim.broken.map((b) => b.name)).toEqual([
+      'minecraft:leaves',
+      'minecraft:leaves',
+      'minecraft:log',
+    ]);
+    const after = await client.observe();
+    expect(after.inventory).toMatchObject({
+      known: true,
+      value: { items: { 'minecraft:log': 1, 'minecraft:sapling': 2 } },
+    });
+  }, 45_000);
 });

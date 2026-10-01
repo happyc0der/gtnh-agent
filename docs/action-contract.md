@@ -169,6 +169,19 @@ ahead, the stop file, `halt()` or a lost connection. See [architecture: walking]
 In `MC_MOVEMENT_MODE=follow`, a `RETURN_TO_SAFE_LOCATION` beyond the play area travels in hops
 first, like `EXPLORE` but not stopped by threats and at any time of day (it is the escape).
 
+**A `MOVE_TO` may break leaves in its way** (2026-10-01): over terrain, with
+`MC_ENABLE_DIGGING=true` too, the walk may break up to 4 `minecraft:leaves` or `leaves2` blocks
+that stand in its body's way, on straight moves only, the upper block first, when a way round
+is more than about 3 blocks longer per leaf (each break costs its dig time). Each break is a
+`DIG_BLOCK` dig in all but name: `checkWalkBreak` (leaves only, every rule of `checkDig`, inside
+the safety boundary) on the server's blocks just before the dig and every tick, an empty hand,
+the dig time, C07 start and finish, success only on the server's change to air. A break refused
+or not confirmed stops the walk (`FAILED`, with the reason; the agent re-plans). The result says
+what it broke (`broken`, and `drops`: what the leaves dropped, picked up before the walk
+reports); the postcondition is unchanged (the player near the target). The observation's stand
+spots (`standAt`) count such walks, so a log walled in by leaves gets one. Retreats, `EXPLORE`
+and the walk to a dig's drop never break.
+
 `CRAFT_ITEM` works when `MC_ENABLE_CRAFTING=true` (otherwise `NOT_IMPLEMENTED`): 2x2 recipes in
 the player's own grid, 3x3 recipes at a crafting table listed in `minecraft.crafting.tables`. The
 recipe table (`src/domain/recipes.ts`) only says what to put where; the server decides:
@@ -240,6 +253,7 @@ Blocks the observation found also work with the older actions: `CRAFT_ITEM` with
 dirt chest.
 
 `DIG_BLOCK` needs `MC_ENABLE_DIGGING=true` and the movement fence (otherwise `NOT_IMPLEMENTED`).
+The same dig breaks the leaves a `MOVE_TO` breaks on its way (above), with the same checks.
 
 - **Refused** (`REFUSED`, nothing sent) when the block:
   - is outside the fence's columns, or outside its level up to `maxHeightAboveFence`;

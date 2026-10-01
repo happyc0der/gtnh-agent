@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BLOCK_CODE } from '../../../src/bot/gtnh1710/block-hazards.ts';
+import { MAX_WALK_BREAKS, walkBreakCost, walkBreaks } from '../../../src/bot/gtnh1710/digging.ts';
 import {
   bodyProblem,
   checkSupport,
@@ -11,6 +12,7 @@ import {
   standProblem,
   terrainSteps,
   type TerrainMove,
+  type TerrainPlan,
 } from '../../../src/bot/gtnh1710/terrain.ts';
 import type { Fence, Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 
@@ -226,6 +228,207 @@ describe('where a walk can get to (reachableFeet)', () => {
     expect(r.has('3,64,3')).toBe(true);
     expect(planTerrainWalk(w, FENCE, at(0.5, 64, 0.5), at(5.5, 64, 5.5), 64).ok).toBe(false);
     expect(reachableFeet(w, FENCE, at(0.5, 64.5, 0.5), 64).size).toBe(0);
+  });
+});
+
+describe('breaking leaves on the way (WalkBreaks)', () => {
+  const BREAKS = walkBreaks({ fence: FENCE, maxHeightAboveFence: 4 });
+  const LEAF = walkBreakCost('minecraft:leaves');
+  const FROM = at(0.5, 64, 0.5);
+  /** A wall of leaves across the fence at x = 2, `high` blocks tall, open at the `gaps` (z). */
+  const wall = (high: number, gaps: number[] = []): Record<string, number> => {
+    const blocks: Record<string, number> = {};
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) {
+      if (gaps.includes(z)) continue;
+      for (let y = 64; y < 64 + high; y++) blocks[`2,${y},${z}`] = ID.leaves;
+    }
+    return blocks;
+  };
+  const planned = (plan: TerrainPlan) => {
+    if (!plan.ok) throw new Error(plan.reason);
+    return plan;
+  };
+  const brokenBy = (plan: TerrainPlan) => planned(plan).moves.flatMap((m) => m.breaks ?? []);
+
+  it('costs a leaf its dig time by hand and the wait for the verdict, at the walking pace', () => {
+    // (10 ticks of digging + 1 + 5 quiet) x 0.2 blocks per tick.
+    expect(LEAF).toBeCloseTo(3.2, 9);
+    expect(walkBreakCost('minecraft:leaves2')).toBeCloseTo(3.2, 9);
+  });
+
+  it('crosses a wall of leaves by breaking one block, or two (the upper one first)', () => {
+    for (const high of [1, 2]) {
+      const w = terrain(() => 63, wall(high));
+      // Without digging there is no way through.
+      expect(planTerrainWalk(w, FENCE, FROM, at(4.5, 64, 0.5), 64).ok).toBe(false);
+      const plan = planned(planTerrainWalk(w, FENCE, FROM, at(4.5, 64, 0.5), 64, BREAKS));
+      // One straight move into the wall breaks what is in the body's way first.
+      const breaking = plan.moves.filter((m) => m.breaks !== undefined);
+      expect(breaking).toHaveLength(1);
+      expect(breaking[0]).toMatchObject({ kind: 'walk', to: at(2.5, 64, 0.5) });
+      expect(brokenBy(plan)).toEqual(
+        high === 1
+          ? [{ x: 2, y: 64, z: 0 }]
+          : [
+              { x: 2, y: 65, z: 0 },
+              { x: 2, y: 64, z: 0 },
+            ],
+      );
+      expect(plan.length).toBeCloseTo(4, 9);
+      expect(plan.moves.at(-1)?.to).toEqual(at(4.5, 64, 0.5));
+    }
+  });
+
+  it('walks round a bush when that is only a little longer, and through when much longer', () => {
+    // A gap two blocks off the line: round is 4 + 2 x 1.41 = 6.8 blocks, through is 4 blocks
+    // and a leaf (3.2): round wins, though it walks 2.8 blocks more.
+    const round = planned(
+      planTerrainWalk(
+        terrain(() => 63, wall(1, [2])),
+        FENCE,
+        FROM,
+        at(4.5, 64, 0.5),
+        64,
+        BREAKS,
+      ),
+    );
+    expect(brokenBy(round)).toEqual([]);
+    expect(round.length).toBeCloseTo(4 + 2 * Math.SQRT2, 9);
+    // The gap at the fence's edge, 8 blocks off: round would be about 19 blocks.
+    const far = terrain(() => 63, wall(1, [8]));
+    expect(brokenBy(planTerrainWalk(far, FENCE, FROM, at(4.5, 64, 0.5), 64, BREAKS))).toEqual([
+      { x: 2, y: 64, z: 0 },
+    ]);
+  });
+
+  it('breaks only what checkDig allows: never above the dig heights or under a plant', () => {
+    // Digging reaches only the feet level: the head-level leaves stay, so no way through.
+    const low = walkBreaks({ fence: FENCE, maxHeightAboveFence: 0 });
+    expect(
+      planTerrainWalk(
+        terrain(() => 63, wall(2)),
+        FENCE,
+        FROM,
+        at(4.5, 64, 0.5),
+        64,
+        low,
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: 'there is no walkable path to the target inside the fence',
+    });
+    expect(
+      planTerrainWalk(
+        terrain(() => 63, wall(1)),
+        FENCE,
+        FROM,
+        at(4.5, 64, 0.5),
+        64,
+        low,
+      ).ok,
+    ).toBe(true);
+    // Tall grass along the wall stands on the ground beside the leaves: they are broken...
+    const to = at(4.5, 64, 0.5);
+    const beside = wall(1);
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) beside[`1,64,${z}`] = ID.tallgrass;
+    const plan = planTerrainWalk(
+      terrain(() => 63, beside),
+      FENCE,
+      FROM,
+      to,
+      64,
+      BREAKS,
+    );
+    expect(brokenBy(plan)).toEqual([{ x: 2, y: 64, z: 0 }]);
+    // ...but a plant on top of a leaf would drop with it: none is.
+    const onTop = wall(1);
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) onTop[`2,65,${z}`] = ID.tallgrass;
+    expect(
+      planTerrainWalk(
+        terrain(() => 63, onTop),
+        FENCE,
+        FROM,
+        to,
+        64,
+        BREAKS,
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('breaks the head-room of a step up, but never a leaf next to lava', () => {
+    // A one-block step up at x = 1 along a strip, with a leaf over the player's head before it.
+    const strip: Fence = { min: { x: -8, y: 60, z: 0 }, max: { x: 8, y: 70, z: 0 } };
+    const breaks = walkBreaks({ fence: strip, maxHeightAboveFence: 4 });
+    const step = (x: number): number => (x >= 1 ? 64 : 63);
+    const overhang = { '0,66,0': ID.leaves };
+    const plan = planned(
+      planTerrainWalk(terrain(step, overhang), strip, FROM, at(3.5, 65, 0.5), 64, breaks),
+    );
+    expect(plan.moves.find((m) => m.breaks !== undefined)).toMatchObject({
+      kind: 'step-up',
+      breaks: [{ x: 0, y: 66, z: 0 }],
+    });
+    // Lava touching that leaf's corner (and no block the walker stands next to): refused.
+    const lava = { '-1,67,0': ID.lava };
+    const hot = terrain(step, { ...overhang, ...lava });
+    expect(planTerrainWalk(hot, strip, FROM, at(3.5, 65, 0.5), 64, breaks)).toMatchObject({
+      ok: false,
+      reason: 'there is no walkable path to the target inside the fence',
+    });
+    // The lava alone stops no walk: it is the break next to it that is refused.
+    expect(planTerrainWalk(terrain(step, lava), strip, FROM, at(3.5, 65, 0.5), 64).ok).toBe(true);
+  });
+
+  it(`breaks at most ${MAX_WALK_BREAKS} blocks per walk`, () => {
+    const strip: Fence = { min: { x: -8, y: 60, z: 0 }, max: { x: 8, y: 70, z: 0 } };
+    const breaks = walkBreaks({ fence: strip, maxHeightAboveFence: 4 });
+    const hedge = (long: number): WalkWorld => {
+      const blocks: Record<string, number> = {};
+      for (let x = 1; x <= long; x++) blocks[`${x},64,0`] = ID.leaves;
+      return terrain(() => 63, blocks);
+    };
+    const to = at(6.5, 64, 0.5);
+    expect(
+      brokenBy(planTerrainWalk(hedge(MAX_WALK_BREAKS), strip, FROM, to, 64, breaks)),
+    ).toHaveLength(MAX_WALK_BREAKS);
+    expect(planTerrainWalk(hedge(MAX_WALK_BREAKS + 1), strip, FROM, to, 64, breaks)).toMatchObject({
+      ok: false,
+      reason: `there is no walkable path to the target inside the fence breaking at most ${MAX_WALK_BREAKS} blocks on the way`,
+    });
+  });
+
+  it('reachableFeet reaches the pocket walled in by leaves, as the walker plans its walk there', () => {
+    const ring: Record<string, number> = {};
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        for (const y of [64, 65]) ring[`${5 + dx},${y},${5 + dz}`] = ID.leaves;
+      }
+    }
+    const w = terrain(() => 63, ring);
+    const r = reachableFeet(w, FENCE, FROM, 64, BREAKS);
+    const inside = r.get('5,64,5');
+    // Through one cell of the ring: its head and feet blocks; the breaks count in the cost.
+    expect(inside).toMatchObject({ breaks: 2 });
+    expect(inside?.cost).toBeCloseTo((inside?.length ?? 0) + 2 * LEAF, 9);
+    expect(r.get('3,64,3')).toMatchObject({ breaks: 0 });
+    // Each spot in and around the pocket is planned to the same way: breaks and blocks walked.
+    for (let x = 3; x <= 7; x++) {
+      for (let z = 3; z <= 7; z++) {
+        const flood = r.get(`${x},64,${z}`);
+        if (flood === undefined) throw new Error(`(${x}, 64, ${z}) not reached`);
+        const plan = planned(planTerrainWalk(w, FENCE, FROM, at(x + 0.5, 64, z + 0.5), 64, BREAKS));
+        expect(brokenBy(plan), `(${x}, 64, ${z})`).toHaveLength(flood.breaks);
+        expect(plan.length, `(${x}, 64, ${z})`).toBeCloseTo(flood.length, 9);
+      }
+    }
+    // Over the length limit, neither gets there.
+    const short = reachableFeet(w, FENCE, FROM, 6, BREAKS);
+    expect(short.has('5,64,5')).toBe(false);
+    expect(planTerrainWalk(w, FENCE, FROM, at(5.5, 64, 5.5), 6, BREAKS)).toMatchObject({
+      ok: false,
+      reason: 'there is no walkable path to the target inside the fence within 6 blocks',
+    });
   });
 });
 

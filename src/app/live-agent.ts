@@ -352,7 +352,8 @@ export async function runLiveMove(
         const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
         process.once('SIGINT', onInterrupt);
         try {
-          const before = client.previewWalk(target);
+          // Planned as the action walks: a MOVE_TO may break leaves in its way.
+          const before = client.previewWalk(target, spec.type === 'MOVE_TO');
           if (options.dryRun) {
             return {
               result: null,
