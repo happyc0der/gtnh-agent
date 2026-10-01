@@ -350,14 +350,16 @@ export class ActionLogRepository implements FailureHistory {
   /**
    * Executed-and-failed attempts (execution or verification) of this exact action for this
    * task, by the agent itself: failures of actions a human requested directly (origin
-   * 'user', e.g. a stopped test walk) do not count against the agent's own attempts.
+   * 'user', e.g. a stopped test walk) do not count against the agent's own attempts, nor do
+   * actions the client could not even try (NOT_IMPLEMENTED: seen live, EAT_FOOD before the
+   * client could eat, which then refused every meal of a task id reused each night).
    */
   countFailures(taskId: string | null, fingerprint: string): number {
     const row = this.#db
       .prepare(
         `SELECT COUNT(*) AS n FROM action_logs
           WHERE task_id IS ? AND fingerprint = ? AND status IN ('failed','verification_failed')
-            AND origin <> 'user'`,
+            AND origin <> 'user' AND ${NOT_UNTRIED}`,
       )
       .get(taskId, fingerprint) as { n: number };
     return row.n;
@@ -370,12 +372,16 @@ export class ActionLogRepository implements FailureHistory {
     return this.#db
       .prepare(
         `SELECT action_type AS actionType, fingerprint, COUNT(*) AS failures FROM action_logs
-            WHERE task_id IS ? AND status IN ('failed','verification_failed')
+            WHERE task_id IS ? AND status IN ('failed','verification_failed') AND ${NOT_UNTRIED}
             GROUP BY action_type, fingerprint ORDER BY failures DESC, fingerprint LIMIT ?`,
       )
       .all(taskId, limit) as Array<{ actionType: string; fingerprint: string; failures: number }>;
   }
 }
+
+/** SQL: the action was tried (not refused by the client as NOT_IMPLEMENTED). */
+const NOT_UNTRIED =
+  "(execution_json IS NULL OR json_extract(execution_json, '$.code') IS NOT 'NOT_IMPLEMENTED')";
 
 function toRecord(raw: unknown): ActionLogRecord {
   const r = ActionLogRowSchema.parse(raw);

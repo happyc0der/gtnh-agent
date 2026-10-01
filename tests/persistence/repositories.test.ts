@@ -138,12 +138,28 @@ describe('repositories', () => {
       fingerprint: 'fp',
       status: 'proposed',
     });
+    // An action the client could not even try (NOT_IMPLEMENTED) is no failed attempt either.
+    repos.actions.insert({
+      ...base,
+      actionId: 'a5',
+      taskId: 't1',
+      actionType: 'WAIT',
+      fingerprint: 'fp',
+      status: 'proposed',
+    });
     repos.actions.update('a1', { status: 'failed', execution: { ok: false } });
     repos.actions.update('a2', { status: 'verification_failed' });
     repos.actions.update('a3', { status: 'failed' });
     repos.actions.update('a4', { status: 'failed' });
+    repos.actions.update('a5', {
+      status: 'failed',
+      execution: { ok: false, code: 'NOT_IMPLEMENTED', message: 'not available', data: {} },
+    });
 
     expect(repos.actions.countFailures('t1', 'fp')).toBe(2);
+    expect(repos.actions.failureSummary('t1', 10)).toEqual([
+      { actionType: 'WAIT', fingerprint: 'fp', failures: 3 },
+    ]);
     expect(repos.actions.countFailures('t2', 'fp')).toBe(1);
     expect(repos.actions.countFailures(null, 'fp')).toBe(0);
     expect(repos.actions.get('a1')).toMatchObject({
