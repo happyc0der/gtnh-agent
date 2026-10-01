@@ -1,9 +1,12 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   runQuestBookAction,
   syncConfigToDatabase,
   type AgentDeps,
-} from '../../../src/app/agent-loop.ts';
+} from '../../../src/app/loop/agent-loop.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type AgentConfig, type MinecraftConfig } from '../../../src/config/env.ts';
 import { createAction, type ActionSpec } from '../../../src/domain/actions.ts';
@@ -106,6 +109,8 @@ export async function startQuestServer(
       serverIdentityMarker: 'gtnh-agent-test',
       connectTimeoutMs: 5_000,
       initialStateGraceMs: 2_000,
+      // Never the repository's own data/STOP: a halted agent must not fail these tests.
+      movement: { stopFile: join(mkdtempSync(join(tmpdir(), 'gtnh-quest-book-')), 'STOP') },
     },
     safety: { protectedItems: ['minecraft:diamond'] },
   });
