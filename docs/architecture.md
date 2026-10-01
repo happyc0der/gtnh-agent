@@ -717,7 +717,7 @@ player stands on: the one under the centre of its feet, or, on the edge of a nei
 0.3 each way, reaches over it), that neighbour (`standingCell`; seen live: a walk stopped at
 z 9.1 over air, on the edge of the block at z 8, and every walk from there was refused).
 
-**Breaking leaves on the way** (2026-10-01, fake server only so far). Seen live: in a Hot Forest
+**Breaking leaves on the way** (2026-10-01; live since: walks broke 3-4 leaves at a time in a Hot Forest). Seen live: in a Hot Forest
 the logs the agent needed stood 7 blocks away, walled in by one- and two-block-high leaf bushes;
 no walk reached a stand spot, GATHER found nothing it could reach, and the agent gave up on the
 forest. A person punches through a leaf or two (by hand in half a second), and Baritone's paths

@@ -10,11 +10,12 @@ GregTech's own channel: type, position, enabled and running (see "Machines"); st
 held-item durability are not observable (except for the agent's allowlisted tools, see "Tools").
 Digging one allowlisted block (see "Digging"), with an empty hand or a verified tool (see
 "Tools"), placing one (see "Placing") and fighting one mob (see "Combat") are built on the
-server's own code, checked in its jars, and tested against the fake server. Digging sand has
-run live (2026-09-30, the play runs); placing and fighting have not yet. The quest book is read
-from Better Questing's own channel, and its submit, checkbox and claim clicks are typed actions
-(see "Quest book"); built from the mod's bytecode and the world's quest database, tested
-against the fake server, not run live yet. Mineflayer cannot connect at all. Every claim below
+server's own code, checked in its jars, and tested against the fake server. Digging has run
+live since 2026-09-30 and placing since 2026-10-01 (the play runs); fighting has not yet. The
+quest book is read from Better Questing's own channel, and its submit, checkbox and claim clicks
+are typed actions (see "Quest book"); built from the mod's bytecode and the world's quest
+database, tested against the fake server, and run live since 2026-10-01 (a submit and three
+claims). Mineflayer cannot connect at all. Every claim below
 is labelled as _verified_ (observed or checked in installed code) or _assumption_ (to be
 tested).
 
@@ -1405,7 +1406,8 @@ the client's 8 s wait.
 What the agent eats and how it gets food ([architecture: food](architecture.md#routes-nights-and-the-play-loop)),
 read in the test server's jars (javap; vanilla classes named through Forge's
 `deobfuscation_data-1.7.10.lzma` and the vanilla jar) and configs. The data is in
-`src/domain/food.ts`. Tested on the mock and the fake server; **not run live yet.**
+`src/domain/food.ts`. Tested on the mock and the fake server, and live since 2026-10-01: a
+hungry agent with no food dug HarvestCraft gardens and ate the barley (food 12 to 14).
 
 **What a food is worth** (_verified_). HungerOverhaul 1.0.0-jenkins104
 (`config/HungerOverhaul/HungerOverhaul.cfg`: `modifyFoodValues=true`, `useHOFoodValues=true`)
