@@ -371,6 +371,28 @@ function knownPlaces(state: GameState, exploration?: ExplorationSummary): PlaceL
   };
 }
 
+/**
+ * Where world memory remembers `block` beyond what the current scan covers, nearest first: a
+ * GATHER with none of it in view heads for the nearest (gather.ts GatherOptions.remembered).
+ */
+export function rememberedPlacesOf(
+  block: string,
+  state: GameState,
+  exploration: ExplorationSummary | undefined,
+): Array<{ x: number; y: number; z: number; distance: number }> {
+  if (exploration === undefined) return [];
+  const covered = scanCovers(state);
+  return exploration.places
+    .flatMap((p) =>
+      p.y !== null &&
+      PLACE_BLOCKS[p.resource].includes(block) &&
+      !covered({ x: p.x, y: p.y, z: p.z })
+        ? [{ x: p.x, y: p.y, z: p.z, distance: p.distance }]
+        : [],
+    )
+    .sort((a, b) => a.distance - b.distance);
+}
+
 /** Room (blocks to the boundary) a direction needs to be worth an EXPLORE toward it. */
 const MIN_EXPLORE_ROOM = 64;
 

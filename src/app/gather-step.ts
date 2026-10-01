@@ -19,6 +19,7 @@ import {
   startGather,
   withSkipped,
   type GatherEnd,
+  type GatherOptions,
   type GatherProgress,
   type GatherStep,
 } from '../planner/gather.ts';
@@ -42,7 +43,14 @@ export interface GatherRef {
 
 /** The action a GATHER step takes this cycle, or how it ended before taking one. */
 export type GatherTurn =
-  | { kind: 'act'; spec: ActionSpec; target: BlockPosition; walk: boolean; reason: string }
+  | {
+      kind: 'act';
+      spec: ActionSpec;
+      target: BlockPosition;
+      walk: boolean;
+      travel?: boolean;
+      reason: string;
+    }
   | { kind: 'end'; end: GatherEnd; why: string };
 
 /**
@@ -142,6 +150,7 @@ export function gatherTurn(
   ref: GatherRef,
   state: GameState,
   ctx: SafetyContext,
+  remembered: GatherOptions['remembered'] = [],
 ): GatherTurn {
   const saved = loadProgress(repos, ref);
   const started = saved ?? startGather(ref.planId, ref.stepIndex, ref.gather, state, ctx.now);
@@ -149,6 +158,7 @@ export function gatherTurn(
     reach: ctx.config.interactionReach,
     now: ctx.now,
     check: previewCheck(repos.actions, ref.taskId, state, ctx),
+    remembered,
   });
   const p = { ...started, skipped: withSkipped(started.skipped, choice.skip) };
   const gathered = gatheredSoFar(p, state);
@@ -175,14 +185,17 @@ export function gatherTurn(
   }
   saveProgress(repos, ref.taskId, p);
   const what =
-    choice.spec.type === 'MOVE_TO'
-      ? `walk to ${formatPosition(choice.spec.args.target)} to dig ${formatPosition(choice.target)}`
-      : `dig ${formatPosition(choice.target)}`;
+    choice.travel === true
+      ? `head for the ${p.block} remembered at ${formatPosition(choice.target)}`
+      : choice.spec.type === 'MOVE_TO'
+        ? `walk to ${formatPosition(choice.spec.args.target)} to dig ${formatPosition(choice.target)}`
+        : `dig ${formatPosition(choice.target)}`;
   return {
     kind: 'act',
     spec: choice.spec,
     target: choice.target,
     walk: choice.walk,
+    ...(choice.travel === true ? { travel: true } : {}),
     reason:
       `${head(p)}: ${what} (${gathered}/${p.count} gathered, ` +
       `action ${p.actions + 1} of at most ${GATHER_MAX_ACTIONS})`,
@@ -200,7 +213,7 @@ export function gatherTurn(
 export function gatherAfterAction(
   repos: Repositories,
   ref: GatherRef,
-  act: { target: BlockPosition; walk: boolean },
+  act: { target: BlockPosition; walk: boolean; travel?: boolean },
   outcome: ExecutionOutcome,
   now: Date,
 ): { next: 'done' | 'bound' | 'more' | 'failed'; why: string } {

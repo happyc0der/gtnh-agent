@@ -31,7 +31,11 @@ import {
   type PlannerResponse,
 } from '../planner/plan-schema.ts';
 import { trimStaleSteps, validatePlan } from '../planner/plan-validator.ts';
-import { buildPlannerRequest, type PlannerProvider } from '../planner/planner-provider.ts';
+import {
+  buildPlannerRequest,
+  rememberedPlacesOf,
+  type PlannerProvider,
+} from '../planner/planner-provider.ts';
 import { mergeProtectedItems } from '../safety/protected-items.ts';
 import {
   actionFingerprint,
@@ -768,7 +772,7 @@ interface PlanStepRef {
    * The step is a GATHER (gather-step.ts), which runs many actions: this one is for the
    * block at `target` (`walk`: the walk to its stand spot).
    */
-  gather?: { ref: GatherRef; target: BlockPosition; walk: boolean };
+  gather?: { ref: GatherRef; target: BlockPosition; walk: boolean; travel?: boolean };
 }
 
 const reviewHint = (taskId: string, planId: number): string =>
@@ -818,7 +822,17 @@ function stepOf(
       stepIndex: stored.nextStep,
       gather: step.action,
     };
-    const turn = gatherTurn(deps.repos, ref, state, ctx);
+    const turn = gatherTurn(
+      deps.repos,
+      ref,
+      state,
+      ctx,
+      rememberedPlacesOf(
+        step.action.args.block,
+        state,
+        explorationFor(deps.config, deps.repos, state, ctx.now),
+      ),
+    );
     if (turn.kind === 'end') return gatherEnded(deps.repos, stored, turn, outcome);
     return {
       chosen: {
@@ -827,7 +841,15 @@ function stepOf(
         origin: 'planner',
       },
       outcome,
-      planStep: { ...planStep, gather: { ref, target: turn.target, walk: turn.walk } },
+      planStep: {
+        ...planStep,
+        gather: {
+          ref,
+          target: turn.target,
+          walk: turn.walk,
+          ...(turn.travel === true ? { travel: true } : {}),
+        },
+      },
     };
   }
   return {
@@ -1092,6 +1114,11 @@ function refusedFirstStep(
         reach: ctx.config.interactionReach,
         now: ctx.now,
         check: previewCheck(deps.repos.actions, taskId, state, ctx),
+        remembered: rememberedPlacesOf(
+          s.action.args.block,
+          state,
+          explorationFor(deps.config, deps.repos, state, ctx.now),
+        ),
       },
     );
     if (choice.kind === 'act') return null;

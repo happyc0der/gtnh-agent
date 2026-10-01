@@ -173,6 +173,58 @@ describe('GATHER chooses each action in code, from the observation', () => {
     });
   });
 
+  it('with none in view, heads for the nearest place world memory remembers it at', () => {
+    // Seen live: GATHER gravel ended "no gravel left in view" with gravel remembered 92 blocks
+    // south, and the planner, asked again, planned the same GATHER.
+    const { state, progress } = setup([]);
+    const near = { x: -50, y: 70, z: 0, distance: 51 };
+    const far = { x: 28, y: 104, z: 107, distance: 106 };
+    expect(
+      chooseGatherAction(gather(), progress, state, { ...opts(), remembered: [near, far] }),
+    ).toEqual({
+      kind: 'act',
+      spec: { type: 'EXPLORE', args: { toward: { x: -49.5, z: 0.5 }, maxDistance: 59 } },
+      target: { x: -50, y: 70, z: 0 },
+      walk: true,
+      travel: true,
+      skip: [],
+    });
+    // A place it stands by already, with none in view, is gone: the next one (at most 96).
+    const by = { x: 5, y: 64, z: 5, distance: 5.7 };
+    expect(
+      chooseGatherAction(gather(), progress, state, { ...opts(), remembered: [by, far] }),
+    ).toMatchObject({
+      kind: 'act',
+      spec: { type: 'EXPLORE', args: { toward: { x: 28.5, z: 107.5 }, maxDistance: 96 } },
+      skip: [{ x: 5, y: 64, z: 5 }],
+    });
+    // An EXPLORE the policy would refuse: the step ends, saying why.
+    const refused = opts((spec) => (spec.type === 'EXPLORE' ? 'it is night' : null));
+    expect(
+      chooseGatherAction(gather(), progress, state, { ...refused, remembered: [near] }),
+    ).toEqual({
+      kind: 'end',
+      end: 'no-target',
+      why: 'no minecraft:sand left in view to dig (the one remembered at (-50, 70, 0): it is night)',
+      skip: [],
+    });
+    // Once there, the block in view is dug as usual: the trip is not a walk to its stand spot.
+    const arrived = setup([sand(8, 64, 1, { x: 7.5, y: 64, z: 1.5 })]);
+    const travelled: GatherProgress = {
+      ...arrived.progress,
+      last: { position: { x: 8, y: 64, z: 1 }, walk: true, travel: true },
+    };
+    expect(chooseGatherAction(gather(), travelled, arrived.state, opts())).toMatchObject({
+      kind: 'act',
+      spec: { type: 'MOVE_TO' },
+      target: { x: 8, y: 64, z: 1 },
+    });
+    // The trip counts as an action, not a block dug.
+    expect(
+      recordGatherAction(progress, { target: far, walk: true, travel: true }, true),
+    ).toMatchObject({ actions: 1, dug: 0, last: { walk: true, travel: true } });
+  });
+
   it('nothing it may dig: the step ends, saying why (the planner is asked again)', () => {
     const { state, progress } = setup([sand(3, 64, 1, { x: 2.5, y: 64, z: 1.5 })]);
     expect(
