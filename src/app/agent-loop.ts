@@ -45,6 +45,7 @@ import type { Clock } from '../util/clock.ts';
 import type { IdGenerator } from '../util/ids.ts';
 import { errorMessage, stableStringify } from '../util/json.ts';
 import { gatherAfterAction, gatherStopped, gatherTurn, type GatherRef } from './gather-step.ts';
+import { readDeadEnds, rememberDeadEnd, withoutDeadEnds } from './dead-ends.ts';
 import { readTrail, recordTrail, TRAIL_LOCATION, trailRetreat } from './trail.ts';
 import { knownStepAfterAction, nextKnownStep } from './known-steps.ts';
 
@@ -370,12 +371,14 @@ export function explorationFor(
   if (!m.enabled || m.mode !== 'follow') return undefined;
   const { position, dimension } = state.player;
   if (!position.known || !dimension.known) return undefined;
-  return summarizeExploration({
+  const summary = summarizeExploration({
     chunks: repos.worldMemory.chunks(dimension.value),
     from: position.value,
     boundary: config.safety.boundary,
     now,
   });
+  // Places an EXPLORE from around here could not get closer to are no use from here.
+  return withoutDeadEnds(summary, readDeadEnds(repos.memory), position.value);
 }
 
 /**
@@ -583,6 +586,12 @@ export async function runSingleCycle(
   const outcome = await newExecutor(deps).execute(action, execution.state, execution.ctx, cycleId);
   rememberContainers(repos, outcome.stateAfter);
   rememberSeen(deps, cycleId);
+  rememberDeadEnd(
+    repos.memory,
+    action,
+    outcome.execution,
+    execution.state.player.position.known ? execution.state.player.position.value : null,
+  );
 
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
   const planHalted =
