@@ -8,7 +8,14 @@ simulated world or a private GTNH 2.8.4 test server. On the test server the agen
 **walks inside a fenced pen** and **moves exact amounts to and from configured chests**. It works on
 **live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`,
 or back to back in a **bounded auto-run** (`run --live`) that stops as soon as anything needs you.
-No open-ended loop, no model and no GPU use.
+No open-ended loop. **Local models are opt-in** (off by default, no GPU use unless enabled).
+
+**Local models (2026-09-30):** a local Ollama model can make the System 1 decisions
+(`AGENT_DECISIONS=ollama`) and write plans (`AGENT_PLANNER=ollama`). Models only propose: a
+decision passes the safety-first wrapper (the router's safety decisions and pauses win; invalid
+output pauses), and every plan step is validated and executed by code like any other. On the mock
+scenarios, qwen3:14b agrees with the rule router on every decision and its plans pass validation;
+qwen2.5:0.5b does not. See [docs/local-llm-integration.md](docs/local-llm-integration.md).
 
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
 the test server and observes position, dimension, health, food, a named inventory, nearby
@@ -81,6 +88,8 @@ cp agent.config.example.json agent.config.json
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
 | Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`                                              |
 | GregTech machine survey (channel + states)   | `node scripts/gt-machine-survey.ts --seconds 10`                                          |
+| One mock cycle with local models (Ollama)    | `AGENT_DECISIONS=ollama AGENT_PLANNER=ollama pnpm agent:once --scenario needs-planner`    |
+| Evaluate local models on the mock scenarios  | `node scripts/llm-eval.ts --decision-model qwen3:14b --planner-model qwen3:14b`           |
 
 `agent:once` persists to `./data/agent.sqlite` by default (`AGENT_DB_PATH` or `--db` override).
 Try `pnpm agent:once --scenario action-fails` three times: two failures, then the third attempt is
@@ -132,7 +141,8 @@ and [docs/action-contract.md](docs/action-contract.md).
 ## Safety defaults
 
 - Localhost/private addresses only. Public IPs and non-allowlisted hostnames are rejected at config
-  load, and `MC_ENABLE_LIVE_CONNECTION` defaults to `false`.
+  load, and `MC_ENABLE_LIVE_CONNECTION` defaults to `false`. The same applies to the model server
+  (`OLLAMA_URL`).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
 - Only 11 non-destructive action types exist. No block placing/breaking, dropping, combat, lava,
@@ -149,7 +159,8 @@ and [docs/action-contract.md](docs/action-contract.md).
   resolvable by Node on this Windows machine, and it denies `better-sqlite3`'s optional build script
   (prebuilt binaries are used).
 - TypeScript is pinned to 6.0.x because `typescript-eslint` 8.70 supports TypeScript < 6.1.
-- Local LLM integration is designed but not implemented: [docs/local-llm-integration.md](docs/local-llm-integration.md).
+- Local models (Ollama) are opt-in; how to enable them and how they did on the mock scenarios:
+  [docs/local-llm-integration.md](docs/local-llm-integration.md).
 
 ## Private GTNH test server
 
