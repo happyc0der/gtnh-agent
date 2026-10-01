@@ -669,6 +669,31 @@ export function checkSupport(world: WalkWorld, feet: Vec3): Support {
   return { kind: 'floating', landY: null };
 }
 
+/**
+ * Where feet that hang a little above the ground come to rest: the top of the block below,
+ * when every cell at the feet's level across the player's box (0.3 each way) is air and a
+ * block the player may not enter lies under at least one of them. Null when the feet are on
+ * a block top already, when something is at their level (a slab or a carpet they may stand
+ * on, a plant they stand in), or when a chunk is not loaded. The server's floating check
+ * (checkSupport) counts a player within 0.55 above a block as held up, but a game client
+ * would fall onto it. Seen live: saved mid-jump at logout, the player joined 0.42 above the
+ * sand, and the night pit was refused: "the player is not standing on a block".
+ */
+export function restingY(world: WalkWorld, feet: Vec3): number | null {
+  const y = Math.floor(feet.y);
+  if (feet.y - y < 1e-6) return null;
+  let ground = false;
+  for (const x of cellsAcross(feet.x - 0.3, feet.x + 0.3)) {
+    for (const z of cellsAcross(feet.z - 0.3, feet.z + 0.3)) {
+      if (world.blockAt(x, y, z) !== 0) return null;
+      const below = passProblem(world, x, y - 1, z);
+      if (below === 'chunk not loaded') return null;
+      if (below !== null) ground = true;
+    }
+  }
+  return ground ? y : null;
+}
+
 /** A hazard (lava, fire, harmful fluid, cactus...) next to where the feet would land, or null. */
 export function landingHazard(world: WalkWorld, x: number, y: number, z: number): string | null {
   for (let dx = -1; dx <= 1; dx++) {

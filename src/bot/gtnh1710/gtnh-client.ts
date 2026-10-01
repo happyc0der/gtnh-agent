@@ -174,6 +174,7 @@ import {
   MAX_SAFE_FALL,
   planTerrainWalk,
   reachableFeet,
+  restingY,
   standProblem,
   terrainSteps,
   type TerrainStep,
@@ -4352,7 +4353,11 @@ export class Gtnh1710Client implements MinecraftClient {
     const fence = this.#fence().fence;
     if (world === null || feet === null || fence === null) return;
     const support = checkSupport(world, feet);
-    if (support.kind !== 'floating') {
+    if (support.kind === 'unknown') return;
+    // Held up for the server, the feet may still hang a little above the ground: they come
+    // to rest on it, as in a game client (restingY).
+    const resting = support.kind === 'supported' ? restingY(world, feet) : null;
+    if (support.kind === 'supported' && resting === null) {
       this.#floatingNote = null;
       return;
     }
@@ -4363,7 +4368,7 @@ export class Gtnh1710Client implements MinecraftClient {
         `in the air at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}) and not falling: ${why}`,
       );
     };
-    const landY = support.landY;
+    const landY = support.kind === 'floating' ? support.landY : resting;
     if (landY === null || feet.y - landY > MAX_SAFE_FALL) {
       note(`no floor within ${MAX_SAFE_FALL} blocks below`);
       return;

@@ -108,6 +108,19 @@ describe('Gtnh1710Client gravity', () => {
     });
   });
 
+  it('comes to rest on the ground when the server put it a little above (saved mid-jump)', async () => {
+    // Seen live: the player joined 0.42 above the sand; the server held it up, the night pit
+    // did not ("the player is not standing on a block").
+    const { server, client } = await start({
+      spawn: { x: -4.5, eyeY: FEET_Y + 0.42 + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
+    });
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -4.5, y: FEET_Y, z: -7.5 },
+    });
+    expect(server.confirmedPositions.at(-1)).toMatchObject({ feetY: FEET_Y, onGround: true });
+  });
+
   it('stays in the air rather than fall where it may not walk (the stop file)', async () => {
     writeFileSync(stopFile, 'stop');
     const { server } = await start({

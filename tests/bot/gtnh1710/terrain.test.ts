@@ -4,6 +4,7 @@ import { MAX_WALK_BREAKS, walkBreakCost, walkBreaks } from '../../../src/bot/gtn
 import {
   bodyProblem,
   checkSupport,
+  restingY,
   fallDistances,
   landingHazard,
   MAX_DROP,
@@ -478,6 +479,19 @@ describe('gravity: what holds the player up', () => {
     const step = terrain(() => 63, { '1,64,0': ID.stone });
     expect(checkSupport(step, at(0.5, 65, 0.5))).toEqual({ kind: 'floating', landY: 64 });
     expect(checkSupport(step, at(0.9, 65, 0.5))).toEqual({ kind: 'supported' });
+  });
+
+  it('feet hanging a little above the ground come to rest on it, as in a game client', () => {
+    // Seen live: saved mid-jump at logout, the player joined at y 92.42 over sand at 91.
+    expect(checkSupport(flat, at(0.5, 64.42, 0.5))).toEqual({ kind: 'supported' });
+    expect(restingY(flat, at(0.5, 64.42, 0.5))).toBe(64);
+    expect(restingY(flat, at(0.5, 64, 0.5))).toBeNull(); // on the ground already
+    // Over an edge: the block under one side of the box holds it.
+    const edge = terrain((x) => (x >= 1 ? 63 : 60));
+    expect(restingY(edge, at(0.9, 64.3, 0.5))).toBe(64);
+    // Something at the feet's level (a plant it stands in, a block beside it): no settling.
+    const grassy = terrain(() => 63, { '0,64,0': ID.tallgrass });
+    expect(restingY(grassy, at(0.5, 64.42, 0.5))).toBeNull();
   });
 
   it('a player left in the air by a stopped jump falls to the block below', () => {
