@@ -32,7 +32,9 @@ climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, 
 `DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. With crafting enabled,
 `CRAFT_ITEM` crafts early-game recipes in the 2x2 grid or at a configured crafting table (fake
 server only so far). With digging enabled, `DIG_BLOCK` breaks one allowlisted block inside the
-fence with an empty hand. The remaining world-changing actions return `NOT_IMPLEMENTED`. See
+fence, holding the best verified tool the player carries (a wooden shovel for sand, dirt, gravel,
+grass and clay; a vanilla axe for logs) or an empty hand. The remaining world-changing actions
+return `NOT_IMPLEMENTED`. See
 [Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting) and
 [Digging](#digging).
 
@@ -260,10 +262,11 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#chests)):
 ### Crafting
 
 The third world-changing ability: `CRAFT_ITEM` crafts a recipe from the agent's small table of
-early (Age 0) recipes (`src/domain/recipes.ts`: planks, sticks, torches, crafting table, chest). It
-crafts in the player's own 2x2 grid, or for 3x3 recipes at a crafting table you configure. It has
-only run against the fake server so far (see
-[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#crafting-2026-09-30)).
+early (Age 0) recipes (`src/domain/recipes.ts`: planks, sticks, torches, crafting table, chest,
+wooden shovel, wooden axe), each as GTNH 2.8.4 has it (e.g. 2 planks give 2 sticks; the crafting
+table is two flint above two logs). It crafts in the player's own 2x2 grid, or for 3x3 recipes at
+a crafting table you configure (the agent cannot place one). It has only run against the fake
+server so far (see [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#crafting-2026-09-30)).
 
 - Settings: `MC_ENABLE_CRAFTING=true`, and for 3x3 recipes the table in `agent.config.json` under
   `minecraft.crafting.tables` (`{ "table.pen": { "name": "...", "position": { "x": .., "y": .., "z": .. } } }`).
@@ -313,10 +316,19 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
     (water, a torch, a chest, a machine...);
   - a block with sand or gravel on top;
   - a block next to lava, fire or other hazards.
-- It digs with an empty hand, so no tool or item can do anything special.
-- It waits 1.25 x the vanilla dig time + 2 ticks: well past the 70% the server requires.
+- It holds the best verified tool the player carries for the block, or an empty hand
+  (`src/domain/tools.ts`, [evidence](docs/gtnh-compatibility.md#tools-2026-09-30)):
+  - a wooden shovel for dirt, grass, sand, gravel and clay (sand: 12 ticks instead of 21);
+  - a vanilla axe for logs (77 ticks by hand, 40 with a wooden axe, 21 with a stone one).
+  - The other vanilla shovels dig nothing on GTNH. GregTech and TConstruct tools keep their wear
+    in NBT data the agent does not read, so it never holds them.
+  - It never holds a protected tool, one with NBT data, or one whose next use would break it (a
+    wooden tool: 59 uses). A tool in the main inventory is first moved into the hotbar with two
+    confirmed clicks. The result reports the tool and its uses left.
+- It waits 1.25 x the vanilla dig time (at the tool's speed) + 2 ticks: well past the 70% the
+  server requires.
 - Every tick it re-checks. It cancels on the stop file, Ctrl+C, a server correction, a health
-  drop, a nearby threat, or any change to the block.
+  drop, a nearby threat, any change to the block, or a change to the tool in hand.
 - Success needs the server's own block change to air, with no re-send. The result reports
   whether the drop reached the inventory.
 

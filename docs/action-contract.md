@@ -62,6 +62,14 @@ player's feet level are listed there, so the ground it stands on is never a targ
 reported (`dropCollected`), not required: leaves usually drop nothing, and a drop that lands out
 of pickup range stays where it fell.
 
+The client chooses what to hold; the action names only the block. It holds the fastest
+allowlisted tool the player carries for that block (`src/domain/tools.ts`): the wooden shovel
+for dirt, grass, sand, gravel and clay, a vanilla axe for logs. Otherwise it digs with an empty
+hand. It never holds a protected tool, one with NBT data, or one that one more use would break.
+The result reports `tool` (null for an empty hand), `toolUsesLeft` and, when tools were passed
+over, `toolNote`. A tool wears by one per block, which renames it in the inventory
+(`minecraft:wooden_shovel@1`).
+
 **On the live GTNH client**, `OPEN_CONTAINER`, `DEPOSIT_ITEM` and `WITHDRAW_ITEM` work on
 configured vanilla chests when `MC_ENABLE_CONTAINERS=true` (otherwise `NOT_IMPLEMENTED`). A
 withdrawal's "container contents known" precondition may use contents the agent saw within
@@ -102,9 +110,13 @@ See [architecture: crafting](architecture.md#crafting). The other world-changing
   - touches anything but air, allowlisted blocks and plain full blocks (water, a torch, a
     chest...);
   - has sand or gravel on top, or has a hazard within one block.
-    It is also refused with no empty hotbar slot, or while a walk or chest operation runs.
+    It is also refused while a walk or chest operation runs, or when there is no usable tool in
+    the hotbar and no empty hotbar slot (to move a tool into, or to dig with an empty hand).
 - **Fails** (`FAILED`, after C07 cancel if it had started) on:
+  - a tool that could not be moved into the hotbar (a click not accepted; the cursor is put
+    back first; `ERROR` if that fails too);
   - any server update for the block while digging (a refusal), or the block becoming unsafe;
+  - the tool in hand changing while digging;
   - the stop file, `halt()`, a server correction, a health drop or a nearby threat;
   - a re-send after the finish (judged too early, or the break was cancelled), or no block
     change at all.

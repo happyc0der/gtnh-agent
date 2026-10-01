@@ -3,9 +3,8 @@ import { z } from 'zod';
 /**
  * The ONLY blocks DIG_BLOCK may break, by 1.7.10 registry name: vanilla natural blocks
  * that a bare hand harvests (their material needs no tool). Nothing modded, nothing with a
- * tile entity, nothing that is part of a build. The live client keeps each block's hardness
- * and falling behaviour next to this list (src/bot/gtnh1710/digging.ts); a test keeps the
- * two identical.
+ * tile entity, nothing that is part of a build. Each block's hardness and falling behaviour
+ * are kept next to this list (src/domain/dig-time.ts); a test keeps the two identical.
  */
 export const DIGGABLE_BLOCKS = [
   'minecraft:log',

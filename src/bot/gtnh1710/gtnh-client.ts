@@ -4,14 +4,25 @@ import { resolve as resolvePath } from 'node:path';
 import type { MinecraftConfig } from '../../config/env.ts';
 import { assertPrivateDestination } from '../../config/network.ts';
 import type { GameState } from '../../domain/game-state.ts';
+import type { DiggableBlock } from '../../domain/blocks.ts';
 import type { BlockPosition, Position } from '../../domain/common.ts';
+import { BARE_HAND_SPEED, digWaitTicks, TICK_MS } from '../../domain/dig-time.ts';
 import {
   needsCraftingTable,
   RECIPES,
   type CraftingRecipe,
   type RecipeId,
 } from '../../domain/recipes.ts';
+import {
+  bestTool,
+  toolInfo,
+  toolProblem,
+  toolSpeedOn,
+  usesLeft,
+  type ToolInfo,
+} from '../../domain/tools.ts';
 import { assertValidatedAction, type ValidatedAction } from '../../domain/validated-action.ts';
+import { isProtected } from '../../safety/protected-items.ts';
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
@@ -43,7 +54,7 @@ import {
   type CraftingLayout,
   type PlacedRecipe,
 } from './crafting.ts';
-import { checkDig, digWaitTicks, eyesOf, standSpotFor, TICK_MS, type DigArea } from './digging.ts';
+import { checkDig, eyesOf, standSpotFor, type DigArea } from './digging.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
 import {
@@ -113,6 +124,16 @@ const DIG_OUTCOME_TIMEOUT_MS = 2_000;
 const DIG_SETTLE_MS = 5 * TICK_MS;
 /** How long the drop may take to reach the inventory: a 10-tick pickup delay, plus falling. */
 const DROP_WAIT_MS = 2_000;
+
+/** What a dig holds: hotbar slot `slot`, with `tool` (null: an empty hand) at `damage`. */
+interface Hand {
+  ok: true;
+  slot: number;
+  tool: ToolInfo | null;
+  damage: number;
+  /** Tools for the block that were passed over, and why (or null). */
+  note: string | null;
+}
 
 /** "2 x minecraft:sand, 1 x minecraft:flint" (at most 200 characters). */
 function describeGain(gained: ReadonlyArray<[string, number]>): string {
@@ -190,8 +211,10 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    ahead, the stop file, halt(), or a lost connection;
  *  - window work never leaves items on the cursor or in a crafting grid when it can help it
  *    (the server drops both when a window closes or the player leaves);
- *  - a dig uses an empty hand on one allowlisted block that digging.ts has checked, and
- *    re-checks it every tick; walking, window work and digging never run at the same time.
+ *  - a dig breaks one allowlisted block that digging.ts has checked, and re-checks it every
+ *    tick; it holds an allowlisted tool made for that block (src/domain/tools.ts: never a
+ *    protected one, one with NBT data, or one that one more use would break) or an empty
+ *    hand; walking, window work and digging never run at the same time.
  */
 export class Gtnh1710Client implements MinecraftClient {
   readonly kind = 'gtnh1710';
@@ -395,7 +418,7 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'CRAFT_ITEM':
         return this.#craft(action.args);
       case 'DIG_BLOCK':
-        return this.#dig(action.args.position);
+        return this.#dig(action.args.position, new Set(validated.protectedItems));
       case 'EAT_FOOD':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
@@ -544,13 +567,19 @@ export class Gtnh1710Client implements MinecraftClient {
     );
   }
 
-  #emptyHotbarSlot(): number | null {
+  /**
+   * The stack in hotbar slot `j` (0-8), from the open window or else window 0; null or
+   * undefined when the slot is empty or not known.
+   */
+  #hotbar(j: number): Stack | null | undefined {
     const w = this.#world.openWindow;
     const inv = this.#world.inventoryWindow;
-    const hotbar = (j: number) =>
-      w !== null && w.slotsKnown ? w.slots[w.containerSlots + 27 + j] : inv?.[36 + j];
-    if (hotbar(this.#world.heldSlot) == null) return this.#world.heldSlot;
-    for (let j = 0; j < 9; j++) if (hotbar(j) == null) return j;
+    return w !== null && w.slotsKnown ? w.slots[w.containerSlots + 27 + j] : inv?.[36 + j];
+  }
+
+  #emptyHotbarSlot(): number | null {
+    if (this.#hotbar(this.#world.heldSlot) == null) return this.#world.heldSlot;
+    for (let j = 0; j < 9; j++) if (this.#hotbar(j) == null) return j;
     return null;
   }
 
@@ -1118,32 +1147,39 @@ export class Gtnh1710Client implements MinecraftClient {
   }
 
   /**
-   * DIG_BLOCK: break one allowlisted block with an empty hand, like a player: face it, swing
-   * the arm, C07 start, the dig time (vanilla x 1.25 + 2 ticks, re-checking everything
+   * DIG_BLOCK: break one allowlisted block like a player: hold the best allowlisted tool for
+   * it (src/domain/tools.ts; else an empty hand), face it, swing the arm, C07 start, the dig
+   * time (vanilla x 1.25 + 2 ticks at the tool's verified speed, re-checking everything
    * every tick), C07 finish; a problem on the way sends C07 cancel. Success needs the
-   * server's own block change to air, with no re-send after it. Reports whether the drop
-   * reached the inventory. A drop that landed out of the player's pickup reach (in a hole
-   * next to it, or a few blocks away) is picked up as a player would: by walking onto it,
-   * when the spot it lies on is standable (an ordinary checked walk inside the fence).
+   * server's own block change to air, with no re-send after it. Reports the tool used and
+   * its uses left, and whether the drop reached the inventory. A drop that landed out of
+   * the player's pickup reach (in a hole next to it, or a few blocks away) is picked up as a
+   * player would: by walking onto it, when the spot it lies on is standable (an ordinary
+   * checked walk inside the fence).
    */
-  async #dig(target: BlockPosition): Promise<ClientActionResult> {
-    const dug = await this.#digOnce(target);
+  async #dig(
+    target: BlockPosition,
+    protectedItems: ReadonlySet<string>,
+  ): Promise<ClientActionResult> {
+    const dug = await this.#digOnce(target, protectedItems);
     if (dug.drop === null) return dug.result;
     const spot = dug.drop.spot;
     const walked = await this.#walkTo(spot, { stopForThreats: true });
-    const gained = walked.ok ? await this.#dropGain(dug.drop.itemsBefore) : [];
+    const gained = walked.ok ? await this.#dropGain(dug.drop.itemsBefore, dug.drop.tool) : [];
     const drops = describeGain(gained);
     const where = `(${Math.floor(spot.x)}, ${spot.y}, ${Math.floor(spot.z)})`;
     this.#log(
       `walked to the drop at ${where}: ${walked.ok ? (gained.length > 0 ? drops : 'no drop') : walked.message}`,
     );
     return ok(
-      `${dug.result.message.replace(/; no drop reached.*$/, '')}; ` +
+      (
+        `${dug.result.message.replace(/; no drop reached.*$/, '')}; ` +
         (walked.ok
           ? gained.length > 0
             ? `walked to the drop at ${where} and picked up ${drops}`
             : `walked to ${where}, but no drop reached the inventory`
-          : `the drop lies at ${where}, but walking there failed: ${walked.message}`),
+          : `the drop lies at ${where}, but walking there failed: ${walked.message}`)
+      ).slice(0, 500),
       {
         ...dug.result.data,
         dropCollected: gained.length > 0,
@@ -1153,11 +1189,20 @@ export class Gtnh1710Client implements MinecraftClient {
     );
   }
 
-  /** Items gained since `before`, waiting up to DROP_WAIT_MS for the first one. */
-  async #dropGain(before: Readonly<Record<string, number>>): Promise<Array<[string, number]>> {
+  /**
+   * Items gained since `before`, waiting up to DROP_WAIT_MS for the first one. The tool used
+   * (if any) is left out: its wear changes its name (`@damage`), which is not a gain.
+   */
+  async #dropGain(
+    before: Readonly<Record<string, number>>,
+    tool: ToolInfo | null,
+  ): Promise<Array<[string, number]>> {
+    const isTool = (item: string): boolean =>
+      tool !== null && (item === tool.item || item.startsWith(`${tool.item}@`));
     const increase = (): Array<[string, number]> => {
       const now = this.#world.inventoryItems() ?? {};
       return Object.entries(now)
+        .filter(([item]) => !isTool(item))
         .map(([item, n]): [string, number] => [item, n - (before[item] ?? 0)])
         .filter(([, d]) => d > 0);
     };
@@ -1165,10 +1210,17 @@ export class Gtnh1710Client implements MinecraftClient {
     return increase();
   }
 
-  async #digOnce(target: BlockPosition): Promise<{
+  async #digOnce(
+    target: BlockPosition,
+    protectedItems: ReadonlySet<string>,
+  ): Promise<{
     result: ClientActionResult;
     /** Set when the drop was not picked up and lies on a spot the player can walk to. */
-    drop: { itemsBefore: Readonly<Record<string, number>>; spot: Vec3 } | null;
+    drop: {
+      itemsBefore: Readonly<Record<string, number>>;
+      spot: Vec3;
+      tool: ToolInfo | null;
+    } | null;
   }> {
     const done = (result: ClientActionResult): { result: ClientActionResult; drop: null } => ({
       result,
@@ -1198,25 +1250,27 @@ export class Gtnh1710Client implements MinecraftClient {
       if (world === null || feet === null) {
         return done(failed('not digging: block data or position unknown', 'REFUSED'));
       }
-      const check = checkDig(world, area, feet, target);
+      const first = checkDig(world, area, feet, target);
+      if (!first.ok) return done(failed(`not digging: ${first.reason}`, 'REFUSED'));
+      // What to hold: the best allowlisted tool for this block that one more use cannot
+      // break (src/domain/tools.ts), moved into the hotbar if needed; else an empty hand.
+      const hand = await this.#chooseHand(first.block, protectedItems);
+      if (!hand.ok) return done(failed(`not digging: ${hand.reason}`, hand.code));
+      if (hand.slot !== this.#world.heldSlot) {
+        this.#send(outbound.selectHotbarSlot(hand.slot));
+        this.#world.setHeldSlot(hand.slot);
+      }
+      const tool = hand.tool;
+      // Choosing the hand may have taken a few clicks: check again before starting.
+      const check = checkDig(world, area, this.#world.ownPosition ?? feet, target);
       if (!check.ok) return done(failed(`not digging: ${check.reason}`, 'REFUSED'));
-      // An empty hand: no tool can wear out, fell a whole tree or do anything else.
-      const hand = this.#emptyHotbarSlot();
-      if (hand === null) {
-        return done(
-          failed(
-            'not digging: no empty hotbar slot (the agent digs with an empty hand)',
-            'REFUSED',
-          ),
-        );
-      }
-      if (hand !== this.#world.heldSlot) {
-        this.#send(outbound.selectHotbarSlot(hand));
-        this.#world.setHeldSlot(hand);
-      }
+      const held =
+        tool === null ? null : { slot: hand.slot, stack: this.#hotbar(hand.slot) ?? null };
 
       const itemsBefore = this.#world.inventoryItems();
-      const ticks = digWaitTicks(check.block);
+      const ticks = digWaitTicks(check.block, tool === null ? BARE_HAND_SPEED : tool.speed);
+      const holding =
+        tool === null ? 'an empty hand' : `${tool.item} (${usesLeft(tool, hand.damage)} uses left)`;
       const guard = {
         placementsAtStart: this.#confirmedPositions,
         healthAtStart: this.#world.health,
@@ -1226,7 +1280,7 @@ export class Gtnh1710Client implements MinecraftClient {
       const { x, y, z } = target;
       let verdict: { ok: true } | { ok: false; result: ClientActionResult };
       try {
-        this.#log(`digging ${check.block} at ${where}: ${ticks} ticks`);
+        this.#log(`digging ${check.block} at ${where} with ${holding}: ${ticks} ticks`);
         // Face the block, as a player does (other players see where the head points).
         const look = lookAt(eyesOf(feet), target);
         this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
@@ -1243,7 +1297,7 @@ export class Gtnh1710Client implements MinecraftClient {
           if (self !== null && tick % 4 === 0 && this.#phase === 'play') {
             this.#send(outbound.swingArm(self));
           }
-          const problem = this.#digProblem(area, target, check.blockId, watch, guard);
+          const problem = this.#digProblem(area, target, check.blockId, watch, guard, held);
           if (problem !== null) {
             if (this.#phase === 'play') {
               this.#send(outbound.digBlock(DIG_STATUS.cancel, x, y, z, check.face));
@@ -1267,20 +1321,41 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       if (!verdict.ok) return done(verdict.result);
 
+      // The tool wore by one: the server sends its slot again (a tick or so later).
+      const wear = held === null || tool === null ? null : await this.#toolAfterDig(held, tool);
       // The drop spawns in the block's cell and is picked up (after 10 ticks) only when it
       // lands within reach of the player's body; report whether it arrived.
-      const gained = itemsBefore === null ? [] : await this.#dropGain(itemsBefore);
+      const gained = itemsBefore === null ? [] : await this.#dropGain(itemsBefore, tool);
       const drops = describeGain(gained);
       const dropCollected = gained.length > 0;
-      this.#log(`dug ${check.block} at ${where}; drop ${dropCollected ? drops : 'not collected'}`);
+      const used =
+        tool === null
+          ? `an empty hand${hand.note === null ? '' : ` (${hand.note.slice(0, 120)})`}`
+          : `${tool.item} (${wear?.text ?? 'its wear was not seen'})`;
+      this.#log(
+        `dug ${check.block} at ${where} with ${used}; drop ${dropCollected ? drops : 'not collected'}`,
+      );
       const result = ok(
-        `dug ${check.block} at ${where} in ${ticks} ticks; ` +
+        (
+          `dug ${check.block} at ${where} in ${ticks} ticks with ${used}; ` +
           (dropCollected
             ? `the drop reached the inventory: ${drops}`
             : itemsBefore === null
               ? 'the inventory was unknown, so the drop could not be checked'
-              : `no drop reached the inventory (none, or it lies at ${where} out of pickup reach: walk onto it)`),
-        { x, y, z, block: check.block, ticks, dropCollected, drops },
+              : `no drop reached the inventory (none, or it lies at ${where} out of pickup reach: walk onto it)`)
+        ).slice(0, 500),
+        {
+          x,
+          y,
+          z,
+          block: check.block,
+          ticks,
+          tool: tool?.item ?? null,
+          toolUsesLeft: wear?.usesLeft ?? null,
+          ...(hand.note === null ? {} : { toolNote: hand.note.slice(0, 200) }),
+          dropCollected,
+          drops,
+        },
       );
       // Not picked up: the drop fell to the floor of the dug cell (or below it). On terrain,
       // if a player could stand there, walk onto it.
@@ -1294,11 +1369,158 @@ export class Gtnh1710Client implements MinecraftClient {
         standProblem(world, x, floor, z) === null;
       return {
         result,
-        drop: standable ? { itemsBefore, spot: { x: x + 0.5, y: floor, z: z + 0.5 } } : null,
+        drop: standable ? { itemsBefore, spot: { x: x + 0.5, y: floor, z: z + 0.5 }, tool } : null,
       };
     } finally {
       this.#digging = false;
     }
+  }
+
+  /**
+   * What to dig `block` with. The fastest tool for it from the allowlist (src/domain/tools.ts)
+   * that has no NBT data, is not protected, and that one more use cannot break; at equal
+   * speed the one already in hand, then the hotbar, then the main inventory. A tool in the
+   * main inventory is first moved into an empty hotbar slot (two confirmed clicks in window
+   * 0). With no usable tool, an empty hotbar slot: an empty hand. `note` says which tools
+   * for this block were passed over, and why.
+   */
+  async #chooseHand(
+    block: DiggableBlock,
+    protectedItems: ReadonlySet<string>,
+  ): Promise<Hand | { ok: false; reason: string; code: 'REFUSED' | 'FAILED' | 'ERROR' }> {
+    const storage = this.#world.playerStorage();
+    const registry = this.#world.registry;
+    interface Candidate {
+      tool: ToolInfo;
+      damage: number;
+      /** 0-26 main inventory, 27-35 hotbar (playerStorage order). */
+      index: number;
+      stack: Stack;
+    }
+    const candidates: Candidate[] = [];
+    const passedOver: string[] = [];
+    if (storage !== null && registry !== null) {
+      const heldIndex = 27 + this.#world.heldSlot;
+      const order = [heldIndex];
+      for (let i = 27; i < 36; i++) if (i !== heldIndex) order.push(i);
+      for (let i = 0; i < 27; i++) order.push(i);
+      for (const index of order) {
+        const s = storage[index];
+        if (s == null) continue;
+        const base = registry.items.get(s.id);
+        const tool = base === undefined ? null : toolInfo(base);
+        if (tool === null || toolSpeedOn(tool, block) === null) continue;
+        const naming = nameItemStack(registry, s.id, s.damage);
+        const problem = !naming.ok
+          ? `${tool.item}: ${naming.reason}`
+          : isProtected(naming.name, protectedItems)
+            ? `${tool.item} is a protected item`
+            : toolProblem({ tool, damage: s.damage, count: s.count, hasNbt: s.hasNbt }, block);
+        if (problem === null) candidates.push({ tool, damage: s.damage, index, stack: s });
+        else passedOver.push(problem);
+      }
+    }
+    const note = passedOver.length === 0 ? null : `not used: ${passedOver.slice(0, 2).join('; ')}`;
+    const inHotbar = (c: Candidate): boolean => c.index >= 27;
+    const use = (c: Candidate, slot: number): Hand => ({
+      ok: true,
+      slot,
+      tool: c.tool,
+      damage: c.damage,
+      note,
+    });
+
+    const best = bestTool(block, candidates, () => true);
+    if (best !== null && inHotbar(best)) return use(best, best.index - 27);
+    if (best !== null) {
+      const free = this.#emptyHotbarSlot();
+      if (free !== null) {
+        const moved = await this.#moveToHotbar(9 + best.index, free, best.stack);
+        if (moved === null) return use(best, free);
+        return {
+          ok: false,
+          reason: `the ${best.tool.item} could not be moved into the hotbar: ${moved}`,
+          code: moved.startsWith('ITEMS MAY') ? 'ERROR' : 'FAILED',
+        };
+      }
+      // No room to move it: a slower tool already in the hotbar, else nothing to dig with.
+      const slower = bestTool(block, candidates.filter(inHotbar), () => true);
+      if (slower !== null) return use(slower, slower.index - 27);
+      return {
+        ok: false,
+        reason: `no empty hotbar slot (to move the ${best.tool.item} into, or to dig with an empty hand)`,
+        code: 'REFUSED',
+      };
+    }
+    const empty = this.#emptyHotbarSlot();
+    if (empty === null) {
+      return {
+        ok: false,
+        reason:
+          'no empty hotbar slot (with no usable tool for this block, the agent digs with an empty hand)' +
+          (note === null ? '' : `; ${note}`),
+        code: 'REFUSED',
+      };
+    }
+    return { ok: true, slot: empty, tool: null, damage: 0, note };
+  }
+
+  /**
+   * Moves the stack in window-0 slot `from` into the empty hotbar slot `hotbar`: a left-click
+   * picks it up, a left-click on the empty slot puts it down, each confirmed by the server.
+   * After a click that is not accepted, the cursor goes back into the inventory. Null when
+   * moved, else why not ("ITEMS MAY BE ON THE CURSOR..." when that failed too).
+   */
+  async #moveToHotbar(from: number, hotbar: number, stack: Stack): Promise<string | null> {
+    if (this.#world.openWindow !== null) return 'a window is open';
+    if (this.#clickTarget() === null) return 'the inventory window is not known';
+    const clicks: Click[] = [
+      { slot: from, button: 0 },
+      { slot: 36 + hotbar, button: 0 },
+    ];
+    for (const click of clicks) {
+      const outcome = await this.#click(click);
+      if (outcome === 'accepted') continue;
+      const w = this.#clickTarget()?.window;
+      const cleared =
+        w === undefined
+          ? 'the inventory is not known'
+          : await this.#clearGrid(INVENTORY_GRID, stackBounds(w, INVENTORY_GRID), {
+              ...stack,
+              count: 1,
+            });
+      return cleared === null
+        ? `a click was ${outcome}`
+        : `ITEMS MAY BE ON THE CURSOR (${cleared}): a click was ${outcome}`;
+    }
+    this.#log(`moved the tool from slot ${from} into hotbar slot ${hotbar}`);
+    return null;
+  }
+
+  /**
+   * After a dig with a tool: waits (up to 1 s) for the server to re-send its slot with one
+   * more damage, then describes its state.
+   */
+  async #toolAfterDig(
+    held: { slot: number; stack: Stack | null },
+    tool: ToolInfo,
+  ): Promise<{ usesLeft: number | null; text: string }> {
+    await this.#waitFor(() => !sameStack(this.#hotbar(held.slot) ?? null, held.stack), 1_000);
+    const now = this.#hotbar(held.slot) ?? null;
+    const before = held.stack;
+    if (now === null) return { usesLeft: 0, text: 'the tool is gone from its slot' };
+    if (before === null || now.id !== before.id || now.hasNbt) {
+      return { usesLeft: null, text: 'its slot now holds something else' };
+    }
+    const left = usesLeft(tool, now.damage);
+    const wore = now.damage - before.damage;
+    return {
+      usesLeft: left,
+      text:
+        wore === 1
+          ? `${left} uses left`
+          : `${left} uses left; its damage went from ${before.damage} to ${now.damage}`,
+    };
   }
 
   /** Why the dig in progress must stop now, or null. Checked every tick. */
@@ -1308,8 +1530,17 @@ export class Gtnh1710Client implements MinecraftClient {
     blockId: number,
     watch: BlockWatch,
     guard: { placementsAtStart: number; healthAtStart: number | null },
+    held: { slot: number; stack: Stack | null } | null,
   ): string | null {
     if (this.#phase !== 'play') return 'the connection closed';
+    // The server digs with whatever is in hand: with a tool, it must stay exactly as it was.
+    if (
+      held !== null &&
+      (this.#world.heldSlot !== held.slot ||
+        !sameStack(this.#hotbar(held.slot) ?? null, held.stack))
+    ) {
+      return 'the tool in hand changed';
+    }
     const cfg = this.#opts.config;
     if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
     if (existsSync(resolvePath(cfg.movement.stopFile))) {

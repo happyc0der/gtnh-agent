@@ -38,8 +38,10 @@ const ID = {
   chest: 54,
   flint: 318,
   diamond: 264,
+  woodenShovel: 269,
 };
 const ITEMS: Array<[number, string]> = [
+  [ID.woodenShovel, 'minecraft:wooden_shovel'],
   [ID.log, 'minecraft:log'],
   [ID.planks, 'minecraft:planks'],
   [ID.stick, 'minecraft:stick'],
@@ -54,14 +56,19 @@ const ITEMS: Array<[number, string]> = [
 const anyOf = (id: number): FakeIngredient => ({ id, damage: 'any' });
 const exact = (id: number, damage = 0): FakeIngredient => ({ id, damage });
 
-/** The server's recipes, GTNH-like: they differ from the agent's table on purpose (sticks). */
+/** The server's recipes, as GTNH 2.8.4 has them (the crafting table's is left out on purpose). */
 const SERVER_RECIPES: FakeRecipe[] = [
   // GregTech's nerfed planks: one log anywhere gives 2 planks of its kind.
   { shapeless: [exact(ID.log, 0)], result: { id: ID.planks, count: 2, damage: 0 } },
-  // A sticks recipe that gives 2, while the agent's table expects 4.
+  // GregTech's nerfed sticks: two planks give 2 (vanilla gives 4).
   {
     shaped: [[anyOf(ID.planks)], [anyOf(ID.planks)]],
     result: { id: ID.stick, count: 2, damage: 0 },
+  },
+  // The vanilla wooden shovel: planks above two sticks.
+  {
+    shaped: [[anyOf(ID.planks)], [exact(ID.stick)], [exact(ID.stick)]],
+    result: { id: ID.woodenShovel, count: 1, damage: 0 },
   },
   // GTNH torches: coal above a stick gives 3.
   { shaped: [[exact(ID.coal)], [exact(ID.stick)]], result: { id: ID.torch, count: 3, damage: 0 } },
@@ -74,8 +81,13 @@ const SERVER_RECIPES: FakeRecipe[] = [
     ],
     result: { id: ID.chest, count: 1, damage: 0 },
   },
-  // No crafting-table recipe at all: GTNH removes the vanilla one.
+  // No crafting-table recipe at all (GTNH's is flint above logs): an empty result.
 ];
+
+/** The same server without GregTech's nerf: two planks give vanilla's 4 sticks. */
+const VANILLA_STICKS: FakeRecipe[] = SERVER_RECIPES.map((r) =>
+  r.result.id === ID.stick ? { ...r, result: { ...r.result, count: 4 } } : r,
+);
 
 const INVENTORY: NonNullable<FakeServerOptions['inventory']> = [
   { slot: 9, id: ID.log, count: 5, damage: 0 },
@@ -362,17 +374,35 @@ describe('Gtnh1710Client crafting', () => {
     expectClean(server);
   });
 
-  it("takes nothing when the server's result differs, and puts every ingredient back", async () => {
+  it('makes a wooden shovel: GTNH sticks (2 per craft) in the 2x2 grid, then the shovel at the table', async () => {
     const { server, client } = await start();
+    const sticks = await perform(client, craft('sticks', 1));
+    expect(sticks).toMatchObject({ ok: true, data: { crafts: 1 } });
+    const shovel = await perform(client, craft('wooden_shovel', 1, 'table.test'));
+    expect(shovel).toMatchObject({ ok: true, data: { crafts: 1 } });
+    expect(shovel.message).toMatch(/1 minecraft:wooden_shovel/);
+    const state = await client.observe();
+    expect(state.inventory.known && state.inventory.value.items).toMatchObject({
+      // 10 planks: 2 into sticks, 1 into the shovel; 4 + 2 sticks, 2 into the shovel.
+      'minecraft:planks': 7,
+      'minecraft:stick': 4,
+      'minecraft:wooden_shovel': 1,
+    });
+    expect(total(server.chestSim.playerSlots(), ID.woodenShovel)).toBe(1);
+    expectClean(server);
+  });
+
+  it("takes nothing when the server's result differs, and puts every ingredient back", async () => {
+    const { server, client } = await start({ server: { recipes: VANILLA_STICKS } });
     const before = await client.observe();
     const result = await perform(client, craft('sticks', 2));
     expect(result).toMatchObject({
       ok: false,
       code: 'FAILED',
-      data: { crafts: 0, observedResult: '2 x minecraft:stick' },
+      data: { crafts: 0, observedResult: '4 x minecraft:stick' },
     });
     expect(result.message).toMatch(
-      /the server's crafting result for sticks is 2 x minecraft:stick, not the expected 4 x minecraft:stick/,
+      /the server's crafting result for sticks is 4 x minecraft:stick, not the expected 2 x minecraft:stick/,
     );
     const after = await client.observe();
     expect(after.inventory).toEqual(before.inventory);
@@ -383,10 +413,12 @@ describe('Gtnh1710Client crafting', () => {
 
   it('reports an empty result for a pattern the server has no recipe for', async () => {
     const { server, client } = await start();
+    // GTNH's crafting table (flint above logs) is not one of this server's recipes.
     const result = await perform(client, craft('crafting_table', 1));
     expect(result).toMatchObject({ ok: false, code: 'FAILED', data: { observedResult: 'empty' } });
     expect(result.message).toMatch(/is empty, not the expected 1 x minecraft:crafting_table/);
-    expect(total(server.chestSim.playerSlots(), ID.planks)).toBe(10);
+    expect(total(server.chestSim.playerSlots(), ID.flint)).toBe(2);
+    expect(total(server.chestSim.playerSlots(), ID.log)).toBe(5);
     expectClean(server);
   });
 
@@ -476,6 +508,7 @@ describe('Gtnh1710Client crafting', () => {
   it('goes through the executor: validated, crafted and verified; protected ingredients are refused', async () => {
     const { server, client, config } = await start({
       protectedItems: ['minecraft:diamond', 'minecraft:flint'],
+      server: { recipes: VANILLA_STICKS },
     });
     const repos = createRepositories(openDatabase(IN_MEMORY), systemClock);
     syncConfigToDatabase(config, repos);

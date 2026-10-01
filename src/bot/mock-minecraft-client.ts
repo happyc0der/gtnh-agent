@@ -21,7 +21,9 @@ import {
   RECIPES,
   type RecipeId,
 } from '../domain/recipes.ts';
+import { bestTool, parseToolName, toolProblem, usesLeft } from '../domain/tools.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
+import { isProtected } from '../safety/protected-items.ts';
 import type { Clock, ManualClock } from '../util/clock.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from './minecraft-client.ts';
 
@@ -391,7 +393,7 @@ export class MockMinecraftClient implements MinecraftClient {
       }
 
       case 'DIG_BLOCK':
-        return this.#dig(action.args.position);
+        return this.#dig(action.args.position, new Set(validated.protectedItems));
       case 'CRAFT_ITEM':
         return this.#craft(action.args);
 
@@ -401,8 +403,13 @@ export class MockMinecraftClient implements MinecraftClient {
     }
   }
 
-  /** Removes the block and adds its drop, like a server would (within reach, if any room). */
-  #dig(p: BlockPosition): ClientActionResult {
+  /**
+   * Removes the block and adds its drop, like a server would (within reach, if any room).
+   * Like the live client, it holds the best usable tool for the block (src/domain/tools.ts),
+   * found by inventory name, and wears it by one: "minecraft:wooden_shovel" becomes
+   * "minecraft:wooden_shovel@1".
+   */
+  #dig(p: BlockPosition, protectedItems: ReadonlySet<string>): ClientActionResult {
     const w = this.world;
     const at = w.resourceBlocks.findIndex(
       (r) => r.position.x === p.x && r.position.y === p.y && r.position.z === p.z,
@@ -411,6 +418,22 @@ export class MockMinecraftClient implements MinecraftClient {
     if (found === undefined) return failed(`no diggable block at ${formatPosition(p)}`);
     if (eyeDistanceToBlock(w.player.position, p) > w.reach) {
       return failed(`${formatPosition(p)} is out of reach`);
+    }
+    const tools = Object.entries(w.inventory.items).flatMap(([name, count]) => {
+      const t = parseToolName(name);
+      return t === null || count <= 0 ? [] : [{ ...t, name }];
+    });
+    const tool = bestTool(
+      found.block,
+      tools,
+      (t) =>
+        !isProtected(t.name, protectedItems) &&
+        toolProblem({ ...t, count: 1, hasNbt: false }, found.block) === null,
+    );
+    if (tool !== null) {
+      const worn = `${tool.tool.item}@${tool.damage + 1}`;
+      w.inventory.items[tool.name] = (w.inventory.items[tool.name] ?? 0) - 1;
+      w.inventory.items[worn] = (w.inventory.items[worn] ?? 0) + 1;
     }
     this.#clock.advance(MOCK_DIG_MS);
     w.resourceBlocks.splice(at, 1);
@@ -427,11 +450,18 @@ export class MockMinecraftClient implements MinecraftClient {
         dropCollected = true;
       }
     }
-    return ok(`dug ${found.block} at ${formatPosition(p)}`, {
-      block: found.block,
-      dropCollected,
-      drops: drop === null || !dropCollected ? '' : `${drop.count} x ${drop.item}`,
-    });
+    const toolUsesLeft = tool === null ? null : usesLeft(tool.tool, tool.damage + 1);
+    return ok(
+      `dug ${found.block} at ${formatPosition(p)} with ` +
+        (tool === null ? 'an empty hand' : `${tool.tool.item} (${toolUsesLeft} uses left)`),
+      {
+        block: found.block,
+        tool: tool?.tool.item ?? null,
+        toolUsesLeft,
+        dropCollected,
+        drops: drop === null || !dropCollected ? '' : `${drop.count} x ${drop.item}`,
+      },
+    );
   }
 
   /** Like the live client: the server's result must match the table, or nothing is crafted. */

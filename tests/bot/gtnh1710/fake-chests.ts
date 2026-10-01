@@ -305,6 +305,18 @@ export class FakeChestSim {
     return left;
   }
 
+  /** The server changed a player slot (e.g. a tool wore): set it and send it (S2F, window 0). */
+  setPlayerSlot(slot: number, stack: FakeStack | null): void {
+    this.#player[slot] = stack;
+    this.#send(
+      encodeFrame(
+        0x2f,
+        Buffer.concat([Buffer.from([0]), i16(slot), encodeStack(stack, this.#modularUi)]),
+      ),
+    );
+    this.#lastSentPlayer[slot] = copy(stack);
+  }
+
   /** Handles a play-state packet if it is a container packet; returns whether it was. */
   handle(packetId: number, r: Reader): boolean {
     switch (packetId) {

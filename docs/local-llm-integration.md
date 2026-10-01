@@ -65,6 +65,12 @@ afterwards, so those come back as invalid output.
 - Sends the sanitized `PlannerRequest` (see below) with a system prompt: the actions and their
   args, "use only ids and items from the request", "never touch protected items", "prefer short
   plans", and when to escalate instead of planning.
+- The prompt states facts computed from the agent's own tables, never from the model's memory:
+  the known recipes (`src/domain/recipes.ts`), and what a tool saves (rule 11). Rule 11 gives
+  dig times from `src/domain/dig-time.ts` and `src/domain/tools.ts`, for example "sand or dirt
+  21 by hand, 12 with a minecraft:wooden_shovel". It says that a wooden tool lasts 59 digs, and
+  that before gathering 32 or more of a block the planner should craft the tool first when a
+  known recipe and the ingredients carried allow it. `DIG_BLOCK` picks the tool by itself.
 - `format` is the planner response schema with the step count capped at the request's
   `maxPlanSteps`.
 - The reply is parsed with `parsePlannerOutput` (PlannerResponseSchema). Any HTTP error, timeout,
@@ -108,8 +114,10 @@ The planner receives a `PlannerRequest`, never raw state or logs:
 
 - `sanitizeStateForPlanner()`: position, dimension, vitals, the top 20 inventory stacks, fill
   fraction, threat summary, machine/storage/generator ids, status, position and **distance from
-  the player** (computed by code), the recipe target, and an explicit `unknownFields` list, so it
-  is told what is _not_ known instead of guessing.
+  the player** (computed by code), the diggable blocks with their reach and stand spots, the
+  `tools` `DIG_BLOCK` may hold (item, count, `durabilityLeft`, `digsFaster`; protected ones left
+  out), the recipe target, and an explicit `unknownFields` list, so it is told what is _not_
+  known instead of guessing.
 - The allowlisted action types, safety constraints (boundary, protected items, approved food/fuel,
   safe locations, forbidden keywords), the last N actions and a per-fingerprint failure summary.
 - It still contains a task goal, machine and container names, and the recipe target: operator and

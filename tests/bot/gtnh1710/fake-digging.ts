@@ -34,6 +34,42 @@ const TICK_MS = 50;
 /** EntityItem pickup delay for block drops (Block.dropBlockAsItem_do). */
 const PICKUP_DELAY_MS = 10 * TICK_MS;
 
+const SHOVEL_BLOCKS = [
+  'minecraft:dirt',
+  'minecraft:grass',
+  'minecraft:sand',
+  'minecraft:gravel',
+  'minecraft:clay',
+];
+const LOGS = ['minecraft:log', 'minecraft:log2'];
+
+/** What a held item does on the server. */
+export interface FakeTool {
+  /** Dig speed on `blocks`; elsewhere the item digs at 1, like a hand. */
+  speed: number;
+  blocks: readonly string[];
+  /** The tool breaks when a use takes its damage above this. */
+  maxDamage: number;
+  /** IguanaTweaks: this tool digs nothing at all (speed 0 on every block). */
+  useless?: boolean;
+}
+
+/**
+ * Held items as the GTNH 2.8.4 test server treats them (docs/gtnh-compatibility.md, "Tools"):
+ * vanilla efficiencies, GregTech's wooden-tool durability of 64, and IguanaTweaks' disabled
+ * shovels. Every other item digs at speed 1 and does not wear.
+ */
+export const SERVER_TOOLS: Readonly<Record<string, FakeTool>> = {
+  'minecraft:wooden_shovel': { speed: 2, blocks: SHOVEL_BLOCKS, maxDamage: 64 },
+  'minecraft:stone_shovel': { speed: 4, blocks: SHOVEL_BLOCKS, maxDamage: 131, useless: true },
+  'minecraft:iron_shovel': { speed: 6, blocks: SHOVEL_BLOCKS, maxDamage: 250, useless: true },
+  'minecraft:wooden_axe': { speed: 2, blocks: LOGS, maxDamage: 64 },
+  'minecraft:stone_axe': { speed: 4, blocks: LOGS, maxDamage: 131 },
+  'minecraft:iron_axe': { speed: 6, blocks: LOGS, maxDamage: 250 },
+  'minecraft:golden_axe': { speed: 12, blocks: LOGS, maxDamage: 32 },
+  'minecraft:diamond_axe': { speed: 8, blocks: LOGS, maxDamage: 1561 },
+};
+
 export interface FakeDigOptions {
   /** Hardness the SERVER uses, by block name (default vanilla); raise one to make digs too early. */
   hardness?: Record<string, number>;
@@ -50,6 +86,7 @@ export interface FakeDigWorld {
   setBlock(x: number, y: number, z: number, id: number): void;
   blockName(id: number): string | undefined;
   itemId(name: string): number | undefined;
+  itemName(id: number): string | undefined;
   /** The player's feet, from its last position packet. */
   playerFeet(): { x: number; y: number; z: number } | null;
 }
@@ -60,8 +97,10 @@ export interface RecordedDig {
   y: number;
   z: number;
   face: number;
-  /** Whether the selected hotbar slot was empty (the agent must dig with an empty hand). */
+  /** Whether the selected hotbar slot was empty. */
   emptyHand: boolean;
+  /** The item in the selected hotbar slot ("name@damage"), or null. */
+  held: string | null;
   at: number;
 }
 
@@ -70,10 +109,13 @@ export interface RecordedDig {
  * NetHandlerPlayServer.processPlayerDigging, as disassembled from the test server's jars):
  *  - C07 status 0 remembers the block and the time; status 1 cancels;
  *  - status 2 for that block breaks it if progress x (ticks since the start + 1) >= 0.7, with
- *    progress per tick = 1 / hardness / 30 (a bare hand on a block that needs no tool). Forge
+ *    progress per tick = speed / hardness / 30 (a block that needs no tool; an empty hand has
+ *    speed 1, a tool its own on the blocks it is made for, see SERVER_TOOLS). Forge
  *    first sends the digging player "air" (S23), then the world's change goes to every
  *    watcher (a second S23 air). Too early: the block is re-sent at once, and broken on the
  *    server's own schedule once progress reaches 1 (vanilla's receivedFinishDiggingPacket);
+ *  - a held tool wears by 1 per broken block (ItemTool.onBlockDestroyed) and breaks when that
+ *    takes its damage above its maximum; its slot is re-sent (S2F);
  *  - the drop can be picked up 10 ticks later, only if it lies within the player's box grown
  *    by 1 sideways and 0.5 up/down: it goes into the inventory like InventoryPlayer, S2F.
  */
@@ -88,8 +130,17 @@ interface GroundDrop {
 
 export class FakeDigSim {
   readonly digs: RecordedDig[] = [];
-  /** Blocks the server broke, in order. */
-  readonly broken: Array<{ x: number; y: number; z: number; name: string; late: boolean }> = [];
+  /** Blocks the server broke, in order, and what the player held ("name@damage" or null). */
+  readonly broken: Array<{
+    x: number;
+    y: number;
+    z: number;
+    name: string;
+    late: boolean;
+    held?: string;
+  }> = [];
+  /** Tools that broke (their last use took the damage above the maximum). */
+  readonly toolsBroken: string[] = [];
   /** Items picked up by the player. */
   readonly pickedUp: Array<{ item: string; count: number }> = [];
   readonly #world: FakeDigWorld;
@@ -124,8 +175,8 @@ export class FakeDigSim {
     const y = r.u8();
     const z = r.i32();
     const face = r.u8();
-    const held = this.#chests.playerSlots()[36 + this.#chests.heldSlot] ?? null;
-    this.digs.push({ status, x, y, z, face, emptyHand: held === null, at: Date.now() });
+    const held = this.#heldName();
+    this.digs.push({ status, x, y, z, face, emptyHand: held === null, held, at: Date.now() });
     const id = this.#world.blockAt(x, y, z);
     if (status === 0) {
       if (this.#opts.refuseStart === true) {
@@ -152,9 +203,10 @@ export class FakeDigSim {
       this.#break(x, y, z, false);
       return;
     }
-    // Too early: re-send the block now; vanilla then finishes the dig on its own schedule.
+    // Too early: re-send the block now; vanilla then finishes the dig on its own schedule
+    // (never, when the held item digs at speed 0).
     this.#send(blockChangeFrame(x, y, z, id));
-    if (this.#opts.completeLateFinishes !== false) {
+    if (this.#opts.completeLateFinishes !== false && perTick > 0) {
       const fullTicks = Math.ceil(1 / perTick - 1 - 1e-9);
       const wait = Math.max(0, cur.startedAt + fullTicks * TICK_MS - Date.now());
       this.#later(wait, () => {
@@ -164,10 +216,41 @@ export class FakeDigSim {
     this.#current = null;
   }
 
+  /** The held stack (hotbar slot 36 + selected) as "name@damage", or null. */
+  #heldName(): string | null {
+    const s = this.#chests.playerSlots()[36 + this.#chests.heldSlot] ?? null;
+    if (s === null) return null;
+    return `${this.#world.itemName(s.id) ?? `item ${s.id}`}@${s.damage}`;
+  }
+
+  /** The held item's tool facts, or null for an empty hand or any other item. */
+  #heldTool(): FakeTool | null {
+    const s = this.#chests.playerSlots()[36 + this.#chests.heldSlot] ?? null;
+    return s === null ? null : (SERVER_TOOLS[this.#world.itemName(s.id) ?? ''] ?? null);
+  }
+
   #progressPerTick(id: number): number {
     const name = this.#world.blockName(id) ?? '';
     const hardness = this.#opts.hardness?.[name] ?? VANILLA_HARDNESS[name] ?? 50;
-    return 1 / hardness / 30;
+    const tool = this.#heldTool();
+    const speed =
+      tool === null ? 1 : tool.useless === true ? 0 : tool.blocks.includes(name) ? tool.speed : 1;
+    return speed / hardness / 30;
+  }
+
+  /** ItemTool.onBlockDestroyed: the held tool wears by one; past its maximum it breaks. */
+  #wearHeldTool(): void {
+    const tool = this.#heldTool();
+    const slot = 36 + this.#chests.heldSlot;
+    const s = this.#chests.playerSlots()[slot] ?? null;
+    if (tool === null || s === null) return;
+    const damage = s.damage + 1;
+    if (damage > tool.maxDamage) {
+      this.toolsBroken.push(this.#world.itemName(s.id) ?? `item ${s.id}`);
+      this.#chests.setPlayerSlot(slot, null);
+    } else {
+      this.#chests.setPlayerSlot(slot, { ...s, damage });
+    }
   }
 
   #break(x: number, y: number, z: number, late: boolean): void {
@@ -179,9 +262,13 @@ export class FakeDigSim {
       this.#send(blockChangeFrame(x, y, z, id)); // cancelled: the block is re-sent
       return;
     }
+    const held = this.#heldName();
     this.#world.setBlock(x, y, z, 0);
     this.#broadcast(blockChangeFrame(x, y, z, 0)); // the world's own change, to every watcher
-    this.broken.push({ x, y, z, name, late });
+    // The tool wore before the block went (onBlockDestroyed); its slot is sent with the
+    // player's next container sync, after the block changes.
+    this.#wearHeldTool();
+    this.broken.push({ x, y, z, name, late, ...(held === null ? {} : { held }) });
     const drop = DROPS[name];
     if (drop === null || drop === undefined) return;
     this.#later(PICKUP_DELAY_MS, () => this.#pickUp(x, y, z, drop));

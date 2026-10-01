@@ -7,9 +7,10 @@ fully named inventory, nearby entities (vanilla and modded) and lava/void/damagi
 agent cycle has no state violations; it pauses only because it has no task. With movement enabled
 it walks on one level inside a fence (see "Walking"). GregTech machines are observed through
 GregTech's own channel: type, position, enabled and running (see "Machines"); stored energy and
-held-item durability are not observable. Digging one allowlisted block (see "Digging") is built
-on the server's own code, checked in its jars, and tested against the fake server; it has not
-been run live yet. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
+held-item durability are not observable (except for the agent's allowlisted tools, see "Tools").
+Digging one allowlisted block (see "Digging"), with an empty hand or a verified tool (see
+"Tools"), is built on the server's own code, checked in its jars, and tested against the fake
+server; it has not been run live yet. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
 (observed or checked in installed code) or _assumption_ (to be tested).
 
 ## Test server results (2026-09-30)
@@ -52,7 +53,7 @@ Live `pnpm cli observe --live` on the test server (verified):
 | Dimension      | `overworld` (1.7.10 numeric IDs are mapped; unknown IDs become `dim_<id>`).                                         |
 | Health / food  | 20 / 20, but only once the client acknowledges the server's placement (see presence below).                         |
 | Inventory      | `1 x questbook:ItemQuestBook`: the starter quest book GTNH gives new players, named through the per-world registry. |
-| Held item      | Unknown: the durability of modded items is not known yet.                                                           |
+| Held item      | Empty hand, or one of the agent's allowlisted tools with its durability (see "Tools"); any other item is unknown.   |
 | Threats        | Tracked (see "Entity tracking" below); lava/void still unknown.                                                     |
 | Machines/power | GregTech machines: type, enabled, running (see "Machines"). Power (EU) unknown.                                     |
 
@@ -249,13 +250,19 @@ server was not used. The sources:
 
 **GTNH 2.8.4 recipes** (from the jars; the agent still checks every result against the server):
 
-| Recipe            | On this server                                                                                                                                                          |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Planks from a log | Shapeless, **2** planks (GregTech `ProcessingLog`; `nerfedWoodPlank=true` in the test server's `GregTech.cfg`). Vanilla gives 4; a saw in the grid gives 4.             |
-| Torch             | Coal above a stick: **3**; charcoal: **2** (NewHorizonsCoreMod `ScriptMinecraft`, `ShapedUniversalRecipe`).                                                             |
-| Chest             | 3x3: logs in the corners, planks on the sides, **flint** in the middle (`ScriptMinecraft`).                                                                             |
-| Crafting table    | Every recipe that outputs `minecraft:crafting_table` is removed (`RecipeRemover`). The replacement was not identified; the agent's vanilla pattern is expected to fail. |
-| Sticks            | Not verified (the agent's table keeps vanilla's 4).                                                                                                                     |
+| Recipe             | On this server                                                                                                                                                                                                                                                                                                                         |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Planks from a log  | Shapeless, **2** planks (GregTech `ProcessingLog`; `nerfedWoodPlank=true` in the test server's `GregTech.cfg`). Vanilla gives 4; a saw in the grid gives 4.                                                                                                                                                                            |
+| Sticks             | Plank above plank: **2** sticks. GregTech's `CraftingRecipeLoader` removes the vanilla recipe (4) and adds `P/P` → 4/2 while `nerfedWoodPlank` is on; a saw above the planks gives 4.                                                                                                                                                  |
+| Torch              | Coal above a stick: **3**; charcoal: **2** (NewHorizonsCoreMod `ScriptMinecraft`, `ShapedUniversalRecipe`).                                                                                                                                                                                                                            |
+| Chest              | 3x3: logs in the corners, planks on the sides, **flint** in the middle (`ScriptMinecraft`).                                                                                                                                                                                                                                            |
+| Crafting table     | **2x2: two flint above two logs** (any `logWood`). `RecipeRemover` removes every recipe that outputs `minecraft:crafting_table`, then `ScriptMinecraft.craftingRecipes` adds this one; `MainRegistry.CompleteLoad` runs the remover first. A 4-element `ShapedUniversalRecipe` is a 2x2 grid. The quest "Crafting Time" says the same. |
+| Wooden shovel, axe | Vanilla `RecipesTools` (`afk`): shovel `X / # / #`, axe `XX / X# / _#`, X = any planks, # = stick; 3x3, so at a crafting table. Kept: see "Tools".                                                                                                                                                                                     |
+| Flint              | Shapeless, **3 gravel** → 1 flint (IguanaTweaks `addFlintRecipe`, `gravelPerFlint=3`). Gravel never drops flint (`removeFlintDrop=true`). Not in the agent's table yet.                                                                                                                                                                |
+
+The agent cannot place blocks, so the crafting table recipe is of no use to it: it crafts 3x3
+recipes only at tables an operator placed (`minecraft.crafting.tables`), and the planner is not
+told about the table recipe.
 
 **Mods that touch crafting** (checked; none changes the behaviour above on this server):
 
@@ -399,6 +406,133 @@ _Assumptions, to check live:_
 - that the S23 order (Forge's early "air", then the world change) arrives as read from the code;
 - that the player is never under a potion effect that slows digging (effects are not observed
   yet).
+
+## Tools (2026-09-30)
+
+Which tools an early player can make and use on this server, and what they change. Everything
+below was checked in the test server's jars, configs and logs (_verified_), not live. Sources:
+the Forge-patched vanilla classes (as in "Digging"; names from FML's `deobfuscation_data`), the
+mod jars (`javap`), the server's `config/` files, and its `logs/` from the current run.
+
+**What a held tool changes, server side** (vanilla 1.7.10 + Forge 10.13.4.1614):
+
+- **Speed.** `EntityPlayer.getBreakSpeed` asks the held item's `getDigSpeed(stack, block, meta)`
+  (an empty hand: 1). Forge's `ItemTool.getDigSpeed` returns the material's efficiency when
+  `ForgeHooks.isToolEffective` (the tool class matches the block's harvest tool), else
+  `func_150893_a`: the efficiency for blocks in the tool's own set, else 1.
+  - `ItemSpade` (`ady`): grass, dirt, sand, gravel, snow layer, snow, clay, farmland, soul sand,
+    mycelium. Tool class "shovel".
+  - `ItemAxe` (`abf`): planks, bookshelf, log, log2, chest, pumpkins, and any block of material
+    wood, plants or vine. Leaves are none of these: an axe digs them at 1.
+  - Efficiency enchantment adds level² + 1 (only with NBT data, which the agent never uses).
+  - Progress per tick is then speed / hardness / 30, as in "Digging".
+- **Materials** (`Item$ToolMaterial`, `adc.<clinit>`): harvest level, uses, efficiency.
+  - WOOD 0, 59, 2; STONE 1, 131, 4; IRON 2, 250, 6; EMERALD (diamond) 3, 1561, 8; GOLD 0, 32, 12.
+  - `Item.registerItems`: the wooden_shovel ... golden_shovel are `ItemSpade`s of these
+    materials, the axes `ItemAxe`s. The `ItemTool` constructor copies the efficiency and sets
+    the maximum damage to the uses.
+  - minecraft-data 1.7 (`materials.json`, installed with mineflayer) gives the same speeds.
+- **Wear.** `ItemTool.onBlockDestroyed` damages the tool by 1 for every block with hardness ≠ 0
+  (all allowlisted blocks).
+  - `ItemStack.attemptDamageItem` adds the damage and reports a break when the damage is then
+    above `getMaxDamage`. `damageItem` then shrinks the stack, and
+    `ItemInWorldManager.tryHarvestBlock` destroys the held item when it is empty.
+  - That happens before the block is removed. The block still breaks and drops as usual.
+  - The new damage reaches the client as an ordinary slot update (the damage value of the stack).
+- **One block.** `tryHarvestBlock` harvests one block. Only `Item.onBlockStartBreak` could do
+  more (TConstruct's lumber axe, hammer and excavator use it). `Item` returns false and the vanilla
+  tools do not override it. No mod's `BreakEvent` handler looks at a vanilla axe or shovel
+  (searched all 211 jars).
+
+**What GTNH changes** (all three found by searching every jar for the vanilla tool classes,
+fields and names):
+
+- **IguanaTweaks disables most vanilla shovels.**
+  - The config (`IguanaTinkerTweaks/main.cfg`): `disableRegularTools=true`,
+    `exclusionType=blacklist`, and a `tools` list with the stone, iron, golden and diamond
+    shovels and pickaxes (and some modded tools).
+  - `IguanaTweaks.findToolsFromConfig` whitelists every `ItemTool` whose name and mod are not
+    on the lists. `VanillaToolNerfHandler.breakSpeed` sets the speed to **0** for any other
+    `ItemTool` in hand, on every block.
+  - So the **wooden shovel and every vanilla axe work**, and the other vanilla shovels dig
+    nothing. GregTech and TConstruct tools are not `ItemTool`s and are not affected.
+  - Log line: "Sticks and stones may break my bones, but your pickaxes and axes will break no
+    blocks."
+- **GregTech** `changedWoodenVanillaTools=true` (`GregTech.cfg`):
+  - `GTPostLoad.changeWoodenVanillaTools` sets the maximum damage of the wooden sword, pickaxe,
+    shovel, axe and hoe to **64**. `GregTech.log`: "GTMod: Updating Vanilla Wooden Tools".
+  - Its mixin that would raise wood's efficiency to 4 (`ItemToolMaterialMixin`) is **not
+    loaded**: `fml-server-latest.log` lists it under "Not loading the following EARLY mixins".
+    Its condition reads the GregTech config before GTNHLib has loaded it, while the field still
+    has Java's default, false. So wood keeps efficiency 2.
+- **Recipes:**
+  - NewHorizonsCoreMod's `RecipeRemover` removes the stone and diamond tool recipes.
+  - TConstruct would remove the vanilla tool recipes only with "Remove Vanilla Tool Recipes"
+    (false), or set their durability to 1 with "Remove Vanilla Tool Effectiveness" (false).
+  - The other jars that name the wooden shovel or axe use them as an ingredient (Et Futurum
+    boats, EMT tools), as loot, or in tooltips and slot filters.
+- **Harvest levels** (IguanaTweaks `ToolDefaults.cfg`; level names Stone 0, Copper 1, Iron 2,
+  Bronze 3, ...):
+  - wooden shovel, wooden, stone and golden axe: 0; iron axe: 3; diamond axe: 5.
+  - The allowlisted blocks are level 0 (`BlockDefaults.cfg`: dirt, grass, sand, gravel and clay
+    under `blocks_shovel`, the logs under `blocks_axe`), and their materials need no tool.
+  - `ExtraHarvestLevelHandler` ignores level-0 blocks. Harvest levels matter for ores, not here.
+- **The 26 `BreakSpeed` handlers** (see "Digging") were checked again with a vanilla tool in hand.
+  None applies: each needs its own item, armor, accessory, enchantment, potion, dimension, block,
+  hover or spectator mode. The exceptions are IguanaTweaks' nerf (above) and GregTech's, which
+  handles only GregTech tools.
+
+**Early tools on this server:**
+
+| Tool                                | How an early player gets it                                                                                                                                                   | Speed on its blocks                                                                                            | Max. damage               | Agent                 |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------- | --------------------- |
+| Wooden shovel                       | Vanilla 3x3 at a crafting table: 1 plank above 2 sticks. The quest "Tools" asks for it.                                                                                       | 2 (dirt, grass, sand, gravel, clay)                                                                            | 64 (the agent assumes 59) | Uses it               |
+| Wooden axe                          | Vanilla 3x3: 3 planks, 2 sticks                                                                                                                                               | 2 (logs)                                                                                                       | 64 (59)                   | Uses it               |
+| Stone axe                           | No recipe (removed)                                                                                                                                                           | 4                                                                                                              | 131                       | Uses it if it has one |
+| Iron, golden axe                    | Not early (their GTNH recipes were not checked)                                                                                                                               | 6, 12                                                                                                          | 250, 32                   | Uses them             |
+| Diamond axe                         | No recipe (removed)                                                                                                                                                           | 8                                                                                                              | 1561                      | Uses it               |
+| Stone, iron, golden, diamond shovel | Stone and diamond recipes removed                                                                                                                                             | **0** (IguanaTweaks)                                                                                           |                           | Never                 |
+| GregTech tools                      | There is **no** GregTech shovel, axe, pickaxe, sword or hoe in 5.09.51.482 (`MetaGeneratedTool01` starts at the saw). The quests describe a flint knife: flint above a stick. | see below                                                                                                      | in NBT (`GT.ToolStats`)   | Never (NBT)           |
+| TConstruct flint shovel, hatchet    | The quest "Your First Tool": Part Builder, stencil table and Tool Station (placed blocks).                                                                                    | about 4 (flint's mining speed is 400 in IguanaTweaks' `MaterialDefaults.cfg`; durability 113, harvest level 1) | in NBT (`InfiTool`)       | Never (NBT)           |
+
+GregTech's `MetaGeneratedTool.getDigSpeed` is the tool's speed multiplier × its primary
+material's `mToolSpeed`, on blocks the tool can mine. TConstruct's `AbilityHelper.calcToolSpeed`
+averages the `InfiTool` `MiningSpeed` values / 100, times the tool's break-speed modifier, plus
+the Stonebound bonus; `HarvestTool.getDigSpeed` gives 0.1 once the tool is broken.
+
+**What the agent does** (`src/domain/tools.ts`, [architecture: digging](architecture.md#digging)):
+
+- It may hold only the wooden shovel and the vanilla axes, each only on the blocks it digs faster.
+- It uses each tool's speed above as a lower bound: 2 for wood (4 if GregTech's mixin were
+  loaded). The maximum damage it assumes for wooden tools is 59 (64 here): a server with
+  GregTech's option off has 59. Being slower or more careful than the server is always safe.
+- It never uses a tool when one more use would take it past that maximum, nor one with NBT data,
+  more than one in a stack, or a protected item.
+
+Dig times with a tool (ticks of 50 ms; empty hand for comparison):
+
+| Block                     | Tool          | Vanilla client | Server accepts from | Agent waits |
+| ------------------------- | ------------- | -------------- | ------------------- | ----------- |
+| `sand`, `dirt`            | empty hand    | 15             | 10                  | 21          |
+| `sand`, `dirt`            | wooden shovel | 8              | 5                   | 12          |
+| `grass`, `gravel`, `clay` | empty hand    | 18             | 12                  | 25          |
+| `grass`, `gravel`, `clay` | wooden shovel | 9              | 6                   | 14          |
+| `log`, `log2`             | empty hand    | 60             | 41                  | 77          |
+| `log`, `log2`             | wooden axe    | 30             | 20                  | 40          |
+| `log`, `log2`             | stone axe     | 15             | 10                  | 21          |
+| `log`, `log2`             | iron axe      | 10             | 6                   | 15          |
+| `log`, `log2`             | diamond axe   | 8              | 5                   | 12          |
+| `log`, `log2`             | golden axe    | 5              | 3                   | 9           |
+
+So 128 sand takes 128 × 21 ticks (134 s) of digging by hand, or 128 × 12 (77 s) with wooden
+shovels. Three shovels are needed: each lasts 59 digs.
+
+Prior art: mineflayer-tool and Baritone's `ToolSet` also choose the item that breaks a block
+fastest, and Baritone can stop using a tool just before it breaks. The agent uses the same idea
+with this server's verified numbers. No code from either is used (Baritone is LGPL-3.0).
+
+_Not verified:_ a live run with a tool. It would show the faster dig accepted and the damage
+going up by one per block.
 
 ## Machines (2026-09-30)
 

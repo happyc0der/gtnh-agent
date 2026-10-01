@@ -37,7 +37,11 @@ describe('the recipe table', () => {
   });
 
   it('knows which recipes need a crafting table', () => {
-    expect(RECIPE_IDS.filter((id) => needsCraftingTable(RECIPES[id]))).toEqual(['chest']);
+    expect(RECIPE_IDS.filter((id) => needsCraftingTable(RECIPES[id]))).toEqual([
+      'chest',
+      'wooden_shovel',
+      'wooden_axe',
+    ]);
   });
 
   it('records GTNH 2.8.4 results where they were verified', () => {
@@ -49,7 +53,25 @@ describe('the recipe table', () => {
     expect(RECIPES.torch_coal.result.count).toBe(3);
     expect(RECIPES.torch_charcoal.key['C']).toEqual(['minecraft:coal@1']);
     expect(RECIPES.chest.evidence).toMatch(/verified/);
-    expect(RECIPES.sticks.evidence).toMatch(/NOT verified/);
+    // GregTech's nerfed sticks: two planks give 2, not vanilla's 4.
+    expect(RECIPES.sticks.result).toEqual({ item: 'minecraft:stick', count: 2 });
+    expect(RECIPES.sticks.evidence).toMatch(/verified.*nerfedWoodPlank/);
+    // NewHorizonsCoreMod's crafting table: flint above logs, in the 2x2 grid.
+    expect(RECIPES.crafting_table).toMatchObject({
+      pattern: ['FF', 'LL'],
+      key: { F: ['minecraft:flint'] },
+      result: { item: 'minecraft:crafting_table', count: 1 },
+    });
+    expect(needsCraftingTable(RECIPES.crafting_table)).toBe(false);
+    // The vanilla wooden tools are kept (3x3, so at a crafting table).
+    expect(RECIPES.wooden_shovel).toMatchObject({
+      pattern: ['P', 'S', 'S'],
+      key: { S: ['minecraft:stick'] },
+      result: { item: 'minecraft:wooden_shovel', count: 1 },
+    });
+    expect(RECIPES.wooden_axe.pattern).toEqual(['PP', 'PS', ' S']);
+    expect(RECIPES.wooden_shovel.key['P']).toEqual(RECIPES.sticks.key['P']);
+    expect(RECIPES.wooden_axe.evidence).toMatch(/verified.*RecipesTools/);
   });
 
   it('derives what a craft uses and makes', () => {
@@ -93,14 +115,15 @@ describe('the mock client crafts like the live one', () => {
     expect(world.inventory.items).toMatchObject({
       'minecraft:planks': 0,
       'minecraft:planks@4': 0,
-      'minecraft:stick': 8,
+      'minecraft:stick': 4,
     });
   });
 
   it("crafts nothing when the server's recipe differs, or a 3x3 recipe has no table", async () => {
     const { world, client } = makeWorld((w) => {
       Object.assign(w.inventory.items, { 'minecraft:planks': 4 });
-      w.craftingResults.sticks = { item: 'minecraft:stick', count: 2 };
+      // A server without GregTech's nerf (vanilla sticks).
+      w.craftingResults.sticks = { item: 'minecraft:stick', count: 4 };
     });
     await client.connect();
     const perform = (recipe: 'sticks' | 'chest') =>
@@ -113,7 +136,7 @@ describe('the mock client crafts like the live one', () => {
       );
     const differs = await perform('sticks');
     expect(differs).toMatchObject({ ok: false });
-    expect(differs.message).toMatch(/is 2 x minecraft:stick, not the expected 4 x minecraft:stick/);
+    expect(differs.message).toMatch(/is 4 x minecraft:stick, not the expected 2 x minecraft:stick/);
     expect(world.inventory.items['minecraft:planks']).toBe(4);
     expect(await perform('chest')).toMatchObject({ ok: false, code: 'REFUSED' });
   });

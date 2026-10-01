@@ -3,10 +3,13 @@ import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
+import { parseToolName, usesLeft } from '../domain/tools.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
+import { isProtected } from '../safety/protected-items.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
   MAX_COMPACT_RESOURCES,
+  MAX_COMPACT_TOOLS,
   PlannerRequestSchema,
   type CompactState,
   type PlannerRequest,
@@ -40,8 +43,44 @@ export interface RecentFailureSummary {
   failures: number;
 }
 
-/** Reduces GameState to what a planner needs. Unknown values stay null and are listed. */
-export function sanitizeStateForPlanner(state: GameState): CompactState {
+/**
+ * The tools DIG_BLOCK may hold, from the inventory's names (a worn tool shows its damage:
+ * "minecraft:wooden_shovel@12"), best first: fastest, then most digs left. Protected tools
+ * are left out (the client never uses them).
+ */
+function plannerTools(
+  items: Readonly<Record<string, number>>,
+  protectedItems: ReadonlySet<string>,
+): CompactState['tools'] {
+  return Object.entries(items)
+    .flatMap(([name, count]) => {
+      const parsed = parseToolName(name);
+      if (parsed === null || count <= 0 || isProtected(name, protectedItems)) return [];
+      return [{ ...parsed, count }];
+    })
+    .sort(
+      (a, b) =>
+        b.tool.speed - a.tool.speed ||
+        usesLeft(b.tool, b.damage) - usesLeft(a.tool, a.damage) ||
+        (a.tool.item < b.tool.item ? -1 : 1),
+    )
+    .slice(0, MAX_COMPACT_TOOLS)
+    .map(({ tool, damage, count }) => ({
+      item: tool.item,
+      count,
+      durabilityLeft: usesLeft(tool, damage),
+      digsFaster: [...tool.digsFaster],
+    }));
+}
+
+/**
+ * Reduces GameState to what a planner needs. Unknown values stay null and are listed.
+ * `protectedItems` keeps protected tools out of `tools`.
+ */
+export function sanitizeStateForPlanner(
+  state: GameState,
+  protectedItems: ReadonlySet<string> = new Set(),
+): CompactState {
   const unknownFields: string[] = [];
   const val = <T>(
     name: string,
@@ -99,6 +138,7 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
           position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
         standAt: r.standAt ?? null,
       })),
+    tools: inventory ? plannerTools(inventory.items, protectedItems) : [],
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
       name: m.name,
@@ -144,7 +184,7 @@ export function buildPlannerRequest(input: {
 }): PlannerRequest {
   const { config } = input.safety;
   return PlannerRequestSchema.parse({
-    state: sanitizeStateForPlanner(input.state),
+    state: sanitizeStateForPlanner(input.state, input.safety.protectedItems),
     task: input.state.currentTask,
     allowedActions: [...ACTION_TYPES],
     safetyConstraints: {

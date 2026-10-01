@@ -316,6 +316,9 @@ export class FakeGtnhServer {
         itemId: (name) =>
           this.#opts.items.find(([, n]) => n === name)?.[0] ??
           this.#opts.blocks.find(([, n]) => n === name)?.[0],
+        itemName: (id) =>
+          this.#opts.items.find(([i]) => i === id)?.[1] ??
+          this.#opts.blocks.find(([i]) => i === id)?.[1],
         playerFeet: () => {
           const p = this.confirmedPositions.at(-1);
           return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };

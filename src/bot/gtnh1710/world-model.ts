@@ -5,6 +5,7 @@ import {
   type GameState,
 } from '../../domain/game-state.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
+import { toolInfo, usesLeft } from '../../domain/tools.ts';
 import {
   buildDiggableTable,
   diggableOf,
@@ -1046,9 +1047,17 @@ export class WorldModel {
     const slots = this.#playerSlots();
     if (typeof slots === 'string') return unknown(slots);
     const stack = slots[HOTBAR_FIRST - STORAGE_FIRST + this.#heldSlot];
-    return stack === null || stack === undefined
-      ? known(null)
-      : unknown('held item durability is not known yet');
+    if (stack === null || stack === undefined) return known(null);
+    // An allowlisted tool (src/domain/tools.ts) without NBT data: its damage value is its wear.
+    const base = this.#registry?.items.get(stack.id);
+    const tool = base === undefined ? null : toolInfo(base);
+    if (tool === null || stack.hasNbt || stack.count !== 1) {
+      return unknown('held item durability is not known (only allowlisted tools without NBT data)');
+    }
+    return known({
+      item: tool.item,
+      durabilityFraction: usesLeft(tool, stack.damage) / tool.maxDamage,
+    });
   }
 
   /** The player's 36 storage slots (main, then hotbar), or null while they are not known. */
