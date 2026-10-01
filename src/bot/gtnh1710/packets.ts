@@ -57,6 +57,7 @@ export type OutboundKind =
   | 'player-look'
   | 'swing-arm'
   | 'attack-entity'
+  | 'client-status'
   | 'quest-book';
 
 /**
@@ -180,6 +181,15 @@ export const outbound = {
         ]),
       ),
     };
+  },
+
+  /**
+   * C16 Client Status, action 0: Perform Respawn, which a player sends with the Respawn
+   * button of the death screen. The server answers with S07 Respawn, the spawn point (S08)
+   * and the new health; until then a dead player stays dead, whoever logs in.
+   */
+  respawn(): OutboundPacket {
+    return { kind: 'client-status', frame: encodeFrame(0x16, Buffer.from([0])) };
   },
 
   /** C09 Held Item Change: select hotbar slot 0-8. */

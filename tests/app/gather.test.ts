@@ -523,6 +523,26 @@ describe('accepting a plan drops the steps planned from a view it replaces', () 
     expect(g.requests).toHaveLength(2);
   });
 
+  it('a dropped step is not checked: one that would be refused does not reject the plan', async () => {
+    // Seen live: a starving agent's food plan, EXPLORE, GATHER, then EAT_FOOD of the garden
+    // block (no food), was rejected whole for its third step, and the agent paused.
+    const g = await gathering(sandRows(2), {
+      kind: 'plan',
+      plan: plan([
+        { type: 'EXPLORE', args: { toward: 'east', maxDistance: 32 } },
+        { type: 'GATHER', args: { block: 'minecraft:sand', count: 4 } },
+        { type: 'EAT_FOOD', args: { item: 'minecraft:sand' } },
+      ]),
+    });
+    const r = await g.cycle();
+    expect(r).toMatchObject({
+      status: 'succeeded',
+      action: { type: 'EXPLORE' },
+      planner: { kind: 'plan-accepted', planId: 1, steps: 1 },
+    });
+    expect(g.repos.violations.recent(10).map((v) => v.code)).not.toContain('PLAN_INVALID');
+  });
+
   it('after a GATHER, a step naming a position is dropped; crafting what it gathers stays', async () => {
     const g = await gathering(sandRows(2), {
       kind: 'plan',

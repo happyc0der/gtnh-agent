@@ -260,6 +260,12 @@ export class FakeCombatSim {
   }
 
   /** The player is hurt by something else (tests): the server sends the new health. */
+  /** The player respawned: health back to `health` (the server sends it). */
+  revive(health: number): void {
+    this.playerHealth = health;
+    this.#sendHealth();
+  }
+
   hurtPlayer(damage: number): void {
     this.playerHealth = Math.max(0, this.playerHealth - damage);
     this.#sendHealth();

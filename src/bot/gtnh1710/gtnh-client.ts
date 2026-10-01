@@ -212,6 +212,8 @@ const PLAIN_GROUND: ReadonlySet<string> = new Set([
   'minecraft:snow',
   'minecraft:netherrack',
 ]);
+/** How long after a death the client asks to respawn (the death screen's button delay). */
+const RESPAWN_DELAY_MS = 1_000;
 /** Longest wait for the server to finish eating (vanilla 32 ticks; HungerOverhaul longer). */
 const EAT_TIMEOUT_MS = 8_000;
 /** Vanilla clients send one "player" packet per tick (20 per second). */
@@ -473,6 +475,8 @@ export class Gtnh1710Client implements MinecraftClient {
   #closedReason: string | null = null;
   #connectedAt: Date | null = null;
   #confirmedPositions = 0;
+  /** The player died and a respawn was asked for (until the server sends health again). */
+  #respawnAsked = false;
   /** Where the last server position packet put the player, in words (#noteCorrection). */
   #lastCorrection: string | null = null;
   #listeners: Array<() => void> = [];
@@ -4705,13 +4709,16 @@ export class Gtnh1710Client implements MinecraftClient {
           this.#clickVerdicts.set(packet.actionNumber, packet.accepted);
         }
         break;
+      case 'update-health':
+        if (packet.health <= 0) this.#onDeath();
+        else this.#respawnAsked = false;
+        break;
       case 'open-window':
       case 'close-window':
       case 'window-property':
       case 'join-game':
       case 'chat':
       case 'spawn-position':
-      case 'update-health':
       case 'time-update':
       case 'change-game-state':
       case 'respawn':
@@ -4836,6 +4843,27 @@ export class Gtnh1710Client implements MinecraftClient {
     return this.#lastCorrection === null
       ? 'the server corrected the position'
       : `the server corrected the position ${this.#lastCorrection}`;
+  }
+
+  /**
+   * The player died (its health came as 0). A dead player stays dead until its client asks
+   * to respawn, as a player clicks Respawn on the death screen; whoever logs in next finds it
+   * dead. So the client asks, once, a second later (the death screen's own delay), and says so
+   * loudly: a death is never routine. Its items lie where it died; it respawns at the spawn
+   * point, with the health and food the server gives a respawned player.
+   */
+  #onDeath(): void {
+    if (this.#respawnAsked) return;
+    this.#respawnAsked = true;
+    const at = this.#world.ownPosition;
+    this.#log(
+      `THE PLAYER DIED${at === null ? '' : ` at (${at.x.toFixed(1)}, ${at.y.toFixed(1)}, ${at.z.toFixed(1)})`}` +
+        ` (food ${this.#world.food ?? 'unknown'}): asking the server to respawn it`,
+    );
+    const timer = setTimeout(() => {
+      if (this.#phase === 'play') this.#send(outbound.respawn());
+    }, RESPAWN_DELAY_MS);
+    timer.unref();
   }
 
   #onServerPosition(position: ServerPosition): void {

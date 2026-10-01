@@ -1420,7 +1420,12 @@ async function consultPlanner(
     });
   }
 
-  const validation = validatePlan(response.plan, ctx, config.planner.maxPlanSteps);
+  // Steps after an EXPLORE (and view-bound steps after a GATHER) were planned from a view
+  // that will be gone when they run: they are dropped first, and only the steps that will run
+  // are checked (seen live: a starving agent's food plan, EXPLORE, GATHER garden, then
+  // EAT_FOOD of the garden block, was rejected whole for its third step, and it paused).
+  const firstTrim = trimStaleSteps(response.plan);
+  const validation = validatePlan(firstTrim.plan, ctx, config.planner.maxPlanSteps);
   if (!validation.ok || validation.plan === null) {
     repos.checkpoints.add(
       taskId,
@@ -1453,9 +1458,9 @@ async function consultPlanner(
     );
   }
 
-  // Steps after an EXPLORE (and view-bound steps after a GATHER) were planned from a view
-  // that will be gone when they run: they are dropped, and the next plan starts from there.
-  let { plan, note: trimmed } = trimStaleSteps(validation.plan);
+  // The next plan starts from where the dropped steps would have (firstTrim above).
+  let plan = validation.plan;
+  let trimmed = firstTrim.note;
   // A first step code would refuse ends the session, often for a human (seen live: the model
   // planned the same EXPLORE toward an unreachable tree a third time, and EXPLORE toward the
   // forest it stood in, 1.6 blocks away, three sessions running). Code checks the step the
@@ -1485,10 +1490,12 @@ async function consultPlanner(
     }
     const again = await ask({ ...base, journal: [...base.journal, refused.note] });
     repos.events.append(cycleId, 'PLAN', { provider: planner.name, response: again });
+    const againTrim = again.kind === 'plan' ? trimStaleSteps(again.plan) : null;
     const checked =
-      again.kind === 'plan' ? validatePlan(again.plan, ctx, config.planner.maxPlanSteps) : null;
-    if (checked?.ok === true && checked.plan !== null) {
-      ({ plan, note: trimmed } = trimStaleSteps(checked.plan));
+      againTrim === null ? null : validatePlan(againTrim.plan, ctx, config.planner.maxPlanSteps);
+    if (againTrim !== null && checked?.ok === true && checked.plan !== null) {
+      plan = checked.plan;
+      trimmed = againTrim.note;
     }
   }
   const stored = repos.plans.create(

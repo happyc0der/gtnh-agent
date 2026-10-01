@@ -520,6 +520,8 @@ export class FakeGtnhServer {
 
   /** Eats the server started (a C08 in the air with an edible stack in hand). */
   eatsStarted = 0;
+  /** Client Status actions received (C16; 0 = Perform Respawn). */
+  readonly clientStatus: number[] = [];
   /** The player is under spawn protection (options.spawnProtection, until a block click). */
   spawnProtected = false;
 
@@ -891,12 +893,40 @@ export class FakeGtnhServer {
           case 0x02:
             this.combatSim.handle(r);
             break;
+          case 0x16: {
+            // Client Status: 0 = Perform Respawn (ServerConfigurationManager.respawnPlayer).
+            const action = r.u8();
+            this.clientStatus.push(action);
+            if (action === 0 && this.combatSim.playerHealth <= 0) this.#respawn(send);
+            break;
+          }
           default:
             sim?.handle(frame.packetId, r);
             break;
         }
       }
     });
+  }
+
+  /** A dead player respawns at the spawn: S07 Respawn, its position, full health. */
+  #respawn(send: (frame: Buffer) => void): void {
+    const o = this.#opts;
+    send(encodeFrame(0x07, Buffer.concat([i32(0), Buffer.from([3, 0]), encodeString('RWG')])));
+    this.placements.push({ x: o.spawn.x, eyeY: o.spawn.eyeY, z: o.spawn.z });
+    send(
+      encodeFrame(
+        0x08,
+        Buffer.concat([
+          f64(o.spawn.x),
+          f64(o.spawn.eyeY),
+          f64(o.spawn.z),
+          f32(o.spawn.yaw),
+          f32(o.spawn.pitch),
+          Buffer.from([0]),
+        ]),
+      ),
+    );
+    this.combatSim.revive(20);
   }
 
   #onHandshake(data: Buffer, send: (frame: Buffer) => void, socket: Socket): void {
