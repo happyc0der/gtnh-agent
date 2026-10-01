@@ -91,7 +91,17 @@ import {
   type QuestBookRequest,
 } from './better-questing.ts';
 import { rewardSlotsNeeded } from '../../domain/quest-items.ts';
-import { checkDig, eyesOf, faceTowards, reachTo, standSpotFor, type DigArea } from './digging.ts';
+import {
+  checkDig,
+  checkDigDown,
+  eyesOf,
+  faceTowards,
+  reachTo,
+  standSpotFor,
+  underFeetOf,
+  type DigArea,
+  type DigCheck,
+} from './digging.ts';
 import { ARRIVED, chooseHop, exploreGoal } from './explore.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
@@ -149,6 +159,7 @@ import {
   type Fence,
   type Vec3,
   type WalkPlan,
+  type WalkWorld,
 } from './walking.ts';
 import {
   bodyProblem,
@@ -357,7 +368,8 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
  *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
  *    DEPOSIT_ITEM / WITHDRAW_ITEM when containers are enabled, CRAFT_ITEM when crafting is
- *    enabled, DIG_BLOCK when digging is enabled, PLACE_BLOCK when placing is enabled,
+ *    enabled, DIG_BLOCK when digging is enabled (and DIG_DOWN, the night pit's dig under the
+ *    feet, when walking is enabled too), PLACE_BLOCK when placing is enabled,
  *    INTERACT_BLOCK / SMELT / TAKE_OUTPUT when interacting is enabled and ATTACK_ENTITY when
  *    combat is enabled (NOT_IMPLEMENTED otherwise); every other world-changing action returns
  *    NOT_IMPLEMENTED without sending anything;
@@ -371,7 +383,8 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *  - a dig breaks one allowlisted block that digging.ts has checked, and re-checks it every
  *    tick; it holds an allowlisted tool made for that block (src/domain/tools.ts: never a
  *    protected one, one with NBT data, or one that one more use would break) or an empty
- *    hand;
+ *    hand; a dig down (the night pit only) digs the block under the feet by checkDigDown's
+ *    rules and then drops the player exactly one block, with vanilla gravity;
  *  - a placement puts one allowlisted block into a cell placing.ts has checked, clicking
  *    only a plain full block, never a chest, machine or modded block;
  *  - a fight strikes one entity src/domain/combat.ts allows, with an allowlisted weapon or an
@@ -604,6 +617,14 @@ export class Gtnh1710Client implements MinecraftClient {
   }
 
   /**
+   * The fence walks, digs and placements use right now (#fence()), read-only, for code that
+   * plans with the client's own rules (the night shelter); null when there is none.
+   */
+  currentFence(): Fence | null {
+    return this.#fence().fence;
+  }
+
+  /**
    * Fits the nearby blocks to the fence. Digging enabled: adds, for the listed diggable
    * blocks, where the player can stand to dig each (digging.ts standSpotFor), so a planner
    * can walk there and dig. Placing enabled: keeps only the placeable cells inside the area
@@ -628,6 +649,8 @@ export class Gtnh1710Client implements MinecraftClient {
           ...r,
           standAt: standSpotFor(world, area, r.position, feet),
         })),
+        // The ground in the player's own column (DIG_DOWN, the night pit only).
+        underFeet: underFeetOf(world, feet),
       };
     }
     if (cfg.placing.enabled) {
@@ -682,6 +705,8 @@ export class Gtnh1710Client implements MinecraftClient {
         return this.#craft(action.args);
       case 'DIG_BLOCK':
         return this.#dig(action.args.position, new Set(validated.protectedItems));
+      case 'DIG_DOWN':
+        return this.#digDown(action.args.position, new Set(validated.protectedItems));
       case 'PLACE_BLOCK':
         return this.#place(action.args);
       case 'INTERACT_BLOCK':
@@ -2020,6 +2045,91 @@ export class Gtnh1710Client implements MinecraftClient {
   }
 
   /**
+   * DIG_DOWN (the night pit only; approved 2026-10-01): dig the block under the player's own
+   * feet, exactly as DIG_BLOCK digs (the best allowed tool or an empty hand, the dig time,
+   * every tick re-checked, C07 start/finish, success only on the server's change to air),
+   * with digging.ts checkDigDown's rules instead of checkDig's: exactly one block down onto a
+   * plain full block, nothing but air, plants and plain blocks around it. Then the player
+   * falls onto the block below with vanilla gravity (#fallInto), and the result reports the
+   * new feet position. Walking must be allowed: the fall is a move.
+   */
+  async #digDown(
+    target: BlockPosition,
+    protectedItems: ReadonlySet<string>,
+  ): Promise<ClientActionResult> {
+    const moving = this.#movementBlocker();
+    if (moving !== null && this.#opts.config.digging.enabled) {
+      return failed(`not digging down: the player falls into the hole, and ${moving}`, 'REFUSED');
+    }
+    return (await this.#digOnce(target, protectedItems, true)).result;
+  }
+
+  /**
+   * DIG_DOWN's fall, as a game client would make it (this client does not otherwise simulate
+   * physics): the block under the feet is gone, so the player drops straight down with
+   * vanilla gravity onto the block below, one block. Only when checkSupport shows nothing
+   * holding the player up and the floor exactly at `landY`, with no hazard next to the
+   * landing. Then SETTLE_TICKS for a server correction. Null when it landed, else why not.
+   */
+  async #fallInto(
+    landY: number,
+    guard: { placementsAtStart: number; healthAtStart: number | null },
+  ): Promise<string | null> {
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    if (world === null || feet === null) return 'block data or position became unknown';
+    const support = checkSupport(world, feet);
+    if (support.kind !== 'floating' || support.landY !== landY) {
+      return support.kind === 'floating'
+        ? `the floor is at y=${support.landY ?? 'none'}, not y=${landY}`
+        : `the player is still ${support.kind === 'supported' ? 'held up' : 'over unknown blocks'}`;
+    }
+    const hazard = landingHazard(world, Math.floor(feet.x), landY, Math.floor(feet.z));
+    if (hazard !== null) return `the landing is ${hazard}`;
+    // Falling is a walk of its own: nothing else may start meanwhile.
+    this.#walking = true;
+    this.#stopIdle();
+    try {
+      const fallen = fallDistances(feet.y - landY);
+      for (const [i, d] of fallen.entries()) {
+        if (this.#phase !== 'play') return 'the connection closed';
+        const last = i === fallen.length - 1;
+        const pos = { x: feet.x, y: last ? landY : feet.y - d, z: feet.z };
+        this.#send(
+          outbound.playerMove(
+            { x: pos.x, feetY: pos.y, z: pos.z, yaw: this.#lastYaw, pitch: 0 },
+            last,
+          ),
+        );
+        this.#world.setOwnPosition(pos);
+        await delay(WALK_TICK_MS);
+      }
+      // A correction (S08) or a kick arrives within a few ticks of a move the server rejects.
+      for (let i = 0; i < SETTLE_TICKS; i++) {
+        if (this.#phase !== 'play') return 'the connection closed';
+        if (this.#confirmedPositions !== guard.placementsAtStart) {
+          return 'the server corrected the position after the fall';
+        }
+        this.#send(outbound.playerIdle(ON_GROUND));
+        await delay(WALK_TICK_MS);
+      }
+      if (this.#confirmedPositions !== guard.placementsAtStart) {
+        return 'the server corrected the position after the fall';
+      }
+      // The feet must be exactly where the fall ended: straight down, on the block below.
+      const now = this.#world.ownPosition;
+      if (now === null || now.x !== feet.x || now.z !== feet.z || Math.abs(now.y - landY) > 1e-9) {
+        return `the feet are not on the landing after the fall (${now === null ? 'unknown' : `${now.x}, ${now.y}, ${now.z}`})`;
+      }
+      this.#log(`fell ${(feet.y - landY).toFixed(2)} blocks into the hole, onto y=${landY}`);
+      return null;
+    } finally {
+      this.#walking = false;
+      if (this.#phase === 'play') this.#startIdle();
+    }
+  }
+
+  /**
    * Items gained since `before`, waiting up to DROP_WAIT_MS for the first one. The tool used
    * (if any) is left out: its wear changes its name (`@damage`), which is not a gain.
    */
@@ -2043,6 +2153,8 @@ export class Gtnh1710Client implements MinecraftClient {
   async #digOnce(
     target: BlockPosition,
     protectedItems: ReadonlySet<string>,
+    /** DIG_DOWN: the block under the feet, by checkDigDown's rules, then the fall into it. */
+    down = false,
   ): Promise<{
     result: ClientActionResult;
     /** Set when the drop was not picked up and lies on a spot the player can walk to. */
@@ -2056,44 +2168,48 @@ export class Gtnh1710Client implements MinecraftClient {
       result,
       drop: null,
     });
+    const verb = down ? 'digging down' : 'digging';
     const blocker = this.#digBlocker();
     const fence = this.#fence().fence;
     if (blocker !== null || fence === null) {
       return done(
-        failed(`not digging: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED'),
+        failed(`not ${verb}: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED'),
       );
     }
     const area: DigArea = {
       fence,
       maxHeightAboveFence: this.#opts.config.digging.maxHeightAboveFence,
     };
+    /** The rules this dig is checked by, before it starts and every tick (digging.ts). */
+    const rule = (world: WalkWorld, at: Vec3): DigCheck =>
+      down ? checkDigDown(world, area, at, target) : checkDig(world, area, at, target);
     const where = `(${target.x}, ${target.y}, ${target.z})`;
     this.#digging = true;
     try {
       // A chest left open by an earlier action is closed first (never with a full cursor).
       if (this.#world.openWindow !== null) {
         const closed = this.#closeOpenWindow();
-        if (closed !== null) return done(failed(`not digging: ${closed.message}`, 'REFUSED'));
+        if (closed !== null) return done(failed(`not ${verb}: ${closed.message}`, 'REFUSED'));
       }
       const world = this.#world.walkWorld();
       const feet = this.#world.ownPosition;
       if (world === null || feet === null) {
-        return done(failed('not digging: block data or position unknown', 'REFUSED'));
+        return done(failed(`not ${verb}: block data or position unknown`, 'REFUSED'));
       }
-      const first = checkDig(world, area, feet, target);
-      if (!first.ok) return done(failed(`not digging: ${first.reason}`, 'REFUSED'));
+      const first = rule(world, feet);
+      if (!first.ok) return done(failed(`not ${verb}: ${first.reason}`, 'REFUSED'));
       // What to hold: the best allowlisted tool for this block that one more use cannot
       // break (src/domain/tools.ts), moved into the hotbar if needed; else an empty hand.
       const hand = await this.#chooseHand(first.block, protectedItems);
-      if (!hand.ok) return done(failed(`not digging: ${hand.reason}`, hand.code));
+      if (!hand.ok) return done(failed(`not ${verb}: ${hand.reason}`, hand.code));
       if (hand.slot !== this.#world.heldSlot) {
         this.#send(outbound.selectHotbarSlot(hand.slot));
         this.#world.setHeldSlot(hand.slot);
       }
       const tool = hand.tool;
       // Choosing the hand may have taken a few clicks: check again before starting.
-      const check = checkDig(world, area, this.#world.ownPosition ?? feet, target);
-      if (!check.ok) return done(failed(`not digging: ${check.reason}`, 'REFUSED'));
+      const check = rule(world, this.#world.ownPosition ?? feet);
+      if (!check.ok) return done(failed(`not ${verb}: ${check.reason}`, 'REFUSED'));
       const held =
         tool === null ? null : { slot: hand.slot, stack: this.#hotbar(hand.slot) ?? null };
 
@@ -2127,7 +2243,7 @@ export class Gtnh1710Client implements MinecraftClient {
           if (self !== null && tick % 4 === 0 && this.#phase === 'play') {
             this.#send(outbound.swingArm(self));
           }
-          const problem = this.#digProblem(area, target, check.blockId, watch, guard, held);
+          const problem = this.#digProblem(rule, check.blockId, watch, guard, held);
           if (problem !== null) {
             if (this.#phase === 'play') {
               this.#send(outbound.digBlock(DIG_STATUS.cancel, x, y, z, check.face));
@@ -2151,6 +2267,21 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       if (!verdict.ok) return done(verdict.result);
 
+      // DIG_DOWN: the block under the feet is gone; fall onto the one below it at once.
+      if (down) {
+        const fell = await this.#fallInto(y, guard);
+        if (fell !== null) {
+          this.#log(`dug ${check.block} at ${where}, but did not fall into the hole: ${fell}`);
+          return done(
+            failed(
+              `dug ${check.block} at ${where}, but the fall into the hole failed: ${fell}`,
+              'FAILED',
+              { x, y, z, block: check.block },
+            ),
+          );
+        }
+      }
+
       // The tool wore by one: the server sends its slot again (a tick or so later).
       const wear = held === null || tool === null ? null : await this.#toolAfterDig(held, tool);
       // The drop spawns in the block's cell and is picked up (after 10 ticks) only when it
@@ -2165,9 +2296,13 @@ export class Gtnh1710Client implements MinecraftClient {
       this.#log(
         `dug ${check.block} at ${where} with ${used}; drop ${dropCollected ? drops : 'not collected'}`,
       );
+      const now = this.#world.ownPosition;
       const result = ok(
         (
           `dug ${check.block} at ${where} in ${ticks} ticks with ${used}; ` +
+          (down && now !== null
+            ? `fell into the hole: the feet are at (${now.x}, ${now.y}, ${now.z}); `
+            : '') +
           (dropCollected
             ? `the drop reached the inventory: ${drops}`
             : itemsBefore === null
@@ -2185,12 +2320,14 @@ export class Gtnh1710Client implements MinecraftClient {
           ...(hand.note === null ? {} : { toolNote: hand.note.slice(0, 200) }),
           dropCollected,
           drops,
+          ...(down && now !== null ? { feetX: now.x, feetY: now.y, feetZ: now.z } : {}),
         },
       );
       // Not picked up: the drop fell to the floor of the dug cell (or below it). On terrain,
-      // if a player could stand there, walk onto it.
+      // if a player could stand there, walk onto it. (After DIG_DOWN the player stands in
+      // that cell already.)
       const terrain = area.fence.min.y !== area.fence.max.y;
-      if (dropCollected || itemsBefore === null || !terrain) return { result, drop: null };
+      if (dropCollected || itemsBefore === null || !terrain || down) return { result, drop: null };
       let floor = y;
       while (floor > y - 3 && world.blockAt(x, floor - 1, z) === 0) floor -= 1;
       const standable =
@@ -2385,10 +2522,12 @@ export class Gtnh1710Client implements MinecraftClient {
     return null;
   }
 
-  /** Why the dig in progress must stop now, or null. Checked every tick. */
+  /**
+   * Why the dig in progress must stop now, or null. Checked every tick, with the dig's own
+   * rules (`rule`: checkDig, or checkDigDown for DIG_DOWN).
+   */
   #digProblem(
-    area: DigArea,
-    target: BlockPosition,
+    rule: (world: WalkWorld, feet: Vec3) => DigCheck,
     blockId: number,
     watch: BlockWatch,
     guard: { placementsAtStart: number; healthAtStart: number | null },
@@ -2412,7 +2551,7 @@ export class Gtnh1710Client implements MinecraftClient {
     const world = this.#world.walkWorld();
     const feet = this.#world.ownPosition;
     if (world === null || feet === null) return 'block data or position became unknown';
-    const check = checkDig(world, area, feet, target);
+    const check = rule(world, feet);
     if (!check.ok) return `it is no longer safe to dig: ${check.reason}`;
     if (check.blockId !== blockId) return 'the block changed';
     return null;

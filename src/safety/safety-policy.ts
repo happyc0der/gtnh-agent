@@ -12,6 +12,12 @@ import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '..
 import type { BlockPosition } from '../domain/common.ts';
 import { MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
 import {
+  isDigDownBlock,
+  NIGHT_PIT_WINDOW_MINUTES,
+  NIGHT_SHELTER_TASK_ID,
+  nightPitTime,
+} from '../domain/night-shelter.ts';
+import {
   blockCentre,
   bodyColumns,
   distance,
@@ -376,6 +382,7 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
       v.push(...exploreTargetChecks(spec.args.toward, config));
       break;
     case 'DIG_BLOCK':
+    case 'DIG_DOWN':
     case 'PLACE_BLOCK': {
       // The whole block must lie inside the work area, not just a corner of it.
       const b = spec.args.position;
@@ -667,6 +674,9 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
     case 'DIG_BLOCK':
       v.push(...digChecks(action.args.position, state, config));
       break;
+    case 'DIG_DOWN':
+      v.push(...digDownChecks(action, state, config));
+      break;
     case 'PLACE_BLOCK':
       v.push(...placeChecks(action.args.position, action.args.item, state, config));
       break;
@@ -800,6 +810,126 @@ function digChecks(
       hazards,
       config.hazardAvoidanceRadius,
       'DIG_BLOCK target',
+    ),
+  );
+  return v;
+}
+
+/**
+ * DIG_DOWN rules that the observation can answer (approved 2026-10-01 for the night pit
+ * only). The live client re-checks the blocks themselves just before and during the dig
+ * (digging.ts checkDigDown: exactly one block down onto a plain full block, nothing but air,
+ * plants and plain blocks around the dug block, the landing and the body, no fluid, no
+ * hazard, nothing unloaded).
+ *  - The night pit only (NIGHT_PIT_ONLY): proposed by code (origin deterministic-router),
+ *    for the night-shelter task, as exactly the next known step of that task's code-made
+ *    blueprint (knownRecipeState.nextKnownSafeStep), in the evening, at night or in the
+ *    last NIGHT_PIT_WINDOW_MINUTES before it. Plans never contain it (validatePlan), and a
+ *    human's command (origin user) is refused too: it is not a general mining ability.
+ *  - Exactly the block under the player's feet, the player on top of it (UNSAFE_DIG).
+ *  - The observation reports that ground (nearbyBlocks.underFeet): a block DIG_DOWN digs
+ *    (dirt, grass, sand, gravel, clay; NOT_DIGGABLE otherwise), over a landing that holds
+ *    the player (UNSAFE_DIG: a cave, a fluid or unsupported sand would drop it farther).
+ *  - Clear of known hazards, like a dug block.
+ */
+function digDownChecks(
+  action: Extract<Action, { type: 'DIG_DOWN' }>,
+  state: GameState,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  const v: SafetyViolation[] = [];
+  const target = action.args.position;
+  const where = formatPosition(target);
+  const details = { x: target.x, y: target.y, z: target.z };
+  /** Why this is not the night pit's own step now (one NIGHT_PIT_ONLY violation for all). */
+  const notThePit: string[] = [];
+  if (action.origin !== 'deterministic-router') {
+    notThePit.push(`only code's blueprint proposes it (origin ${action.origin})`);
+  }
+  const task = state.currentTask;
+  if (task === null || task.taskId !== NIGHT_SHELTER_TASK_ID) {
+    notThePit.push(
+      `only for the night shelter task (${NIGHT_SHELTER_TASK_ID}), not ${task?.taskId ?? 'no task'}`,
+    );
+  }
+  const known = state.knownRecipeState?.nextKnownSafeStep ?? null;
+  if (known === null || stableStringify(known) !== stableStringify(toSpec(action))) {
+    notThePit.push(`${where} is not the next step of the night shelter's blueprint`);
+  }
+  if (!state.time.known) {
+    v.push({
+      code: 'STATE_UNKNOWN',
+      severity: 'block',
+      message: `DIG_DOWN needs the time of day (night is near), and it is unknown (${state.time.reason})`,
+      details: { field: 'time' },
+    });
+  } else if (!nightPitTime(state.time.value)) {
+    const t = state.time.value;
+    notThePit.push(
+      `only in the evening, at night or within ${NIGHT_PIT_WINDOW_MINUTES} min of it, and it is ${t.phase} (${t.minutesUntilNight} min until night)`,
+    );
+  }
+  if (notThePit.length > 0) {
+    v.push({
+      code: 'NIGHT_PIT_ONLY',
+      severity: 'pause',
+      message: `DIG_DOWN is the night pit's own step: ${notThePit.join('; ')}`.slice(0, 500),
+      details,
+    });
+  }
+
+  const unsafe = (message: string, extra: Record<string, string | number | boolean> = {}): void => {
+    v.push({ code: 'UNSAFE_DIG', severity: 'pause', message, details: { ...details, ...extra } });
+  };
+  const position = state.player.position.known ? state.player.position.value : null;
+  if (position !== null) {
+    const feetLevel = Math.floor(position.y + 1e-6);
+    const under =
+      target.x === Math.floor(position.x) &&
+      target.z === Math.floor(position.z) &&
+      target.y === feetLevel - 1;
+    if (!under || Math.abs(position.y - Math.round(position.y)) > 1e-3) {
+      unsafe(`${where} is not the block the player stands on`);
+    }
+  }
+  if (!state.nearbyBlocks.known) {
+    v.push({
+      code: 'UNKNOWN_TARGET',
+      severity: 'pause',
+      message: `Nearby blocks are not observed (${state.nearbyBlocks.reason}); nothing can be dug`,
+      details,
+    });
+  } else {
+    const ground = state.nearbyBlocks.value.underFeet ?? null;
+    const same =
+      ground !== null &&
+      ground.position.x === target.x &&
+      ground.position.y === target.y &&
+      ground.position.z === target.z;
+    if (!same) {
+      unsafe(
+        `the observation does not report the ground under the player at ${where} (the player must stand in one column, on a block top)`,
+      );
+    } else if (!isDigDownBlock(ground.block)) {
+      v.push({
+        code: 'NOT_DIGGABLE',
+        severity: 'pause',
+        message: `${where} is ${ground.block}: digging down takes only dirt, grass, sand, gravel or clay`,
+        details: { ...details, block: ground.block },
+      });
+    } else if (!ground.landingHolds) {
+      unsafe(`${ground.landing} under ${where} would not hold the player exactly one block lower`, {
+        landing: ground.landing,
+      });
+    }
+  }
+  const hazards = state.environmentHazards.known ? state.environmentHazards.value.hazards : [];
+  v.push(
+    ...checkHazardClearance(
+      blockCentre(target),
+      hazards,
+      config.hazardAvoidanceRadius,
+      'DIG_DOWN target',
     ),
   );
   return v;

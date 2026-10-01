@@ -137,6 +137,11 @@ export const VIOLATION_CODES = [
   'TARGET_GONE',
   /** SUBMIT_QUEST / CHECK_QUEST_BOX on a quest the server does not list as active and unlocked. */
   'QUEST_NOT_ACTIVE',
+  /**
+   * DIG_DOWN outside the night pit: not code's own next step of the night-shelter task's
+   * blueprint, or not in the evening, at night or just before it.
+   */
+  'NIGHT_PIT_ONLY',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

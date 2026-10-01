@@ -207,6 +207,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
       SUBMIT_QUEST: { type: 'SUBMIT_QUEST', args: { questId: '0:0' } },
       CHECK_QUEST_BOX: { type: 'CHECK_QUEST_BOX', args: { questId: '0:4', taskIndex: 0 } },
       CLAIM_QUEST_REWARD: { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:0', choice: null } },
+      DIG_DOWN: { type: 'DIG_DOWN', args: { position: { x: -5, y: 105, z: -8 } } },
     };
     expect(Object.keys(specs).sort()).toEqual([...ACTION_TYPES].sort());
 

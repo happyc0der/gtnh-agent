@@ -12,65 +12,78 @@ function ground(extra: string[] = []): SolidLookup {
   return { solidAt: (x, y, z) => y <= 63 || solid.has(`${x},${y},${z}`) };
 }
 const FEET = { x: 0.5, y: 64, z: 0.5 };
+/** A tree trunk east of the roof cell: something to place the roof against. */
+const TRUNK = '1,66,0';
+const roles = (s: ReturnType<typeof shelterStatus>): string[] =>
+  s.steps.map((x) => x.text.replace(/^.*\((.*)\)$/, '$1'));
 
-describe('the night shelter', () => {
-  it('is a 1 x 1 box: four walls at feet level, four at head level, a roof support, then the roof', () => {
+describe('the raised box (the night shelter where a pit cannot be dug)', () => {
+  it('is a 1 x 1 box: four walls at feet level, four at head level, then the roof', () => {
     const cells = shelterCells(FEET);
     expect(cells.map((c) => c.role)).toEqual([
       ...Array<string>(4).fill('feet wall'),
       ...Array<string>(4).fill('head wall'),
-      'roof support',
       'roof',
     ]);
-    // The roof touches no wall, so it is placed against the support on top of a head wall.
-    expect(cells.at(-2)?.position).toEqual({ x: 1, y: 66, z: 0 });
     expect(cells.at(-1)?.position).toEqual({ x: 0, y: 66, z: 0 });
   });
 
-  it('needs no support when a block beside the roof is solid already', () => {
-    const walls = shelterCells(FEET)
-      .filter((c) => c.role === 'feet wall' || c.role === 'head wall')
-      .map((c) => `${c.position.x},${c.position.y},${c.position.z}`);
-    const open = shelterStatus(ground(walls), FEET, { 'minecraft:cobblestone': 2 });
-    expect(open.todo.map((c) => c.role)).toEqual(['roof support', 'roof']);
-    const cliff = shelterStatus(ground([...walls, '-1,66,0']), FEET, {
-      'minecraft:cobblestone': 1,
-    });
-    expect(cliff.todo.map((c) => c.role)).toEqual(['roof']);
+  it('cannot be roofed on open ground: nothing touches the roof cell (seen live 2026-10-01)', () => {
+    const s = shelterStatus(ground(), FEET, { 'minecraft:sand': 20, 'minecraft:cobblestone': 2 });
+    expect(s).toMatchObject({ kind: 'box', sheltered: false, steps: [] });
+    expect(s.problem).toMatch(/nothing beside or above the box's roof cell \(0, 66, 0\)/);
   });
 
-  it('builds walls from sand (it can dig out again) and the roof from a block that does not fall', () => {
-    const s = shelterStatus(ground(), FEET, { 'minecraft:sand': 55, 'minecraft:cobblestone': 10 });
-    expect(s).toMatchObject({ sheltered: false, problem: null });
-    expect(s.needs).toEqual({ 'minecraft:sand': 9, 'minecraft:cobblestone': 1 });
-    expect(s.todo.at(-1)).toMatchObject({ role: 'roof', item: 'minecraft:cobblestone' });
+  it('is roofed against a block already beside or above the roof cell (a trunk, a cliff, a canopy)', () => {
+    const s = shelterStatus(ground([TRUNK]), FEET, {
+      'minecraft:sand': 55,
+      'minecraft:cobblestone': 10,
+    });
+    expect(s).toMatchObject({ kind: 'box', sheltered: false, problem: null, exit: [] });
+    expect(s.needs).toEqual({ 'minecraft:sand': 8, 'minecraft:cobblestone': 1 });
+    expect(roles(s)).toEqual([
+      ...Array<string>(4).fill('feet wall'),
+      ...Array<string>(4).fill('head wall'),
+      'roof',
+    ]);
+    // Each step is an action the executor validates.
+    expect(s.steps[0]?.spec).toEqual({
+      type: 'PLACE_BLOCK',
+      args: { position: { x: 1, y: 64, z: 0 }, item: 'minecraft:sand' },
+    });
+    expect(s.steps.at(-1)?.spec).toEqual({
+      type: 'PLACE_BLOCK',
+      args: { position: { x: 0, y: 66, z: 0 }, item: 'minecraft:cobblestone' },
+    });
     expect(describeShelter(s)[0]).toBe('1. place minecraft:sand at (1, 64, 0) (feet wall)');
+    // Leaves above count too (placed against their bottom face).
+    expect(shelterStatus(ground(['0,67,0']), FEET, s.needs).problem).toBeNull();
   });
 
   it('needs a roof block that does not fall, and enough wall blocks', () => {
-    expect(shelterStatus(ground(), FEET, { 'minecraft:sand': 64 }).problem).toMatch(
+    expect(shelterStatus(ground([TRUNK]), FEET, { 'minecraft:sand': 64 }).problem).toMatch(
       /no block for the roof/,
     );
     expect(
-      shelterStatus(ground(), FEET, { 'minecraft:sand': 3, 'minecraft:cobblestone': 1 }).problem,
+      shelterStatus(ground([TRUNK]), FEET, { 'minecraft:sand': 3, 'minecraft:cobblestone': 1 })
+        .problem,
     ).toMatch(/not enough wall blocks/);
   });
 
-  it('uses what is already solid, and knows when the player is enclosed', () => {
+  it('uses what is already solid, and knows when the player is walled in and enclosed', () => {
     const wall = ['1,64,0', '1,65,0', '-1,64,0', '-1,65,0'];
-    const part = shelterStatus(ground(wall), FEET, {
+    const part = shelterStatus(ground([...wall, TRUNK]), FEET, {
       'minecraft:dirt': 4,
-      'minecraft:cobblestone': 2,
+      'minecraft:cobblestone': 1,
     });
     expect(part.problem).toBeNull();
-    expect(part.todo.map((c) => c.role)).toEqual([
-      ...Array<string>(2).fill('feet wall'),
-      ...Array<string>(2).fill('head wall'),
-      'roof support',
-      'roof',
-    ]);
+    expect(roles(part)).toEqual(['feet wall', 'feet wall', 'head wall', 'head wall', 'roof']);
+    const walls = shelterCells(FEET)
+      .filter((c) => c.role !== 'roof')
+      .map((c) => `${c.position.x},${c.position.y},${c.position.z}`);
+    expect(shelterStatus(ground([...walls, TRUNK]), FEET, {}).walled).toBe(true);
     const all = shelterCells(FEET).map((c) => `${c.position.x},${c.position.y},${c.position.z}`);
-    expect(shelterStatus(ground(all), FEET, {}).sheltered).toBe(true);
+    expect(shelterStatus(ground(all), FEET, {})).toMatchObject({ sheltered: true, walled: true });
   });
 
   it('refuses when the blocks around are not loaded', () => {

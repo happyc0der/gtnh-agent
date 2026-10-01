@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import type { MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import { defaultConfig } from '../../src/config/env.ts';
-import { ACTION_TYPES, type ActionSpec } from '../../src/domain/actions.ts';
+import {
+  ACTION_TYPES,
+  createAction,
+  type ActionOrigin,
+  type ActionSpec,
+} from '../../src/domain/actions.ts';
 import type { PlaceableItem } from '../../src/domain/blocks.ts';
-import type { GameState } from '../../src/domain/game-state.ts';
+import type { GameState, NearbyBlocks } from '../../src/domain/game-state.ts';
 import { known, unknown } from '../../src/domain/known.ts';
+import { sequentialIds } from '../../src/util/ids.ts';
 import { classifyActionType } from '../../src/safety/forbidden-actions.ts';
 import { isProtected } from '../../src/safety/protected-items.ts';
 import {
@@ -16,7 +23,7 @@ import {
   evaluateStaticSpec,
   type FailureHistory,
 } from '../../src/safety/safety-policy.ts';
-import { action, makeState, safetyCtx } from '../fixtures/index.ts';
+import { action, makeState, safetyCtx, T0 } from '../fixtures/index.ts';
 
 const codes = (
   spec: ActionSpec,
@@ -495,6 +502,143 @@ describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's suppo
     const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
     expect(codes(dig(2, 64, 1), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
   });
+});
+
+describe('DIG_DOWN: the night pit only, exactly the block under the feet', () => {
+  // The player stands centred on (1, 63, 1) at dusk (1.7 min before night), working on the
+  // night-shelter task whose code-made blueprint's next step is this dig.
+  const down = (x = 1, y = 63, z = 1): ActionSpec => ({
+    type: 'DIG_DOWN',
+    args: { position: { x, y, z } },
+  });
+  const ground = (over: Partial<NonNullable<NearbyBlocks['underFeet']>> = {}) => ({
+    position: { x: 1, y: 63, z: 1 },
+    block: 'minecraft:grass',
+    landing: 'minecraft:dirt',
+    landingHolds: true,
+    ...over,
+  });
+  const pit = (
+    opts: {
+      timeOfDay?: number;
+      next?: ActionSpec | null;
+      taskId?: string;
+      underFeet?: NearbyBlocks['underFeet'];
+      at?: { x: number; y: number; z: number };
+      mutate?: (w: MockWorld) => void;
+    } = {},
+  ): GameState => {
+    const base = makeState((w) => {
+      w.player.position = opts.at ?? { x: 1.5, y: 64, z: 1.5 };
+      w.timeOfDay = opts.timeOfDay ?? 11_000;
+      opts.mutate?.(w);
+    });
+    if (!base.nearbyBlocks.known) throw new Error('fixture blocks unknown');
+    return {
+      ...base,
+      currentTask: {
+        taskId: opts.taskId ?? 'night-shelter',
+        goal: 'Night is coming: dig a pit',
+        subgoal: null,
+        status: 'active',
+      },
+      knownRecipeState: {
+        target: 'night shelter',
+        missingComponents: {},
+        requiredMachineIds: [],
+        nextKnownSafeStep: opts.next === undefined ? down() : opts.next,
+      },
+      nearbyBlocks: known({
+        ...base.nearbyBlocks.value,
+        underFeet: opts.underFeet === undefined ? ground() : opts.underFeet,
+      }),
+    };
+  };
+  const ids = sequentialIds();
+  const check = (
+    state: GameState,
+    origin: ActionOrigin = 'deterministic-router',
+    spec: ActionSpec = down(),
+  ): string[] =>
+    evaluateAction(
+      createAction(
+        { spec, reason: 'test', origin, taskId: 'night-shelter' },
+        { newId: ids, now: () => new Date(T0) },
+      ),
+      state,
+      safetyCtx(),
+      emptyFailureHistory,
+    ).violations.map((v) => v.code);
+
+  it("allows code's own next step of the night pit, at dusk or at night", () => {
+    expect(check(pit())).toEqual([]);
+    expect(check(pit({ timeOfDay: 12_500 }))).toEqual([]); // evening
+    expect(check(pit({ timeOfDay: 18_000 }))).toEqual([]); // night
+    expect(evaluateStaticSpec(down(), safetyCtx())).toEqual([]);
+  });
+
+  it("is never a planner's or a human's step, nor any other task's", () => {
+    expect(check(pit(), 'planner')).toEqual(['NIGHT_PIT_ONLY']);
+    expect(check(pit(), 'user')).toEqual(['NIGHT_PIT_ONLY']);
+    expect(check(pit({ taskId: 'quest-2' }))).toEqual(['NIGHT_PIT_ONLY']);
+    // Not the blueprint's next step (another one is next, or there is no blueprint).
+    const roof: ActionSpec = {
+      type: 'PLACE_BLOCK',
+      args: { position: { x: 1, y: 63, z: 1 }, item: 'minecraft:dirt' },
+    };
+    expect(check(pit({ next: roof }))).toEqual(['NIGHT_PIT_ONLY']);
+    expect(check(pit({ next: null }))).toEqual(['NIGHT_PIT_ONLY']);
+  });
+
+  it('only near night: refused in the day and at dawn, and when the time is unknown', () => {
+    expect(check(pit({ timeOfDay: 1_000 }))).toEqual(['NIGHT_PIT_ONLY']);
+    expect(check(pit({ timeOfDay: 23_500 }))).toEqual(['NIGHT_PIT_ONLY']); // dawn
+    const noClock: GameState = { ...pit(), time: unknown('no time update yet') };
+    expect(check(noClock)).toEqual(['STATE_UNKNOWN']);
+  });
+
+  it('only the block under the feet, observed as ground that holds the player one lower', () => {
+    // Another block (even as the blueprint's step): not the one the player stands on.
+    const beside = down(2, 63, 1);
+    expect(check(pit({ next: beside }), 'deterministic-router', beside)).toEqual([
+      'UNSAFE_DIG',
+      'UNSAFE_DIG',
+    ]);
+    expect(check(pit({ underFeet: ground({ block: 'minecraft:stone' }) }))).toEqual([
+      'NOT_DIGGABLE',
+    ]);
+    expect(
+      check(pit({ underFeet: ground({ landing: 'minecraft:air', landingHolds: false }) })),
+    ).toEqual(['UNSAFE_DIG']);
+    // Not reported: the player stands across columns, or digging is off.
+    expect(check(pit({ underFeet: null }))).toEqual(['UNSAFE_DIG']);
+    expect(check({ ...pit(), nearbyBlocks: unknown('scan unknown') })).toEqual(['UNKNOWN_TARGET']);
+  });
+
+  it('keeps clear of known hazards, inside the boundary, and is not allowed during danger', () => {
+    // Lava 5.9 blocks below the dug block (6.4 from the feet: not a danger to the player).
+    const lava = pit({
+      mutate: (w) => void (w.hazards = [{ kind: 'lava', position: { x: 1.5, y: 57.6, z: 1.5 } }]),
+    });
+    expect(assessDangers(lava, safetyCtx())).toEqual([]);
+    expect(check(lava)).toEqual(['HAZARD_PROXIMITY']);
+    const edge = down(256, 63, 1);
+    const atEdge = pit({
+      at: { x: 256.5, y: 64, z: 1.5 },
+      next: edge,
+      underFeet: ground({ position: { x: 256, y: 63, z: 1 } }),
+    });
+    expect(check(atEdge, 'deterministic-router', edge)).toContain('OUT_OF_BOUNDS');
+    const danger = pit({ mutate: (w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]) });
+    expect(check(danger)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+
+  it.each(['DIG_DOWN ', 'dig_down', 'DIG_DOWN_MANY', 'DIG_PIT'])(
+    'only exactly DIG_DOWN is exempt from the DIG keyword: %j stays forbidden',
+    (type) => {
+      expect(classifyActionType(type)).toBe('forbidden');
+    },
+  );
 });
 
 describe('PLACE_BLOCK: only observed placeable cells, never the body, nothing that falls on it', () => {

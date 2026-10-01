@@ -65,6 +65,7 @@ const oneOfEach: ActionSpec[] = [
   { type: 'SUBMIT_QUEST', args: { questId: '-2157870659866113684:-8191827436027574183' } },
   { type: 'CHECK_QUEST_BOX', args: { questId: '0:4', taskIndex: 0 } },
   { type: 'CLAIM_QUEST_REWARD', args: { questId: '0:5', choice: 1 } },
+  { type: 'DIG_DOWN', args: { position: { x: -8, y: 199, z: -11 } } },
 ];
 
 describe('action model', () => {

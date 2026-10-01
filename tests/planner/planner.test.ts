@@ -131,6 +131,24 @@ describe('validatePlan', () => {
     expect(r.stepViolations.map((s) => s.step)).toEqual([2]);
     expect(r.stepViolations[0]?.violations.map((v) => v.code)).toContain('PROTECTED_ITEM');
   });
+
+  it("never lets a plan dig down: DIG_DOWN is the night pit's own step, code's only", () => {
+    const plan: Plan = {
+      ...validPlan,
+      steps: [
+        {
+          step: 1,
+          action: { type: 'DIG_DOWN', args: { position: { x: 0, y: 63, z: 0 } } },
+          rationale: 'a pit',
+        },
+      ],
+    };
+    const r = validatePlan(plan, safetyCtx(), 8);
+    expect(r.ok).toBe(false);
+    expect(r.schemaIssues).toEqual([
+      "step 1: DIG_DOWN is the night pit's own step; only code's blueprint proposes it, never a plan",
+    ]);
+  });
 });
 
 describe('parsePlannerOutput (future LLM output path)', () => {
@@ -236,6 +254,8 @@ describe('planner request and mock planner', () => {
   it('the request carries the allowlist and constraints', () => {
     const r = request();
     expect(r.allowedActions).toHaveLength(18);
+    // DIG_DOWN is the night pit's own step (code's blueprint), never offered to a planner.
+    expect(r.allowedActions).not.toContain('DIG_DOWN');
     expect(r.allowedActions).toContain('DIG_BLOCK');
     expect(r.allowedActions).toContain('PLACE_BLOCK');
     expect(r.allowedActions).toContain('CRAFT_ITEM');

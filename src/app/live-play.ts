@@ -1,12 +1,23 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { z } from 'zod';
 import { QUEST_BOOK_SYNC_PENDING } from '../bot/gtnh1710/better-questing.ts';
 import type { ConnectionInfo, Gtnh1710Client } from '../bot/gtnh1710/gtnh-client.ts';
+import {
+  continueNightPit,
+  enclosedIn,
+  planNightPit,
+  planShelterExit,
+  walledIn,
+  type PitOptions,
+  type PitSite,
+} from '../bot/gtnh1710/night-pit.ts';
 import type { AgentConfig } from '../config/env.ts';
 import type { GameState } from '../domain/game-state.ts';
 import type { Abilities } from '../goals/quest-goals.ts';
 import { openDatabase } from '../persistence/database.ts';
-import { createRepositories } from '../persistence/repositories.ts';
+import { NIGHT_PIT_KEY } from '../persistence/memory-repository.ts';
+import { createRepositories, type Repositories } from '../persistence/repositories.ts';
 import type { PlannerProvider } from '../planner/planner-provider.ts';
 import type { DecisionProvider } from '../system1/decision-provider.ts';
 import { systemClock } from '../util/clock.ts';
@@ -15,7 +26,7 @@ import { runQuestBookAction, syncConfigToDatabase, type AgentDeps } from './agen
 import { runSession } from './live-session.ts';
 import { withLiveClient } from './live-agent.ts';
 import { passProblem } from '../bot/gtnh1710/terrain.ts';
-import { shelterStatus } from '../goals/shelter.ts';
+import { shelterStatus, type ShelterStatus } from '../goals/shelter.ts';
 import {
   runPlay,
   type FreeGoal,
@@ -26,6 +37,104 @@ import {
 
 /** How long to wait for Better Questing's quest book after login. */
 const QUEST_BOOK_WAIT_MS = 30_000;
+
+const PitSiteSchema = z.strictObject({ x: z.int(), z: z.int(), groundY: z.int().min(0).max(255) });
+
+/** Where the night pit the agent started is (agent memory), or null. */
+function readPitSite(repos: Repositories): PitSite | null {
+  const raw = repos.memory.getValue(NIGHT_PIT_KEY);
+  if (raw === null) return null;
+  try {
+    const parsed = PitSiteSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The night shelter around the player, from the live world and with the client's own dig,
+ * place and walk rules (src/bot/gtnh1710/night-pit.ts); null when the blocks, the position
+ * or the inventory are unknown.
+ *  - 'night': walled and roofed already: sheltered. In the pit the agent started (its site
+ *    in agent memory, NIGHT_PIT_KEY): the rest of it. Else a new pit, in the player's column
+ *    or one next to it; else the raised box where something already holds its roof
+ *    (src/goals/shelter.ts); else why neither works (play then goes offline until sunrise).
+ *  - 'morning': walled in, or still down in the night pit's column (an exit stopped half-way
+ *    leaves a side open): the way out (the pit's roof and a staircase, or one wall of the
+ *    box), planned with the same rules. Out of the pit's column, its site is forgotten.
+ */
+export function liveShelter(
+  client: Gtnh1710Client,
+  config: AgentConfig,
+  repos: Repositories,
+): (purpose?: 'night' | 'morning') => Promise<ShelterStatus | null> {
+  return async (purpose = 'night') => {
+    const state = await client.observe();
+    const world = client.world.walkWorld();
+    const feet = client.world.ownPosition;
+    if (world === null || feet === null || !state.inventory.known) return null;
+    const inventory = state.inventory.value.items;
+    const walled = walledIn(world, feet);
+    if (walled === null) return null;
+    const site = readPitSite(repos);
+    /** Down in the pit the agent started: in its column, at or below its ground layer. */
+    const inPit =
+      site !== null &&
+      Math.floor(feet.x) === site.x &&
+      Math.floor(feet.z) === site.z &&
+      Math.floor(feet.y + 1e-6) <= site.groundY;
+    const base: ShelterStatus = {
+      kind: inPit ? 'pit' : 'box',
+      sheltered: false,
+      steps: [],
+      needs: {},
+      problem: null,
+      walled,
+      exit: [],
+    };
+    const fence = client.currentFence();
+    const opts: PitOptions | null =
+      fence === null
+        ? null
+        : {
+            area: { fence, maxHeightAboveFence: config.minecraft.digging.maxHeightAboveFence },
+            maxPathLength: config.minecraft.movement.maxPathLength,
+          };
+    if (purpose === 'morning') {
+      if (site !== null && !inPit) repos.memory.setValue(NIGHT_PIT_KEY, null);
+      if (!walled && !inPit) return base;
+      const stuck = { ...base, walled: true };
+      if (opts === null) return { ...stuck, problem: 'there is no fence to dig or walk in' };
+      const exit = planShelterExit(world, feet, opts);
+      return exit.ok ? { ...stuck, exit: exit.steps } : { ...stuck, problem: exit.reason };
+    }
+    if (enclosedIn(world, feet) === true) return { ...base, sheltered: true };
+    if (opts === null) return { ...base, problem: 'there is no fence to dig or build in' };
+    const going = site === null ? null : continueNightPit(world, feet, inventory, site, opts);
+    const pit = going ?? planNightPit(world, feet, inventory, opts);
+    if (pit.ok) {
+      repos.memory.setValue(NIGHT_PIT_KEY, JSON.stringify(pit.site));
+      return {
+        ...base,
+        kind: 'pit',
+        steps: pit.steps,
+        needs: pit.roof === null ? {} : { [pit.roof]: 1 },
+      };
+    }
+    // Already in a pit it started: no box from down there.
+    if (going !== null) return { ...base, kind: 'pit', problem: pit.reason };
+    const solid = {
+      solidAt: (x: number, y: number, z: number): boolean | undefined => {
+        const problem = passProblem(world, x, y, z);
+        return problem === 'chunk not loaded' ? undefined : problem !== null;
+      },
+    };
+    const box = shelterStatus(solid, feet, inventory);
+    if (box.problem === null) return { ...box, walled };
+    return { ...base, problem: `no pit (${pit.reason}); no box (${box.problem})` };
+  };
+}
 
 /**
  * Observes, waiting first (at most `timeoutMs`) for the quest book: Better Questing sends it
@@ -123,19 +232,7 @@ export async function runLivePlay(
                 const state = await client.observe();
                 return state.time.known ? state.time.value : null;
               },
-              shelter: async () => {
-                const state = await client.observe();
-                const world = client.world.walkWorld();
-                const feet = client.world.ownPosition;
-                if (world === null || feet === null || !state.inventory.known) return null;
-                const solid = {
-                  solidAt: (x: number, y: number, z: number): boolean | undefined => {
-                    const problem = passProblem(world, x, y, z);
-                    return problem === 'chunk not loaded' ? undefined : problem !== null;
-                  },
-                };
-                return shelterStatus(solid, feet, state.inventory.value.items);
-              },
+              shelter: liveShelter(client, config, repos),
               session: (limits, hooks) => runSession(agent, limits, hooks),
             },
             input.limits,

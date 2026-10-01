@@ -50,6 +50,12 @@ for a task) in a short burst, and System 1 decides `DEFEND` when retreating is i
 [Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting),
 [Digging](#digging), [Placing](#placing) and [Combat](#combat).
 
+**Night pit (2026-10-01, fake server only so far):** at dusk, play digs a pit three blocks
+straight down under the player (`DIG_DOWN`, the only dig of the ground underfoot, allowed only
+as code's own night-shelter step) and roofs it in the ground layer it dug through; in the
+morning it digs the roof and a staircase out before the day's goal. Code plans and runs both as
+known safe steps; the planner is not asked. See [The night pit](#the-night-pit).
+
 **Exploring (2026-09-30, fake server only so far):** with `MC_MOVEMENT_MODE=follow` the walk/dig
 fence becomes a play area that moves with the player, inside the safety boundary. `EXPLORE` walks
 toward a direction or a point in checked hops, in daylight only, and the agent remembers what it
@@ -190,9 +196,11 @@ and [docs/action-contract.md](docs/action-contract.md).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6 (1.5 for cacti and other
   blocks that hurt only on contact); retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 22 action types exist (3 of them quest-book clicks that only the play loop makes). No
-  dropping, lava, network/multiblock changes or rare-item use. The one action that breaks
-  blocks, `DIG_BLOCK`, only breaks vanilla logs, leaves, dirt, grass, sand, gravel and clay; the
+- Only 23 action types exist (3 of them quest-book clicks that only the play loop makes, and
+  `DIG_DOWN`, the night pit's dig under the player's own feet, that only code's night-shelter
+  blueprint makes). No dropping, lava, network/multiblock changes or rare-item use. The action
+  that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs, leaves, dirt, grass, sand, gravel
+  and clay (`DIG_DOWN`: dirt, grass, sand, gravel or clay under the feet); the
   one that places blocks, `PLACE_BLOCK`, only places vanilla dirt, cobblestone, sand, gravel,
   sandstone, planks and logs; `EXPLORE` only walks, in hops, inside the boundary and only in
   daylight. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT`, and only
@@ -215,6 +223,15 @@ and [docs/action-contract.md](docs/action-contract.md).
 - Digging is off unless `MC_ENABLE_DIGGING=true` **and** the fence is set. It only breaks
   allowlisted blocks inside the fence, never the floor, and never anything touching water, a
   chest, a machine or any other non-plain block (see below).
+- The one dig of the ground under the player, `DIG_DOWN` (approved 2026-10-01), is for the night
+  pit only. The safety policy allows it only as code's own next step of the night-shelter
+  task's blueprint, in the evening, at night or in the last 4 minutes before night; never from
+  a plan or a command. The client digs only the block under the feet, with the player centred
+  on it, when the block under that is a plain full block (no cave, fluid or plant: the drop is
+  exactly one block), with nothing but air, plants and plain blocks around the dug block, the
+  landing and the body (no water, lava, fire or other hazard, nothing unloaded), and needs
+  walking on and a fence with a height range (never the pen). Before digging a pit, code checks
+  that its walls are natural ground and that a way out exists for the morning.
 - Placing is off unless `MC_ENABLE_PLACING=true` **and** the fence is set. It only fills empty
   cells inside the fence, never one the player's body or an entity is in, only by clicking a
   plain full block (never a chest or machine, which would open), never next to water, a chest
@@ -419,7 +436,8 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
 - Only a block the observation lists as allowlisted can be asked for.
 - The client re-checks it on the server's own block data before and during the dig. It refuses:
   - anything outside the fence's columns, below its level or more than 4 blocks above it;
-  - anything under the player, or sand or gravel over its head;
+  - anything under the player (only `DIG_DOWN`, for [the night pit](#the-night-pit), digs the
+    block underfoot), or sand or gravel over its head;
   - any block touching something other than air, an allowlisted block or a plain full block
     (water, a torch, a chest, a machine...);
   - a block with sand or gravel on top;
@@ -474,6 +492,31 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#placing)):
   click, with nothing else for 250 ms, and the held stack one item smaller.
 - It is refused during danger, like digging: placing a block is not an escape. Shelters are
   built while it is safe.
+
+### The night pit
+
+Approved 2026-10-01: a raised box cannot be roofed from inside (the walls' tops are above the
+eyes, and nothing touches the roof cell; seen live), so the agent shelters the way a
+first-night player does on flat ground. Tested against the fake server only; the live test is
+next.
+
+- **At dusk** (2 real minutes before night), standing at feet level y, play digs the block
+  under the feet three times (`DIG_DOWN`), falling one block each time, to feet at y-3. Then it
+  places the roof in the y-1 cell, the ground layer it dug through, against the natural ground
+  beside it: dirt or a log, which it can dig again (the digs themselves drop dirt).
+- **In the morning** it digs the roof and a staircase out (the upper block of each step first;
+  the terrain walker climbs one block at a time), then walks onto open ground and plays on.
+- **Code plans both** with the live client's own rules (`src/bot/gtnh1710/night-pit.ts`) and
+  runs them as known safe steps (`src/app/known-steps.ts`): each step is still validated,
+  executed and verified by the executor; the planner is not asked. Code picks the player's
+  column or one next to it, and refuses a spot unless the 3 x 3 columns around are natural
+  ground down to y-3 (sand and gravel only on solid ground), every dig down passes the client's
+  checks, the roof can be placed, and a way out exists for the morning.
+- **Otherwise** a raised box where something already touches its roof cell (a cliff, a tree
+  trunk), and with neither, play goes offline until sunrise, as before.
+- Settings: digging, placing and walking enabled, with a fence that has a height range (the
+  play area in `MC_MOVEMENT_MODE=follow`, or a terrain fence); the pen's one-level fence keeps
+  its floor.
 
 ### Exploring and world memory
 

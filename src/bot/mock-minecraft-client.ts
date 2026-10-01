@@ -911,6 +911,9 @@ export class MockMinecraftClient implements MinecraftClient {
       case 'CHECK_QUEST_BOX':
       case 'CLAIM_QUEST_REWARD':
         return failed('mock: the quest book is not simulated', 'NOT_IMPLEMENTED');
+      case 'DIG_DOWN':
+        // The mock world lists blocks, not the ground under the player.
+        return failed('mock: digging down (the night pit) is not simulated', 'NOT_IMPLEMENTED');
     }
   }
 

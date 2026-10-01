@@ -1,3 +1,4 @@
+import { isCodeOnlyActionType } from '../domain/actions.ts';
 import { isQuestBookActionType } from '../domain/quest-book.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 import { evaluateStaticSpec, type SafetyContext } from '../safety/safety-policy.ts';
@@ -24,7 +25,8 @@ export interface PlanValidation {
  *  3. static safety checks on EVERY step (protected items, approved food/fuel,
  *     boundary, known safe locations);
  *  4. no quest-book clicks (SUBMIT_QUEST, CHECK_QUEST_BOX, CLAIM_QUEST_REWARD): the play loop
- *     makes those itself, deterministically, from the server's quest book.
+ *     makes those itself, deterministically, from the server's quest book;
+ *  5. no code-only steps (DIG_DOWN: the night pit's, proposed only by code's blueprint).
  * A GATHER step has no static checks beyond its schema (a block on DIG_BLOCK's allowlist,
  * a count of 1 to 256): it names no position or item to check. Every DIG_BLOCK and MOVE_TO
  * it expands into is validated like any other action when it runs.
@@ -50,6 +52,11 @@ export function validatePlan(raw: unknown, ctx: SafetyContext, maxSteps: number)
     if (isQuestBookActionType(s.action.type)) {
       schemaIssues.push(
         `step ${s.step}: ${s.action.type} is a quest-book click; the play loop makes those, not plans`,
+      );
+    }
+    if (isCodeOnlyActionType(s.action.type)) {
+      schemaIssues.push(
+        `step ${s.step}: ${s.action.type} is the night pit's own step; only code's blueprint proposes it, never a plan`,
       );
     }
   }

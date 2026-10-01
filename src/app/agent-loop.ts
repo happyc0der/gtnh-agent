@@ -35,6 +35,7 @@ import type { Clock } from '../util/clock.ts';
 import type { IdGenerator } from '../util/ids.ts';
 import { errorMessage } from '../util/json.ts';
 import { gatherAfterAction, gatherStopped, gatherTurn, type GatherRef } from './gather-step.ts';
+import { knownStepAfterAction, nextKnownStep } from './known-steps.ts';
 
 export interface AgentDeps {
   config: AgentConfig;
@@ -60,7 +61,9 @@ export type PlannerOutcome =
   | { kind: 'approval-pending'; planId: number; goal: string; steps: number }
   | { kind: 'plan-rejected'; issues: string[] }
   | { kind: 'escalation'; reason: string; message: string }
-  | { kind: 'unavailable' };
+  | { kind: 'unavailable' }
+  /** A code-made blueprint's next step ran instead (known-steps.ts); no planner was asked. */
+  | { kind: 'known-step'; step: number; steps: number };
 
 export interface CycleResult {
   cycleId: string;
@@ -160,6 +163,22 @@ export function overlayAgentMemory(
             missingComponents: {},
             requiredMachineIds: machines.slice(0, 16),
             nextKnownSafeStep: null,
+          },
+        };
+      }
+      // A code-made blueprint (the night shelter, the way out of it): its next step is a
+      // known safe step, which System 1's rule 6 runs (known-steps.ts).
+      const known = nextKnownStep(repos, task.id);
+      if (known !== null) {
+        next = {
+          ...next,
+          knownRecipeState: {
+            ...(next.knownRecipeState ?? {
+              target: task.goal.slice(0, 200),
+              missingComponents: {},
+              requiredMachineIds: [],
+            }),
+            nextKnownSafeStep: known.spec,
           },
         };
       }
@@ -506,12 +525,18 @@ export async function runSingleCycle(
     planStep === null
       ? false
       : updatePlanProgress(repos, planStep, outcome, clock.now(), execution.state);
+  // A code-made blueprint's step: advance on a verified step (the last completes the task).
+  const knownStep = taskId !== null && knownStepAfterAction(repos, taskId, action, outcome);
 
   // Task bookkeeping: pauses, rejections and failed plans halt the task until a human resumes
-  // it. A stale planner step (see isStaleRejection) only fails its plan: the task goes on.
+  // it. A stale planner step (see isStaleRejection), or a code-made blueprint's step refused
+  // only as stale, fails without halting the task: the next plan starts from the new view.
   const paused = action.type === 'PAUSE_AND_ASK_USER' && outcome.status === 'succeeded';
   const status: CycleStatus = paused ? 'paused' : outcome.status;
-  const blockingRejection = outcome.status === 'rejected' && !isStaleRejection(planStep, outcome);
+  const blockingRejection =
+    outcome.status === 'rejected' &&
+    !isStaleRejection(planStep, outcome) &&
+    !(knownStep && onlyStaleRefusals(outcome));
   const needsUserAttention =
     paused ||
     planHalted ||
@@ -817,6 +842,20 @@ export function isStaleRejection(ref: PlanStepRef | null, outcome: ExecutionOutc
 }
 
 /**
+ * Rejected only because the step no longer fits what is observed (preconditions and/or
+ * STALE_VIOLATION_CODES), nothing else: for a code-made blueprint's step (known-steps.ts),
+ * whose plan is made again from the new view.
+ */
+function onlyStaleRefusals(outcome: ExecutionOutcome): boolean {
+  const v = outcome.validation;
+  return (
+    outcome.status === 'rejected' &&
+    v.violations.every((x) => STALE_VIOLATION_CODES.has(x.code)) &&
+    (v.violations.length > 0 || v.preconditionFailures.length > 0)
+  );
+}
+
+/**
  * After a plan step ran: advance on success; on failure count it against the plan's retry
  * budget and, once exhausted, fail the plan. Returns true if the task must now wait for a
  * human (a rejected step, or a failure policy other than REPLAN). A stale rejection fails
@@ -944,6 +983,22 @@ async function consultPlanner(
     return pauseWith('There is no task to plan for. What should the agent do?', {
       kind: 'unavailable',
     });
+  }
+
+  // A code-made blueprint (the night shelter, the way out of it) runs its next step as a
+  // known safe step whatever the decision provider chose: code's own steps never go through
+  // the planner (known-steps.ts).
+  const known = nextKnownStep(repos, taskId);
+  if (known !== null) {
+    return {
+      chosen: {
+        spec: known.spec,
+        reason: `code's step ${known.index + 1}/${known.total}: ${known.text}`.slice(0, 500),
+        origin: 'deterministic-router',
+      },
+      outcome: { kind: 'known-step', step: known.index + 1, steps: known.total },
+      planStep: null,
+    };
   }
 
   // An open plan takes precedence over asking the planner again.

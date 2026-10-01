@@ -314,7 +314,7 @@ function horizontal(a: Vec3, b: Vec3, y: number, onGround: boolean): TerrainStep
 /** The longest fall that does no damage (vanilla: damage = fall distance - 3). */
 export const MAX_SAFE_FALL = 3;
 /** The server's floating check: the player's box (0.3 each way) grown by 0.0625... */
-const FLOAT_CHECK_HALF_WIDTH = 0.3625;
+export const FLOAT_CHECK_HALF_WIDTH = 0.3625;
 /** ...reaching 0.55 (+ 0.0625) below the feet... */
 const FLOAT_CHECK_BELOW = 0.6125;
 /** ...and up to its head (1.8 + 0.0625). */

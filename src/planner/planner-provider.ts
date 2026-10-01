@@ -1,4 +1,4 @@
-import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
+import { ACTION_TYPES, isAllowlistedActionType, isCodeOnlyActionType } from '../domain/actions.ts';
 import { isQuestBookActionType } from '../domain/quest-book.ts';
 import { DIGGABLE_BLOCKS, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import { attackRefusal } from '../domain/combat.ts';
@@ -446,9 +446,13 @@ export function buildPlannerRequest(input: {
   return PlannerRequestSchema.parse({
     state: sanitizeStateForPlanner(input.state, input.safety.protectedItems, config),
     task: input.state.currentTask,
-    // Quest-book clicks are the play loop's, never a plan's (plan-validator.ts refuses them).
+    // Quest-book clicks are the play loop's, and DIG_DOWN the night pit's (code's own step),
+    // never a plan's (plan-validator.ts refuses them).
     allowedActions: ACTION_TYPES.filter(
-      (t) => !isQuestBookActionType(t) && (t !== 'EXPLORE' || exploration !== undefined),
+      (t) =>
+        !isQuestBookActionType(t) &&
+        !isCodeOnlyActionType(t) &&
+        (t !== 'EXPLORE' || exploration !== undefined),
     ),
     ...(exploration === undefined ? {} : { exploration }),
     safetyConstraints: {
@@ -464,7 +468,9 @@ export function buildPlannerRequest(input: {
         .map(([name]) => name)
         .sort(),
       forbidden: [...forbiddenKeywords()],
-      forbiddenExceptions: operatorApprovedTypes().filter(isAllowlistedActionType),
+      forbiddenExceptions: operatorApprovedTypes().filter(
+        (t) => isAllowlistedActionType(t) && !isCodeOnlyActionType(t),
+      ),
       diggableBlocks: [...DIGGABLE_BLOCKS],
       placeableItems: [...PLACEABLE_ITEMS],
     },
