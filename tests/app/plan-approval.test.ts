@@ -180,6 +180,36 @@ describe('stored plans advance one verified step per cycle', () => {
     expect(s.repos.tasks.get(s.taskId)?.status).toBe('blocked');
   });
 
+  it("an open plan's next step that would be refused now ends the plan, and the planner is asked again", async () => {
+    // Seen live: an EXPLORE failed twice from one spot; the next session ran the open plan's
+    // step a third time, the repeated-failure rule refused it, and play stopped for a human.
+    const plan = twoStepPlan({
+      failureHandling: {
+        onStepFailure: 'REPLAN',
+        maxRetriesPerStep: 2,
+        escalationMessage: 'Could not fetch cobblestone.',
+      },
+    });
+    const s = await session('needs-planner', fixture(plan));
+    s.client.failNext('WITHDRAW_ITEM', 'simulated failure', 2);
+
+    await s.cycle(); // the plan; its step 1 fails (1)
+    await s.cycle(); // the open plan's step 1 again; it fails (2), within the plan's retries
+    expect(s.repos.plans.get(1)?.status).toBe('active');
+    expect(s.planner.requests).toHaveLength(1);
+
+    // Step 1 failed twice: it would be refused now. The plan ends, and the planner is asked
+    // again, told why, instead of the step being run and refused (which blocks the task).
+    const third = await s.cycle();
+    expect(s.repos.plans.get(1)).toMatchObject({ status: 'failed' });
+    expect(s.repos.plans.get(1)?.statusReason).toMatch(/^step 1 would be refused: it failed 2/);
+    expect(s.planner.requests.length).toBeGreaterThanOrEqual(2);
+    expect(s.planner.requests[1]?.journal.join('\n')).toMatch(
+      /plan #1 ended: its step 1, WITHDRAW_ITEM .* would be refused \(it failed 2 time\(s\): simulated failure\)/,
+    );
+    expect(third.planner).toMatchObject({ kind: 'plan-accepted', planId: 2 });
+  });
+
   it('a step that is not feasible now fails the plan; the task goes on and the planner is asked again', async () => {
     const plan = twoStepPlan({
       steps: [

@@ -16,19 +16,61 @@ const explore = (x: number, z: number) => ({
 const at = (x: number, z: number) => ({ x, y: 64, z });
 
 describe('dead ends', () => {
-  it('remembers the point of an EXPLORE that found no way further, and nothing else', () => {
+  it('remembers the point or direction of an EXPLORE that found no way further, and nothing else', () => {
     const { memory } = memoryRepos(testClock());
     rememberDeadEnd(memory, explore(49, 49), { ok: false, message: NO_WAY }, at(40, 63));
-    // Not a dead end: it got going, it failed for another reason, it explored a direction.
-    rememberDeadEnd(memory, explore(10, 10), { ok: true, message: 'explored 40 blocks' }, at(0, 0));
-    rememberDeadEnd(memory, explore(10, 10), { ok: false, message: 'it is dark' }, at(0, 0));
+    // A direction too (seen live: "EXPLORE north_west" three times from one spot).
     rememberDeadEnd(
       memory,
       { type: 'EXPLORE', args: { toward: 'north', maxDistance: 64 } },
       { ok: false, message: NO_WAY },
       at(0, 0),
     );
-    expect(readDeadEnds(memory)).toEqual([{ toward: { x: 49, z: 49 }, from: at(40, 63) }]);
+    // Not a dead end: it got going all the way, or it failed for another reason.
+    rememberDeadEnd(memory, explore(10, 10), { ok: true, message: 'explored 40 blocks' }, at(0, 0));
+    rememberDeadEnd(memory, explore(10, 10), { ok: false, message: 'it is dark' }, at(0, 0));
+    expect(readDeadEnds(memory)).toEqual([
+      { toward: { x: 49, z: 49 }, from: at(40, 63) },
+      { toward: 'north', from: at(0, 0) },
+    ]);
+  });
+
+  it('remembers where an EXPLORE that got going stopped short for want of a way', () => {
+    const { memory } = memoryRepos(testClock());
+    const stopped =
+      'explored 57.6 blocks toward north-west in 2 hop(s), 39.1 closer, now at (-9.5, 86.0, ' +
+      '16.5); stopped: no way further: no walkable spot in the play area gets closer';
+    rememberDeadEnd(
+      memory,
+      { type: 'EXPLORE', args: { toward: 'north_west', maxDistance: 64 } },
+      { ok: true, message: stopped },
+      at(24, 39),
+      at(-9.5, 16.5),
+    );
+    expect(readDeadEnds(memory)).toEqual([{ toward: 'north_west', from: at(-9.5, 16.5) }]);
+  });
+
+  it('a dead-end direction shows no room left, near where it was found', () => {
+    const summary: ExplorationSummary = {
+      chunksSeen: 3,
+      directions: {
+        north: { seen: 67, room: 272 },
+        north_east: { seen: 95, room: 375 },
+        east: { seen: 113, room: 265 },
+        south_east: { seen: 139, room: 338 },
+        south: { seen: 116, room: 239 },
+        south_west: { seen: 107, room: 338 },
+        west: { seen: 55, room: 246 },
+        north_west: { seen: 72, room: 348 },
+      },
+      places: [],
+      biomes: [],
+    };
+    const deadEnds = [{ toward: 'north_west' as const, from: at(16, 5) }];
+    const here = withoutDeadEnds(summary, deadEnds, at(17, 6));
+    expect(here.directions.north_west).toEqual({ seen: 72, room: 0 });
+    expect(here.directions.north).toEqual({ seen: 67, room: 272 });
+    expect(withoutDeadEnds(summary, deadEnds, at(100, 100))).toEqual(summary);
   });
 
   it('leaves out places and biome patches near a dead end, while the player is near it', () => {

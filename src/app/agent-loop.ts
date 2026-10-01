@@ -598,6 +598,9 @@ export async function runSingleCycle(
     action,
     outcome.execution,
     execution.state.player.position.known ? execution.state.player.position.value : null,
+    outcome.stateAfter?.player.position.known === true
+      ? outcome.stateAfter.player.position.value
+      : null,
   );
 
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
@@ -1068,6 +1071,8 @@ function refusedFirstStep(
   action: { type: string; args: unknown };
   /** What the last failure of this very step said, when it is a repeated failure. */
   lastFailure: string | null;
+  /** The repeated-failure rule is among the refusals. */
+  repeated: boolean;
 } | null {
   // GATHER steps run first to last, one with nothing to dig skipped (gatherEnded): the step
   // that would act first is the one to check, and with none, the plan would do nothing (seen
@@ -1105,6 +1110,7 @@ function refusedFirstStep(
       note: `${head} (${why.slice(0, Math.max(0, room))})${tail}`,
       action: lead,
       lastFailure: null,
+      repeated: false,
     };
   }
   const action = createAction(
@@ -1119,7 +1125,8 @@ function refusedFirstStep(
   }
   let why = [...report.violations.map((v) => v.message), ...report.preconditionFailures].join('; ');
   let lastFailure: string | null = null;
-  if (report.violations.some((v) => v.code === 'REPEATED_FAILURE')) {
+  const repeated = report.violations.some((v) => v.code === 'REPEATED_FAILURE');
+  if (repeated) {
     const from = state.player.position.known ? state.player.position.value : null;
     const fingerprint = actionFingerprint(first, from);
     const last = deps.repos.actions
@@ -1149,6 +1156,7 @@ function refusedFirstStep(
     note: `${head} (${why.slice(0, Math.max(0, room))})${tail}`,
     action: first,
     lastFailure,
+    repeated,
   };
 }
 
@@ -1222,7 +1230,46 @@ async function consultPlanner(
       },
     );
   }
-  if (open?.status === 'active') return stepOf(deps, open, 'plan-step', state, ctx);
+  if (open?.status === 'active') {
+    // The open plan's next step, dry run like a new plan's first (refusedFirstStep): one the
+    // repeated-failure rule would refuse now ends the plan, and the planner is asked again
+    // below, told why. Seen live: an EXPLORE failed twice from one spot; the next session ran
+    // the open plan's step a third time, the rule refused it, and play stopped for a human.
+    // Other refusals still meet the plan's own handling when the step runs (a machine taken
+    // for a chest blocks the task); a GATHER runs on as code expands it.
+    const next = open.plan.steps[open.nextStep];
+    const refused =
+      next === undefined || next.action.type === GATHER
+        ? null
+        : refusedFirstStep(
+            deps,
+            { ...open.plan, steps: open.plan.steps.slice(open.nextStep) },
+            state,
+            ctx,
+            taskId,
+          );
+    if (refused === null || !refused.repeated) return stepOf(deps, open, 'plan-step', state, ctx);
+    repos.plans.setStatus(
+      open.id,
+      'failed',
+      `step ${open.nextStep + 1} would be refused: ${refused.why}`.slice(0, 500),
+    );
+    repos.memory.appendJournal(
+      taskId,
+      `plan #${open.id} ended: its step ${open.nextStep + 1}, ${refused.step}, would be refused (${refused.why})`.slice(
+        0,
+        MAX_JOURNAL_LINE,
+      ),
+    );
+    if (refused.lastFailure !== null) {
+      rememberDeadEnd(
+        repos.memory,
+        refused.action,
+        { ok: false, message: refused.lastFailure },
+        state.player.position.known ? state.player.position.value : null,
+      );
+    }
+  }
 
   if (planner === null || config.planner.provider === 'none') {
     return pauseWith(
