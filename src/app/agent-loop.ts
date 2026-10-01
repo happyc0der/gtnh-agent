@@ -111,7 +111,11 @@ export const OPERATOR_PLANNER = 'operator';
  *    (planning checks only; the live client re-reads the real contents before clicking);
  *  - the last logged action is filled in.
  */
-function overlayAgentMemory(state: GameState, repos: Repositories, config: AgentConfig): GameState {
+export function overlayAgentMemory(
+  state: GameState,
+  repos: Repositories,
+  config: AgentConfig,
+): GameState {
   let next = state;
   if (state.currentTask === null && state.source === 'gtnh1710') {
     const id = repos.memory.getValue(CURRENT_TASK_KEY);

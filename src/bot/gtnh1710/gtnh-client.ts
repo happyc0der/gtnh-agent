@@ -43,7 +43,7 @@ import {
   type CraftingLayout,
   type PlacedRecipe,
 } from './crafting.ts';
-import { checkDig, digWaitTicks, eyesOf, TICK_MS, type DigArea } from './digging.ts';
+import { checkDig, digWaitTicks, eyesOf, standSpotFor, TICK_MS, type DigArea } from './digging.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
 import { decodeGregTechMessage, GT_CHANNEL } from './gregtech.ts';
 import {
@@ -107,6 +107,8 @@ const DIG_OUTCOME_TIMEOUT_MS = 2_000;
 const DIG_SETTLE_MS = 5 * TICK_MS;
 /** How long the drop may take to reach the inventory: a 10-tick pickup delay, plus falling. */
 const DROP_WAIT_MS = 2_000;
+/** Listed diggable blocks (nearest first) that get a stand spot in each observation. */
+const STAND_SPOT_BLOCKS = 32;
 
 /** "2 x minecraft:sand, 1 x minecraft:flint" (at most 200 characters). */
 function describeGain(gained: ReadonlyArray<[string, number]>): string {
@@ -320,7 +322,40 @@ export class Gtnh1710Client implements MinecraftClient {
     // While packets keep arriving the model is current; if the server goes quiet the
     // timestamp stops advancing, so the safety policy's staleness check fires.
     const asOf = last !== null && now.getTime() - last.getTime() > FRESHNESS_WINDOW_MS ? last : now;
-    return Promise.resolve(this.#world.toGameState(asOf));
+    return Promise.resolve(this.#withStandSpots(this.#world.toGameState(asOf)));
+  }
+
+  /**
+   * Adds, for the nearest listed diggable blocks, where the player can stand to dig each
+   * (digging.ts standSpotFor), so a planner can walk there and dig. Digging disabled or no
+   * fence: the blocks are left as they are.
+   */
+  #withStandSpots(state: GameState): GameState {
+    const cfg = this.#opts.config;
+    const fence = cfg.movement.fence;
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    if (!cfg.digging.enabled || fence === null || world === null || feet === null) return state;
+    if (!state.nearbyBlocks.known) return state;
+    const area: DigArea = {
+      fence: fenceOf(fence),
+      maxHeightAboveFence: cfg.digging.maxHeightAboveFence,
+    };
+    const blocks = state.nearbyBlocks.value;
+    return {
+      ...state,
+      nearbyBlocks: {
+        known: true,
+        value: {
+          ...blocks,
+          resources: blocks.resources.map((r, i) =>
+            i < STAND_SPOT_BLOCKS
+              ? { ...r, standAt: standSpotFor(world, area, r.position, feet) }
+              : r,
+          ),
+        },
+      },
+    };
   }
 
   perform(validated: ValidatedAction): Promise<ClientActionResult> {

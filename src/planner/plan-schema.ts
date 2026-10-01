@@ -91,9 +91,20 @@ export const CompactStateSchema = z.strictObject({
   inventoryFill: z.number().nullable(),
   threats: z.strictObject({ hostileCount: z.int(), unclassifiedCount: z.int() }).nullable(),
   hazards: z.strictObject({ lavaNearby: z.boolean(), voidNearby: z.boolean() }).nullable(),
-  /** Blocks DIG_BLOCK may target (allowlisted, observed), nearest first. */
+  /**
+   * Blocks DIG_BLOCK may target (allowlisted, observed), nearest first, with `reach` (blocks
+   * from the eyes to the block centre; DIG_BLOCK needs at most 4.5) and `standAt` (where to
+   * stand to dig it, or null).
+   */
   diggableBlocks: z
-    .array(z.strictObject({ block: DiggableBlockSchema, position: BlockPositionSchema }))
+    .array(
+      z.strictObject({
+        block: DiggableBlockSchema,
+        position: BlockPositionSchema,
+        reach: z.number().min(0).nullable(),
+        standAt: PositionSchema.nullable(),
+      }),
+    )
     .max(MAX_COMPACT_RESOURCES),
   machines: z
     .array(

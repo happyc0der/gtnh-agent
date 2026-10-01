@@ -190,7 +190,14 @@ describe('Gtnh1710Client digging', () => {
     const blocks = blocksOf(await client.observe());
     expect(blocks.scanRadius).toBe(16);
     expect(blocks.removed).toEqual([]);
-    expect(blocks.resources[0]).toEqual({ block: 'minecraft:dirt', position: AT.dirt });
+    // Each comes with where to stand to dig it: the dirt next to the player from right here.
+    expect(blocks.resources[0]).toEqual({
+      block: 'minecraft:dirt',
+      position: AT.dirt,
+      standAt: { x: -4.5, y: 106, z: -7.5 },
+    });
+    // The wet dirt (water next to it) cannot be dug from anywhere.
+    expect(blocks.resources.find((r) => key(r.position) === key(AT.wetDirt))?.standAt).toBeNull();
     // Distance from the feet to each block's centre; ties (2.29 m) by position.
     expect(blocks.resources.map((r) => r.position)).toEqual([
       AT.dirt, // 1.12 m

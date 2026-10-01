@@ -13,7 +13,7 @@
  *   node scripts/test-server-admin.ts rcon "<command>"   Run one server command.
  *   node scripts/test-server-admin.ts pen show           Pen geometry and the matching agent settings.
  *   node scripts/test-server-admin.ts pen build          Build (or reset) the glass movement pen.
- *   node scripts/test-server-admin.ts pen tp [--wait N]  Teleport the agent's player to the pen
+ *   node scripts/test-server-admin.ts pen tp [--wait N] [--to=x,y,z]  Teleport the agent's player to the pen (or to x,y,z)
  *                                                        centre, waiting up to N s for it to be online.
  *   node scripts/test-server-admin.ts pen chest          Place the test chest in the pen (only if there is
  *                                                        none): 128 cobblestone, 3 diamonds (a protected
@@ -292,7 +292,7 @@ async function main(argv: string[]): Promise<number> {
   const { positionals, values } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { wait: { type: 'string', default: '0' } },
+    options: { wait: { type: 'string', default: '0' }, to: { type: 'string' } },
   });
   const [command, sub] = positionals;
   if (command === 'pen' && sub === 'show') {
@@ -375,6 +375,12 @@ async function main(argv: string[]): Promise<number> {
     const pen = penFromEnv(process.env);
     const { username } = loadConfig().config.minecraft;
     const waitMs = Math.max(0, Number(values.wait) || 0) * 1000;
+    // --to x,y,z: the player's feet position anywhere (else the pen's centre block).
+    const to = typeof values.to === 'string' ? values.to.split(',').map(Number) : null;
+    if (to !== null && (to.length !== 3 || !to.every(Number.isFinite))) {
+      process.stderr.write('--to must be x,y,z (feet position, e.g. --to=-4.5,106,-7.5)\n');
+      return 1;
+    }
     const { x, y, z } = pen.center;
     return withRcon(async (rcon) => {
       const deadline = Date.now() + waitMs;
@@ -389,13 +395,13 @@ async function main(argv: string[]): Promise<number> {
       }
       // 1.7.10's tp adds 0.5 to any coordinate written without a decimal point, which
       // would leave the player floating half a block above the floor: always send decimals.
-      const at = [x + 0.5, y, z + 0.5].map((n) => n.toFixed(2)).join(' ');
+      const at = (to ?? [x + 0.5, y, z + 0.5]).map((n) => n.toFixed(2)).join(' ');
       print(await rcon.command(`tp ${username} ${at}`));
       return 0;
     });
   }
   process.stderr.write(
-    'Usage: node scripts/test-server-admin.ts rcon "<command>" | pen show | pen build | pen chest | pen resources | pen tp [--wait N]\n',
+    'Usage: node scripts/test-server-admin.ts rcon "<command>" | pen show | pen build | pen chest | pen resources | pen tp [--wait N] [--to=x,y,z]\n',
   );
   return 1;
 }

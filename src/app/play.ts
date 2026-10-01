@@ -6,6 +6,7 @@ import {
   type Quest,
   type QuestProgress,
 } from '../goals/quest-goals.ts';
+import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../domain/recipes.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { CycleResult } from './agent-loop.ts';
 import {
@@ -99,7 +100,16 @@ export type PlayEvent =
       taskId: string;
       created: boolean;
     }
-  | { kind: 'cycle'; session: number; index: number; summary: string }
+  | {
+      kind: 'cycle';
+      session: number;
+      index: number;
+      summary: string;
+      /** A plan the planner just made: its goal and steps (one line each). */
+      newPlan: { goal: string; steps: string[] } | null;
+      /** What the executor reported for the action, if one ran. */
+      detail: string | null;
+    }
   | {
       kind: 'session-end';
       session: number;
@@ -125,6 +135,29 @@ const CONTINUE_AFTER: ReadonlySet<SessionStopKind> = new Set([
   'non-task-decision',
   'stop-requested', // only when the quest itself was met: see below
 ]);
+
+/** A stored plan as one line per step, for narration. */
+function planOf(repos: Repositories, planId: number): { goal: string; steps: string[] } | null {
+  const p = repos.plans.get(planId);
+  if (p === null) return null;
+  return {
+    goal: p.plan.goal,
+    steps: p.plan.steps.map((s) => `${s.step}. ${s.action.type} ${JSON.stringify(s.action.args)}`),
+  };
+}
+
+/**
+ * What the live agent can obtain: everything digging gathers, and the results of the
+ * recipes it can craft (2x2 always; 3x3 only when a crafting table is configured). GTNH
+ * removes the vanilla crafting-table recipe, so the table itself is never counted.
+ */
+export function liveAbilities(hasCraftingTable: boolean): Abilities {
+  const craft = RECIPE_IDS.filter((id) => id !== 'crafting_table')
+    .map((id) => RECIPES[id])
+    .filter((r) => hasCraftingTable || !needsCraftingTable(r))
+    .map((r) => r.result.item.replace(/@\d+$/, ''));
+  return { gather: BASE_ABILITIES.gather, craft: new Set(craft) };
+}
 
 const total = (missing: Record<string, number>): number =>
   Object.values(missing).reduce((n, c) => n + c, 0);
@@ -224,7 +257,15 @@ export async function runPlay(
       stopRequested: () =>
         met ? `the quest "${goal.quest.name}" is satisfied` : hooks.stopRequested(),
       onCycle: (r, index) => {
-        emit({ kind: 'cycle', session, index, summary: r.summary });
+        emit({
+          kind: 'cycle',
+          session,
+          index,
+          summary: r.summary,
+          newPlan:
+            r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
+          detail: r.outcome?.execution?.message ?? null,
+        });
         const after = r.outcome?.stateAfter;
         if (after?.inventory.known === true) {
           met = total(missingItems(goal.quest, after.inventory.value.items)) === 0;
@@ -257,8 +298,17 @@ export function describePlayEvent(e: PlayEvent): string {
         .join(', ');
       return `goal: "${e.quest}"${missing === '' ? '' : ` - missing ${missing}`}${e.created ? ' (new task)' : ''}`;
     }
-    case 'cycle':
-      return `  [${e.session}.${e.index}] ${e.summary}`;
+    case 'cycle': {
+      const lines: string[] = [];
+      if (e.newPlan !== null) {
+        lines.push(`  [${e.session}.${e.index}] new plan: ${e.newPlan.goal}`);
+        for (const step of e.newPlan.steps) lines.push(`        ${step}`);
+      }
+      lines.push(
+        `  [${e.session}.${e.index}] ${e.summary}${e.detail === null ? '' : ` (${e.detail})`}`,
+      );
+      return lines.join('\n');
+    }
     case 'session-end':
       return `session ${e.session}: ${e.cycles} cycle(s); ${e.stopReason}`;
   }

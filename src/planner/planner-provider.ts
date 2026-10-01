@@ -2,7 +2,7 @@ import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
 import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
-import { distance } from '../domain/geometry.ts';
+import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
@@ -87,9 +87,12 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       ? { hostileCount: threats.hostileCount, unclassifiedCount: threats.unclassifiedCount }
       : null,
     hazards: hazards ? { lavaNearby: hazards.lavaNearby, voidNearby: hazards.voidNearby } : null,
-    diggableBlocks: (blocks?.resources ?? [])
-      .slice(0, MAX_COMPACT_RESOURCES)
-      .map((r) => ({ block: r.block, position: { ...r.position } })),
+    diggableBlocks: (blocks?.resources ?? []).slice(0, MAX_COMPACT_RESOURCES).map((r) => ({
+      block: r.block,
+      position: { ...r.position },
+      reach: position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
+      standAt: r.standAt ?? null,
+    })),
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
       name: m.name,

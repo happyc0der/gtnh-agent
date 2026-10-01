@@ -95,6 +95,12 @@ export const MAX_REPORTED_REMOVED = 16;
 export const ResourceBlockSchema = z.strictObject({
   block: DiggableBlockSchema,
   position: BlockPositionSchema,
+  /**
+   * Where the player can stand to dig it (feet position): beside it, standable, inside the
+   * fence, the dig allowed from there; null when there is no such spot. Absent when the
+   * adapter does not compute it.
+   */
+  standAt: PositionSchema.nullable().optional(),
 });
 export type ResourceBlock = z.infer<typeof ResourceBlockSchema>;
 

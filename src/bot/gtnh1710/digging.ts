@@ -6,6 +6,7 @@ import {
 } from '../../domain/blocks.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
+import { standProblem } from './terrain.ts';
 import {
   sweptColumns,
   WALKABLE_SURFACES,
@@ -278,4 +279,41 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
   }
 
   return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+}
+
+/** Feet heights tried for a stand spot, relative to the block: on the ground beside it (+1), level with it, or below it (logs overhead). */
+const STAND_HEIGHTS = [1, 0, -1, -2, -3, -4] as const;
+
+/**
+ * Where the player can stand to dig `target`: feet at the centre of a block beside it (one
+ * of the 8 columns around it, never on top of it), standable by the terrain rules, inside
+ * the fence, and from which checkDig allows the dig. The spot nearest to `from`; null when
+ * there is none. A planner walks there (MOVE_TO) and then digs.
+ */
+export function standSpotFor(
+  world: WalkWorld,
+  area: DigArea,
+  target: BlockPos,
+  from: Vec3,
+): Vec3 | null {
+  const { fence } = area;
+  let best: { spot: Vec3; d: number } | null = null;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      if (dx === 0 && dz === 0) continue;
+      const fx = target.x + dx;
+      const fz = target.z + dz;
+      if (fx < fence.min.x || fx > fence.max.x || fz < fence.min.z || fz > fence.max.z) continue;
+      for (const dy of STAND_HEIGHTS) {
+        const fy = target.y + dy;
+        if (fy < fence.min.y || fy > fence.max.y) continue;
+        if (standProblem(world, fx, fy, fz) !== null) continue;
+        const spot = { x: fx + 0.5, y: fy, z: fz + 0.5 };
+        if (!checkDig(world, area, spot, target).ok) continue;
+        const d = Math.hypot(spot.x - from.x, spot.y - from.y, spot.z - from.z);
+        if (best === null || d < best.d - 1e-9) best = { spot, d };
+      }
+    }
+  }
+  return best?.spot ?? null;
 }

@@ -162,9 +162,12 @@ describe('planner request and mock planner', () => {
       'minecraft:log',
       'minecraft:leaves',
     ]);
+    // The player stands at (1, 64, 1): eyes at y 65.62, the dirt's centre at (2.5, 64.5, 1.5).
     expect(compact.diggableBlocks[0]).toEqual({
       block: 'minecraft:dirt',
       position: { x: 2, y: 64, z: 1 },
+      reach: Number(Math.hypot(1.5, 1.12, 0.5).toFixed(2)),
+      standAt: null,
     });
     const hidden = sanitizeStateForPlanner(makeState((w) => void (w.unobservable = ['blocks'])));
     expect(hidden.diggableBlocks).toEqual([]);

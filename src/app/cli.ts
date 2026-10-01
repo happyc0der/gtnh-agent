@@ -25,6 +25,15 @@ import {
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
+import { runLivePlay } from './live-play.ts';
+import {
+  checkPlayLimits,
+  DEFAULT_PLAY_LIMITS,
+  describePlayEvent,
+  liveAbilities,
+  type PlayLimits,
+} from './play.ts';
+import { createProviders } from './providers.ts';
 import { describeQuests, updateQuests } from './quest-commands.ts';
 import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
@@ -60,6 +69,12 @@ Usage:
       stopping when the task is done or anything needs you (a pause, rejection, failure,
       approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
       stop file (pnpm cli halt) or Ctrl+C.
+  node src/app/cli.ts play --live [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
+      AUTONOMOUS PLAY through the Age 0 quest book: the agent picks its next quest, the
+      configured decision maker and planner (AGENT_DECISIONS / AGENT_PLANNER, e.g. ollama)
+      choose what to do, and every action is validated, executed and verified as always.
+      Stops when no doable quest is left, when anything needs you, after 3 sessions without
+      progress on a quest, at the time limit, the stop file (pnpm cli halt) or Ctrl+C.
   node src/app/cli.ts quests [--live] [--db <path>]
       The agent's Age 0 quest book (GTNH "Tier 0 Stone Age"): progress, completed quests
       and the next goal. --live reads the inventory first and records the quests it now
@@ -154,6 +169,7 @@ async function main(argv: string[]): Promise<number> {
       every: { type: 'string', default: '5' },
       'max-cycles': { type: 'string', default: String(DEFAULT_SESSION_LIMITS.maxCycles) },
       'max-minutes': { type: 'string', default: String(DEFAULT_SESSION_LIMITS.maxMinutes) },
+      minutes: { type: 'string', default: String(DEFAULT_PLAY_LIMITS.maxMinutes) },
       tolerance: { type: 'string', default: '0.5' },
       'dry-run': { type: 'boolean', default: false },
       live: { type: 'boolean', default: false },
@@ -276,6 +292,46 @@ async function main(argv: string[]): Promise<number> {
       const seconds = Math.max(1, Math.min(3600, Number(values.seconds) || 60));
       const every = Math.max(1, Math.min(60, Number(values.every) || 5));
       await watchLive(config, seconds, every, (line) => process.stdout.write(`${line}\n`), log);
+      return 0;
+    }
+    case 'play': {
+      if (!values.live) {
+        process.stderr.write('play acts on the configured test server; pass --live to confirm.\n');
+        return 1;
+      }
+      const limits: PlayLimits = {
+        ...DEFAULT_PLAY_LIMITS,
+        maxMinutes: Number(values.minutes),
+        session: { ...DEFAULT_PLAY_LIMITS.session, maxCycles: Number(values['max-cycles']) },
+      };
+      const invalid = checkPlayLimits(limits);
+      if (invalid !== null) {
+        process.stderr.write(`${invalid}\n`);
+        return 1;
+      }
+      const providers = createProviders(config);
+      process.stderr.write(
+        `playing: decisions by ${providers.decisionProvider.name}, plans by ` +
+          `${providers.planner?.name ?? 'nobody'}; stop with pnpm cli halt or Ctrl+C\n`,
+      );
+      const out = await runLivePlay(
+        config,
+        dbPath,
+        {
+          limits,
+          ...providers,
+          abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
+          onEvent: (e) => process.stderr.write(`${describePlayEvent(e)}\n`),
+        },
+        log,
+      );
+      print({
+        stopReason: out.stopReason,
+        sessions: out.sessions,
+        questsCompleted: out.questsCompleted,
+        progress: out.progress,
+        minutes: Number((out.elapsedMs / 60_000).toFixed(1)),
+      });
       return 0;
     }
     case 'run': {
