@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ACTION_TYPES } from '../../src/domain/actions.ts';
 import { OllamaClient } from '../../src/llm/ollama-client.ts';
 import {
   OllamaPlannerProvider,
@@ -45,7 +46,49 @@ describe('OllamaPlannerProvider', () => {
     expect(body?.options).toMatchObject({ temperature: 0, seed: 7, num_ctx: 16_384 });
     expect(body?.format).toEqual(plannerFormat(4));
     expect(JSON.stringify(body?.format)).toContain('"maxItems":4');
-    expect(JSON.stringify(body?.format)).not.toContain('PLACE_BLOCK');
+    expect(JSON.stringify(body?.format)).not.toContain('BREAK_BLOCK');
+  });
+
+  it('the prompt names every action with its args, and the placing rule', () => {
+    for (const type of ACTION_TYPES) expect(PLANNER_SYSTEM_PROMPT, type).toContain(`- ${type} {`);
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      '- PLACE_BLOCK {"position":{"x":0,"y":64,"z":0},"item":"minecraft:dirt"}',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/never sand or gravel above the player's own head/);
+  });
+
+  it('tells the model what a tool saves, from the verified tables, and the tool recipes', () => {
+    // Dig times come from src/domain/dig-time.ts and tools.ts, not from the model's memory.
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      '13. Tools: digging time in ticks: sand or dirt 21 by hand, 12 with a minecraft:wooden_shovel; ' +
+        'gravel, grass or clay 25 by hand, 14 with the shovel; logs 77 by hand, 40 with a ' +
+        'minecraft:wooden_axe, 21 with a minecraft:stone_axe. A wooden tool lasts 59 digs',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/Before gathering 32 or more of a block/);
+    // DIG_BLOCK picks the tool itself; the planner only decides whether to make one.
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/It holds the best tool from state\.tools/);
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      'wooden_shovel: 1 any of minecraft:planks|minecraft:planks@1|minecraft:planks@2|minecraft:planks@3|minecraft:planks@4|minecraft:planks@5 + 2 minecraft:stick -> 1 minecraft:wooden_shovel (3x3, at a table)',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/sticks: 2 any of [^;]* -> 2 minecraft:stick \(2x2\)/);
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/wooden_axe: 3 any of [^;]* \+ 2 minecraft:stick/);
+    // GTNH's own crafting table (2 flint above 2 logs, 2x2): the agent can place it.
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(
+      /crafting_table: 2 minecraft:flint \+ 2 any of [^;]* \(2x2\)/,
+    );
+    // The request carries the tools the player has (none in this state).
+    expect(request().state.tools).toEqual([]);
+  });
+
+  it('tells the model about EXPLORE, its arguments and when to explore (GTNH start)', () => {
+    expect(PLANNER_SYSTEM_PROMPT).toContain('EXPLORE {"toward":"north","maxDistance":64}');
+    expect(PLANNER_SYSTEM_PROMPT).toContain('{"toward":{"x":40,"z":120},"maxDistance":64}');
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/15. Exploring. A good GTNH start has wood/);
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(
+      /Never EXPLORE when state\.time\.phase is evening or night/,
+    );
+    expect(PLANNER_SYSTEM_PROMPT).not.toMatch(/exploring is not possible yet/);
+    expect(JSON.stringify(plannerFormat(8))).toContain('"EXPLORE"');
   });
 
   it('returns a recorded valid plan, which then passes validatePlan', async () => {
@@ -97,7 +140,7 @@ describe('OllamaPlannerProvider', () => {
         kind: 'plan',
         plan: {
           goal: 'x',
-          steps: [{ step: 1, action: { type: 'PLACE_BLOCK', args: {} }, rationale: 'x' }],
+          steps: [{ step: 1, action: { type: 'BREAK_BLOCK', args: {} }, rationale: 'x' }],
           requiresUserApproval: false,
           explanation: 'x',
           failureHandling: {

@@ -44,6 +44,9 @@ export const RECIPE_IDS = [
   'torch_charcoal',
   'crafting_table',
   'chest',
+  'wooden_shovel',
+  'wooden_axe',
+  'flint',
 ] as const;
 export const RecipeIdSchema = z.enum(RECIPE_IDS);
 export type RecipeId = z.infer<typeof RecipeIdSchema>;
@@ -67,6 +70,14 @@ const GT_PLANKS =
   'GTNH 2.8.4, verified: GregTech 5.09.51.482 ProcessingLog replaces the vanilla recipe with a ' +
   'shapeless 1 log -> 2 planks while nerfedWoodPlank=true (the test server GregTech.cfg); vanilla gives 4.';
 
+/** The vanilla wooden tool recipes, kept on GTNH 2.8.4 (verified). */
+const WOODEN_TOOL = (pattern: string): string =>
+  `GTNH 2.8.4, verified: vanilla 1.7.10 RecipesTools (${pattern}, X = any planks, # = stick), ` +
+  'a 3x3 recipe that no mod removes: NewHorizonsCoreMod removes only the stone and diamond tool ' +
+  'recipes, TConstruct only with "Remove Vanilla Tool Recipes" (false on the test server), and ' +
+  'the other jars naming the item use it as an ingredient or a loot drop, or change its ' +
+  'durability (GregTech). The quest "Tools" asks for it.';
+
 function planks(id: RecipeId, log: string, plank: string): CraftingRecipe {
   return {
     id,
@@ -88,10 +99,11 @@ export const RECIPES: Readonly<Record<RecipeId, CraftingRecipe>> = {
     id: 'sticks',
     pattern: ['P', 'P'],
     key: { P: PLANKS },
-    result: { item: 'minecraft:stick', count: 4 },
+    result: { item: 'minecraft:stick', count: 2 },
     evidence:
-      'Vanilla 1.7.10 (two planks, one above the other -> 4 sticks). NOT verified for GTNH, ' +
-      'which adds saw recipes and may give fewer.',
+      'GTNH 2.8.4, verified: GregTech 5.09.51.482 CraftingRecipeLoader removes the vanilla recipe ' +
+      '(4 sticks) and adds plankWood above plankWood -> 2 sticks while nerfedWoodPlank=true (the ' +
+      'test server GregTech.cfg); a saw above the planks gives 4.',
   },
   torch_coal: {
     id: 'torch_coal',
@@ -113,13 +125,14 @@ export const RECIPES: Readonly<Record<RecipeId, CraftingRecipe>> = {
   },
   crafting_table: {
     id: 'crafting_table',
-    pattern: ['PP', 'PP'],
-    key: { P: PLANKS },
+    pattern: ['FF', 'LL'],
+    key: { F: ['minecraft:flint'], L: LOGS },
     result: { item: 'minecraft:crafting_table', count: 1 },
     evidence:
-      'Vanilla 1.7.10 (4 planks -> 1). GTNH removes every recipe whose output is ' +
-      'minecraft:crafting_table (RecipeRemover, verified), so on GTNH the server is expected ' +
-      'to show a different result or none; the replacement recipe was not identified.',
+      'GTNH 2.8.4, verified: NewHorizonsCoreMod 2.7.268 RecipeRemover removes every recipe whose ' +
+      'output is minecraft:crafting_table, then ScriptMinecraft adds ShapedUniversalRecipe(' +
+      'crafting_table: flint flint / logWood logWood), a 2x2 recipe (both in CompleteLoad, the ' +
+      'remover first). The agent cannot place blocks: it crafts 3x3 only at tables an operator placed.',
   },
   chest: {
     id: 'chest',
@@ -129,6 +142,32 @@ export const RECIPES: Readonly<Record<RecipeId, CraftingRecipe>> = {
     evidence:
       'GTNH 2.8.4, verified: ScriptMinecraft adds ShapedUniversalRecipe(chest: logWood ' +
       'plankWood logWood / plankWood flint plankWood / logWood plankWood logWood).',
+  },
+  wooden_shovel: {
+    id: 'wooden_shovel',
+    pattern: ['P', 'S', 'S'],
+    key: { P: PLANKS, S: ['minecraft:stick'] },
+    result: { item: 'minecraft:wooden_shovel', count: 1 },
+    evidence: WOODEN_TOOL('X / # / #'),
+  },
+  wooden_axe: {
+    id: 'wooden_axe',
+    pattern: ['PP', 'PS', ' S'],
+    key: { P: PLANKS, S: ['minecraft:stick'] },
+    result: { item: 'minecraft:wooden_axe', count: 1 },
+    evidence: WOODEN_TOOL('XX / X# / _#'),
+  },
+  flint: {
+    id: 'flint',
+    // Shapeless: any three cells of the 2x2 grid.
+    pattern: ['GG', 'G '],
+    key: { G: ['minecraft:gravel'] },
+    result: { item: 'minecraft:flint', count: 1 },
+    evidence:
+      'GTNH 2.8.4, verified: IguanaTweaks 2.6.6 IguanaTweaks.flintTweaks adds a shapeless ' +
+      'new ItemStack(Items.flint) from gravelPerFlint=3 gravel (addFlintRecipe=true in ' +
+      'IguanaTinkerTweaks/main.cfg); the CraftTweaker dump lists it. Gravel never drops flint here: ' +
+      'FlintHandler (removeFlintDrop=true) swaps the flint drop for gravel. Vanilla: no recipe.',
   },
 };
 

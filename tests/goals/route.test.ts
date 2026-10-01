@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { HAND_BOOK, ROUTE_BOOK } from '../../src/goals/route-book.ts';
+import {
+  DIG_YIELDS,
+  HAND_BOOK,
+  ROUTE_BOOK,
+  VANILLA_DIG_YIELDS,
+} from '../../src/goals/route-book.ts';
 import { describeRoute, planRoute, type RouteBook } from '../../src/goals/route.ts';
 import { routeForPlanner } from '../../src/planner/planner-provider.ts';
 import { makeState } from '../fixtures/index.ts';
@@ -76,14 +81,30 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
   it('mixes kinds a recipe accepts, starting with what is held, and needs a table for 3x3', () => {
     // The hand-verified book alone (no generated GTNH data): exact, small numbers.
     const route = planRoute({ 'minecraft:chest': 1 }, { 'minecraft:planks@2': 3 }, HAND_BOOK);
-    // 4 logs + 4 planks + 1 flint: 3 birch planks held, 1 more plank from a log.
-    expect(route.raw).toEqual({ 'minecraft:log': 5, 'minecraft:flint': 1 });
+    // 4 logs + 4 planks + 1 flint: 3 birch planks held, 1 more plank from a log, and the
+    // flint crafted from 3 gravel (GTNH: gravel never drops flint).
+    expect(route.raw).toEqual({ 'minecraft:log': 5, 'minecraft:gravel': 3 });
     expect(route.fromInventory).toEqual({ 'minecraft:planks@2': 3 });
     expect(route.stations).toEqual(['crafting_table']);
-    // Flint comes from gravel one dig in ten.
-    expect(
-      route.legs.find((l) => l.kind === 'gather' && l.item === 'minecraft:flint'),
-    ).toMatchObject({ actions: 10, blocks: ['minecraft:gravel'] });
+    expect(route.legs.find((l) => l.kind === 'craft' && l.recipe === 'flint')).toMatchObject({
+      times: 1,
+      makes: { item: 'minecraft:flint', count: 1 },
+      uses: { 'minecraft:gravel': 3 },
+    });
+    expect(route.legs.some((l) => l.kind === 'gather' && l.item === 'minecraft:flint')).toBe(false);
+  });
+
+  it('never digs gravel for flint (GTNH), unlike vanilla', () => {
+    expect(VANILLA_DIG_YIELDS['minecraft:gravel']).toContainEqual({
+      item: 'minecraft:flint',
+      perDig: 0.1,
+    });
+    expect(DIG_YIELDS['minecraft:gravel']).toEqual([{ item: 'minecraft:gravel', perDig: 1 }]);
+    const flint = planRoute({ 'minecraft:flint': 3 }, {}, ROUTE_BOOK);
+    expect(flint.legs).toMatchObject([
+      { kind: 'gather', item: 'minecraft:gravel', quantity: 9, blocks: ['minecraft:gravel'] },
+      { kind: 'craft', recipe: 'flint', times: 3, makes: { count: 3 } },
+    ]);
   });
 
   it('reports what nothing it knows can make, and why', () => {
@@ -133,7 +154,7 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
     expect(route?.stock).toEqual([
       { item: 'minecraft:stick', have: 0, stored: 0, need: 4, missing: 4 },
     ]);
-    expect(route?.steps.some((s) => s.includes('craft sticks x1'))).toBe(true);
+    expect(route?.steps.some((s) => s.includes('craft sticks x2'))).toBe(true); // GTNH: 2 sticks per craft
     expect(routeForPlanner(base)).toBeNull();
   });
 });

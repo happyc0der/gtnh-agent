@@ -3,14 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { BLOCK_CODE } from '../../../src/bot/gtnh1710/block-hazards.ts';
 import { ChunkStore, decodeChunkBulk } from '../../../src/bot/gtnh1710/chunk-data.ts';
 import {
-  bareHandProgressPerTick,
   checkDig,
   DIG_NEIGHBOURS,
-  DIGGABLE,
-  digWaitTicks,
   faceTowards,
-  serverMinimumTicks,
-  vanillaDigTicks,
   type DigArea,
 } from '../../../src/bot/gtnh1710/digging.ts';
 import { DIG_STATUS, outbound } from '../../../src/bot/gtnh1710/packets.ts';
@@ -27,6 +22,13 @@ import {
   FALLING_DIGGABLE_BLOCKS,
   type DiggableBlock,
 } from '../../../src/domain/blocks.ts';
+import {
+  bareHandProgressPerTick,
+  DIGGABLE,
+  digWaitTicks,
+  serverMinimumTicks,
+  vanillaDigTicks,
+} from '../../../src/domain/dig-time.ts';
 import { BLOCK, DIG_TEST_BLOCK_REGISTRY, flatWorld, neidColumn } from './chunk-fixtures.ts';
 
 describe('the dig allowlist', () => {

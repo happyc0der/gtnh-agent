@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ActionIdSchema, ActionSpecSchema, ActionTypeSchema } from './actions.ts';
-import { DiggableBlockSchema } from './blocks.ts';
+import { DiggableBlockSchema, PlaceableBlockSchema } from './blocks.ts';
 import {
   BlockPositionSchema,
   DimensionSchema,
@@ -10,6 +10,7 @@ import {
   PositionSchema,
   TimestampSchema,
 } from './common.ts';
+import { ProfileIdSchema, SLOT_ROLES } from './interactions.ts';
 import { knownSchema } from './known.ts';
 import { TaskStatusSchema } from './tasks.ts';
 
@@ -90,6 +91,10 @@ export type EnvironmentHazards = z.infer<typeof EnvironmentHazardsSchema>;
 export const MAX_REPORTED_RESOURCES = 64;
 /** Largest `nearbyBlocks.removed` list. */
 export const MAX_REPORTED_REMOVED = 16;
+/** Largest `nearbyBlocks.placeable` list (the nearest cells within reach). */
+export const MAX_REPORTED_PLACEABLE = 32;
+/** Largest `nearbyBlocks.placed` list. */
+export const MAX_REPORTED_PLACED = 16;
 
 /** A block DIG_BLOCK may break, where the observation saw it. */
 export const ResourceBlockSchema = z.strictObject({
@@ -105,10 +110,33 @@ export const ResourceBlockSchema = z.strictObject({
 export type ResourceBlock = z.infer<typeof ResourceBlockSchema>;
 
 /**
- * Blocks near the player that matter for digging, from the blocks the server sent. Only
- * allowlisted blocks a player could see (a face touching air) are listed: at or above the
- * player's feet level, plus sand, gravel and clay one level below it (the ground layer a
- * player digs). The blocks the player stands on are never listed.
+ * An empty cell PLACE_BLOCK may fill, where the observation saw it: air (or tall grass or a
+ * dead bush, which a placed block replaces), within reach, clear of the player's body and of
+ * every entity, touching a plain full block to place it against, with nothing but air, plain
+ * blocks and plants around it and no hazard within one block.
+ */
+export const PlaceableCellSchema = z.strictObject({
+  position: BlockPositionSchema,
+  /**
+   * Sand and gravel may go here: a plain full block is directly below it (they fall
+   * otherwise) and it is not in a column the player's body stands in.
+   */
+  takesFalling: z.boolean(),
+});
+export type PlaceableCell = z.infer<typeof PlaceableCellSchema>;
+
+/** A block the observer saw appear in an empty cell (a placed block), still there. */
+export const PlacedBlockSchema = z.strictObject({
+  block: PlaceableBlockSchema,
+  position: BlockPositionSchema,
+});
+export type PlacedBlock = z.infer<typeof PlacedBlockSchema>;
+
+/**
+ * Blocks near the player that matter for digging and placing, from the blocks the server
+ * sent. Only allowlisted blocks a player could see (a face touching air) are listed as
+ * resources: at or above the player's feet level, plus sand, gravel and clay one level below
+ * it (the ground layer a player digs). The blocks the player stands on are never listed.
  */
 export const NearbyBlocksSchema = z.strictObject({
   /**
@@ -125,6 +153,18 @@ export const NearbyBlocksSchema = z.strictObject({
    * recent first. BLOCK_REMOVED is verified against this.
    */
   removed: z.array(BlockPositionSchema).max(MAX_REPORTED_REMOVED),
+  /**
+   * Cells PLACE_BLOCK may fill (see PlaceableCellSchema), nearest to the eyes first. Only
+   * cells within reach are looked at, and only the nearest MAX_REPORTED_PLACEABLE are listed:
+   * a cell not listed may not be placed into. Empty in snapshots stored before placing.
+   */
+  placeable: z.array(PlaceableCellSchema).max(MAX_REPORTED_PLACEABLE).default([]),
+  /**
+   * Positions near the player where the observer saw an empty cell (air, tall grass or a dead
+   * bush) become a placeable block, while it still is, most recent first. BLOCK_PLACED is
+   * verified against this.
+   */
+  placed: z.array(PlacedBlockSchema).max(MAX_REPORTED_PLACED).default([]),
 });
 export type NearbyBlocks = z.infer<typeof NearbyBlocksSchema>;
 
@@ -169,13 +209,119 @@ export const StorageContainerSchema = z.strictObject({
 });
 export type StorageContainer = z.infer<typeof StorageContainerSchema>;
 
-/** A crafting table the agent may use for 3x3 crafting (the operator configures them). */
+/**
+ * A crafting table the agent may use for 3x3 crafting: one the operator configured, or a
+ * vanilla crafting table the observation found nearby (id `crafting_table:<x>.<y>.<z>`).
+ */
 export const CraftingTableSchema = z.strictObject({
   id: EntityIdSchema,
   name: z.string().min(1).max(100),
   position: knownSchema(PositionSchema),
 });
 export type CraftingTable = z.infer<typeof CraftingTableSchema>;
+
+/** Largest `interactables.blocks` list; beyond it the declared scan radius shrinks. */
+export const MAX_REPORTED_INTERACTABLES = 32;
+
+/** An item stack in a block's window: what it is and how many. */
+export const SlotStackSchema = z.strictObject({
+  item: ItemNameSchema,
+  count: z.int().min(1).max(1_000_000),
+});
+export type SlotStack = z.infer<typeof SlotStackSchema>;
+
+/**
+ * What the agent knows about a furnace. `burning` comes from the block itself
+ * (minecraft:lit_furnace), so it is always current; the contents and progress only from
+ * the last time the agent had its window open (`seen`, with its time).
+ */
+export const FurnaceStateSchema = z.strictObject({
+  burning: z.boolean(),
+  seen: z
+    .strictObject({
+      observedAt: TimestampSchema,
+      input: SlotStackSchema.nullable(),
+      fuel: SlotStackSchema.nullable(),
+      output: SlotStackSchema.nullable(),
+      /** Ticks the current item has cooked (it is done at 200), or null if not sent. */
+      cookTicks: z.int().min(-32768).max(32767).nullable(),
+      /** Ticks the burning fuel item still burns, or null if not sent. */
+      burnTicksLeft: z.int().min(-32768).max(32767).nullable(),
+      /** Total burn ticks of the fuel item burning now, or null if not sent. */
+      fuelItemTicks: z.int().min(-32768).max(32767).nullable(),
+    })
+    .nullable(),
+});
+export type FurnaceState = z.infer<typeof FurnaceStateSchema>;
+
+/**
+ * A block near the player the agent may right-click (src/domain/interactions.ts): one with
+ * an interaction profile, or one the operator allowlisted to look at (`profile` null).
+ */
+export const InteractableBlockSchema = z.strictObject({
+  profile: ProfileIdSchema.nullable(),
+  /** The block's registry name. */
+  block: ItemNameSchema,
+  position: BlockPositionSchema,
+  /**
+   * Where the player can stand to use it (feet position, inside the fence, within reach);
+   * null when there is no such spot. Absent when the adapter does not compute it.
+   */
+  standAt: PositionSchema.nullable().optional(),
+  /** Furnaces only. */
+  furnace: FurnaceStateSchema.optional(),
+});
+export type InteractableBlock = z.infer<typeof InteractableBlockSchema>;
+
+export const NearbyInteractablesSchema = z.strictObject({
+  /** How far (blocks, feet to block centres) the scan looked; `blocks` is complete within it. */
+  scanRadius: z.number().min(0).max(64),
+  /** Nearest first. Only blocks with a face open to air are listed. */
+  blocks: z.array(InteractableBlockSchema).max(MAX_REPORTED_INTERACTABLES),
+});
+export type NearbyInteractables = z.infer<typeof NearbyInteractablesSchema>;
+
+/** One non-empty slot of a block's window. */
+export const WindowSlotSchema = z.strictObject({
+  slot: z.int().min(0).max(511),
+  /** Registry name, or `unknown:<id>@<damage>` for an id the registry does not name. */
+  item: z.string().min(1).max(128),
+  count: z.int().min(-128).max(1_000_000),
+  /** The slot's role from the profile (input, fuel, output, grid, ...), or null. */
+  role: z.enum(SLOT_ROLES).nullable(),
+  /** The stack carries NBT data (never moved by the agent). */
+  nbt: z.boolean(),
+});
+
+/**
+ * The window of the block the agent opened last (INTERACT_BLOCK, SMELT, TAKE_OUTPUT), as
+ * the server sent it. Observe-only windows are closed right after they are seen.
+ */
+export const BlockWindowSchema = z.strictObject({
+  position: BlockPositionSchema,
+  block: ItemNameSchema,
+  profile: ProfileIdSchema.nullable(),
+  /** How the server opened it: `vanilla:<S2D type>` or `fml:<modId>:<guiId>`. */
+  opener: z.string().min(1).max(100),
+  title: z.string().max(200).nullable(),
+  /** Every slot the window has, the player's 36 included. */
+  slotCount: z.int().min(0).max(512),
+  /** The window's own slots before the player's 36, when its layout is known. */
+  containerSlots: z.int().min(0).max(512).nullable(),
+  /**
+   * Where the player's 36 slots start: the layout's, or, for a window without a known
+   * layout, where 36 slots exactly matched the (non-empty) inventory; null if neither.
+   */
+  inventoryAt: z.int().min(0).max(512).nullable(),
+  /** Non-empty slots outside the player's inventory part (all slots if that is unknown). */
+  slots: z.array(WindowSlotSchema).max(512),
+  /** Window properties (S31) as last sent: property id -> value. */
+  properties: z.record(z.string().regex(/^\d{1,5}$/), z.int().min(-32768).max(32767)),
+  /** Whether the window is still open. */
+  open: z.boolean(),
+  observedAt: TimestampSchema,
+});
+export type BlockWindow = z.infer<typeof BlockWindowSchema>;
 
 export const CurrentTaskSchema = z.strictObject({
   taskId: EntityIdSchema,
@@ -187,6 +333,8 @@ export const CurrentTaskSchema = z.strictObject({
    * The planner gets an exact route for them (src/goals/route.ts).
    */
   requirements: ItemCountsSchema.optional(),
+  /** A building task's blueprint: the blocks to place, in order (the planner's route). */
+  blueprint: z.array(z.string().max(300)).max(32).optional(),
 });
 export type CurrentTask = z.infer<typeof CurrentTaskSchema>;
 
@@ -258,8 +406,8 @@ export const GameStateSchema = z.strictObject({
   nearbyThreats: knownSchema(ThreatsSchema),
   environmentHazards: knownSchema(EnvironmentHazardsSchema),
   /**
-   * Diggable blocks nearby (for DIG_BLOCK). Snapshots stored before this field existed
-   * read back as unknown.
+   * Diggable blocks and placeable cells nearby (for DIG_BLOCK and PLACE_BLOCK). Snapshots
+   * stored before this field existed read back as unknown.
    */
   nearbyBlocks: knownSchema(NearbyBlocksSchema).default({
     known: false,
@@ -275,6 +423,16 @@ export const GameStateSchema = z.strictObject({
   storage: z.array(StorageContainerSchema).max(512),
   /** Crafting tables the agent may use. Defaults to [] for states recorded before crafting. */
   craftingTables: z.array(CraftingTableSchema).max(64).default([]),
+  /**
+   * Blocks the agent may right-click (furnaces, crafting tables, allowlisted blocks...).
+   * Snapshots stored before this field existed read back as unknown.
+   */
+  interactables: knownSchema(NearbyInteractablesSchema).default({
+    known: false,
+    reason: 'not reported by this observation',
+  }),
+  /** The block window the agent opened last in this connection, or null. */
+  blockWindow: BlockWindowSchema.nullable().default(null),
   /** Container whose GUI is currently open, if any. */
   openContainerId: EntityIdSchema.nullable(),
   currentTask: CurrentTaskSchema.nullable(),

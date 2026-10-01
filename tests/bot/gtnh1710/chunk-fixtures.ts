@@ -31,6 +31,12 @@ export const BLOCK = {
   clay: 82,
   leaves2: 161,
   log2: 162,
+  // Placing tests:
+  cobblestone: 4,
+  planks: 5,
+  sandstone: 24,
+  deadbush: 32,
+  yellowFlower: 37,
 } as const;
 
 export const TEST_BLOCK_REGISTRY: Array<[number, string]> = [
@@ -65,6 +71,16 @@ export const DIG_TEST_BLOCK_REGISTRY: Array<[number, string]> = [
   [BLOCK.log2, 'minecraft:log2'],
 ];
 
+/** The digging registry plus the blocks the placing tests use. */
+export const PLACE_TEST_BLOCK_REGISTRY: Array<[number, string]> = [
+  ...DIG_TEST_BLOCK_REGISTRY,
+  [BLOCK.cobblestone, 'minecraft:cobblestone'],
+  [BLOCK.planks, 'minecraft:planks'],
+  [BLOCK.sandstone, 'minecraft:sandstone'],
+  [BLOCK.deadbush, 'minecraft:deadbush'],
+  [BLOCK.yellowFlower, 'minecraft:yellow_flower'],
+];
+
 export type BlockFn = (x: number, y: number, z: number) => number;
 
 /** Bedrock at y=0 and a grass floor at y=105 (the fake spawn stands on it at y=106). */
@@ -87,13 +103,20 @@ export interface ColumnBytes {
   data: Buffer;
 }
 
-/** One column in NotEnoughIDs layout (u16 ids, u16 metadata, block light, sky light, biomes). */
+/** Biome id of a column (world x, z). */
+export type BiomeFn = (x: number, z: number) => number;
+
+/**
+ * One column in NotEnoughIDs layout (u16 ids, u16 metadata, block light, sky light, biomes:
+ * one byte per column, index z << 4 | x, from `biomeAt`, or all 0).
+ */
 export function neidColumn(
   cx: number,
   cz: number,
   block: BlockFn,
   skyLight = true,
   biomes = true,
+  biomeAt?: BiomeFn,
 ): ColumnBytes {
   let mask = 0;
   const idArrays: Buffer[] = [];
@@ -113,12 +136,16 @@ export function neidColumn(
     }
   }
   const n = idArrays.length;
+  const biomeBytes = Buffer.alloc(biomes ? 256 : 0);
+  if (biomes && biomeAt !== undefined) {
+    for (let i = 0; i < 256; i++) biomeBytes[i] = biomeAt(cx * 16 + (i & 15), cz * 16 + (i >> 4));
+  }
   const data = Buffer.concat([
     ...idArrays,
     Buffer.alloc(8192 * n), // metadata
     Buffer.alloc(2048 * n), // block light
     Buffer.alloc(skyLight ? 2048 * n : 0),
-    Buffer.alloc(biomes ? 256 : 0),
+    biomeBytes,
   ]);
   return { header: { chunkX: cx, chunkZ: cz, primaryBitMask: mask, addBitMask: 0 }, data };
 }

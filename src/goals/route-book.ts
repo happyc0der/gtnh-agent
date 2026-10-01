@@ -23,10 +23,13 @@ import type { RouteBook, RouteRecipe, RouteSource, RouteTool } from './route.ts'
  * itself stays general: new abilities and data are new entries here.
  */
 
-/** What one dig of each allowlisted block yields with a bare hand (vanilla 1.7.10 averages). */
-export const DIG_YIELDS: Readonly<
-  Record<DiggableBlock, ReadonlyArray<{ item: string; perDig: number }>>
-> = {
+type Yields = Readonly<Record<DiggableBlock, ReadonlyArray<{ item: string; perDig: number }>>>;
+
+/**
+ * Vanilla 1.7.10 (the base layer): what one bare-hand dig of each allowlisted block yields
+ * on average, with no fortune. GTNH changes some of it (GTNH_DIG_CHANGES).
+ */
+export const VANILLA_DIG_YIELDS: Yields = {
   'minecraft:sand': [{ item: 'minecraft:sand', perDig: 1 }],
   // BlockGravel: 10% flint instead of gravel (fortune 0).
   'minecraft:gravel': [
@@ -53,6 +56,28 @@ export const DIG_YIELDS: Readonly<
     { item: 'minecraft:apple', perDig: 0.005 },
   ],
   'minecraft:leaves2': [{ item: 'minecraft:sapling@4', perDig: 0.05 }],
+};
+
+/** GTNH 2.8.4's changes to what bare-hand digs yield (each verified; see the evidence). */
+export const GTNH_DIG_CHANGES: ReadonlyArray<{
+  block: DiggableBlock;
+  yields: ReadonlyArray<{ item: string; perDig: number }>;
+  evidence: string;
+}> = [
+  {
+    block: 'minecraft:gravel',
+    yields: [{ item: 'minecraft:gravel', perDig: 1 }],
+    evidence:
+      'IguanaTweaks 2.6.6 FlintHandler (removeFlintDrop=true, IguanaTinkerTweaks/main.cfg) ' +
+      'replaces the flint drop with gravel: gravel always drops gravel. Flint is crafted: 3 ' +
+      'gravel -> 1 flint (addFlintRecipe, gravelPerFlint=3).',
+  },
+];
+
+/** What one bare-hand dig yields on this server: vanilla, with GTNH's changes applied. */
+export const DIG_YIELDS: Yields = {
+  ...VANILLA_DIG_YIELDS,
+  ...Object.fromEntries(GTNH_DIG_CHANGES.map((c) => [c.block, c.yields])),
 };
 
 /**
@@ -169,8 +194,9 @@ function digSources(): RouteSource[] {
 
 /** The hand-verified crafting recipes (src/domain/recipes.ts), as route recipes. */
 function handRecipes(): RouteRecipe[] {
-  // GTNH removes the vanilla crafting table recipe (recipes.ts): never route through it.
-  return RECIPE_IDS.filter((id) => id !== 'crafting_table').map((id) => {
+  // Every recipe in the table is verified for GTNH (e.g. the crafting table is GTNH's own
+  // 2x2: two flint above two logs).
+  return RECIPE_IDS.map((id) => {
     const r = RECIPES[id];
     return {
       id,

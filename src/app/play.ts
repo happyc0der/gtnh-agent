@@ -2,12 +2,15 @@ import { AGE0_QUESTS } from '../goals/age0-quests.ts';
 import {
   BASE_ABILITIES,
   missingItems,
+  missingText,
   type Abilities,
   type Quest,
   type QuestProgress,
 } from '../goals/quest-goals.ts';
 import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../domain/recipes.ts';
-import type { WorldTime } from '../domain/game-state.ts';
+import { TICKS_PER_DAY, TICKS_PER_SECOND, type WorldTime } from '../domain/game-state.ts';
+import { describeShelter, type ShelterStatus } from '../goals/shelter.ts';
+import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { CycleResult } from './agent-loop.ts';
 import {
@@ -18,6 +21,13 @@ import {
   type SessionStopKind,
 } from './live-session.ts';
 import { adoptGoal, updateQuests } from './quest-commands.ts';
+import {
+  adoptScoutTask,
+  finishScoutTask,
+  runScoutSession,
+  scoutingDue,
+  type Scouting,
+} from './scouting.ts';
 
 /**
  * Autonomous play: the agent works through the Age 0 quest book by itself. Each round it
@@ -79,6 +89,18 @@ export interface PlayDeps {
   inventory: () => Promise<Readonly<Record<string, number>> | null>;
   /** Reads the world's clock now (null when unknown). Without it, play ignores the time. */
   time?: () => Promise<WorldTime | null>;
+  /**
+   * What a night shelter around the player still needs (null when unknown). With it, play
+   * shelters at dusk and waits for the morning inside; without it, play stops before dark.
+   */
+  shelter?: () => Promise<ShelterStatus | null>;
+  /** Waits (injectable for tests). */
+  sleep?: (ms: number) => Promise<void>;
+  /**
+   * A goal of the player's own instead of the quest book: items to have (item -> count).
+   * Play pursues it like a quest (the planner gets its route) and ends when it is reached.
+   */
+  goal?: FreeGoal;
   /** Runs one bounded session on the current task (runSession on the live connection). */
   session: (
     limits: SessionLimits,
@@ -91,10 +113,24 @@ export interface PlayDeps {
   quests?: readonly Quest[];
   /** Milliseconds since the epoch (injectable for tests). */
   now?: () => number;
+  /**
+   * Given when the agent can explore: play then begins by scouting the area once, while world
+   * memory has seen little (src/app/scouting.ts).
+   */
+  scouting?: Scouting;
+}
+
+export interface FreeGoal {
+  /** The task id it is worked under (e.g. goal-minecraft:diamond-100). */
+  taskId: string;
+  /** Shown to the planner and in messages, e.g. "get 100 minecraft:diamond". */
+  name: string;
+  requirements: Readonly<Record<string, number>>;
 }
 
 export type PlayEvent =
   | { kind: 'quest-completed'; quest: string; completed: number; total: number }
+  | { kind: 'scout'; taskId: string; chunksSeen: number; created: boolean }
   | {
       kind: 'goal';
       quest: string;
@@ -120,6 +156,7 @@ export type PlayEvent =
       /** What the executor reported for the action, if one ran. */
       detail: string | null;
     }
+  | { kind: 'night'; message: string }
   | {
       kind: 'session-end';
       session: number;
@@ -151,6 +188,32 @@ const CONTINUE_AFTER: ReadonlySet<SessionStopKind> = new Set([
   'stop-requested', // only when the quest itself was met: see below
 ]);
 
+/** A cycle of a play session, for narration (the same event the quest sessions emit). */
+function cycleEvent(
+  repos: Repositories,
+  session: number,
+  r: CycleResult,
+  index: number,
+): PlayEvent {
+  return {
+    kind: 'cycle',
+    session,
+    index,
+    summary: r.summary,
+    decision:
+      r.decision === null || r.decision === undefined
+        ? null
+        : {
+            provider: r.decision.provider,
+            decision: r.decision.decision,
+            reasons: r.decision.reasonCodes,
+            confidence: r.decision.confidence,
+          },
+    newPlan: r.planner?.kind === 'plan-accepted' ? planOf(repos, r.planner.planId) : null,
+    detail: r.outcome?.execution?.message ?? null,
+  };
+}
+
 /** A stored plan as one line per step, for narration. */
 function planOf(
   repos: Repositories,
@@ -169,19 +232,100 @@ function planOf(
 
 /**
  * What the live agent can obtain: everything digging gathers, and the results of the
- * recipes it can craft (2x2 always; 3x3 only when a crafting table is configured). GTNH
- * removes the vanilla crafting-table recipe, so the table itself is never counted.
+ * recipes it can craft (2x2 always; 3x3 only when a crafting table is configured). The
+ * crafting table itself is never counted: the agent cannot place it, so making one (from
+ * GTNH's flint recipe) would only spend flint.
  */
 export function liveAbilities(hasCraftingTable: boolean): Abilities {
-  const craft = RECIPE_IDS.filter((id) => id !== 'crafting_table')
-    .map((id) => RECIPES[id])
+  const craft = RECIPE_IDS.map((id) => RECIPES[id])
     .filter((r) => hasCraftingTable || !needsCraftingTable(r))
     .map((r) => r.result.item.replace(/@\d+$/, ''));
   return { gather: BASE_ABILITIES.gather, craft: new Set(craft) };
 }
 
-/** Evening or night: hostile mobs come out, and the agent has no shelter yet. */
+/** What `requirements` still needs beyond `inventory` (item -> missing count). */
+function missingFor(
+  requirements: Readonly<Record<string, number>>,
+  inventory: Readonly<Record<string, number>>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [item, n] of Object.entries(requirements)) {
+    const need = n - (inventory[item] ?? 0);
+    if (need > 0) out[item] = need;
+  }
+  return out;
+}
+
+/** Makes a free goal the current task, with its requirements (the planner's route). */
+function adoptFreeGoal(
+  repos: Repositories,
+  goal: FreeGoal,
+  missing: Record<string, number>,
+): { taskId: string; created: boolean; status: string } {
+  const existing = repos.tasks.get(goal.taskId);
+  const task = repos.transaction(() => {
+    const t = repos.tasks.ensure({
+      id: goal.taskId,
+      goal: goal.name.slice(0, 300),
+      subgoal: missingText(missing),
+      status: 'active',
+    });
+    repos.memory.setTaskRequirements(goal.taskId, { ...goal.requirements });
+    if (t.status === 'active') repos.memory.setValue(CURRENT_TASK_KEY, goal.taskId);
+    return t;
+  });
+  return { taskId: goal.taskId, created: existing === null, status: task.status };
+}
+
+/** The goal is held: its task completes and stops being current. */
+function reachGoal(repos: Repositories, goal: FreeGoal): void {
+  repos.transaction(() => {
+    if (repos.tasks.get(goal.taskId) !== null) repos.tasks.setStatus(goal.taskId, 'completed');
+    if (repos.memory.getValue(CURRENT_TASK_KEY) === goal.taskId) {
+      repos.memory.setValue(CURRENT_TASK_KEY, null);
+    }
+    repos.memory.appendJournal(goal.taskId, `GOAL "${goal.name}" reached`);
+  });
+}
+
+/** Real minutes until the next sunrise (tick 0 of the next day). */
+const untilSunrise = (t: WorldTime): number =>
+  Number(((TICKS_PER_DAY - t.timeOfDay) / TICKS_PER_SECOND / 60).toFixed(1));
+
+/** Evening or night: hostile mobs come out. */
 export const isDark = (t: WorldTime): boolean => t.phase === 'evening' || t.phase === 'night';
+
+/** Real minutes before night when play starts on a shelter (placing is refused once mobs are near). */
+export const SHELTER_LEAD_MINUTES = 2;
+
+/** Dark, or dark within SHELTER_LEAD_MINUTES: time to be in a shelter. */
+export const nightSoon = (t: WorldTime): boolean =>
+  isDark(t) || (t.phase === 'day' && t.minutesUntilNight <= SHELTER_LEAD_MINUTES);
+
+/**
+ * Inside the shelter: waits until it is day again, checking the stop file / Ctrl+C and the
+ * time limit every few seconds. Returns why play must stop, or null at sunrise.
+ */
+async function waitForMorning(
+  deps: PlayDeps,
+  hooks: { stopRequested: () => string | null },
+  limits: PlayLimits,
+  started: number,
+  now: () => number,
+): Promise<string | null> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (;;) {
+    const stop = hooks.stopRequested();
+    if (stop !== null) return stop;
+    if (now() - started >= limits.maxMinutes * 60_000) {
+      return `reached the limit of ${limits.maxMinutes} minutes`;
+    }
+    const t = (await deps.time?.()) ?? null;
+    if (t === null) return 'the clock is unknown, so the morning cannot be awaited';
+    if (t.phase === 'day' && !nightSoon(t)) return null;
+    await sleep(5000);
+  }
+}
 
 function nightReason(t: WorldTime): string {
   return (
@@ -212,6 +356,10 @@ export async function runPlay(
   let progress: QuestProgress | null = null;
   let sessions = 0;
   let lastStop = '';
+  /** Shelter sessions tonight (reset in daylight). */
+  let shelterTries = 0;
+  /** A note for the next goal's journal (e.g. how to leave the night shelter). */
+  let wakeNote: string | null = null;
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
   let last: { questId: string; missing: number; stuck: number } | null = null;
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
@@ -224,6 +372,41 @@ export async function runPlay(
     elapsedMs: now() - started,
   });
 
+  // GTNH start: look around once before settling (scouting.ts), when the agent can explore.
+  if (deps.scouting !== undefined) {
+    const due = scoutingDue(deps.repos, deps.scouting);
+    if (due.kind === 'stop') return done(due.reason);
+    if (due.kind === 'scout') {
+      const stop = hooks.stopRequested();
+      if (stop !== null) return done(stop);
+      const clock = (await deps.time?.()) ?? null;
+      if (clock !== null && isDark(clock)) return done(nightReason(clock), clock);
+      const scout = adoptScoutTask(deps.repos);
+      emit({ kind: 'scout', ...scout, chunksSeen: deps.scouting.chunksSeen() });
+      const session = sessions + 1;
+      const r = await runScoutSession({
+        scouting: deps.scouting,
+        limits: limits.session,
+        session: deps.session,
+        stopRequested: hooks.stopRequested,
+        onCycle: (c, index) => emit(cycleEvent(deps.repos, session, c, index)),
+      });
+      sessions = session;
+      lastStop = r.session.stopReason;
+      emit({
+        kind: 'session-end',
+        session,
+        stopKind: r.session.stopKind,
+        stopReason: r.session.stopReason,
+        cycles: r.session.cycles.length,
+      });
+      if (r.dark !== null) return done(nightReason(r.dark), r.dark);
+      if (r.session.stopKind === 'stop-requested' && !r.scouted) return done(r.session.stopReason);
+      if (!CONTINUE_AFTER.has(r.session.stopKind)) return done(r.session.stopReason);
+      finishScoutTask(deps.repos);
+    }
+  }
+
   for (;;) {
     const stop = hooks.stopRequested();
     if (stop !== null) return done(stop);
@@ -235,55 +418,176 @@ export async function runPlay(
     }
 
     const clock = (await deps.time?.()) ?? null;
-    if (clock !== null && isDark(clock)) return done(nightReason(clock), clock);
+    if (clock !== null && nightSoon(clock)) {
+      if (deps.shelter === undefined) {
+        if (isDark(clock)) return done(nightReason(clock), clock);
+      } else {
+        const status = await deps.shelter();
+        if (status === null)
+          return done(`${nightReason(clock)}: the shelter cannot be checked`, clock);
+        if (status.sheltered) {
+          emit({
+            kind: 'night',
+            message: `sheltered: waiting for the morning (${untilSunrise(clock)} min)`,
+          });
+          const stop = await waitForMorning(deps, hooks, limits, started, now);
+          if (stop !== null) return done(stop);
+          emit({ kind: 'night', message: 'morning: leaving the shelter' });
+          wakeNote =
+            'morning: the player is inside its night shelter (walls around it, a roof above): ' +
+            'to get out, dig one wall, the head-level block first, then the one below it';
+          continue;
+        }
+        if (status.problem !== null || shelterTries >= limits.maxStuckSessions) {
+          const why = status.problem ?? `${shelterTries} sessions did not finish it`;
+          return done(`${nightReason(clock)}; no shelter: ${why}`, clock);
+        }
+        shelterTries += 1;
+        const taskId = 'night-shelter';
+        const steps = describeShelter(status);
+        deps.repos.transaction(() => {
+          deps.repos.tasks.ensure({
+            id: taskId,
+            goal: 'Night is coming: build a shelter around yourself (the route), then stay inside until morning',
+            subgoal: `${status.todo.length} blocks to place before dark`,
+            status: 'active',
+          });
+          deps.repos.tasks.setStatus(taskId, 'active');
+          deps.repos.memory.setTaskBlueprint(taskId, steps);
+          deps.repos.memory.setTaskRequirements(taskId, null);
+          deps.repos.memory.setValue(CURRENT_TASK_KEY, taskId);
+        });
+        emit({
+          kind: 'goal',
+          quest: 'shelter for the night',
+          goal: `place ${status.todo.length} blocks`,
+          missing: status.needs,
+          taskId,
+          created: false,
+        });
+        const session = sessions + 1;
+        const result = await deps.session(
+          {
+            ...limits.session,
+            maxCycles: Math.min(limits.session.maxCycles, status.todo.length * 2 + 2),
+          },
+          {
+            stopRequested: hooks.stopRequested,
+            onCycle: (r, index) =>
+              emit({
+                kind: 'cycle',
+                session,
+                index,
+                summary: r.summary,
+                decision: null,
+                newPlan:
+                  r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
+                detail: r.outcome?.execution?.message ?? null,
+              }),
+          },
+        );
+        sessions = session;
+        emit({
+          kind: 'session-end',
+          session,
+          stopKind: result.stopKind,
+          stopReason: result.stopReason,
+          cycles: result.cycles.length,
+        });
+        if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
+          return done(result.stopReason);
+        }
+        continue;
+      }
+    }
+    shelterTries = 0;
 
     const inventory = await deps.inventory();
-    if (inventory === null) return done('the inventory is unknown, so quest progress is unknown');
-    const update = updateQuests(deps.repos, inventory, abilities, quests);
-    progress = update.progress;
-    for (const q of update.added) {
-      questsCompleted.push(q.name);
-      deps.repos.memory.appendJournal(`quest-${q.id}`, `QUEST "${q.name}" completed`);
-      emit({
-        kind: 'quest-completed',
-        quest: q.name,
-        completed: update.progress.completed,
-        total: update.progress.total,
-      });
-    }
-    const goal = update.next;
-    if (goal === null) return done('no quest the agent can do is left');
+    if (inventory === null) return done('the inventory is unknown, so progress is unknown');
 
-    // Progress is fewer missing items for the same quest (read from the inventory, not
-    // from what a session claims); moving to another quest resets the count.
-    const missingNow = total(goal.missing);
-    if (last !== null && last.questId === goal.quest.id) {
+    // What to work on this round: the player's own goal, or the next quest.
+    let current: {
+      id: string;
+      name: string;
+      text: string;
+      missing: Record<string, number>;
+      missingWith: (inv: Readonly<Record<string, number>>) => number;
+      adopt: () => { taskId: string; created: boolean; status: string };
+    };
+    if (deps.goal !== undefined) {
+      const free = deps.goal;
+      const missing = missingFor(free.requirements, inventory);
+      if (total(missing) === 0) {
+        reachGoal(deps.repos, free);
+        return done(`the goal "${free.name}" is reached`);
+      }
+      current = {
+        id: free.taskId,
+        name: free.name,
+        text: free.name,
+        missing,
+        missingWith: (inv) => total(missingFor(free.requirements, inv)),
+        adopt: () => adoptFreeGoal(deps.repos, free, missing),
+      };
+    } else {
+      const update = updateQuests(deps.repos, inventory, abilities, quests);
+      progress = update.progress;
+      for (const q of update.added) {
+        questsCompleted.push(q.name);
+        deps.repos.memory.appendJournal(`quest-${q.id}`, `QUEST "${q.name}" completed`);
+        emit({
+          kind: 'quest-completed',
+          quest: q.name,
+          completed: update.progress.completed,
+          total: update.progress.total,
+        });
+      }
+      const goal = update.next;
+      if (goal === null) return done('no quest the agent can do is left');
+      current = {
+        id: goal.quest.id,
+        name: goal.quest.name,
+        text: goal.text,
+        missing: goal.missing,
+        missingWith: (inv) => total(missingItems(goal.quest, inv)),
+        adopt: () => adoptGoal(deps.repos, goal),
+      };
+    }
+
+    // Progress is fewer missing items for the same goal (read from the inventory, not
+    // from what a session claims); moving to another goal resets the count.
+    const missingNow = total(current.missing);
+    if (last !== null && last.questId === current.id) {
       last.stuck = missingNow < last.missing ? 0 : last.stuck + 1;
       last.missing = missingNow;
       if (last.stuck >= limits.maxStuckSessions) {
         return done(
-          `no progress on "${goal.quest.name}" in ${last.stuck} sessions in a row (last: ${lastStop})`,
+          `no progress on "${current.name}" in ${last.stuck} sessions in a row (last: ${lastStop})`,
         );
       }
     } else {
-      last = { questId: goal.quest.id, missing: missingNow, stuck: 0 };
+      last = { questId: current.id, missing: missingNow, stuck: 0 };
     }
 
-    const adopted = adoptGoal(deps.repos, goal);
+    const adopted = current.adopt();
     if (adopted.status !== 'active') {
       return done(
-        `the task ${adopted.taskId} for "${goal.quest.name}" is ${adopted.status}; ` +
+        `the task ${adopted.taskId} for "${current.name}" is ${adopted.status}; ` +
           'it needs you (plan-approve, task-resume) before play goes on',
       );
     }
     emit({
       kind: 'goal',
-      quest: goal.quest.name,
-      goal: goal.text,
-      missing: goal.missing,
+      quest: current.name,
+      goal: current.text,
+      missing: current.missing,
       taskId: adopted.taskId,
       created: adopted.created,
     });
+    if (wakeNote !== null) {
+      deps.repos.memory.appendJournal(adopted.taskId, wakeNote);
+      wakeNote = null;
+    }
 
     // One session on this quest. It also ends as soon as an observation shows the quest's
     // items are all held, so the planner is never asked to do what is already done.
@@ -293,7 +597,7 @@ export async function runPlay(
     const result = await deps.session(limits.session, {
       stopRequested: () =>
         met
-          ? `the quest "${goal.quest.name}" is satisfied`
+          ? `"${current.name}" is satisfied`
           : dark !== null
             ? nightReason(dark)
             : hooks.stopRequested(),
@@ -318,9 +622,15 @@ export async function runPlay(
         });
         const after = r.outcome?.stateAfter;
         if (after?.inventory.known === true) {
-          met = total(missingItems(goal.quest, after.inventory.value.items)) === 0;
+          met = current.missingWith(after.inventory.value.items) === 0;
         }
-        if (after?.time.known === true && isDark(after.time.value)) dark = after.time.value;
+        // Shelter time (or dark, without shelters) ends the session in time to act on it.
+        if (
+          after?.time.known === true &&
+          (deps.shelter === undefined ? isDark(after.time.value) : nightSoon(after.time.value))
+        ) {
+          dark = after.time.value;
+        }
       },
     });
     sessions = session;
@@ -340,7 +650,10 @@ export async function runPlay(
         `interrupted: ${dark !== null ? nightReason(dark) : result.stopReason}`,
       );
     }
-    if (dark !== null) return done(nightReason(dark), dark);
+    if (dark !== null) {
+      if (deps.shelter === undefined) return done(nightReason(dark), dark);
+      continue; // the next round builds the shelter
+    }
     if (result.stopKind === 'stop-requested' && !met) return done(result.stopReason);
     if (!CONTINUE_AFTER.has(result.stopKind)) return done(result.stopReason);
   }
@@ -351,6 +664,8 @@ export function describePlayEvent(e: PlayEvent): string {
   switch (e.kind) {
     case 'quest-completed':
       return `QUEST DONE: "${e.quest}" (${e.completed}/${e.total})`;
+    case 'scout':
+      return `goal: scout the area before settling (${e.chunksSeen} chunk(s) seen so far)${e.created ? ' (new task)' : ''}`;
     case 'goal': {
       const missing = Object.entries(e.missing)
         .map(([item, n]) => `${n} ${item}`)
@@ -378,5 +693,7 @@ export function describePlayEvent(e: PlayEvent): string {
     }
     case 'session-end':
       return `session ${e.session}: ${e.cycles} cycle(s); ${e.stopReason}`;
+    case 'night':
+      return `night: ${e.message}`;
   }
 }

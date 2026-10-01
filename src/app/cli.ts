@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import { loadConfig } from '../config/env.ts';
+import { isPlaceableItem, PLACEABLE_ITEMS } from '../domain/blocks.ts';
+import { MAX_EXPLORE_DISTANCE, MIN_EXPLORE_DISTANCE } from '../domain/actions.ts';
 import { TaskStatusSchema } from '../domain/tasks.ts';
 import { IN_MEMORY, openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
@@ -13,9 +15,13 @@ import { syncConfigToDatabase, type CycleResult } from './agent-loop.ts';
 import {
   movementStatus,
   parseBlockPosition,
+  parseExploreToward,
   runLiveChest,
   runLiveCycle,
   runLiveDig,
+  runLivePlace,
+  runLiveExplore,
+  runLiveInteract,
   runLiveSession,
   runLiveMove,
   setMovementHalted,
@@ -23,6 +29,7 @@ import {
   watchLive,
   withLiveClient,
 } from './live-agent.ts';
+import { describeKnownPlaces, parseMapPoint } from './world-memory-commands.ts';
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
@@ -40,7 +47,7 @@ import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
 const USAGE = `gtnh-agent (single cycle, no autonomy; the live client only observes unless walking,
-chests or digging are explicitly enabled)
+chests, crafting, digging or placing are explicitly enabled)
 
 Usage:
   node src/app/cli.ts once [--scenario <name>] [--db <path> | --memory] [--full]
@@ -58,6 +65,13 @@ Usage:
       WALK the player (needs MC_ENABLE_MOVEMENT=true and a fence). One action, validated,
       executed and verified like the agent's own; Ctrl+C stops it. --dry-run only plans it
       and draws the path on a map of the fence.
+  node src/app/cli.ts explore --live --toward <north|north_east|...|x,z> [--distance 64] [--db <path>]
+      EXPLORE (needs MC_ENABLE_MOVEMENT=true and MC_MOVEMENT_MODE=follow): walk over land toward
+      a direction or a point, in hops, at most --distance blocks (8-96), in daylight only, as a
+      checked user action; prints what it saw and what world memory knows. Ctrl+C stops it.
+  node src/app/cli.ts places [--at x,z] [--db <path>]
+      What world memory knows, as the planner gets it (chunks seen, places per resource,
+      biomes, how far each direction is seen), from --at or the last observed position.
   node src/app/cli.ts chest --live --container <id> [--withdraw <item> | --deposit <item>] [--count N]
       Open a configured vanilla chest (needs MC_ENABLE_CONTAINERS=true) and optionally move
       exactly N items, as checked user actions; prints the chest and inventory afterwards.
@@ -65,24 +79,39 @@ Usage:
       BREAK one allowlisted block (logs, leaves, dirt, grass, sand, gravel, clay) inside the
       fence with an empty hand (needs MC_ENABLE_DIGGING=true and a fence), as a checked user
       action; prints the diggable blocks and the inventory afterwards. Ctrl+C stops it.
+  node src/app/cli.ts place --live --at <x,y,z> --item <item> [--db <path>]
+      PLACE one allowlisted block the player carries (dirt, cobblestone, sand, gravel,
+      sandstone, planks, logs) into an empty cell inside the fence (needs
+      MC_ENABLE_PLACING=true and a fence), as a checked user action; prints the placeable
+      cells and the inventory afterwards.
+  node src/app/cli.ts interact --live --at <x,y,z> [--smelt <item> --count N --fuel <item> --fuel-count M | --take <item>]
+      OPEN a block with an interaction profile (furnace, crafting table, chest, Iron Chests...)
+      or one on the observe-only allowlist (needs MC_ENABLE_INTERACT=true) with an empty hand,
+      and print its window; optionally put items to smelt and fuel into a furnace, or take
+      its output. Checked user actions, like dig and chest.
+  node src/app/cli.ts layouts [--db <path>]
+      Window layouts learned from blocks the agent opened (per block): the material for a
+      new interaction profile (docs/architecture.md, "Interacting with blocks").
   node src/app/cli.ts run --live [--max-cycles N] [--max-minutes M] [--db <path>] [--verbose]
       BOUNDED auto-run of the current task on one connection: ordinary cycles back to back,
       stopping when the task is done or anything needs you (a pause, rejection, failure,
       approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
       stop file (pnpm cli halt) or Ctrl+C.
-  node src/app/cli.ts play --live [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
+  node src/app/cli.ts play --live [--needs item=count,...] [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
       AUTONOMOUS PLAY through the Age 0 quest book: the agent picks its next quest, the
       configured decision maker and planner (AGENT_DECISIONS / AGENT_PLANNER, e.g. ollama)
       choose what to do, and every action is validated, executed and verified as always.
       Stops when no doable quest is left, when anything needs you, after 3 sessions without
       progress on a quest, at the time limit, the stop file (pnpm cli halt) or Ctrl+C.
+      --needs pursues your own goal instead (e.g. --needs minecraft:diamond=100): the planner
+      gets its route the same way, and play ends when the items are held.
   node src/app/cli.ts quests [--live] [--db <path>]
       The agent's Age 0 quest book (GTNH "Tier 0 Stone Age"): progress, completed quests
       and the next goal. --live reads the inventory first and records the quests it now
       satisfies (the agent's own bookkeeping; the server's quest book is not touched).
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
-      Create / remove the stop file (nothing walks, uses chests or digs while it exists) /
-      show movement and digging settings.
+      Create / remove the stop file (nothing walks, uses chests, digs or places while it
+      exists) / show movement, digging and placing settings.
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -177,9 +206,16 @@ async function main(argv: string[]): Promise<number> {
       reason: { type: 'string' },
       to: { type: 'string' },
       at: { type: 'string' },
+      item: { type: 'string' },
+      toward: { type: 'string' },
+      distance: { type: 'string', default: '64' },
       container: { type: 'string' },
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
+      smelt: { type: 'string' },
+      fuel: { type: 'string' },
+      'fuel-count': { type: 'string', default: '0' },
+      take: { type: 'string' },
       count: { type: 'string', default: '1' },
       seconds: { type: 'string', default: '60' },
       every: { type: 'string', default: '5' },
@@ -298,6 +334,65 @@ async function main(argv: string[]): Promise<number> {
       if (out.result === null) return out.plan?.ok === true ? 0 : 1;
       return out.result.status === 'succeeded' ? 0 : 1;
     }
+    case 'explore': {
+      if (!values.live) {
+        process.stderr.write(
+          'explore walks on the configured test server; pass --live to confirm.\n',
+        );
+        return 1;
+      }
+      const toward = values.toward === undefined ? null : parseExploreToward(values.toward);
+      if (toward === null) {
+        process.stderr.write(
+          'explore requires --toward <direction | x,z>: north, north_east, east, south_east, ' +
+            'south, south_west, west, north_west, or a point such as 120,-40\n',
+        );
+        return 1;
+      }
+      const distance = Number(values.distance);
+      if (
+        !Number.isInteger(distance) ||
+        distance < MIN_EXPLORE_DISTANCE ||
+        distance > MAX_EXPLORE_DISTANCE
+      ) {
+        process.stderr.write(
+          `--distance must be a whole number from ${MIN_EXPLORE_DISTANCE} to ${MAX_EXPLORE_DISTANCE}\n`,
+        );
+        return 1;
+      }
+      const out = await runLiveExplore(config, dbPath, toward, distance, log);
+      print({
+        ...(values.full
+          ? { result: out.result, connection: out.info }
+          : compact('live-explore', dbPath, out.result)),
+        worldMemory: out.exploration,
+      });
+      return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'places': {
+      const at = values.at === undefined ? null : parseMapPoint(values.at);
+      if (values.at !== undefined && at === null) {
+        process.stderr.write('--at must be x,z (or x,y,z)\n');
+        return 1;
+      }
+      const db = openDatabase(dbPath);
+      try {
+        const out = describeKnownPlaces(
+          createRepositories(db, systemClock),
+          config,
+          at,
+          new Date(),
+        );
+        if (!out.ok) {
+          process.stderr.write(`${out.error}\n`);
+          return 1;
+        }
+        print(out.value);
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
     case 'watch': {
       if (!values.live) {
         process.stderr.write(
@@ -325,6 +420,19 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`${invalid}\n`);
         return 1;
       }
+      const needs = values.needs === undefined ? null : parseNeeds(values.needs);
+      const freeGoal =
+        needs === null
+          ? null
+          : {
+              taskId: `goal-${Object.entries(needs)
+                .map(([item, n]) => `${item}-${n}`)
+                .join('-')}`.slice(0, 64),
+              name: `get ${Object.entries(needs)
+                .map(([item, n]) => `${n} ${item}`)
+                .join(', ')}`,
+              requirements: needs,
+            };
       const providers = createProviders(config);
       process.stderr.write(
         `playing: decisions by ${providers.decisionProvider.name}, plans by ` +
@@ -348,6 +456,7 @@ async function main(argv: string[]): Promise<number> {
               limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, minutesLeft)) },
               ...providers,
               abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
+              ...(freeGoal === null ? {} : { goal: freeGoal }),
               onEvent: (e) => process.stderr.write(`${describePlayEvent(e)}\n`),
             },
             log,
@@ -466,6 +575,95 @@ async function main(argv: string[]): Promise<number> {
         inventory: out.inventory,
       });
       return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'place': {
+      if (!values.live) {
+        process.stderr.write('place puts a block on the test server; pass --live to confirm.\n');
+        return 1;
+      }
+      const at = values.at === undefined ? null : parseBlockPosition(values.at);
+      if (at === null || values.item === undefined || !isPlaceableItem(values.item)) {
+        process.stderr.write(
+          'place requires --at <x,y,z> (whole-block coordinates; use --at=-8,200,-11 for ' +
+            `negatives) and --item, one of: ${PLACEABLE_ITEMS.join(', ')}\n`,
+        );
+        return 1;
+      }
+      const out = await runLivePlace(config, dbPath, at, values.item, log);
+      print({
+        action: values.full
+          ? { result: out.result, connection: out.info }
+          : compact('live-place', dbPath, out.result),
+        placing: out.placing,
+        inventory: out.inventory,
+      });
+      return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'interact': {
+      if (!values.live) {
+        process.stderr.write(
+          'interact opens a block on the test server; pass --live to confirm.\n',
+        );
+        return 1;
+      }
+      const at = values.at === undefined ? null : parseBlockPosition(values.at);
+      if (at === null) {
+        process.stderr.write(
+          'interact requires --at <x,y,z> (use --at=-8,200,-11 for negatives)\n',
+        );
+        return 1;
+      }
+      if (values.smelt !== undefined && values.take !== undefined) {
+        process.stderr.write('use either --smelt or --take, not both\n');
+        return 1;
+      }
+      const quantity = Number(values.count);
+      const fuelQuantity = Number(values['fuel-count']);
+      if (values.smelt !== undefined && (!Number.isInteger(quantity) || quantity < 1)) {
+        process.stderr.write('--count must be a positive whole number\n');
+        return 1;
+      }
+      if (!Number.isInteger(fuelQuantity) || fuelQuantity < 0) {
+        process.stderr.write('--fuel-count must be a whole number (0 adds no fuel)\n');
+        return 1;
+      }
+      if (values.smelt !== undefined && fuelQuantity > 0 && values.fuel === undefined) {
+        process.stderr.write('--fuel-count needs --fuel <item>\n');
+        return 1;
+      }
+      const out = await runLiveInteract(
+        config,
+        dbPath,
+        at,
+        values.smelt !== undefined
+          ? {
+              kind: 'smelt',
+              input: values.smelt,
+              quantity,
+              fuel: values.fuel ?? values.smelt,
+              fuelQuantity,
+            }
+          : values.take !== undefined
+            ? { kind: 'take', item: values.take }
+            : null,
+        log,
+      );
+      print({
+        actions: out.results.map((r) => (values.full ? r : compact('live-interact', dbPath, r))),
+        window: out.window,
+        interactables: out.interactables,
+        inventory: out.inventory,
+      });
+      return out.results.every((r) => r.status === 'succeeded') ? 0 : 1;
+    }
+    case 'layouts': {
+      const db = openDatabase(dbPath);
+      try {
+        print(createRepositories(db, systemClock).windowLayouts.list());
+        return 0;
+      } finally {
+        db.close();
+      }
     }
     case 'halt':
       print(setMovementHalted(config, true, values.reason));

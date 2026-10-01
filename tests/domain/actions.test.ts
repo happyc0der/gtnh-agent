@@ -7,6 +7,12 @@ import {
   expectedPostconditionFor,
   type ActionSpec,
 } from '../../src/domain/actions.ts';
+import {
+  fallsWhenPlaced,
+  PLACEABLE_BLOCKS,
+  PLACEABLE_ITEMS,
+  placedBlockOf,
+} from '../../src/domain/blocks.ts';
 import { GameStateSchema } from '../../src/domain/game-state.ts';
 import { makeState } from '../fixtures/index.ts';
 
@@ -15,6 +21,7 @@ const deps = { newId: (p: string) => `${p}_0001`, now: () => new Date('2026-01-0
 const oneOfEach: ActionSpec[] = [
   { type: 'OBSERVE_STATE', args: {} },
   { type: 'MOVE_TO', args: { target: { x: 1, y: 64, z: 1 }, tolerance: 1 } },
+  { type: 'EXPLORE', args: { toward: 'south_west', maxDistance: 64 } },
   { type: 'WAIT', args: { durationMs: 1000 } },
   { type: 'EAT_FOOD', args: { item: 'minecraft:bread' } },
   { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } },
@@ -33,7 +40,26 @@ const oneOfEach: ActionSpec[] = [
     args: { generatorId: 'g1', fuelItem: 'minecraft:coal', quantity: 1 },
   },
   { type: 'DIG_BLOCK', args: { position: { x: -8, y: 200, z: -11 } } },
+  {
+    type: 'PLACE_BLOCK',
+    args: { position: { x: -8, y: 201, z: -11 }, item: 'minecraft:planks@2' },
+  },
   { type: 'CRAFT_ITEM', args: { recipe: 'chest', times: 2, craftingTableId: 'table.main' } },
+  { type: 'INTERACT_BLOCK', args: { position: { x: -6, y: 200, z: -9 } } },
+  {
+    type: 'SMELT',
+    args: {
+      position: { x: -6, y: 200, z: -9 },
+      input: 'minecraft:cobblestone',
+      quantity: 8,
+      fuel: 'minecraft:planks',
+      fuelQuantity: 6,
+    },
+  },
+  {
+    type: 'TAKE_OUTPUT',
+    args: { position: { x: -6, y: 200, z: -9 }, item: 'minecraft:stone' },
+  },
   { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
 ];
 
@@ -52,7 +78,7 @@ describe('action model', () => {
   });
 
   it.each([
-    ['unknown type', { type: 'PLACE_BLOCK', args: {} }],
+    ['unknown type', { type: 'TELEPORT', args: {} }],
     ['extra field', { type: 'WAIT', args: { durationMs: 100, extra: 1 } }],
     ['wait too long', { type: 'WAIT', args: { durationMs: 3_600_000 } }],
     [
@@ -85,6 +111,25 @@ describe('action model', () => {
       { type: 'BREAK_BLOCK', args: { position: { x: 1, y: 64, z: 0 } } },
     ],
     [
+      'placing an item that is not on the allowlist',
+      { type: 'PLACE_BLOCK', args: { position: { x: 1, y: 64, z: 0 }, item: 'minecraft:tnt' } },
+    ],
+    [
+      'placing a block without saying which',
+      { type: 'PLACE_BLOCK', args: { position: { x: 1, y: 64, z: 0 } } },
+    ],
+    [
+      'placing at a point, not a cell',
+      { type: 'PLACE_BLOCK', args: { position: { x: 1, y: 64.5, z: 0 }, item: 'minecraft:dirt' } },
+    ],
+    [
+      'placing a planks type that does not exist',
+      {
+        type: 'PLACE_BLOCK',
+        args: { position: { x: 1, y: 64, z: 0 }, item: 'minecraft:planks@6' },
+      },
+    ],
+    [
       'unknown recipe',
       { type: 'CRAFT_ITEM', args: { recipe: 'diamond_pickaxe', times: 1, craftingTableId: null } },
     ],
@@ -97,6 +142,18 @@ describe('action model', () => {
       { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 0, craftingTableId: null } },
     ],
     ['crafting without saying where', { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 1 } }],
+    ['exploring too far', { type: 'EXPLORE', args: { toward: 'north', maxDistance: 97 } }],
+    ['exploring a few steps', { type: 'EXPLORE', args: { toward: 'north', maxDistance: 7 } }],
+    ['an unknown direction', { type: 'EXPLORE', args: { toward: 'up', maxDistance: 32 } }],
+    [
+      'a point with a height',
+      { type: 'EXPLORE', args: { toward: { x: 1, y: 70, z: 2 }, maxDistance: 32 } },
+    ],
+    [
+      'a point beyond the world border',
+      { type: 'EXPLORE', args: { toward: { x: 3e7 + 1, z: 0 }, maxDistance: 32 } },
+    ],
+    ['exploring without a limit', { type: 'EXPLORE', args: { toward: 'east' } }],
   ])('rejects %s', (_name, spec) => {
     expect(ActionSpecSchema.safeParse(spec).success).toBe(false);
     expect(() =>
@@ -110,6 +167,50 @@ describe('action model', () => {
       deps,
     );
     expect(ActionSchema.safeParse({ ...a, origin: 'llm-direct' }).success).toBe(false);
+  });
+
+  it('PLACE_BLOCK expects the block the item becomes, and one item used', () => {
+    expect(
+      expectedPostconditionFor({
+        type: 'PLACE_BLOCK',
+        args: { position: { x: 1, y: 65, z: 2 }, item: 'minecraft:log2@1' },
+      }),
+    ).toEqual({
+      kind: 'BLOCK_PLACED',
+      position: { x: 1, y: 65, z: 2 },
+      block: 'minecraft:log2',
+      item: 'minecraft:log2@1',
+    });
+  });
+});
+
+describe('the place allowlist', () => {
+  it('holds plain vanilla blocks only, each becoming a block of the same name', () => {
+    for (const item of PLACEABLE_ITEMS) {
+      expect(item.startsWith('minecraft:'), item).toBe(true);
+      expect(placedBlockOf(item), item).toBe(item.replace(/@\d+$/, ''));
+    }
+    expect([...new Set(PLACEABLE_ITEMS.map(placedBlockOf))].sort()).toEqual(
+      [...PLACEABLE_BLOCKS].sort(),
+    );
+  });
+
+  it('knows which of them fall', () => {
+    expect(PLACEABLE_ITEMS.filter(fallsWhenPlaced)).toEqual(['minecraft:sand', 'minecraft:gravel']);
+  });
+
+  it('every wood type, and nothing else, has a damage value', () => {
+    expect(PLACEABLE_ITEMS.filter((i) => i.includes('@'))).toEqual([
+      'minecraft:planks@1',
+      'minecraft:planks@2',
+      'minecraft:planks@3',
+      'minecraft:planks@4',
+      'minecraft:planks@5',
+      'minecraft:log@1',
+      'minecraft:log@2',
+      'minecraft:log@3',
+      'minecraft:log2@1',
+    ]);
   });
 });
 
@@ -136,6 +237,35 @@ describe('game state schema', () => {
       known: false,
       reason: 'not reported by this observation',
     });
+  });
+
+  it('reads a snapshot stored before placing as "nothing placeable, nothing placed"', () => {
+    const state = makeState();
+    if (!state.nearbyBlocks.known) throw new Error('fixture blocks unknown');
+    const value: Record<string, unknown> = { ...state.nearbyBlocks.value };
+    delete value['placeable'];
+    delete value['placed'];
+    const parsed = GameStateSchema.parse({ ...state, nearbyBlocks: { known: true, value } });
+    expect(parsed.nearbyBlocks).toMatchObject({
+      known: true,
+      value: { placeable: [], placed: [] },
+    });
+  });
+
+  it('lists only allowlisted blocks as placed blocks', () => {
+    const state = makeState();
+    if (!state.nearbyBlocks.known) throw new Error('fixture blocks unknown');
+    const withChest = {
+      ...state,
+      nearbyBlocks: {
+        known: true,
+        value: {
+          ...state.nearbyBlocks.value,
+          placed: [{ block: 'minecraft:chest', position: { x: 0, y: 64, z: 0 } }],
+        },
+      },
+    };
+    expect(GameStateSchema.safeParse(withChest).success).toBe(false);
   });
 
   it('lists only allowlisted blocks as diggable resources', () => {

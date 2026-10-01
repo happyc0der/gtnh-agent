@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { EntityIdSchema, ItemNameSchema, LocationNameSchema } from '../domain/common.ts';
+import { ObservePatternSchema } from '../domain/interactions.ts';
 import { NamedLocationSchema, SafetyConfigSchema } from '../domain/safety.ts';
 import { checkPrivateHost, checkPrivateUrl } from './network.ts';
 
@@ -16,6 +17,14 @@ const BlockPositionSchema = z.strictObject({
 export const MAX_FENCE_SIDE = 64;
 /** Largest height range of a terrain fence (feet levels). A single level walks the flat way. */
 export const MAX_FENCE_HEIGHT = 32;
+/**
+ * Largest exploration area (the safety boundary, blocks per side) the 'follow' movement mode
+ * accepts: exploring stays within a bounded area around the base.
+ */
+export const MAX_EXPLORATION_SIDE = 2048;
+
+/** Where walks and digs may go: one fixed fence, or a play area that moves with the player. */
+export const MOVEMENT_MODES = ['fixed', 'follow'] as const;
 
 /**
  * Walking (the only world-changing ability of the live client). Off by default: the
@@ -24,6 +33,19 @@ export const MAX_FENCE_HEIGHT = 32;
 export const MovementConfigSchema = z
   .strictObject({
     enabled: z.boolean().default(false),
+    /**
+     * 'fixed': every walk and dig stays inside `fence` (the test pen). 'follow': inside a play
+     * area that moves with the player (`area`, centred on its feet, a terrain fence), clipped to
+     * the exploration boundary (safety.boundary); `fence` is not used. EXPLORE needs 'follow'.
+     */
+    mode: z.enum(MOVEMENT_MODES).default('fixed'),
+    /** The moving play area of mode 'follow': blocks per side, and its height range (levels). */
+    area: z
+      .strictObject({
+        side: z.int().min(16).max(MAX_FENCE_SIDE).default(MAX_FENCE_SIDE),
+        height: z.int().min(4).max(MAX_FENCE_HEIGHT).default(MAX_FENCE_HEIGHT),
+      })
+      .prefault({}),
     /**
      * Blocks the player's feet may be in (inclusive). One level (min.y === max.y) walks the
      * flat pen way; a height range walks terrain (steps up, drops of up to 2).
@@ -90,6 +112,18 @@ export const DiggingConfigSchema = z.strictObject({
 export type DiggingConfig = z.infer<typeof DiggingConfigSchema>;
 
 /**
+ * Placing blocks (PLACE_BLOCK; approved 2026-09-30). Off by default. Like digging it also
+ * needs the movement fence: only allowlisted plain blocks, only into cells inside the
+ * fence's columns, from its feet level up to `maxHeightAboveFence` above it.
+ */
+export const PlacingConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  /** Cells from the fence's level (the feet level) up to this many above it may be filled. */
+  maxHeightAboveFence: z.int().min(0).max(MAX_DIG_HEIGHT_ABOVE_FENCE).default(4),
+});
+export type PlacingConfig = z.infer<typeof PlacingConfigSchema>;
+
+/**
  * Crafting (the third world-changing ability: it consumes items). Off by default. The
  * player's own 2x2 grid needs no table; 3x3 recipes use only the crafting tables listed
  * here, and only if the block there is a minecraft:crafting_table.
@@ -107,6 +141,20 @@ export const CraftingConfigSchema = z.strictObject({
     .default({}),
 });
 export type CraftingConfig = z.infer<typeof CraftingConfigSchema>;
+
+/**
+ * Interacting with blocks (INTERACT_BLOCK, SMELT, TAKE_OUTPUT; world-changing: the agent
+ * right-clicks blocks and moves items into and out of furnaces). Off by default. Only
+ * blocks with an interaction profile (src/domain/interactions.ts) are used; blocks without
+ * one only if listed in `observeOnly`, and then only LOOKED at (their window is opened,
+ * recorded and closed; nothing inside is ever clicked).
+ */
+export const InteractConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  /** Exact block registry names (`IronChest:BlockIronChest`) or whole mods (`IronChest:*`). */
+  observeOnly: z.array(ObservePatternSchema).max(100).default([]),
+});
+export type InteractConfig = z.infer<typeof InteractConfigSchema>;
 
 export const MinecraftConfigSchema = z
   .strictObject({
@@ -141,7 +189,9 @@ export const MinecraftConfigSchema = z
     movement: MovementConfigSchema.prefault({}),
     containers: ContainersConfigSchema.prefault({}),
     digging: DiggingConfigSchema.prefault({}),
+    placing: PlacingConfigSchema.prefault({}),
     crafting: CraftingConfigSchema.prefault({}),
+    interact: InteractConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -220,7 +270,7 @@ export const MemoryConfigSchema = z.strictObject({
 });
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 
-export const AgentConfigSchema = z.strictObject({
+const AgentConfigFields = z.strictObject({
   minecraft: MinecraftConfigSchema.prefault({}),
   database: z.strictObject({ path: z.string().min(1).default('./data/agent.sqlite') }).prefault({}),
   safety: SafetyConfigSchema.prefault({}),
@@ -230,6 +280,22 @@ export const AgentConfigSchema = z.strictObject({
   llm: LlmConfigSchema.prefault({}),
   memory: MemoryConfigSchema.prefault({}),
   locations: z.record(LocationNameSchema, NamedLocationSchema).default({}),
+});
+
+/**
+ * The whole configuration. With movement mode 'follow' the safety boundary is the exploration
+ * area: it must stay bounded.
+ */
+export const AgentConfigSchema = AgentConfigFields.superRefine((c, ctx) => {
+  if (c.minecraft.movement.mode !== 'follow') return;
+  const { min, max } = c.safety.boundary;
+  if (max.x - min.x > MAX_EXPLORATION_SIDE || max.z - min.z > MAX_EXPLORATION_SIDE) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['safety', 'boundary'],
+      message: `with movement mode 'follow' the boundary is the exploration area: at most ${MAX_EXPLORATION_SIDE} blocks per side`,
+    });
+  }
 });
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 export type AgentConfigInput = z.input<typeof AgentConfigSchema>;
@@ -301,6 +367,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_ENABLE_LIVE_CONNECTION')))
     set(['minecraft', 'enableLiveConnection'], v === 'true');
   if ((v = e('MC_ENABLE_MOVEMENT'))) set(['minecraft', 'movement', 'enabled'], v === 'true');
+  if ((v = e('MC_MOVEMENT_MODE'))) set(['minecraft', 'movement', 'mode'], v);
   if ((v = e('MC_MOVEMENT_FENCE_MIN')))
     set(['minecraft', 'movement', 'fence', 'min'], xyz('MC_MOVEMENT_FENCE_MIN', v));
   if ((v = e('MC_MOVEMENT_FENCE_MAX')))
@@ -308,7 +375,10 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_MOVEMENT_STOP_FILE'))) set(['minecraft', 'movement', 'stopFile'], v);
   if ((v = e('MC_ENABLE_CONTAINERS'))) set(['minecraft', 'containers', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_DIGGING'))) set(['minecraft', 'digging', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_PLACING'))) set(['minecraft', 'placing', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_CRAFTING'))) set(['minecraft', 'crafting', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_INTERACT'))) set(['minecraft', 'interact', 'enabled'], v === 'true');
+  if ((v = e('MC_INTERACT_OBSERVE_ONLY'))) set(['minecraft', 'interact', 'observeOnly'], list(v));
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))
     set(['safety', 'boundary', 'min'], xyz('SAFETY_BOUNDARY_MIN', v));

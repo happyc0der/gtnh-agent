@@ -5,8 +5,9 @@ A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTN
 
 **Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
 simulated world or a private GTNH 2.8.4 test server. On the test server the agent observes,
-**walks inside a fenced pen**, **moves exact amounts to and from configured chests** and can **dig
-allowlisted natural blocks** (logs, leaves, dirt, sand, gravel, clay) inside the pen. It works on
+**walks inside a fenced pen**, **moves exact amounts to and from configured chests**, can **dig
+allowlisted natural blocks** (logs, leaves, dirt, sand, gravel, clay) and **place allowlisted
+plain blocks** (dirt, cobblestone, sand, gravel, sandstone, planks, logs) inside the pen. It works on
 **live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`,
 or back to back in a **bounded auto-run** (`run --live`) that stops as soon as anything needs you.
 No open-ended loop. **Local models are opt-in** (off by default, no GPU use unless enabled).
@@ -26,15 +27,33 @@ whether each is enabled and running, from GregTech's own network channel; stored
 With everything critical observable, a live cycle pauses only because the agent has no task. Mineflayer cannot connect to GTNH (it rejects
 1.7.10). See [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md).
 
+**Interacting with blocks (2026-09-30, fake server only so far):** with interacting enabled,
+`INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT` open blocks the agent has an interaction profile for
+(furnaces, crafting tables, chests, Iron Chests chests, Thaumcraft hungry chests, Tinkers' crafting
+stations), smelt in furnaces and take their output. Each profile is data checked in the server's
+jars; blocks without one are only looked at, and only if you list them. Found chests and crafting
+tables also work with the chest and crafting actions. See
+[Interacting with blocks](#interacting-with-blocks).
+
 **Walking and chests (2026-09-30):** with movement explicitly enabled and a fence configured,
 `MOVE_TO` and `RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence (no jumping,
 climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, `WITHDRAW_ITEM` and
 `DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. With crafting enabled,
 `CRAFT_ITEM` crafts early-game recipes in the 2x2 grid or at a configured crafting table (fake
 server only so far). With digging enabled, `DIG_BLOCK` breaks one allowlisted block inside the
-fence with an empty hand. The remaining world-changing actions return `NOT_IMPLEMENTED`. See
-[Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting) and
-[Digging](#digging).
+fence, holding the best verified tool the player carries (a wooden shovel for sand, dirt, gravel,
+grass and clay; a vanilla axe for logs) or an empty hand. With placing enabled, `PLACE_BLOCK` puts
+one allowlisted plain block the player carries into an empty cell inside the fence (fake server
+only so far). The remaining world-changing actions return `NOT_IMPLEMENTED`. See
+[Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting),
+[Digging](#digging) and [Placing](#placing).
+
+**Exploring (2026-09-30, fake server only so far):** with `MC_MOVEMENT_MODE=follow` the walk/dig
+fence becomes a play area that moves with the player, inside the safety boundary. `EXPLORE` walks
+toward a direction or a point in checked hops, in daylight only, and the agent remembers what it
+has seen per chunk (biome, logs, sand, gravel, clay, water, stone, ores; only what a player could
+see). The planner gets the known places, and play scouts the area once before the quests. See
+[Exploring and world memory](#exploring-and-world-memory).
 
 ## Requirements
 
@@ -88,8 +107,15 @@ cp agent.config.example.json agent.config.json
 | Add a live task with your plan / list tasks  | `pnpm cli task-add --task <id> --goal <text> --plan <file>` / `pnpm cli task-list`        |
 | Bounded auto-run of the current task         | `pnpm cli run --live [--max-cycles 20] [--max-minutes 10]`                                |
 | The agent's Age 0 quest book and next goal   | `pnpm cli quests [--live]`                                                                |
+| Autonomous play (quests, or your own goal)   | `pnpm cli play --live [--needs minecraft:diamond=100] [--minutes 30]`                     |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
+| Open a block (furnace, Iron Chests chest...) | `pnpm cli interact --live --at=-6,200,-8`                                                 |
+| Take a furnace's output                      | `pnpm cli interact --live --at=-6,200,-8 --take <item>`                                   |
+| Window layouts learned from opened blocks    | `pnpm cli layouts`                                                                        |
 | **Dig** one allowlisted block in the pen     | `pnpm cli dig --live --at=-8,200,-11`                                                     |
+| **Place** one allowlisted block in the pen   | `pnpm cli place --live --at=-7,200,-11 --item minecraft:cobblestone`                      |
+| **Explore** toward a direction or a point    | `pnpm cli explore --live --toward south --distance 64`                                    |
+| What world memory knows (known places)       | `pnpm cli places [--at x,z]`                                                              |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
 | Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`                                              |
@@ -149,20 +175,37 @@ and [docs/action-contract.md](docs/action-contract.md).
 - Localhost/private addresses only. Public IPs and non-allowlisted hostnames are rejected at config
   load, and `MC_ENABLE_LIVE_CONNECTION` defaults to `false`. The same applies to the model server
   (`OLLAMA_URL`).
-- A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
+- A ±256-block boundary in the overworld; lava/void avoidance radius 6 (1.5 for cacti and other
+  blocks that hurt only on contact); retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 13 action types exist. No block placing, dropping, combat, lava, network/multiblock
-  changes or rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks
-  vanilla logs, leaves, dirt, grass, sand, gravel and clay.
+- Only 18 action types exist. No dropping, combat, lava, network/multiblock changes or
+  rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs,
+  leaves, dirt, grass, sand, gravel and clay; the one that places blocks, `PLACE_BLOCK`, only
+  places vanilla dirt, cobblestone, sand, gravel, sandstone, planks and logs; `EXPLORE` only
+  walks, in hops, inside the boundary and only in daylight. Blocks are opened only by
+  `INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT`, and only blocks with an interaction profile or
+  on the observe-only list.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
+- Exploring is off unless walking is on **and** `MC_MOVEMENT_MODE=follow`; it never leaves the
+  safety boundary (at most 2048 blocks per side in that mode), walks at most 96 blocks per
+  `EXPLORE`, only in daylight, and stops for threats like any walk.
 - Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
   and only if the block is a plain `minecraft:chest` (see below).
-- Crafting is off unless `MC_ENABLE_CRAFTING=true`; only crafting tables listed in the config are
-  used, and a result is taken only if the server shows exactly what the recipe table expects.
+- Crafting is off unless `MC_ENABLE_CRAFTING=true`; only crafting tables listed in the config or
+  found inside the fence are used, and a result is taken only if the server shows exactly what the
+  recipe table expects.
+- Interacting with blocks is off unless `MC_ENABLE_INTERACT=true`. Only blocks with an interaction
+  profile are used; others only if you list them, and then only looked at. Trapped chests, levers,
+  doors, drawers, barrels and ender chests are never right-clicked. Furnaces get only approved
+  fuels, never lava (see below).
 - Digging is off unless `MC_ENABLE_DIGGING=true` **and** the fence is set. It only breaks
   allowlisted blocks inside the fence, never the floor, and never anything touching water, a
   chest, a machine or any other non-plain block (see below).
+- Placing is off unless `MC_ENABLE_PLACING=true` **and** the fence is set. It only fills empty
+  cells inside the fence, never one the player's body or an entity is in, only by clicking a
+  plain full block (never a chest or machine, which would open), never next to water, a chest
+  or a machine, never sand or gravel where it could fall, and never during danger (see below).
 - Protected items are never consumed or moved.
 
 ## Project notes
@@ -260,10 +303,11 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#chests)):
 ### Crafting
 
 The third world-changing ability: `CRAFT_ITEM` crafts a recipe from the agent's small table of
-early (Age 0) recipes (`src/domain/recipes.ts`: planks, sticks, torches, crafting table, chest). It
-crafts in the player's own 2x2 grid, or for 3x3 recipes at a crafting table you configure. It has
-only run against the fake server so far (see
-[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#crafting-2026-09-30)).
+early (Age 0) recipes (`src/domain/recipes.ts`: planks, sticks, torches, crafting table, chest,
+wooden shovel, wooden axe), each as GTNH 2.8.4 has it (e.g. 2 planks give 2 sticks; the crafting
+table is two flint above two logs). It crafts in the player's own 2x2 grid, or for 3x3 recipes at
+a crafting table you configure (the agent cannot place one). It has only run against the fake
+server so far (see [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#crafting-2026-09-30)).
 
 - Settings: `MC_ENABLE_CRAFTING=true`, and for 3x3 recipes the table in `agent.config.json` under
   `minecraft.crafting.tables` (`{ "table.pen": { "name": "...", "position": { "x": .., "y": .., "z": .. } } }`).
@@ -281,6 +325,51 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#crafting)):
 - Only predictable clicks are used, each confirmed by the server, and results always go into an
   empty slot.
 - Protected items are never used as ingredients, and neither are stacks with NBT data.
+
+### Interacting with blocks
+
+GTNH has thousands of blocks that open a window, each different. `INTERACT_BLOCK`, `SMELT` and
+`TAKE_OUTPUT` use only blocks the agent has an interaction profile for: data that says how the
+block opens, what each slot of its window is for, and what the agent may do there
+(`src/domain/interactions.ts`). Profiles today:
+
+- furnaces;
+- crafting tables;
+- chests (never trapped chests);
+- Iron Chests chests (all 11 types);
+- Thaumcraft hungry chests;
+- Tinkers' crafting stations (looked at only).
+
+Every fact was checked in the server's jars, and it has run against the fake server only (see
+[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#interacting-with-blocks-2026-09-30), which
+also surveys GTNH's storage blocks).
+
+- Settings: `MC_ENABLE_INTERACT=true`. A block without a profile can be looked at if you list it:
+  `MC_INTERACT_OBSERVE_ONLY=appliedenergistics2:*` (exact names or whole mods).
+- `pnpm cli interact --live --at=x,y,z` opens a block and prints its window. To use a furnace, add
+  `--smelt minecraft:sand --count 8 --fuel minecraft:coal --fuel-count 1` (items and fuel in), or
+  `--take <item>` (its output out).
+- `observe --live` lists the blocks the agent may use, with a furnace's contents as last seen.
+  `pnpm cli layouts` lists the windows learned from blocks the agent opened.
+- In a plan: `SMELT` (`position`, `input`, `quantity`, `fuel`, `fuelQuantity`), then other steps
+  or `WAIT`, then `TAKE_OUTPUT` (`position`, `item`).
+- Found storage blocks work with `OPEN_CONTAINER`, `WITHDRAW_ITEM` and `DEPOSIT_ITEM` as
+  `<profile>:<x>.<y>.<z>` (with `MC_ENABLE_CONTAINERS=true` too). Found crafting tables work with
+  `CRAFT_ITEM` as `crafting_table:<x>.<y>.<z>`.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#interacting-with-blocks)):
+
+- Only a block the observation lists, with a profile that allows the action, can be asked for. A
+  listed block without a profile is only looked at: its window is recorded and closed at once,
+  and nothing inside is clicked.
+- Never right-clicked: trapped chests (redstone), levers, doors, buttons, beds..., drawers and
+  barrels (a right-click can move the player's items), and ender chests (a window the client cannot
+  recognise).
+- An empty hand, and only a window that is exactly the profile's. Predictable clicks only, each
+  confirmed by the server; the cursor is never left holding items.
+- Only approved fuels, never lava. Protected items are never smelted, burned or taken.
+- What a furnace makes is up to the server (GTNH changes smelting), so the agent takes only what
+  the output slot shows, and every count is verified exactly.
 
 ### Digging
 
@@ -313,12 +402,95 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
     (water, a torch, a chest, a machine...);
   - a block with sand or gravel on top;
   - a block next to lava, fire or other hazards.
-- It digs with an empty hand, so no tool or item can do anything special.
-- It waits 1.25 x the vanilla dig time + 2 ticks: well past the 70% the server requires.
+- It holds the best verified tool the player carries for the block, or an empty hand
+  (`src/domain/tools.ts`, [evidence](docs/gtnh-compatibility.md#tools-2026-09-30)):
+  - a wooden shovel for dirt, grass, sand, gravel and clay (sand: 12 ticks instead of 21);
+  - a vanilla axe for logs (77 ticks by hand, 40 with a wooden axe, 21 with a stone one).
+  - The other vanilla shovels dig nothing on GTNH. GregTech and TConstruct tools keep their wear
+    in NBT data the agent does not read, so it never holds them.
+  - It never holds a protected tool, one with NBT data, or one whose next use would break it (a
+    wooden tool: 59 uses). A tool in the main inventory is first moved into the hotbar with two
+    confirmed clicks. The result reports the tool and its uses left.
+- It waits 1.25 x the vanilla dig time (at the tool's speed) + 2 ticks: well past the 70% the
+  server requires.
 - Every tick it re-checks. It cancels on the stop file, Ctrl+C, a server correction, a health
-  drop, a nearby threat, or any change to the block.
+  drop, a nearby threat, any change to the block, or a change to the tool in hand.
 - Success needs the server's own block change to air, with no re-send. The result reports
   whether the drop reached the inventory.
+
+### Placing
+
+The newest world-changing ability (approved 2026-09-30, so the agent can seal itself into a pit
+for the night, and later place a crafting table, furnace and coke oven): putting ONE block the
+player carries into an empty cell. Only `minecraft:dirt`, `cobblestone`, `sand`, `gravel`,
+`sandstone`, `planks` and `log`/`log2` are placed. It has been tested against the fake server
+only; the live test is next.
+
+- Settings: `MC_ENABLE_PLACING=true` (it also needs the movement fence), and optionally
+  `minecraft.placing.maxHeightAboveFence` (default 4) in `agent.config.json`.
+- `pnpm cli place --live --at=-7,200,-11 --item minecraft:cobblestone` places one as a checked
+  user action, and prints the placeable cells and the inventory afterwards.
+- `observe --live` lists the cells a block could be placed into, and the blocks it saw placed.
+- Use it as a plan step, e.g.
+  `{ "type": "PLACE_BLOCK", "args": { "position": { "x": -7, "y": 200, "z": -11 }, "item": "minecraft:dirt" } }`.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#placing)):
+
+- Only a cell the observation lists as placeable can be asked for, and only with an allowlisted
+  item the player carries.
+- The client re-checks it on the server's own block data just before the click. It refuses:
+  - anything outside the fence's columns, below its level or more than 4 blocks above it;
+  - a cell that is not air, tall grass or a dead bush (water, lava, a flower, a block);
+  - a cell the player's body is in (the server itself would allow that), or that any entity
+    may be in;
+  - a cell touching anything but air, plants and plain full blocks (a chest, a machine, water,
+    a torch...), or with a hazard within one block;
+  - sand or gravel with no plain full block under it, or over the player's head.
+- It clicks only a plain full block next to the cell. The server activates the clicked block
+  first, so clicking a chest or machine would open it instead of placing.
+- Success needs the server's own block change to the placed block after its answer to the
+  click, with nothing else for 250 ms, and the held stack one item smaller.
+- It is refused during danger, like digging: placing a block is not an escape. Shelters are
+  built while it is safe.
+
+### Exploring and world memory
+
+The fourth ability: leaving the first spot. The test world spawns the agent in a desert, and
+GTNH's early quests want wood, gravel "near water", clay on "the riverbanks" and stone. It has
+been tested against the fake server only (a streamed world with a desert, a forest, a river and
+the boundary); the live test is next.
+
+- Settings:
+  - `MC_ENABLE_MOVEMENT=true` and `MC_MOVEMENT_MODE=follow`: walks and digs then use a play area
+    centred on the player (`minecraft.movement.area`, default 64 x 64 blocks and 32 levels),
+    instead of the fixed fence;
+  - `SAFETY_BOUNDARY_MIN` / `MAX`: the exploration area. The play area never leaves it, and an
+    EXPLORE toward a point outside it is refused. Keep it to a few hundred blocks around spawn
+    (at most 2048 per side in this mode), e.g. `-256,0,-256` to `256,255,256`.
+- `pnpm cli explore --live --toward south --distance 64` explores once as a checked user action
+  (`--toward north_east`, or a point: `--toward=120,-40`). It prints how far it got, why it
+  stopped and what world memory now knows. Ctrl+C or `pnpm cli halt` stops it at its next step.
+- `pnpm cli places` prints what world memory knows, as the planner gets it: per resource the
+  nearest place seen (and a much richer one), the biomes seen, and how far each direction has
+  been seen.
+- `pnpm cli play --live` in this mode first scouts the area (one session, while fewer than 50
+  chunks are known), then plays the quests; the planner explores when a quest needs a block
+  that is not nearby.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and-world-memory)):
+
+- Every hop is an ordinary walk: planned on the server's blocks, every 0.2-block step re-checked
+  just before it is sent, never into water, lava, unloaded chunks or next to a hazard, drops of at
+  most 2 blocks; a hostile or unidentified entity within 10 blocks stops it.
+- At most 96 blocks walked per EXPLORE, 12 hops and 3 minutes; it stops when stuck, at the
+  boundary, at water or cliffs it cannot route around, and when it gets dark. It is refused in the
+  evening, at night and when the time is unknown.
+- The way back: a retreat (`RETURN_TO_SAFE_LOCATION`, e.g. `move --to home`) to a location
+  beyond the play area travels in the same checked hops. Threats do not stop a retreat, at any
+  time of day: it is the escape.
+- World memory records only what a player could see: blocks near the surface with a face
+  touching air, in a clear line of sight from the eyes, in daylight. Ores are recorded as "ore",
+  never by material.
 
 ### Live tasks
 

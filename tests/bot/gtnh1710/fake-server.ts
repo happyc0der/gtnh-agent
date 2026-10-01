@@ -10,8 +10,17 @@ import {
   i32,
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
-import { encodeStack, FakeChestSim, type FakeChest, type FakeRecipe } from './fake-chests.ts';
+import {
+  encodeStack,
+  FakeChestSim,
+  type FakeChest,
+  type FakeFurnace,
+  type FakeModBlock,
+  type FakeRecipe,
+  type FakeSmelting,
+} from './fake-chests.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
+import { FakePlaceSim, type FakeBody, type FakePlaceOptions } from './fake-placing.ts';
 import {
   blockChangeFrame,
   chunkBulkFrame,
@@ -19,6 +28,8 @@ import {
   multiBlockChangeFrame,
   neidColumn,
   TEST_BLOCK_REGISTRY,
+  type BiomeFn,
+  type BlockFn,
 } from './chunk-fixtures.ts';
 
 /**
@@ -74,10 +85,32 @@ export interface FakeServerOptions {
   tables?: Array<{ x: number; y: number; z: number }>;
   /** The server's crafting recipes (for the 2x2 grid and crafting tables). */
   recipes?: FakeRecipe[];
+  /** Furnaces (their blocks must also be in blockOverrides: minecraft:furnace or lit_furnace). */
+  furnaces?: FakeFurnace[];
+  /** The server's smelting recipes and fuel burn ticks by item id. */
+  smelting?: FakeSmelting[];
+  fuels?: ReadonlyMap<number, number>;
+  /** Modded blocks whose GUI opens with Forge's OpenGui (their blocks in blockOverrides too). */
+  modBlocks?: FakeModBlock[];
   /** 1-based click numbers the server rejects (as if the client's claim did not match). */
   rejectClicks?: number[];
   /** How the server treats digging (C07); vanilla by default. */
   dig?: FakeDigOptions;
+  /** How the server treats block placement (C08 with a held block); vanilla by default. */
+  place?: FakePlaceOptions;
+  /** The world's blocks (blockOverrides still win); default: the flat test world. */
+  world?: BlockFn;
+  /** Each column's biome id; default 0 everywhere. */
+  biomeAt?: BiomeFn;
+  /** Columns sent around the player: this many chunks each way (default 3, a 7 x 7 square). */
+  viewDistance?: number;
+  /**
+   * Send the columns that come into view as the player walks, and unload those that leave it,
+   * like the real server (default false: only the columns around the spawn, once).
+   */
+  streamChunks?: boolean;
+  /** The world's time of day (S03 at join and every second); default: no time updates. */
+  dayTicks?: number;
 }
 
 export interface ReceivedPacket {
@@ -171,6 +204,21 @@ export type FakeEntity =
 const fixed = (x: number, y: number, z: number): Buffer =>
   Buffer.concat([i32(Math.floor(x * 32)), i32(Math.floor(y * 32)), i32(Math.floor(z * 32))]);
 
+/** Vanilla object types that stop a block being placed into them (preventEntitySpawning). */
+const SOLID_OBJECTS: ReadonlySet<number> = new Set([1, 10, 50, 51, 70]);
+
+/**
+ * An entity's box as World.canPlaceEntityOnSide sees it: living entities (players, mobs,
+ * modded mobs) as 0.6 x 1.8 (the fake does not model sizes), boats, minecarts, primed TNT,
+ * ender crystals and falling blocks as one block; dropped items and other objects not at all.
+ */
+function bodyOf(e: FakeEntity): FakeBody[] {
+  if (e.kind === 'object') {
+    return SOLID_OBJECTS.has(e.objectType) ? [{ x: e.x, y: e.y, z: e.z, width: 1, height: 1 }] : [];
+  }
+  return [{ x: e.x, y: e.y, z: e.z, width: 0.6, height: 1.8 }];
+}
+
 /** Encodes an entity spawn exactly as a 1.7.10 Forge server would. */
 export function spawnFrame(e: FakeEntity): Buffer {
   switch (e.kind) {
@@ -240,12 +288,24 @@ export class FakeGtnhServer {
   readonly chestSim: FakeChestSim;
   /** Digging (C07): what the client sent, what broke, what was picked up. */
   readonly digSim: FakeDigSim;
+  /** Placing (C08 with a held block): what the client clicked, what was placed. */
+  readonly placeSim: FakePlaceSim;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
   logins = 0;
   handshakeHosts: string[] = [];
-  readonly #opts: Required<Omit<FakeServerOptions, 'kickOnLogin'>> & { kickOnLogin: string | null };
+  readonly #opts: Required<
+    Omit<FakeServerOptions, 'kickOnLogin' | 'world' | 'biomeAt' | 'dayTicks'>
+  > & {
+    kickOnLogin: string | null;
+    world: BlockFn | null;
+    biomeAt: BiomeFn | null;
+  };
+  /** The time of day the server reports (null: it sends no time updates). */
+  #dayTicks: number | null;
+  /** Columns sent to each play connection ("cx,cz"), and the chunk it was centred on. */
+  readonly #views = new Map<Socket, { sent: Set<string>; centre: string }>();
   readonly #server: Server;
   readonly #sockets = new Set<Socket>();
   readonly #timers = new Set<NodeJS.Timeout>();
@@ -292,20 +352,41 @@ export class FakeGtnhServer {
       chests: options.chests ?? [],
       tables: options.tables ?? [],
       recipes: options.recipes ?? [],
+      furnaces: options.furnaces ?? [],
+      smelting: options.smelting ?? [],
+      fuels: options.fuels ?? new Map(),
+      modBlocks: options.modBlocks ?? [],
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
+      place: options.place ?? {},
+      world: options.world ?? null,
+      biomeAt: options.biomeAt ?? null,
+      viewDistance: options.viewDistance ?? 3,
+      streamChunks: options.streamChunks ?? false,
     };
+    this.#dayTicks = options.dayTicks ?? null;
     this.chestSim = new FakeChestSim({
       chests: this.#opts.chests,
       tables: this.#opts.tables,
       recipes: this.#opts.recipes,
+      furnaces: this.#opts.furnaces,
+      smelting: this.#opts.smelting,
+      fuels: this.#opts.fuels,
+      modBlocks: this.#opts.modBlocks,
       playerInventory: this.#opts.inventory,
       modularUi: this.#opts.mods.some((m) => m.modid === 'modularui'),
       rejectClicks: new Set(this.#opts.rejectClicks),
       send: () => undefined,
     });
+    // BlockFurnace.updateFurnaceBlockState: a furnace that lights up becomes lit_furnace.
+    const blockId = (name: string): number | undefined =>
+      this.#opts.blocks.find(([, n]) => n === name)?.[0];
+    this.chestSim.onFurnaceLit = (x, y, z, lit) => {
+      const id = blockId(lit ? 'minecraft:lit_furnace' : 'minecraft:furnace');
+      if (id !== undefined) this.setBlock(x, y, z, id);
+    };
     this.#blocks = new Map(this.#opts.blockOverrides);
-    const world = flatWorld(this.#blocks, this.#opts.voidColumns);
+    const world = this.#worldNow();
     const blockNames = new Map(this.#opts.blocks);
     this.digSim = new FakeDigSim(
       {
@@ -316,6 +397,9 @@ export class FakeGtnhServer {
         itemId: (name) =>
           this.#opts.items.find(([, n]) => n === name)?.[0] ??
           this.#opts.blocks.find(([, n]) => n === name)?.[0],
+        itemName: (id) =>
+          this.#opts.items.find(([i]) => i === id)?.[1] ??
+          this.#opts.blocks.find(([i]) => i === id)?.[1],
         playerFeet: () => {
           const p = this.confirmedPositions.at(-1);
           return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
@@ -323,6 +407,20 @@ export class FakeGtnhServer {
       },
       this.chestSim,
       this.#opts.dig,
+    );
+    this.placeSim = new FakePlaceSim(
+      {
+        blockAt: world,
+        setBlock: (x, y, z, id) => this.#blocks.set(`${x},${y},${z}`, id),
+        blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
+        playerFeet: () => {
+          const p = this.confirmedPositions.at(-1);
+          return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
+        },
+        entities: () => this.#opts.entities.flatMap(bodyOf),
+      },
+      this.chestSim,
+      this.#opts.place,
     );
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
@@ -339,6 +437,7 @@ export class FakeGtnhServer {
   close(): Promise<void> {
     for (const t of this.#timers) clearInterval(t);
     this.digSim.stop();
+    this.placeSim.stop();
     for (const s of this.#sockets) s.destroy();
     return new Promise((resolve) => this.#server.close(() => resolve()));
   }
@@ -386,10 +485,74 @@ export class FakeGtnhServer {
     );
   }
 
+  /** The world's blocks now: the overrides (and the blocks changed since) over the base world. */
+  #worldNow(): BlockFn {
+    const base = this.#opts.world;
+    if (base === null) return flatWorld(this.#blocks, this.#opts.voidColumns);
+    return (x, y, z) => this.#blocks.get(`${x},${y},${z}`) ?? base(x, y, z);
+  }
+
+  /** S03 at the server's time of day (the daylight cycle running). */
+  #timeFrame(dayTicks: number): Buffer {
+    const b = Buffer.alloc(16);
+    b.writeBigInt64BE(BigInt(dayTicks), 0); // world age: any value
+    b.writeBigInt64BE(BigInt(dayTicks), 8);
+    return encodeFrame(0x03, b);
+  }
+
+  /** Sets the time of day and tells every client at once (S03). */
+  setTime(dayTicks: number): void {
+    this.#dayTicks = dayTicks;
+    this.broadcast(this.#timeFrame(dayTicks));
+  }
+
+  /** Columns not yet sent within the view distance of chunk (cx, cz), nearest first. */
+  #sendView(socket: Socket, send: (frame: Buffer) => void, cx: number, cz: number): void {
+    const view = this.#views.get(socket) ?? { sent: new Set<string>(), centre: '' };
+    this.#views.set(socket, view);
+    view.centre = `${cx},${cz}`;
+    const r = this.#opts.viewDistance;
+    const wanted: Array<[number, number]> = [];
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        if (!view.sent.has(`${cx + dx},${cz + dz}`)) wanted.push([cx + dx, cz + dz]);
+      }
+    }
+    wanted.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cz) - Math.hypot(b[0] - cx, b[1] - cz));
+    // Nearest first, 5 columns per Map Chunk Bulk, like the real server.
+    const world = this.#worldNow();
+    const biomeAt = this.#opts.biomeAt ?? undefined;
+    for (let i = 0; i < wanted.length; i += 5) {
+      const batch = wanted.slice(i, i + 5);
+      send(
+        chunkBulkFrame(
+          batch.map(([x, z]) => neidColumn(x, z, world, true, true, biomeAt)),
+          true,
+          this.#opts.corruptChunks,
+        ),
+      );
+      for (const [x, z] of batch) view.sent.add(`${x},${z}`);
+    }
+    // Columns that left the view are unloaded (one beyond it is kept, like the real server).
+    for (const key of [...view.sent]) {
+      const [x, z] = key.split(',').map(Number) as [number, number];
+      if (Math.max(Math.abs(x - cx), Math.abs(z - cz)) <= r + 1) continue;
+      send(
+        encodeFrame(0x21, Buffer.concat([i32(x), i32(z), Buffer.from([1, 0, 0, 0, 0]), i32(0)])),
+      );
+      view.sent.delete(key);
+    }
+  }
+
   /** A single block change (NEID format), e.g. lava appearing next to the player. */
   setBlock(x: number, y: number, z: number, id: number): void {
     this.#blocks.set(`${x},${y},${z}`, id);
     this.broadcast(blockChangeFrame(x, y, z, id));
+  }
+
+  /** A block change the client is never told about (as if the update had been lost). */
+  setBlockSilently(x: number, y: number, z: number, id: number): void {
+    this.#blocks.set(`${x},${y},${z}`, id);
   }
 
   setBlocks(
@@ -439,6 +602,7 @@ export class FakeGtnhServer {
     socket.on('close', () => {
       this.#sockets.delete(socket);
       this.#playSockets.delete(socket);
+      this.#views.delete(socket);
       sim?.onDisconnect();
     });
     socket.on('error', () => undefined);
@@ -509,6 +673,7 @@ export class FakeGtnhServer {
           sim.setSender(send);
           sim.onJoin();
           this.digSim.setSenders(send, (f) => this.broadcast(f));
+          this.placeSim.setSenders(send, (f) => this.broadcast(f));
           send(
             plugin(
               'REGISTER',
@@ -538,8 +703,8 @@ export class FakeGtnhServer {
               );
             }
             break;
-          case 0x06:
-            this.confirmedPositions.push({
+          case 0x06: {
+            const p = {
               x: r.f64(),
               feetY: r.f64(),
               headY: r.f64(),
@@ -547,17 +712,30 @@ export class FakeGtnhServer {
               yaw: r.f32(),
               pitch: r.f32(),
               onGround: r.bool(),
-            });
+            };
+            this.confirmedPositions.push(p);
             this.digSim.onPlayerTick();
+            const centre = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`;
+            if (this.#opts.streamChunks && this.#views.get(socket)?.centre !== centre) {
+              this.#sendView(socket, send, Math.floor(p.x / 16), Math.floor(p.z / 16));
+            }
             break;
+          }
           case 0x17: {
             const channel = r.string();
             const data = r.bytes(r.i16());
-            if (channel === 'FML|HS') this.#onHandshake(data, send);
+            if (channel === 'FML|HS') this.#onHandshake(data, send, socket);
             break;
           }
           case 0x07:
             this.digSim.handle(r);
+            break;
+          case 0x08:
+            // Activation first (a chest or table opens), else the held block is placed.
+            this.placeSim.handle(
+              r,
+              this.#opts.mods.some((m) => m.modid === 'modularui'),
+            );
             break;
           default:
             sim?.handle(frame.packetId, r);
@@ -567,7 +745,7 @@ export class FakeGtnhServer {
     });
   }
 
-  #onHandshake(data: Buffer, send: (frame: Buffer) => void): void {
+  #onHandshake(data: Buffer, send: (frame: Buffer) => void, socket: Socket): void {
     const discriminator = data.readInt8(0);
     if (discriminator === 2) {
       const mods = this.#opts.mods;
@@ -606,11 +784,11 @@ export class FakeGtnhServer {
     } else if (phase === 3) {
       send(plugin('FML|HS', Buffer.from([0xff, 3])));
     } else if (phase === 4) {
-      this.#sendJoin(send);
+      this.#sendJoin(send, socket);
     }
   }
 
-  #sendJoin(send: (frame: Buffer) => void): void {
+  #sendJoin(send: (frame: Buffer) => void, socket: Socket): void {
     const o = this.#opts;
     send(
       encodeFrame(
@@ -647,28 +825,11 @@ export class FakeGtnhServer {
     send(encodeFrame(0x2f, Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff])));
     // An unknown packet id the client must skip without desynchronizing.
     send(encodeFrame(0x35, Buffer.from('opaque tile entity data')));
+    if (this.#dayTicks !== null) send(this.#timeFrame(this.#dayTicks));
     if (o.sendChunks) {
       // Nearest-first, 5 columns per Map Chunk Bulk, like the real server, with real
-      // NotEnoughIDs-format block data for a flat world (plus test overrides).
-      const cx0 = Math.floor(o.spawn.x / 16);
-      const cz0 = Math.floor(o.spawn.z / 16);
-      const columns: Array<[number, number]> = [];
-      for (let dx = -3; dx <= 3; dx++)
-        for (let dz = -3; dz <= 3; dz++) columns.push([cx0 + dx, cz0 + dz]);
-      columns.sort(
-        (a, b) => Math.hypot(a[0] - cx0, a[1] - cz0) - Math.hypot(b[0] - cx0, b[1] - cz0),
-      );
-      for (let i = 0; i < columns.length; i += 5) {
-        const batch = columns.slice(i, i + 5);
-        const world = flatWorld(this.#blocks, o.voidColumns);
-        send(
-          chunkBulkFrame(
-            batch.map(([cx, cz]) => neidColumn(cx, cz, world)),
-            true,
-            o.corruptChunks,
-          ),
-        );
-      }
+      // NotEnoughIDs-format block data for the world (plus test overrides).
+      this.#sendView(socket, send, Math.floor(o.spawn.x / 16), Math.floor(o.spawn.z / 16));
     }
     for (const entity of o.entities) send(spawnFrame(entity));
     const timer = setInterval(
@@ -676,5 +837,12 @@ export class FakeGtnhServer {
       o.keepAliveEveryMs,
     );
     this.#timers.add(timer);
+    if (this.#dayTicks !== null) {
+      // The real server sends the time every second.
+      const clock = setInterval(() => {
+        if (this.#dayTicks !== null) send(this.#timeFrame(this.#dayTicks));
+      }, 1_000);
+      this.#timers.add(clock);
+    }
   }
 }

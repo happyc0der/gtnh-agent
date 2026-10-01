@@ -19,6 +19,8 @@ import type { Clock } from '../util/clock.ts';
 import type { Db } from './database.ts';
 import { PlanRepository } from './plan-repository.ts';
 import { MemoryRepository } from './memory-repository.ts';
+import { WorldMemoryRepository } from './world-memory-repository.ts';
+import { WindowLayoutRepository } from './window-layout-repository.ts';
 
 /*
  * Repositories are thin, synchronous and typed. Rows are re-validated with Zod on
@@ -634,6 +636,10 @@ export interface Repositories {
   protectedItems: ProtectedItemRepository;
   plans: PlanRepository;
   memory: MemoryRepository;
+  /** What the agent has seen of the world, per chunk. */
+  worldMemory: WorldMemoryRepository;
+  /** Window layouts of blocks the agent opened (src/domain/interactions.ts). */
+  windowLayouts: WindowLayoutRepository;
   /** Runs `fn` in a single SQLite transaction (nested calls become savepoints). */
   transaction<T>(fn: () => T): T;
 }
@@ -650,6 +656,8 @@ export function createRepositories(db: Db, clock: Clock): Repositories {
     protectedItems: new ProtectedItemRepository(db, clock),
     plans: new PlanRepository(db, clock),
     memory: new MemoryRepository(db, clock),
+    worldMemory: new WorldMemoryRepository(db),
+    windowLayouts: new WindowLayoutRepository(db),
     transaction: <T>(fn: () => T): T => db.transaction(fn)(),
   };
 }

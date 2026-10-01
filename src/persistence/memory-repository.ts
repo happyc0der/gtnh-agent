@@ -7,6 +7,8 @@ import type { Db } from './database.ts';
 export const CURRENT_TASK_KEY = 'current_task';
 /** agent_state key prefix for a task's item requirements: `task_requirements:<taskId>`. */
 export const TASK_REQUIREMENTS_PREFIX = 'task_requirements:';
+/** agent_state key prefix for a building task's blueprint lines: `task_blueprint:<taskId>`. */
+export const TASK_BLUEPRINT_PREFIX = 'task_blueprint:';
 /** agent_state key prefix for a task's journal: `task_journal:<taskId>`. */
 export const TASK_JOURNAL_PREFIX = 'task_journal:';
 /** Journal lines kept in full; older ones are folded into one summary line. */
@@ -44,6 +46,19 @@ export class MemoryRepository {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
       )
       .run(key, value, this.#clock.now().toISOString());
+  }
+
+  /** A building task's blueprint: route lines ("place <item> at (x, y, z) (role)"). */
+  taskBlueprint(taskId: string): string[] | null {
+    const raw = this.getValue(`${TASK_BLUEPRINT_PREFIX}${taskId}`);
+    return raw === null ? null : z.array(z.string().max(300)).max(32).parse(JSON.parse(raw));
+  }
+
+  setTaskBlueprint(taskId: string, lines: readonly string[] | null): void {
+    this.setValue(
+      `${TASK_BLUEPRINT_PREFIX}${taskId}`,
+      lines === null ? null : JSON.stringify(lines.slice(0, 32)),
+    );
   }
 
   /** The items a task's goal needs (item -> count), or null. */

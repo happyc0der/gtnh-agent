@@ -67,6 +67,16 @@ export function checkPreconditions(
       resolvedTarget = action.args.target;
       break;
 
+    case 'EXPLORE': {
+      const p = requirePosition();
+      const toward = action.args.toward;
+      if (p !== null && typeof toward !== 'string') {
+        const d = Math.hypot(toward.x - p.x, toward.z - p.z);
+        if (d < 2) failures.push(`the EXPLORE target is only ${d.toFixed(1)} blocks away`);
+      }
+      break;
+    }
+
     case 'RETURN_TO_SAFE_LOCATION': {
       requirePosition();
       const location = ctx.locations.get(action.args.locationName);
@@ -164,6 +174,51 @@ export function checkPreconditions(
       break;
     }
 
+    case 'INTERACT_BLOCK':
+    case 'SMELT':
+    case 'TAKE_OUTPUT': {
+      // Reach is measured like the game does: from the eyes to the block.
+      const p = requirePosition();
+      const target = action.args.position;
+      if (p !== null && eyeDistanceToBlock(p, target) > reach) {
+        failures.push(
+          `block ${formatPosition(target)} is ${eyeDistanceToBlock(p, target).toFixed(1)} blocks from the eyes (reach ${reach})`,
+        );
+      }
+      if (action.type === 'SMELT') {
+        requireInventory();
+        const { input, quantity, fuel, fuelQuantity } = action.args;
+        const need = new Map<string, number>([[input, quantity]]);
+        if (fuelQuantity > 0) need.set(fuel, (need.get(fuel) ?? 0) + fuelQuantity);
+        if (inventory !== null) {
+          for (const [item, n] of need) {
+            if (have(item) < n) failures.push(`inventory holds ${have(item)} ${item}, need ${n}`);
+          }
+        }
+      }
+      if (action.type === 'TAKE_OUTPUT') {
+        // The output goes into an empty slot (results are never merged into other stacks).
+        requireInventory();
+        if (inventory !== null && inventory.usedSlots >= inventory.capacitySlots) {
+          failures.push('inventory is full (no empty slot for the furnace output)');
+        }
+        const furnace = state.interactables.known
+          ? state.interactables.value.blocks.find(
+              (b) =>
+                b.position.x === target.x && b.position.y === target.y && b.position.z === target.z,
+            )?.furnace
+          : undefined;
+        // Seen empty is no proof (it may have filled since); seen holding another item is.
+        const output = furnace?.seen?.output ?? null;
+        if (output !== null && output.item !== action.args.item) {
+          failures.push(
+            `the furnace's output was last seen holding ${output.count} ${output.item}, not ${action.args.item}`,
+          );
+        }
+      }
+      break;
+    }
+
     case 'DIG_BLOCK': {
       // Reach is measured like the game does: from the eyes to the block.
       const p = requirePosition();
@@ -177,6 +232,22 @@ export function checkPreconditions(
       requireInventory();
       if (inventory !== null && inventory.usedSlots >= inventory.capacitySlots) {
         failures.push('inventory is full (no room for the drop)');
+      }
+      break;
+    }
+
+    case 'PLACE_BLOCK': {
+      // Reach is measured from the eyes to the cell, like digging.
+      const p = requirePosition();
+      const target = action.args.position;
+      if (p !== null && eyeDistanceToBlock(p, target) > reach) {
+        failures.push(
+          `cell ${formatPosition(target)} is ${eyeDistanceToBlock(p, target).toFixed(1)} blocks from the eyes (reach ${reach})`,
+        );
+      }
+      requireInventory();
+      if (inventory !== null && have(action.args.item) < 1) {
+        failures.push(`inventory holds no ${action.args.item} to place`);
       }
       break;
     }

@@ -5,8 +5,10 @@ import {
   type Action,
   type ActionSpec,
   type ActionType,
+  type ExploreToward,
 } from '../domain/actions.ts';
-import { FALLING_DIGGABLE_BLOCKS } from '../domain/blocks.ts';
+import { parseObservedStorageId, profileForBlock } from '../domain/interactions.ts';
+import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import {
@@ -329,14 +331,18 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
       v.push(...outside.map((x) => ({ ...x, severity: 'block' as const })));
       break;
     }
-    case 'DIG_BLOCK': {
+    case 'EXPLORE':
+      v.push(...exploreTargetChecks(spec.args.toward, config));
+      break;
+    case 'DIG_BLOCK':
+    case 'PLACE_BLOCK': {
       // The whole block must lie inside the work area, not just a corner of it.
       const b = spec.args.position;
       if (!isBlockInsideBox(b, config.boundary)) {
         v.push({
           code: 'OUT_OF_BOUNDS',
           severity: 'block',
-          message: `DIG_BLOCK target block ${formatPosition(b)} is not inside the configured boundary`,
+          message: `${spec.type} target block ${formatPosition(b)} is not inside the configured boundary`,
           details: {
             x: b.x,
             y: b.y,
@@ -344,6 +350,31 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
             min: formatPosition(config.boundary.min),
             max: formatPosition(config.boundary.max),
           },
+        });
+      }
+      break;
+    }
+    case 'INTERACT_BLOCK':
+    case 'TAKE_OUTPUT':
+      v.push(...blockOutsideBoundary(spec.type, spec.args.position, config));
+      break;
+    case 'SMELT': {
+      v.push(...blockOutsideBoundary(spec.type, spec.args.position, config));
+      const { fuel, fuelQuantity } = spec.args;
+      if (fuel === LAVA_BUCKET || spec.args.input === LAVA_BUCKET) {
+        v.push({
+          code: 'FORBIDDEN_MODIFICATION',
+          severity: 'pause',
+          message: 'SMELT never uses lava (lava interaction is not allowed)',
+          details: { item: LAVA_BUCKET },
+        });
+      }
+      if (fuelQuantity > 0 && !config.approvedFuels.includes(fuel)) {
+        v.push({
+          code: 'NOT_APPROVED_FUEL',
+          severity: 'block',
+          message: `${fuel} is not an approved fuel`,
+          details: { item: fuel },
         });
       }
       break;
@@ -382,7 +413,92 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
   return v;
 }
 
-/** Violations for an action type that is not allowed while dangers are present. */
+const LAVA_BUCKET = 'minecraft:lava_bucket';
+
+/** OUT_OF_BOUNDS when the whole target block is not inside the configured boundary. */
+function blockOutsideBoundary(
+  type: ActionType,
+  b: BlockPosition,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  if (isBlockInsideBox(b, config.boundary)) return [];
+  return [
+    {
+      code: 'OUT_OF_BOUNDS',
+      severity: 'block',
+      message: `${type} target block ${formatPosition(b)} is not inside the configured boundary`,
+      details: {
+        x: b.x,
+        y: b.y,
+        z: b.z,
+        min: formatPosition(config.boundary.min),
+        max: formatPosition(config.boundary.max),
+      },
+    },
+  ];
+}
+
+/**
+ * EXPLORE toward a point: the point (x, z) must lie inside the boundary, which is the
+ * exploration area. A compass direction always passes: the walk is pulled in to stay inside
+ * the boundary, and the client never leaves it.
+ */
+function exploreTargetChecks(toward: ExploreToward, config: SafetyConfig): SafetyViolation[] {
+  if (typeof toward === 'string') return [];
+  const b = config.boundary;
+  if (toward.x >= b.min.x && toward.x <= b.max.x && toward.z >= b.min.z && toward.z <= b.max.z) {
+    return [];
+  }
+  return [
+    {
+      code: 'OUT_OF_BOUNDS',
+      severity: 'block',
+      message: `EXPLORE target (${toward.x}, ${toward.z}) is outside the configured boundary`,
+      details: {
+        x: toward.x,
+        z: toward.z,
+        min: formatPosition(b.min),
+        max: formatPosition(b.max),
+      },
+    },
+  ];
+}
+
+/**
+ * EXPLORE leads the player away from known ground, so only in daylight: refused in the
+ * evening and at night (hostile mobs; the agent cannot shelter yet), and when the time of day
+ * is unknown. Escapes are not affected: a retreat is RETURN_TO_SAFE_LOCATION, never EXPLORE.
+ */
+function exploreTimeChecks(state: GameState): SafetyViolation[] {
+  if (!state.time.known) {
+    return [
+      {
+        code: 'STATE_UNKNOWN',
+        severity: 'block',
+        message: `EXPLORE needs daylight, and the time of day is unknown (${state.time.reason})`,
+        details: { field: 'time' },
+      },
+    ];
+  }
+  const t = state.time.value;
+  if (t.phase !== 'evening' && t.phase !== 'night') return [];
+  return [
+    {
+      code: 'NOT_DAYTIME',
+      severity: 'block',
+      message: `EXPLORE only in daylight: it is ${t.phase} (${t.minutesUntilDay} min until sunrise)`,
+      details: { phase: t.phase, timeOfDay: t.timeOfDay },
+    },
+  ];
+}
+
+/**
+ * Violations for an action type that is not allowed while dangers are present. Only a
+ * retreat (and eating, when only the vitals are low) restores safety. PLACE_BLOCK is
+ * deliberately not an escape: one block does not make a shelter, sealing one with a mob
+ * within reach can wall the agent in with it, and a creeper's blast opens it again. Shelters
+ * are built before dark, while the state is safe (docs/action-contract.md).
+ */
 function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolation[] {
   if (dangers.length === 0) return [];
   const codes = new Set(dangers.map((d) => d.code));
@@ -449,6 +565,12 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
       }
       break;
     }
+    case 'EXPLORE':
+      // The target is checked against the boundary in evaluateStaticSpec; the walk's length
+      // is bounded by its schema (MAX_EXPLORE_DISTANCE). Unscanned ground is the point of
+      // exploring: the client checks every step on the blocks the server sends.
+      v.push(...exploreTimeChecks(state));
+      break;
     case 'RETURN_TO_SAFE_LOCATION': {
       const location = ctx.locations.get(action.args.locationName);
       if (location === undefined) break; // reported by evaluateStaticSpec
@@ -484,6 +606,7 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
       if (!state.storage.some((s) => s.id === action.args.containerId)) {
         v.push(unknownTarget('Container', action.args.containerId));
       }
+      v.push(...observedStorageOutside(action.type, action.args.containerId, state, config));
       break;
     case 'INSPECT_MACHINE':
       if (!state.machines.some((m) => m.id === action.args.machineId)) {
@@ -493,13 +616,29 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
     case 'DIG_BLOCK':
       v.push(...digChecks(action.args.position, state, config));
       break;
+    case 'PLACE_BLOCK':
+      v.push(...placeChecks(action.args.position, action.args.item, state, config));
+      break;
     case 'CRAFT_ITEM': {
       const tableId = action.args.craftingTableId;
       if (tableId !== null && !state.craftingTables.some((t) => t.id === tableId)) {
         v.push(unknownTarget('Crafting table', tableId));
       }
+      // A crafting table the observation found (not configured): inside the work area too.
+      const observed = state.craftingTables.find(
+        (t) => t.id === tableId && t.id.startsWith(OBSERVED_TABLE_PREFIX),
+      );
+      if (observed?.position.known === true) {
+        const p = observed.position.value;
+        v.push(...blockOutsideBoundary(action.type, { x: p.x, y: p.y, z: p.z }, config));
+      }
       break;
     }
+    case 'INTERACT_BLOCK':
+    case 'SMELT':
+    case 'TAKE_OUTPUT':
+      v.push(...interactChecks(action.type, action.args.position, state));
+      break;
     case 'REFUEL_KNOWN_GENERATOR': {
       const generator = state.power.generators.find((g) => g.id === action.args.generatorId);
       if (generator === undefined) {
@@ -605,6 +744,161 @@ function digChecks(
     ),
   );
   return v;
+}
+
+/**
+ * PLACE_BLOCK rules that the observation can answer. The live client re-checks all of them
+ * (and more: the fence, everything touching the cell, entities, the block it clicks) on the
+ * blocks the server sent, just before it places.
+ *  - The cell must be one the observation lists as placeable: empty (air, tall grass or a
+ *    dead bush), within reach, clear of the player's body and of every entity, against a
+ *    plain full block, with no hazard next to it.
+ *  - Never a cell the player's body is in: the server does not stop that (it leaves the
+ *    placing player out of its entity check).
+ *  - Sand and gravel only where they cannot fall: on a plain full block, and never in a
+ *    column the player's body stands in (above its head they would fall on it).
+ *  - Clear of known hazards, like a dug block.
+ */
+function placeChecks(
+  target: BlockPosition,
+  item: PlaceableItem,
+  state: GameState,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  const v: SafetyViolation[] = [];
+  const where = formatPosition(target);
+  const details = { x: target.x, y: target.y, z: target.z, item };
+  if (!state.nearbyBlocks.known) {
+    v.push({
+      code: 'UNKNOWN_TARGET',
+      severity: 'pause',
+      message: `Nearby blocks are not observed (${state.nearbyBlocks.reason}); nothing can be placed`,
+      details,
+    });
+    return v;
+  }
+  const cell = state.nearbyBlocks.value.placeable.find(
+    (c) => c.position.x === target.x && c.position.y === target.y && c.position.z === target.z,
+  );
+  if (cell === undefined) {
+    v.push({
+      code: 'NOT_PLACEABLE',
+      severity: 'pause',
+      message: `${where} is not an observed placeable cell (only empty cells the observation lists, within reach and against a plain block, may be filled)`,
+      details,
+    });
+    return v;
+  }
+  const position = state.player.position.known ? state.player.position.value : null;
+  const falls = fallsWhenPlaced(item);
+  if (position !== null) {
+    const own = bodyColumns(position).some((c) => c.x === target.x && c.z === target.z);
+    if (own && target.y >= Math.floor(position.y + 1e-6) && target.y <= headBlockY(position)) {
+      v.push({
+        code: 'UNSAFE_PLACE',
+        severity: 'pause',
+        message: `${where} is a cell the player's body is in`,
+        details,
+      });
+    } else if (own && falls) {
+      v.push({
+        code: 'UNSAFE_PLACE',
+        severity: 'pause',
+        message: `${item} at ${where} would be in a column the player stands in: it could fall on its head`,
+        details,
+      });
+    }
+  }
+  if (falls && !cell.takesFalling && v.length === 0) {
+    v.push({
+      code: 'UNSAFE_PLACE',
+      severity: 'pause',
+      message: `${item} at ${where} would fall: the observation does not show a plain full block holding it up`,
+      details,
+    });
+  }
+  const hazards = state.environmentHazards.known ? state.environmentHazards.value.hazards : [];
+  v.push(
+    ...checkHazardClearance(
+      blockCentre(target),
+      hazards,
+      config.hazardAvoidanceRadius,
+      'PLACE_BLOCK target',
+    ),
+  );
+  return v;
+}
+
+/** Ids of crafting tables the observation found (not configured): `crafting_table:x.y.z`. */
+export const OBSERVED_TABLE_PREFIX = 'crafting_table:';
+
+/** A storage block the observation found (not configured) must lie inside the work area. */
+function observedStorageOutside(
+  type: ActionType,
+  containerId: string,
+  state: GameState,
+  config: SafetyConfig,
+): SafetyViolation[] {
+  if (parseObservedStorageId(containerId) === null) return [];
+  const listed = state.storage.find((s) => s.id === containerId);
+  if (listed === undefined || !listed.position.known) return [];
+  const p = listed.position.value;
+  return blockOutsideBoundary(type, { x: p.x, y: p.y, z: p.z }, config);
+}
+
+/**
+ * Window-action rules the observation can answer. The block must be listed in
+ * `interactables` (observed: a profile, or the operator's observe-only allowlist), and its
+ * profile must be one the action may use: SMELT and TAKE_OUTPUT need a furnace;
+ * INTERACT_BLOCK any profile that may be opened (never a trapped chest), or an
+ * observe-only block. The live client re-checks the block, reach, the fence and the window
+ * that opens.
+ */
+function interactChecks(
+  type: 'INTERACT_BLOCK' | 'SMELT' | 'TAKE_OUTPUT',
+  target: BlockPosition,
+  state: GameState,
+): SafetyViolation[] {
+  const where = formatPosition(target);
+  const details = { x: target.x, y: target.y, z: target.z };
+  if (!state.interactables.known) {
+    return [
+      {
+        code: 'UNKNOWN_TARGET',
+        severity: 'pause',
+        message: `Nearby blocks to interact with are not observed (${state.interactables.reason}); nothing can be opened`,
+        details,
+      },
+    ];
+  }
+  const listed = state.interactables.value.blocks.find(
+    (b) => b.position.x === target.x && b.position.y === target.y && b.position.z === target.z,
+  );
+  const refuse = (message: string): SafetyViolation[] => [
+    { code: 'NOT_INTERACTABLE', severity: 'pause', message, details },
+  ];
+  if (listed === undefined) {
+    return refuse(
+      `The block at ${where} is not an observed block the agent may interact with (it needs an interaction profile or the observe-only allowlist)`,
+    );
+  }
+  const profile = listed.profile === null ? null : profileForBlock(listed.block);
+  if (listed.profile !== null && (profile === null || profile.id !== listed.profile)) {
+    return refuse(`${listed.block} at ${where} does not match its profile ${listed.profile}`);
+  }
+  if (profile !== null && profile.open.how === 'never') {
+    return refuse(`${listed.block} at ${where} is never opened: ${profile.open.reason}`);
+  }
+  if (type === 'INTERACT_BLOCK') {
+    if (profile !== null && !profile.usedBy.includes('INTERACT_BLOCK')) {
+      return refuse(`${listed.block} at ${where} may not be opened with INTERACT_BLOCK`);
+    }
+    return [];
+  }
+  if (profile === null || !profile.usedBy.includes(type)) {
+    return refuse(`${type} needs a furnace; the block at ${where} is ${listed.block}`);
+  }
+  return [];
 }
 
 /**

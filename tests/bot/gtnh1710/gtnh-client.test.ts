@@ -160,6 +160,7 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     const specs: Record<string, ActionSpec> = {
       OBSERVE_STATE: { type: 'OBSERVE_STATE', args: {} },
       MOVE_TO: { type: 'MOVE_TO', args: { target: { x: 0, y: 64, z: 0 }, tolerance: 1 } },
+      EXPLORE: { type: 'EXPLORE', args: { toward: 'north', maxDistance: 32 } },
       WAIT: { type: 'WAIT', args: { durationMs: 50 } },
       EAT_FOOD: { type: 'EAT_FOOD', args: { item: 'minecraft:bread' } },
       RETURN_TO_SAFE_LOCATION: { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } },
@@ -178,9 +179,28 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
         args: { generatorId: 'g1', fuelItem: 'minecraft:coal', quantity: 1 },
       },
       DIG_BLOCK: { type: 'DIG_BLOCK', args: { position: { x: -4, y: 105, z: -8 } } },
+      PLACE_BLOCK: {
+        type: 'PLACE_BLOCK',
+        args: { position: { x: -3, y: 106, z: -8 }, item: 'minecraft:dirt' },
+      },
       CRAFT_ITEM: {
         type: 'CRAFT_ITEM',
         args: { recipe: 'planks_oak', times: 1, craftingTableId: null },
+      },
+      INTERACT_BLOCK: { type: 'INTERACT_BLOCK', args: { position: { x: -4, y: 106, z: -6 } } },
+      SMELT: {
+        type: 'SMELT',
+        args: {
+          position: { x: -4, y: 106, z: -6 },
+          input: 'minecraft:coal',
+          quantity: 1,
+          fuel: 'minecraft:coal',
+          fuelQuantity: 1,
+        },
+      },
+      TAKE_OUTPUT: {
+        type: 'TAKE_OUTPUT',
+        args: { position: { x: -4, y: 106, z: -6 }, item: 'minecraft:coal' },
       },
       PAUSE_AND_ASK_USER: { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
     };

@@ -87,9 +87,19 @@ function decodeColumn(
   return sections;
 }
 
+/** Bytes of a ground-up column's biome array: one biome id per column, index z << 4 | x. */
+export const BIOME_BYTES = 256;
+
 export interface DecodedColumn {
   header: ColumnHeader;
   sections: ColumnSections;
+  /** The column's biome ids (ground-up data ends with them); null when not sent. */
+  biomes: Uint8Array | null;
+}
+
+/** The biome array at the end of a ground-up column's data (a copy). */
+function biomesAt(data: Buffer, end: number): Uint8Array {
+  return Uint8Array.from(data.subarray(end - BIOME_BYTES, end));
 }
 
 /** Map Chunk Bulk (0x26): every column is ground-up and shares one zlib stream. */
@@ -109,7 +119,11 @@ export function decodeChunkBulk(
     const length = columnDataLength(h, skyLight, true, format);
     if (offset + length > data.length)
       throw new ProtocolError('chunk bulk data shorter than its headers');
-    out.push({ header: h, sections: decodeColumn(data, offset, h, skyLight, format) });
+    out.push({
+      header: h,
+      sections: decodeColumn(data, offset, h, skyLight, format),
+      biomes: biomesAt(data, offset + length),
+    });
     offset += length;
   }
   if (offset !== data.length) {
@@ -128,6 +142,16 @@ export function decodeChunkColumn(
   compressed: Buffer,
   format: ChunkFormat,
 ): ColumnSections {
+  return decodeChunkColumnWithBiomes(header, groundUp, compressed, format).sections;
+}
+
+/** Chunk Data (0x21) with the biome array a ground-up column ends with (null otherwise). */
+export function decodeChunkColumnWithBiomes(
+  header: ColumnHeader,
+  groundUp: boolean,
+  compressed: Buffer,
+  format: ChunkFormat,
+): DecodedColumn {
   if (format.neid && header.addBitMask !== 0) {
     throw new ProtocolError(
       `NEID column ${header.chunkX},${header.chunkZ} unexpectedly has an add mask`,
@@ -136,7 +160,11 @@ export function decodeChunkColumn(
   const data = inflateChunkData(compressed);
   for (const skyLight of [true, false]) {
     if (data.length === columnDataLength(header, skyLight, groundUp, format)) {
-      return decodeColumn(data, 0, header, skyLight, format);
+      return {
+        header,
+        sections: decodeColumn(data, 0, header, skyLight, format),
+        biomes: groundUp ? biomesAt(data, data.length) : null,
+      };
     }
   }
   throw new ProtocolError(`chunk data length ${data.length} matches no known layout`);
@@ -157,6 +185,15 @@ interface StoredColumn {
   receivedAt: number;
   /** Why the block data is unusable (the column still counts as "arrived" for entities). */
   bad: string | null;
+  /** Biome ids from the last ground-up data (null: none received). */
+  biomes: Uint8Array | null;
+}
+
+/** A loaded, usable column, read-only (world surveys). */
+export interface ColumnView {
+  readonly sections: ColumnSections;
+  readonly biomes: Uint8Array | null;
+  readonly receivedAt: number;
 }
 
 const key = (cx: number, cz: number): string => `${cx},${cz}`;
@@ -173,8 +210,14 @@ export class ChunkStore {
     this.#columns.clear();
   }
 
-  setColumn(cx: number, cz: number, sections: ColumnSections, at: number): void {
-    this.#columns.set(key(cx, cz), { sections, receivedAt: at, bad: null });
+  setColumn(
+    cx: number,
+    cz: number,
+    sections: ColumnSections,
+    at: number,
+    biomes: Uint8Array | null = null,
+  ): void {
+    this.#columns.set(key(cx, cz), { sections, receivedAt: at, bad: null, biomes });
   }
 
   /** A non-ground-up update replaces only the sections in its mask. */
@@ -198,6 +241,7 @@ export class ChunkStore {
       sections: new Array<Uint16Array | null>(16).fill(null),
       receivedAt: at,
       bad: reason,
+      biomes: null,
     });
   }
 
@@ -231,6 +275,14 @@ export class ChunkStore {
   columnSections(cx: number, cz: number): ColumnSections | undefined {
     const c = this.#columns.get(key(cx, cz));
     return c === undefined || c.bad !== null ? undefined : c.sections;
+  }
+
+  /** The column with its biomes and arrival time (undefined if not loaded or unusable). */
+  column(cx: number, cz: number): ColumnView | undefined {
+    const c = this.#columns.get(key(cx, cz));
+    return c === undefined || c.bad !== null
+      ? undefined
+      : { sections: c.sections, biomes: c.biomes, receivedAt: c.receivedAt };
   }
 
   setBlock(x: number, y: number, z: number, id: number): void {

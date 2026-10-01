@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
 import { defaultConfig } from '../../src/config/env.ts';
 import { ACTION_TYPES, type ActionSpec } from '../../src/domain/actions.ts';
+import type { PlaceableItem } from '../../src/domain/blocks.ts';
 import type { GameState } from '../../src/domain/game-state.ts';
 import { known, unknown } from '../../src/domain/known.ts';
 import { classifyActionType } from '../../src/safety/forbidden-actions.ts';
@@ -89,6 +91,25 @@ describe('rule 2: lava/void hazards', () => {
     expect(
       codes({ type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } }, state),
     ).toEqual([]);
+  });
+
+  it('keeps only contact range from blocks that hurt on contact (cactus)', () => {
+    const cactus = { kind: 'damaging_block' as const, position: { x: 13.5, y: 64.5, z: 10.5 } };
+    const near = (x: number) =>
+      makeState((w) => {
+        w.hazards = [cactus];
+        w.player.position = { x, y: 64, z: 10.5 };
+      });
+    // Three blocks away: no danger, and a walk may end there; lava that close would be one.
+    expect(assessDangers(near(10.5), safetyCtx()).map((v) => v.code)).toEqual([]);
+    expect(
+      codes(
+        { type: 'MOVE_TO', args: { target: { x: 10.5, y: 64, z: 10.5 }, tolerance: 1 } },
+        near(0),
+      ),
+    ).toEqual([]);
+    // Right next to it: a danger.
+    expect(assessDangers(near(12.5), safetyCtx()).map((v) => v.code)).toEqual(['HAZARD_PROXIMITY']);
   });
 
   it('treats a lava/void flag without a position as a hazard', () => {
@@ -326,7 +347,7 @@ describe('protected items with real GTNH 2.8.4 registry names', () => {
 
 describe('rule 5: no world/base modification', () => {
   it.each([
-    'PLACE_BLOCK',
+    'PLACE_TNT',
     'BREAK_BLOCK',
     'USE_WRENCH',
     'CONFIGURE_CABLE',
@@ -359,6 +380,24 @@ describe('rule 5: no world/base modification', () => {
     'BREAK_BLOCK',
     'DIG_BLOCK ',
   ])('only exactly DIG_BLOCK is exempt from the DIG keyword: %j stays forbidden', (type) => {
+    expect(classifyActionType(type)).toBe('forbidden');
+    const r = evaluateAction(
+      { ...action({ type: 'WAIT', args: { durationMs: 100 } }), type },
+      makeState(),
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['FORBIDDEN_MODIFICATION']);
+  });
+
+  it.each([
+    'PLACE',
+    'place_block',
+    'PLACE_BLOCKS',
+    'PLACE_STRUCTURE',
+    'PLACE_BLOCK ',
+    'BUILD_WALL',
+  ])('only exactly PLACE_BLOCK is exempt from the PLACE keyword: %j stays forbidden', (type) => {
     expect(classifyActionType(type)).toBe('forbidden');
     const r = evaluateAction(
       { ...action({ type: 'WAIT', args: { durationMs: 100 } }), type },
@@ -435,6 +474,133 @@ describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's suppo
   it('is not allowed during danger', () => {
     const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
     expect(codes(dig(2, 64, 1), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+});
+
+describe('PLACE_BLOCK: only observed placeable cells, never the body, nothing that falls on it', () => {
+  // The mock player stands at (1, 64, 1), eyes at (1, 65.62, 1); the cell on top of the dirt
+  // at (2, 64, 1) next to it, (2, 65, 1), is placeable and holds sand up.
+  const place = (
+    x: number,
+    y: number,
+    z: number,
+    item: PlaceableItem = 'minecraft:cobblestone',
+  ): ActionSpec => ({ type: 'PLACE_BLOCK', args: { position: { x, y, z }, item } });
+
+  it('allows a listed placeable cell in a safe state', () => {
+    expect(codes(place(2, 65, 1))).toEqual([]);
+    expect(codes(place(2, 65, 1, 'minecraft:sand'))).toEqual([]);
+  });
+
+  it('refuses (and asks) for a cell the observation does not list as placeable', () => {
+    // The chest's own cell, and the cell the player's head is in.
+    const r = evaluateAction(
+      action(place(3, 64, 0)),
+      makeState(),
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['NOT_PLACEABLE']);
+    expect(r.requiresUserPause).toBe(true);
+    expect(codes(place(1, 65, 1))).toEqual(['NOT_PLACEABLE']);
+  });
+
+  it('refuses when nearby blocks are not observed', () => {
+    const blind = makeState((w) => void (w.unobservable = ['blocks']));
+    expect(codes(place(2, 65, 1), blind)).toEqual(['UNKNOWN_TARGET']);
+  });
+
+  it("refuses the player's own cells even when listed (the server would not stop it)", () => {
+    const state = makeState();
+    if (!state.nearbyBlocks.known) throw new Error('fixture blocks unknown');
+    const listed: GameState = {
+      ...state,
+      nearbyBlocks: known({
+        ...state.nearbyBlocks.value,
+        placeable: [{ position: { x: 1, y: 65, z: 1 }, takesFalling: false }],
+      }),
+    };
+    expect(codes(place(1, 65, 1), listed)).toEqual(['UNSAFE_PLACE']);
+  });
+
+  it('refuses sand or gravel over the head or where nothing holds it up', () => {
+    // With a block beside it, the cell right over the head is placeable, but not for sand.
+    const overhead = makeState((w) => {
+      w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 2, y: 66, z: 1 } });
+    });
+    expect(codes(place(1, 66, 1, 'minecraft:sand'), overhead)).toEqual(['UNSAFE_PLACE']);
+    expect(codes(place(1, 66, 1), overhead)).toEqual([]);
+    // Beside the dirt with nothing under it: gravel would fall.
+    expect(codes(place(2, 64, 2, 'minecraft:gravel'))).toEqual(['UNSAFE_PLACE']);
+    expect(codes(place(2, 64, 2))).toEqual([]);
+  });
+
+  it('keeps the cell clear of known hazards and inside the boundary', () => {
+    const lava = makeState((w) => {
+      w.hazards = [{ kind: 'lava', position: { x: 2, y: 65, z: 7 } }];
+    });
+    expect(assessDangers(lava, safetyCtx())).toEqual([]); // the player is 6.2 blocks away
+    expect(codes(place(2, 65, 1), lava)).toEqual(['HAZARD_PROXIMITY']);
+    const edge = makeState((w) => {
+      w.player.position = { x: 255, y: 64, z: 1 };
+      w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 256, y: 64, z: 1 } });
+    });
+    expect(codes(place(256, 65, 1), edge)).toEqual(['OUT_OF_BOUNDS']);
+  });
+
+  it('never places a protected item, and is not allowed during danger', () => {
+    const ctx = safetyCtx(
+      defaultConfig({ ...MOCK_CONFIG, safety: { protectedItems: ['minecraft:planks'] } }),
+    );
+    expect(
+      evaluateAction(
+        action(place(2, 65, 1, 'minecraft:planks@3')),
+        makeState(),
+        ctx,
+        emptyFailureHistory,
+      ).violations.map((v) => v.code),
+    ).toEqual(['PROTECTED_ITEM']);
+    const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
+    expect(codes(place(2, 65, 1), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+});
+
+describe('EXPLORE: inside the boundary, bounded, only in daylight', () => {
+  const explore = (
+    toward: Extract<ActionSpec, { type: 'EXPLORE' }>['args']['toward'],
+    maxDistance = 64,
+  ): ActionSpec => ({ type: 'EXPLORE', args: { toward, maxDistance } });
+  const at = (timeOfDay: number) => makeState((w) => void (w.timeOfDay = timeOfDay));
+
+  it('allows a direction, or a point inside the boundary, in daylight', () => {
+    expect(codes(explore('north'))).toEqual([]);
+    expect(codes(explore({ x: 200, z: -100 }, 96))).toEqual([]);
+    // Unscanned ground is what exploring is for: no hazard-scan coverage rule, unlike MOVE_TO.
+    expect(codes(explore({ x: 250, z: 250 }, 96))).toEqual([]);
+    expect(codes(explore('south'), at(23_500))).toEqual([]); // dawn
+  });
+
+  it('refuses a point outside the boundary, in plans too (static check)', () => {
+    expect(codes(explore({ x: 300, z: 0 }))).toContain('OUT_OF_BOUNDS');
+    expect(evaluateStaticSpec(explore({ x: 0, z: -257 }), safetyCtx()).map((v) => v.code)).toEqual([
+      'OUT_OF_BOUNDS',
+    ]);
+    expect(evaluateStaticSpec(explore('north_west'), safetyCtx())).toEqual([]);
+  });
+
+  it('refuses in the evening, at night, and when the time of day is unknown', () => {
+    expect(codes(explore('north'), at(12_500))).toEqual(['NOT_DAYTIME']);
+    expect(codes(explore('north'), at(18_000))).toEqual(['NOT_DAYTIME']);
+    const noClock: GameState = { ...makeState(), time: unknown('no time update yet') };
+    expect(codes(explore('north'), noClock)).toEqual(['STATE_UNKNOWN']);
+    // An escape is never refused for the dark: a retreat is not an EXPLORE.
+    const retreat: ActionSpec = { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } };
+    expect(codes(retreat, at(18_000))).toEqual([]);
+  });
+
+  it('is not allowed during danger', () => {
+    const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
+    expect(codes(explore('west'), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
   });
 });
 

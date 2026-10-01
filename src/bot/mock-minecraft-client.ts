@@ -1,9 +1,20 @@
-import type { ActionType } from '../domain/actions.ts';
-import type { DiggableBlock } from '../domain/blocks.ts';
+import type { ActionType, ExploreToward } from '../domain/actions.ts';
+import {
+  fallsWhenPlaced,
+  isDiggableBlock,
+  placedBlockOf,
+  type DiggableBlock,
+  type PlaceableBlock,
+  type PlaceableItem,
+} from '../domain/blocks.ts';
+import { COMPASS } from '../domain/world-memory.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
+  MAX_REPORTED_PLACEABLE,
+  MAX_REPORTED_PLACED,
+  MAX_REPORTED_INTERACTABLES,
   MAX_REPORTED_REMOVED,
   MAX_REPORTED_RESOURCES,
   type CurrentTask,
@@ -12,8 +23,15 @@ import {
   type KnownRecipeState,
   type MachineStatus,
   worldTime,
+  type PlaceableCell,
 } from '../domain/game-state.ts';
-import { blockCentre, distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
+import {
+  blockCentre,
+  bodyColumns,
+  distance,
+  eyeDistanceToBlock,
+  formatPosition,
+} from '../domain/geometry.ts';
 import { known, unknown } from '../domain/known.ts';
 import {
   describeIngredient,
@@ -22,8 +40,13 @@ import {
   RECIPES,
   type RecipeId,
 } from '../domain/recipes.ts';
+import { bestTool, parseToolName, toolProblem, usesLeft } from '../domain/tools.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
+import { isProtected } from '../safety/protected-items.ts';
+import { FURNACE_COOK_TICKS, furnaceFuelTicks, type ProfileId } from '../domain/interactions.ts';
+import type { BlockWindow, FurnaceState, InteractableBlock } from '../domain/game-state.ts';
 import type { Clock, ManualClock } from '../util/clock.ts';
+import { bodyOverlaps, entityOverlaps } from './gtnh1710/placing.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from './minecraft-client.ts';
 
 const STACK_SIZE = 64;
@@ -52,6 +75,11 @@ const MOCK_DROPS: Readonly<Record<DiggableBlock, { item: string; count: number }
 
 export interface MockResourceBlock {
   block: DiggableBlock;
+  position: BlockPosition;
+}
+
+export interface MockPlacedBlock {
+  block: PlaceableBlock;
   position: BlockPosition;
 }
 
@@ -85,6 +113,36 @@ export interface MockMachine {
   lastInspectedAt: string | null;
 }
 
+/** A furnace in the mock world: its slots and the vanilla timers (ticks). */
+export interface MockFurnace {
+  position: BlockPosition;
+  input: { item: string; count: number } | null;
+  fuel: { item: string; count: number } | null;
+  output: { item: string; count: number } | null;
+  cookTicks: number;
+  burnTicksLeft: number;
+  fuelItemTicks: number;
+}
+
+/** Another block the agent may right-click (e.g. an observe-only modded GUI). */
+export interface MockInteractable {
+  position: BlockPosition;
+  block: string;
+  /** Its profile, or null for an observe-only block. */
+  profile: ProfileId | null;
+  /** Slots the window it opens has (observe-only blocks), and what is in them. */
+  windowSlots: number;
+  contents: Array<{ slot: number; item: string; count: number }>;
+}
+
+/** What the mock furnaces make (a placeholder table, not GTNH's). */
+const MOCK_SMELTING: Readonly<Record<string, { item: string; count: number }>> = {
+  'minecraft:cobblestone': { item: 'minecraft:stone', count: 1 },
+  'minecraft:iron_ore': { item: 'minecraft:iron_ingot', count: 1 },
+  'minecraft:sand': { item: 'minecraft:glass', count: 1 },
+  'minecraft:clay_ball': { item: 'minecraft:brick', count: 1 },
+};
+
 /** Fields the mock can pretend it cannot observe, to exercise fail-closed paths. */
 export type MockUnobservable =
   'position' | 'dimension' | 'health' | 'hunger' | 'inventory' | 'threats' | 'hazards' | 'blocks';
@@ -97,10 +155,15 @@ export interface MockWorld {
   /** Entities the agent cannot identify (e.g. unclassified modded mobs). */
   unclassified: Position[];
   hazards: Hazard[];
-  /** Diggable blocks (the only blocks the mock simulates; everything else counts as air). */
+  /**
+   * Diggable blocks. With the placed blocks, the only blocks the mock simulates: everything
+   * else counts as air (and as nothing to place against).
+   */
   resourceBlocks: MockResourceBlock[];
   /** Where diggable blocks were removed, most recent first. */
   removedBlocks: BlockPosition[];
+  /** Blocks the agent placed, most recent first (diggable ones are resource blocks too). */
+  placedBlocks: MockPlacedBlock[];
   containers: MockContainer[];
   generators: MockGenerator[];
   machines: MockMachine[];
@@ -125,6 +188,10 @@ export interface MockWorld {
   blocksPerSecond: number;
   /** Ticks into the Minecraft day (0 sunrise, 6000 noon, 18000 midnight); default noon. */
   timeOfDay?: number;
+  /** Furnaces (they cook while the clock advances, 200 ticks per item). */
+  furnaces?: MockFurnace[];
+  /** Other blocks the agent may right-click (observe-only GUIs and the like). */
+  interactables?: MockInteractable[];
 }
 
 type FailureMode =
@@ -133,8 +200,8 @@ type FailureMode =
 /**
  * Deterministic in-memory Minecraft stand-in. Simulates the player, inventory,
  * a safe container, a known generator with fuel, machines, crafting (with server recipes
- * that may differ from the agent's table), hazards and hostiles, with injectable failures
- * and "reports success but changes nothing" behavior.
+ * that may differ from the agent's table), digging and placing blocks, hazards and hostiles,
+ * with injectable failures and "reports success but changes nothing" behavior.
  */
 export class MockMinecraftClient implements MinecraftClient {
   readonly kind = 'mock';
@@ -144,6 +211,14 @@ export class MockMinecraftClient implements MinecraftClient {
   readonly #clock: ManualClock;
   readonly #failures = new Map<ActionType, FailureMode>();
   #connected = false;
+  /** When the furnaces were last advanced (ms since the epoch); null before the first look. */
+  #furnacesAt: number | null = null;
+  /** The block whose window is open (INTERACT_BLOCK, SMELT, TAKE_OUTPUT), if any. */
+  #openBlock: BlockPosition | null = null;
+  /** The last block window seen (kept, closed, after the window closes). */
+  #lastWindow: BlockWindow | null = null;
+  /** What the agent last saw in each furnace, by "x,y,z". */
+  readonly #furnaceSeen = new Map<string, NonNullable<FurnaceState['seen']>>();
 
   constructor(world: MockWorld, clock: ManualClock) {
     this.world = world;
@@ -184,6 +259,7 @@ export class MockMinecraftClient implements MinecraftClient {
 
   /** Synchronous observation, handy in tests. */
   snapshot(): GameState {
+    this.#tickFurnaces();
     const w = this.world;
     const hidden = new Set(w.unobservable);
     const pos = w.player.position;
@@ -205,6 +281,9 @@ export class MockMinecraftClient implements MinecraftClient {
     const removed = w.removedBlocks
       .filter((p) => near(p) <= BLOCK_SCAN_RADIUS)
       .slice(0, MAX_REPORTED_REMOVED);
+    const placed = w.placedBlocks
+      .filter((p) => near(p.position) <= BLOCK_SCAN_RADIUS)
+      .slice(0, MAX_REPORTED_PLACED);
 
     const state: GameState = {
       schemaVersion: GAME_STATE_SCHEMA_VERSION,
@@ -252,6 +331,8 @@ export class MockMinecraftClient implements MinecraftClient {
             scanRadius: BLOCK_SCAN_RADIUS,
             resources: resources.map((r) => ({ block: r.block, position: { ...r.position } })),
             removed: removed.map((p) => ({ ...p })),
+            placeable: this.#placeableCells().slice(0, MAX_REPORTED_PLACEABLE),
+            placed: placed.map((p) => ({ block: p.block, position: { ...p.position } })),
           }),
       time: known(worldTime(w.timeOfDay ?? 6000, true)),
       power: {
@@ -284,6 +365,10 @@ export class MockMinecraftClient implements MinecraftClient {
         name: t.name,
         position: known({ ...t.position }),
       })),
+      interactables: hidden.has('blocks')
+        ? unknown('mock: blocks hidden')
+        : known({ scanRadius: BLOCK_SCAN_RADIUS, blocks: this.#interactables() }),
+      blockWindow: this.#blockWindow(),
       openContainerId: w.openContainerId,
       currentTask: w.task === null ? null : { ...w.task },
       knownRecipeState: w.recipe === null ? null : structuredClone(w.recipe),
@@ -310,8 +395,251 @@ export class MockMinecraftClient implements MinecraftClient {
     if (action.type !== 'OBSERVE_STATE' && action.type !== 'OPEN_CONTAINER') {
       this.world.openContainerId = null;
     }
+    const windowAction =
+      action.type === 'INTERACT_BLOCK' || action.type === 'SMELT' || action.type === 'TAKE_OUTPUT';
+    if (!windowAction && action.type !== 'OBSERVE_STATE') this.#closeBlockWindow();
+    this.#tickFurnaces();
     this.#clock.advance(ACTION_OVERHEAD_MS);
     return Promise.resolve(this.#apply(validated));
+  }
+
+  // -------------------------------------------------------------------------
+  // Block windows (furnaces and observe-only blocks), like the live client
+
+  /** Advances every furnace to the clock: the vanilla timers, 200 ticks per item. */
+  #tickFurnaces(): void {
+    const now = this.#clock.now().getTime();
+    const from = this.#furnacesAt ?? now;
+    this.#furnacesAt = now;
+    const ticks = Math.max(0, Math.floor((now - from) / 50));
+    for (const f of this.world.furnaces ?? []) {
+      for (let t = 0; t < ticks; t++) {
+        if (f.burnTicksLeft === 0 && f.input === null) {
+          f.cookTicks = 0;
+          break; // nothing can change any more
+        }
+        const result = f.input === null ? undefined : MOCK_SMELTING[f.input.item];
+        const canSmelt =
+          result !== undefined &&
+          (f.output === null || (f.output.item === result.item && f.output.count < 64));
+        if (f.burnTicksLeft > 0) f.burnTicksLeft -= 1;
+        if (f.burnTicksLeft === 0 && canSmelt && f.fuel !== null) {
+          const burn = furnaceFuelTicks(f.fuel.item) ?? 0;
+          if (burn > 0) {
+            f.burnTicksLeft = burn;
+            f.fuelItemTicks = burn;
+            f.fuel = f.fuel.count > 1 ? { ...f.fuel, count: f.fuel.count - 1 } : null;
+          }
+        }
+        if (f.burnTicksLeft > 0 && canSmelt && result !== undefined && f.input !== null) {
+          f.cookTicks += 1;
+          if (f.cookTicks >= FURNACE_COOK_TICKS) {
+            f.cookTicks = 0;
+            f.input = f.input.count > 1 ? { ...f.input, count: f.input.count - 1 } : null;
+            f.output = { item: result.item, count: (f.output?.count ?? 0) + result.count };
+          }
+        } else {
+          f.cookTicks = 0;
+        }
+      }
+    }
+    // While its window is open, the agent sees a furnace change as it happens.
+    const open = this.#openBlock;
+    const furnace = open === null ? undefined : this.#furnaceAt(open);
+    if (open !== null && furnace !== undefined) this.#see(furnace);
+  }
+
+  #furnaceAt(p: BlockPosition): MockFurnace | undefined {
+    return (this.world.furnaces ?? []).find(
+      (f) => f.position.x === p.x && f.position.y === p.y && f.position.z === p.z,
+    );
+  }
+
+  #see(f: MockFurnace): void {
+    this.#furnaceSeen.set(`${f.position.x},${f.position.y},${f.position.z}`, {
+      observedAt: this.#clock.now().toISOString(),
+      input: f.input === null ? null : { ...f.input },
+      fuel: f.fuel === null ? null : { ...f.fuel },
+      output: f.output === null ? null : { ...f.output },
+      cookTicks: f.cookTicks,
+      burnTicksLeft: f.burnTicksLeft,
+      fuelItemTicks: f.fuelItemTicks,
+    });
+  }
+
+  #interactables(): InteractableBlock[] {
+    const pos = this.world.player.position;
+    const near = (b: BlockPosition): number => distance(pos, blockCentre(b));
+    const furnaces = (this.world.furnaces ?? []).map((f) => ({
+      profile: 'furnace' as const,
+      block: f.burnTicksLeft > 0 ? 'minecraft:lit_furnace' : 'minecraft:furnace',
+      position: { ...f.position },
+      furnace: {
+        burning: f.burnTicksLeft > 0,
+        seen: this.#furnaceSeen.get(`${f.position.x},${f.position.y},${f.position.z}`) ?? null,
+      },
+    }));
+    const others = (this.world.interactables ?? []).map((b) => ({
+      profile: b.profile,
+      block: b.block,
+      position: { ...b.position },
+    }));
+    return [...furnaces, ...others]
+      .filter((b) => near(b.position) <= BLOCK_SCAN_RADIUS)
+      .sort((a, b) => near(a.position) - near(b.position))
+      .slice(0, MAX_REPORTED_INTERACTABLES);
+  }
+
+  /** The open block window as the live client reports it (the furnace's slots live). */
+  #blockWindow(): BlockWindow | null {
+    const open = this.#openBlock;
+    const f = open === null ? undefined : this.#furnaceAt(open);
+    if (open === null || f === undefined) return this.#lastWindow;
+    const slots: BlockWindow['slots'] = [];
+    const add = (
+      slot: number,
+      s: { item: string; count: number } | null,
+      role: 'input' | 'fuel' | 'output',
+    ): void => {
+      if (s !== null) slots.push({ slot, item: s.item, count: s.count, role, nbt: false });
+    };
+    add(0, f.input, 'input');
+    add(1, f.fuel, 'fuel');
+    add(2, f.output, 'output');
+    this.#lastWindow = {
+      position: { ...open },
+      block: f.burnTicksLeft > 0 ? 'minecraft:lit_furnace' : 'minecraft:furnace',
+      profile: 'furnace',
+      opener: 'vanilla:2',
+      title: 'container.furnace',
+      slotCount: 39,
+      containerSlots: 3,
+      inventoryAt: 3,
+      slots,
+      properties: {
+        '0': f.cookTicks,
+        '1': Math.min(32767, f.burnTicksLeft),
+        '2': Math.min(32767, f.fuelItemTicks),
+      },
+      open: true,
+      observedAt: this.#clock.now().toISOString(),
+    };
+    return this.#lastWindow;
+  }
+
+  #closeBlockWindow(): void {
+    if (this.#openBlock === null) return;
+    const w = this.#blockWindow();
+    this.#lastWindow = w === null ? null : { ...w, open: false };
+    this.#openBlock = null;
+  }
+
+  /** Opens the block at `p` (it must be a furnace or a listed block within reach). */
+  #openAt(p: BlockPosition): ClientActionResult | null {
+    if (eyeDistanceToBlock(this.world.player.position, p) > this.world.reach) {
+      return failed(`${formatPosition(p)} is out of reach`);
+    }
+    const furnace = this.#furnaceAt(p);
+    if (furnace !== undefined) {
+      this.#openBlock = { ...p };
+      this.#see(furnace);
+      return null;
+    }
+    return failed(`no furnace at ${formatPosition(p)}`, 'REFUSED');
+  }
+
+  #interact(p: BlockPosition): ClientActionResult {
+    this.#closeBlockWindow();
+    const other = (this.world.interactables ?? []).find(
+      (b) => b.position.x === p.x && b.position.y === p.y && b.position.z === p.z,
+    );
+    if (other !== undefined) {
+      if (eyeDistanceToBlock(this.world.player.position, p) > this.world.reach) {
+        return failed(`${formatPosition(p)} is out of reach`);
+      }
+      // Observe-only: looked at and closed again, like the live client.
+      this.#lastWindow = {
+        position: { ...p },
+        block: other.block,
+        profile: other.profile,
+        opener: 'fml:mock:0',
+        title: null,
+        slotCount: other.windowSlots,
+        containerSlots: null,
+        inventoryAt: null,
+        slots: other.contents.map((c) => ({ ...c, role: null, nbt: false })),
+        properties: {},
+        open: false,
+        observedAt: this.#clock.now().toISOString(),
+      };
+      return ok(`looked at ${other.block} at ${formatPosition(p)}`, {
+        block: other.block,
+        profile: other.profile,
+        slots: other.windowSlots,
+      });
+    }
+    const opened = this.#openAt(p);
+    if (opened !== null) return opened;
+    return ok(`opened the furnace at ${formatPosition(p)}`, { profile: 'furnace' });
+  }
+
+  #smelt(args: {
+    position: BlockPosition;
+    input: string;
+    quantity: number;
+    fuel: string;
+    fuelQuantity: number;
+  }): ClientActionResult {
+    const w = this.world;
+    const opened = this.#openAt(args.position);
+    if (opened !== null) return opened;
+    const f = this.#furnaceAt(args.position);
+    if (f === undefined) return failed('internal: furnace vanished', 'ERROR');
+    const need = new Map([[args.input, args.quantity]]);
+    if (args.fuelQuantity > 0) need.set(args.fuel, (need.get(args.fuel) ?? 0) + args.fuelQuantity);
+    for (const [item, n] of need) {
+      if ((w.inventory.items[item] ?? 0) < n) return failed(`not enough ${item}`, 'REFUSED');
+    }
+    const fits = (
+      slot: { item: string; count: number } | null,
+      item: string,
+      n: number,
+    ): boolean =>
+      slot === null ? n <= STACK_SIZE : slot.item === item && slot.count + n <= STACK_SIZE;
+    if (!fits(f.input, args.input, args.quantity))
+      return failed('the input slot holds something else', 'REFUSED');
+    if (args.fuelQuantity > 0 && !fits(f.fuel, args.fuel, args.fuelQuantity)) {
+      return failed('the fuel slot holds something else', 'REFUSED');
+    }
+    for (const [item, n] of need) w.inventory.items[item] = (w.inventory.items[item] ?? 0) - n;
+    if (args.fuelQuantity > 0) {
+      f.fuel = { item: args.fuel, count: (f.fuel?.count ?? 0) + args.fuelQuantity };
+    }
+    f.input = { item: args.input, count: (f.input?.count ?? 0) + args.quantity };
+    this.#see(f);
+    return ok(`put ${args.quantity} ${args.input} into the furnace`, { clicks: 0 });
+  }
+
+  #takeOutput(args: { position: BlockPosition; item: string }): ClientActionResult {
+    const w = this.world;
+    const opened = this.#openAt(args.position);
+    if (opened !== null) return opened;
+    const f = this.#furnaceAt(args.position);
+    if (f === undefined) return failed('internal: furnace vanished', 'ERROR');
+    if (f.output === null) return failed("the furnace's output slot is empty", 'REFUSED');
+    if (f.output.item !== args.item) {
+      return failed(`the furnace's output is ${f.output.item}, not ${args.item}`, 'REFUSED');
+    }
+    const taken = f.output.count;
+    const after = {
+      ...w.inventory.items,
+      [args.item]: (w.inventory.items[args.item] ?? 0) + taken,
+    };
+    if (usedSlots(after) > w.inventory.capacitySlots) return failed('inventory full', 'REFUSED');
+    w.inventory.items[args.item] = after[args.item] ?? 0;
+    f.output = null;
+    this.#see(f);
+    return ok(`took ${taken} ${args.item} from the furnace`, { item: args.item, taken });
   }
 
   #apply(validated: ValidatedAction): ClientActionResult {
@@ -323,6 +651,9 @@ export class MockMinecraftClient implements MinecraftClient {
 
       case 'MOVE_TO':
         return this.#moveTo(action.args.target);
+
+      case 'EXPLORE':
+        return this.#explore(action.args.toward, action.args.maxDistance);
 
       case 'RETURN_TO_SAFE_LOCATION':
         if (validated.resolvedTarget === null) return failed('no resolved safe location', 'ERROR');
@@ -395,9 +726,17 @@ export class MockMinecraftClient implements MinecraftClient {
       }
 
       case 'DIG_BLOCK':
-        return this.#dig(action.args.position);
+        return this.#dig(action.args.position, new Set(validated.protectedItems));
+      case 'PLACE_BLOCK':
+        return this.#place(action.args.position, action.args.item);
       case 'CRAFT_ITEM':
         return this.#craft(action.args);
+      case 'INTERACT_BLOCK':
+        return this.#interact(action.args.position);
+      case 'SMELT':
+        return this.#smelt(action.args);
+      case 'TAKE_OUTPUT':
+        return this.#takeOutput(action.args);
 
       case 'PAUSE_AND_ASK_USER':
         this.userMessages.push(action.args.question);
@@ -405,8 +744,13 @@ export class MockMinecraftClient implements MinecraftClient {
     }
   }
 
-  /** Removes the block and adds its drop, like a server would (within reach, if any room). */
-  #dig(p: BlockPosition): ClientActionResult {
+  /**
+   * Removes the block and adds its drop, like a server would (within reach, if any room).
+   * Like the live client, it holds the best usable tool for the block (src/domain/tools.ts),
+   * found by inventory name, and wears it by one: "minecraft:wooden_shovel" becomes
+   * "minecraft:wooden_shovel@1".
+   */
+  #dig(p: BlockPosition, protectedItems: ReadonlySet<string>): ClientActionResult {
     const w = this.world;
     const at = w.resourceBlocks.findIndex(
       (r) => r.position.x === p.x && r.position.y === p.y && r.position.z === p.z,
@@ -416,9 +760,26 @@ export class MockMinecraftClient implements MinecraftClient {
     if (eyeDistanceToBlock(w.player.position, p) > w.reach) {
       return failed(`${formatPosition(p)} is out of reach`);
     }
+    const tools = Object.entries(w.inventory.items).flatMap(([name, count]) => {
+      const t = parseToolName(name);
+      return t === null || count <= 0 ? [] : [{ ...t, name }];
+    });
+    const tool = bestTool(
+      found.block,
+      tools,
+      (t) =>
+        !isProtected(t.name, protectedItems) &&
+        toolProblem({ ...t, count: 1, hasNbt: false }, found.block) === null,
+    );
+    if (tool !== null) {
+      const worn = `${tool.tool.item}@${tool.damage + 1}`;
+      w.inventory.items[tool.name] = (w.inventory.items[tool.name] ?? 0) - 1;
+      w.inventory.items[worn] = (w.inventory.items[worn] ?? 0) + 1;
+    }
     this.#clock.advance(MOCK_DIG_MS);
     w.resourceBlocks.splice(at, 1);
     w.removedBlocks = [{ ...p }, ...w.removedBlocks];
+    w.placedBlocks = w.placedBlocks.filter((b) => !samePosition(b.position, p));
     const drop = MOCK_DROPS[found.block];
     let dropCollected = false;
     if (drop !== null) {
@@ -431,11 +792,109 @@ export class MockMinecraftClient implements MinecraftClient {
         dropCollected = true;
       }
     }
-    return ok(`dug ${found.block} at ${formatPosition(p)}`, {
-      block: found.block,
-      dropCollected,
-      drops: drop === null || !dropCollected ? '' : `${drop.count} x ${drop.item}`,
+    const toolUsesLeft = tool === null ? null : usesLeft(tool.tool, tool.damage + 1);
+    return ok(
+      `dug ${found.block} at ${formatPosition(p)} with ` +
+        (tool === null ? 'an empty hand' : `${tool.tool.item} (${toolUsesLeft} uses left)`),
+      {
+        block: found.block,
+        tool: tool?.tool.item ?? null,
+        toolUsesLeft,
+        dropCollected,
+        drops: drop === null || !dropCollected ? '' : `${drop.count} x ${drop.item}`,
+      },
+    );
+  }
+
+  /**
+   * Places the block, like a server would: only into a placeable cell (see #placeableCells),
+   * never sand or gravel where it would fall, and only with the item in the inventory.
+   */
+  #place(p: BlockPosition, item: PlaceableItem): ClientActionResult {
+    const w = this.world;
+    const have = w.inventory.items[item] ?? 0;
+    if (have < 1) return failed(`no ${item} in inventory`);
+    const cell = this.#placeableCells().find((c) => samePosition(c.position, p));
+    if (cell === undefined) return failed(`${formatPosition(p)} is not a placeable cell`);
+    if (fallsWhenPlaced(item) && !cell.takesFalling) {
+      return failed(`${item} would fall at ${formatPosition(p)}`);
+    }
+    const block = placedBlockOf(item);
+    w.inventory.items[item] = have - 1;
+    w.placedBlocks = [{ block, position: { ...p } }, ...w.placedBlocks];
+    if (isDiggableBlock(block)) w.resourceBlocks.push({ block, position: { ...p } });
+    return ok(`placed ${block} at ${formatPosition(p)}`, { block, item, stackUsed: true });
+  }
+
+  /**
+   * Like the live client: empty cells within reach of the eyes, clear of the player's body
+   * and of every hostile or unidentified entity, next to a simulated block to place against,
+   * touching no container, machine, crafting table or generator and no hazard. Sand and
+   * gravel may go where a simulated block is right below, outside the player's own columns.
+   * Nearest to the eyes first.
+   */
+  #placeableCells(): PlaceableCell[] {
+    const w = this.world;
+    const feet = w.player.position;
+    const key = (b: BlockPosition): string => `${b.x},${b.y},${b.z}`;
+    const cellOf = (q: Position): BlockPosition => ({
+      x: Math.floor(q.x),
+      y: Math.floor(q.y),
+      z: Math.floor(q.z),
     });
+    const solid = new Set([
+      ...w.resourceBlocks.map((r) => key(r.position)),
+      ...w.placedBlocks.map((b) => key(b.position)),
+    ]);
+    const fixtures = new Set(
+      [...w.containers, ...w.machines, ...w.craftingTables, ...w.generators].map((f) =>
+        key(cellOf(f.position)),
+      ),
+    );
+    const hazards = w.hazards.map((h) => cellOf(h.position));
+    const entities = [...w.hostiles, ...w.unclassified];
+    const own = bodyColumns(feet);
+    const faces: ReadonlyArray<readonly [number, number, number]> = [
+      [0, -1, 0],
+      [0, 1, 0],
+      [0, 0, -1],
+      [0, 0, 1],
+      [-1, 0, 0],
+      [1, 0, 0],
+    ];
+    const around = (b: BlockPosition): BlockPosition[] =>
+      faces.map(([dx, dy, dz]) => ({ x: b.x + dx, y: b.y + dy, z: b.z + dz }));
+    const candidates = new Map<string, BlockPosition>();
+    for (const s of [...w.resourceBlocks, ...w.placedBlocks]) {
+      for (const n of around(s.position)) {
+        if (!solid.has(key(n)) && !fixtures.has(key(n))) candidates.set(key(n), n);
+      }
+    }
+    return [...candidates.values()]
+      .filter(
+        (c) =>
+          c.y >= 1 &&
+          c.y <= 254 &&
+          eyeDistanceToBlock(feet, c) <= w.reach &&
+          !bodyOverlaps(feet, c) &&
+          !entities.some((e) => entityOverlaps(e, c)) &&
+          !around(c).some((n) => fixtures.has(key(n))) &&
+          !hazards.some(
+            (h) => Math.abs(h.x - c.x) <= 1 && Math.abs(h.y - c.y) <= 1 && Math.abs(h.z - c.z) <= 1,
+          ),
+      )
+      .sort(
+        (a, b) =>
+          eyeDistanceToBlock(feet, a) - eyeDistanceToBlock(feet, b) ||
+          a.x - b.x ||
+          a.y - b.y ||
+          a.z - b.z,
+      )
+      .map((c) => ({
+        position: c,
+        takesFalling:
+          solid.has(key({ ...c, y: c.y - 1 })) && !own.some((o) => o.x === c.x && o.z === c.z),
+      }));
   }
 
   /** Like the live client: the server's result must match the table, or nothing is crafted. */
@@ -491,6 +950,23 @@ export class MockMinecraftClient implements MinecraftClient {
     return ok(`moved ${d.toFixed(1)} blocks`, { distance: Number(d.toFixed(2)) });
   }
 
+  /** A straight walk (no terrain is simulated) toward the direction or point, at most maxDistance. */
+  #explore(toward: ExploreToward, maxDistance: number): ClientActionResult {
+    const p = this.world.player.position;
+    const heading =
+      typeof toward === 'string' ? COMPASS[toward] : { x: toward.x - p.x, z: toward.z - p.z };
+    const length = Math.hypot(heading.x, heading.z);
+    const d = typeof toward === 'string' ? maxDistance : Math.min(maxDistance, length);
+    if (length < 1e-9 || d < 1) return failed('already there', 'REFUSED');
+    const target = {
+      x: p.x + (heading.x / length) * d,
+      y: p.y,
+      z: p.z + (heading.z / length) * d,
+    };
+    const moved = this.#moveTo(target);
+    return ok(`explored ${d.toFixed(1)} blocks`, { ...moved.data, walked: Number(d.toFixed(2)) });
+  }
+
   #container(id: string): MockContainer | string {
     const c = this.world.containers.find((x) => x.id === id);
     if (c === undefined) return `no container ${id}`;
@@ -498,6 +974,10 @@ export class MockMinecraftClient implements MinecraftClient {
       return `${id} is out of reach`;
     return c;
   }
+}
+
+function samePosition(a: BlockPosition, b: BlockPosition): boolean {
+  return a.x === b.x && a.y === b.y && a.z === b.z;
 }
 
 function nonZero(items: Record<string, number>): Record<string, number> {

@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
+import { defaultConfig } from '../../src/config/env.ts';
+import type { PlaceableItem } from '../../src/domain/blocks.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
 import { PlanSchema, plannerResponseJsonSchema, type Plan } from '../../src/planner/plan-schema.ts';
 import { parsePlannerOutput, validatePlan } from '../../src/planner/plan-validator.ts';
@@ -8,6 +11,7 @@ import {
   buildPlannerRequest,
   sanitizeStateForPlanner,
 } from '../../src/planner/planner-provider.ts';
+import { summarizeExploration } from '../../src/domain/world-memory.ts';
 import { makeState, safetyCtx } from '../fixtures/index.ts';
 
 const validPlan: Plan = {
@@ -81,7 +85,10 @@ describe('plan schema', () => {
   it('exports a JSON Schema for constrained decoding', () => {
     const schema = JSON.stringify(plannerResponseJsonSchema());
     expect(schema).toContain('INSPECT_MACHINE');
-    expect(schema).not.toContain('PLACE_BLOCK');
+    expect(schema).toContain('PLACE_BLOCK');
+    // The item is an enum of the place allowlist, so decoding cannot invent another block.
+    expect(schema).toContain('"enum":["minecraft:dirt","minecraft:cobblestone"');
+    expect(schema).not.toContain('BREAK_BLOCK');
   });
 });
 
@@ -174,20 +181,178 @@ describe('planner request and mock planner', () => {
     expect(hidden.unknownFields).toContain('nearbyBlocks');
   });
 
+  it('lists the tools DIG_BLOCK may hold, best first, with the digs they have left', () => {
+    const state = makeState((w) => {
+      Object.assign(w.inventory.items, {
+        'minecraft:wooden_shovel': 2,
+        'minecraft:wooden_shovel@57': 1,
+        'minecraft:wooden_shovel@59': 1, // worn out for the agent
+        'minecraft:stone_axe@1': 1,
+        'minecraft:iron_shovel': 1, // digs nothing on this server: not a tool for the agent
+        'minecraft:diamond_axe': 1, // protected below
+      });
+    });
+    const shovel = [
+      'minecraft:dirt',
+      'minecraft:grass',
+      'minecraft:sand',
+      'minecraft:gravel',
+      'minecraft:clay',
+    ];
+    const axe = ['minecraft:log', 'minecraft:log2'];
+    expect(sanitizeStateForPlanner(state, new Set(['minecraft:diamond_axe'])).tools).toEqual([
+      { item: 'minecraft:stone_axe', count: 1, durabilityLeft: 130, digsFaster: axe },
+      { item: 'minecraft:wooden_shovel', count: 2, durabilityLeft: 59, digsFaster: shovel },
+      { item: 'minecraft:wooden_shovel', count: 1, durabilityLeft: 2, digsFaster: shovel },
+      { item: 'minecraft:wooden_shovel', count: 1, durabilityLeft: 0, digsFaster: shovel },
+    ]);
+    // Through buildPlannerRequest, protected tools come from the safety context.
+    const r = buildPlannerRequest({
+      state,
+      safety: safetyCtx(),
+      maxPlanSteps: 4,
+      recentActions: [],
+      recentFailures: [],
+    });
+    expect(r.state.tools.map((t) => t.item)).toContain('minecraft:diamond_axe');
+    const guarded = buildPlannerRequest({
+      state,
+      safety: { ...safetyCtx(), protectedItems: new Set(['minecraft:stone_axe']) },
+      maxPlanSteps: 4,
+      recentActions: [],
+      recentFailures: [],
+    });
+    expect(guarded.state.tools.map((t) => t.item)).not.toContain('minecraft:stone_axe');
+    // No tools, or an unknown inventory: an empty list.
+    expect(request().state.tools).toEqual([]);
+    const blind = sanitizeStateForPlanner(makeState((w) => void (w.unobservable = ['inventory'])));
+    expect(blind.tools).toEqual([]);
+  });
+
   it('the request carries the allowlist and constraints', () => {
     const r = request();
-    expect(r.allowedActions).toHaveLength(13);
+    expect(r.allowedActions).toHaveLength(17);
     expect(r.allowedActions).toContain('DIG_BLOCK');
+    expect(r.allowedActions).toContain('PLACE_BLOCK');
     expect(r.allowedActions).toContain('CRAFT_ITEM');
+    expect(r.allowedActions).toEqual(
+      expect.arrayContaining(['INTERACT_BLOCK', 'SMELT', 'TAKE_OUTPUT']),
+    );
     expect(r.safetyConstraints.protectedItems).toEqual([
       'minecraft:diamond',
       'minecraft:nether_star',
     ]);
     expect(r.safetyConstraints.safeLocations).toEqual(['home']);
-    // 'DIG' stays a forbidden keyword; exactly DIG_BLOCK is the operator's exception.
-    expect(r.safetyConstraints.forbidden).toContain('DIG');
-    expect(r.safetyConstraints.forbiddenExceptions).toEqual(['DIG_BLOCK']);
+    // 'DIG' and 'PLACE' stay forbidden keywords; exactly DIG_BLOCK and PLACE_BLOCK are the
+    // operator's exceptions.
+    expect(r.safetyConstraints.forbidden).toEqual(expect.arrayContaining(['DIG', 'PLACE']));
+    expect(r.safetyConstraints.forbiddenExceptions).toEqual(['DIG_BLOCK', 'PLACE_BLOCK']);
     expect(r.safetyConstraints.diggableBlocks).toContain('minecraft:log');
+    expect(r.safetyConstraints.placeableItems).toEqual(
+      expect.arrayContaining(['minecraft:dirt', 'minecraft:cobblestone', 'minecraft:planks@5']),
+    );
+  });
+
+  it('passes the placeable cells, nearest first, with their reach', () => {
+    // The mock player's eyes are at (1, 65.62, 1); dirt at (2, 64, 1) is a block to place on.
+    const s = sanitizeStateForPlanner(makeState());
+    expect(s.placeableCells[0]).toEqual({
+      position: { x: 2, y: 65, z: 1 },
+      reach: 1.59,
+      takesFalling: true,
+    });
+    const reaches = s.placeableCells.map((c) => c.reach ?? Infinity);
+    expect(reaches).toEqual([...reaches].sort((a, b) => a - b));
+    const hidden = sanitizeStateForPlanner(makeState((w) => void (w.unobservable = ['blocks'])));
+    expect(hidden.placeableCells).toEqual([]);
+  });
+
+  it('a plan may place an allowlisted block, but not outside the boundary or a protected one', () => {
+    const place = (x: number, item: PlaceableItem): Plan => ({
+      ...validPlan,
+      steps: [
+        {
+          step: 1,
+          action: { type: 'PLACE_BLOCK', args: { position: { x, y: 65, z: 1 }, item } },
+          rationale: 'close the gap',
+        },
+      ],
+    });
+    expect(validatePlan(place(2, 'minecraft:cobblestone'), safetyCtx(), 8).ok).toBe(true);
+    const outside = validatePlan(place(300, 'minecraft:cobblestone'), safetyCtx(), 8);
+    expect(outside.stepViolations[0]?.violations.map((v) => v.code)).toEqual(['OUT_OF_BOUNDS']);
+    // Protecting minecraft:log protects every wood type of it.
+    const ctx = safetyCtx(
+      defaultConfig({ ...MOCK_CONFIG, safety: { protectedItems: ['minecraft:log'] } }),
+    );
+    expect(
+      validatePlan(place(2, 'minecraft:log@2'), ctx, 8).stepViolations[0]?.violations.map(
+        (v) => v.code,
+      ),
+    ).toEqual(['PROTECTED_ITEM']);
+  });
+
+  it('offers EXPLORE, with what world memory knows, only when the agent can explore', () => {
+    expect(request().allowedActions).not.toContain('EXPLORE');
+    expect(request().exploration).toBeUndefined();
+    const exploration = summarizeExploration({
+      chunks: [
+        {
+          dimension: 'overworld',
+          chunkX: 0,
+          chunkZ: 4,
+          biome: { id: 229, name: 'Hot Forest', share: 1 },
+          counts: { log: 9 },
+          examples: { log: [{ x: 4, y: 64, z: 70 }] },
+          seenAt: '2026-01-01T11:58:00.000Z',
+        },
+      ],
+      from: { x: 1, y: 64, z: 1 },
+      boundary: safetyCtx().config.boundary,
+      now: new Date('2026-01-01T12:00:00.000Z'),
+    });
+    const r = buildPlannerRequest({
+      state: makeState(),
+      safety: safetyCtx(),
+      maxPlanSteps: 4,
+      recentActions: [],
+      recentFailures: [],
+      exploration,
+    });
+    expect(r.allowedActions).toContain('EXPLORE');
+    expect(r.allowedActions).toHaveLength(18);
+    expect(r.exploration?.places).toEqual([
+      {
+        resource: 'log',
+        x: 4,
+        z: 70,
+        distance: 69,
+        direction: 'south',
+        count: 9,
+        biome: 'Hot Forest',
+        seenMinutesAgo: 2,
+      },
+    ]);
+    expect(JSON.stringify(plannerResponseJsonSchema())).toContain('north_east');
+  });
+
+  it('a plan may explore toward a point inside the boundary, not outside it', () => {
+    const exploreTo = (x: number, z: number): Plan => ({
+      ...validPlan,
+      steps: [
+        {
+          step: 1,
+          action: { type: 'EXPLORE', args: { toward: { x, z }, maxDistance: 96 } },
+          rationale: 'find wood',
+        },
+      ],
+    });
+    expect(validatePlan(exploreTo(40, 70), safetyCtx(), 8).ok).toBe(true);
+    expect(
+      validatePlan(exploreTo(4000, 70), safetyCtx(), 8).stepViolations[0]?.violations.map(
+        (v) => v.code,
+      ),
+    ).toEqual(['OUT_OF_BOUNDS']);
   });
 
   it('a plan may dig an allowlisted block, but not a block outside the boundary', () => {

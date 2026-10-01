@@ -1,7 +1,8 @@
 import type { Action, Postcondition } from '../domain/actions.ts';
 import type { ClientActionResult } from '../bot/minecraft-client.ts';
-import type { GameState } from '../domain/game-state.ts';
+import type { GameState, InteractableBlock } from '../domain/game-state.ts';
 import { distance, formatPosition } from '../domain/geometry.ts';
+import { COMPASS } from '../domain/world-memory.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 
 export interface VerificationCheck {
@@ -87,6 +88,38 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
         'player-near-target',
         d <= tolerance,
         `${d.toFixed(2)} blocks from ${formatPosition(target)} (tolerance ${tolerance})`,
+      );
+      break;
+    }
+
+    case 'EXPLORED': {
+      // Progress along the heading: toward the point (from where the player started), or in
+      // the compass direction. The walk itself is bounded by maxDistance.
+      if (!before.player.position.known || !after.player.position.known) {
+        check('explored-progress', false, 'player position unknown before or after exploring');
+        break;
+      }
+      const b = before.player.position.value;
+      const a = after.player.position.value;
+      const heading =
+        typeof post.toward === 'string'
+          ? COMPASS[post.toward]
+          : { x: post.toward.x - b.x, z: post.toward.z - b.z };
+      const length = Math.hypot(heading.x, heading.z);
+      const progress =
+        length < 1e-9 ? 0 : ((a.x - b.x) * heading.x + (a.z - b.z) * heading.z) / length;
+      const moved = Math.hypot(a.x - b.x, a.z - b.z);
+      const where =
+        typeof post.toward === 'string' ? post.toward : `(${post.toward.x}, ${post.toward.z})`;
+      check(
+        'explored-progress',
+        progress >= 1,
+        `${progress.toFixed(1)} blocks farther toward ${where} (at least 1)`,
+      );
+      check(
+        'explored-bounded',
+        moved <= post.maxDistance + 0.5,
+        `${moved.toFixed(1)} blocks from the start (maxDistance ${post.maxDistance})`,
       );
       break;
     }
@@ -198,6 +231,39 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'BLOCK_PLACED': {
+      const p = post.position;
+      const where = formatPosition(p);
+      if (!after.nearbyBlocks.known) {
+        check(
+          'block-placed',
+          false,
+          `nearby blocks unknown after placing: ${after.nearbyBlocks.reason}`,
+        );
+      } else {
+        const placed = after.nearbyBlocks.value.placed.find(
+          (q) => q.position.x === p.x && q.position.y === p.y && q.position.z === p.z,
+        );
+        check(
+          'block-placed',
+          placed?.block === post.block,
+          placed === undefined
+            ? `${where} was not observed turning into ${post.block}`
+            : `${where} was observed turning into ${placed.block}`,
+        );
+      }
+      // Exactly one item was used: none means the server did not take it, more means
+      // something else happened.
+      const b = inv(before, post.item);
+      const a = inv(after, post.item);
+      check(
+        'item-used',
+        b !== null && a !== null && b - a === 1,
+        `${post.item}: ${b} -> ${a}, expected -1`,
+      );
+      break;
+    }
+
     case 'ITEMS_CRAFTED': {
       if (!before.inventory.known || !after.inventory.known) {
         check('inventory-known', false, 'inventory unknown before or after crafting');
@@ -241,6 +307,90 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'BLOCK_WINDOW_SEEN': {
+      const w = windowAt(after, post.position);
+      const listed = interactableAt(before, post.position);
+      check(
+        'window-seen',
+        w !== null && Date.parse(w.observedAt) >= Date.parse(action.timestamp),
+        w === null
+          ? `no window of the block at ${formatPosition(post.position)} was seen`
+          : `${w.block} (${w.opener}, ${w.slotCount} slots) seen at ${w.observedAt}`,
+      );
+      if (w !== null && listed !== undefined) {
+        check(
+          'window-profile',
+          w.profile === listed.profile,
+          `window profile ${w.profile ?? 'none (observe-only)'}, observed block ${listed.block} has ${listed.profile ?? 'none'}`,
+        );
+        // A profiled window stays open; an observe-only one is closed right after it is seen.
+        check(
+          'window-state',
+          listed.profile === null ? !w.open : w.open,
+          w.open ? 'the window is open' : 'the window was closed after it was seen',
+        );
+      }
+      break;
+    }
+
+    case 'FURNACE_LOADED': {
+      if (!before.inventory.known || !after.inventory.known) {
+        check('inventory-known', false, 'inventory unknown before or after loading the furnace');
+        break;
+      }
+      const expected = new Map<string, number>([[post.input, -post.quantity]]);
+      if (post.fuelQuantity > 0) {
+        expected.set(post.fuel, (expected.get(post.fuel) ?? 0) - post.fuelQuantity);
+      }
+      inventoryDeltas(before.inventory.value.items, after.inventory.value.items, expected, check);
+      const w = windowAt(after, post.position);
+      check(
+        'furnace-open',
+        w !== null && w.profile === 'furnace' && w.open,
+        w === null ? 'no furnace window seen' : `${w.block}: ${w.open ? 'open' : 'closed'}`,
+      );
+      if (w !== null) {
+        const input = w.slots.find((s) => s.role === 'input');
+        const output = w.slots.find((s) => s.role === 'output');
+        check(
+          'furnace-holds-input',
+          input?.item === post.input || output !== undefined,
+          `input slot: ${input === undefined ? 'empty' : `${input.count} ${input.item}`}`,
+        );
+      }
+      break;
+    }
+
+    case 'FURNACE_OUTPUT_TAKEN': {
+      if (!before.inventory.known || !after.inventory.known) {
+        check('inventory-known', false, 'inventory unknown before or after taking the output');
+        break;
+      }
+      const taken = execution.data['taken'];
+      const item = execution.data['item'];
+      const valid = typeof taken === 'number' && Number.isInteger(taken) && taken >= 1;
+      check(
+        'client-took',
+        valid && item === post.item,
+        `client reported ${String(taken)} x ${String(item)}`,
+      );
+      if (valid) {
+        inventoryDeltas(
+          before.inventory.value.items,
+          after.inventory.value.items,
+          new Map([[post.item, taken]]),
+          check,
+        );
+      }
+      const w = windowAt(after, post.position);
+      check(
+        'furnace-open',
+        w !== null && w.profile === 'furnace' && w.open,
+        w === null ? 'no furnace window seen' : `${w.block}: ${w.open ? 'open' : 'closed'}`,
+      );
+      break;
+    }
+
     case 'USER_NOTIFIED':
       check(
         'user-acknowledged',
@@ -250,4 +400,55 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
   }
   return done();
+}
+
+const samePosition = (
+  a: { x: number; y: number; z: number },
+  b: { x: number; y: number; z: number },
+): boolean => a.x === b.x && a.y === b.y && a.z === b.z;
+
+/** The block window an observation shows for this position, or null. */
+function windowAt(s: GameState, p: { x: number; y: number; z: number }): GameState['blockWindow'] {
+  const w = s.blockWindow;
+  return w !== null && samePosition(w.position, p) ? w : null;
+}
+
+function interactableAt(
+  s: GameState,
+  p: { x: number; y: number; z: number },
+): InteractableBlock | undefined {
+  return s.interactables.known
+    ? s.interactables.value.blocks.find((b) => samePosition(b.position, p))
+    : undefined;
+}
+
+/** Exact inventory changes: each listed item by its delta, every other item unchanged. */
+function inventoryDeltas(
+  b: Readonly<Record<string, number>>,
+  a: Readonly<Record<string, number>>,
+  expected: ReadonlyMap<string, number>,
+  check: (name: string, passed: boolean, detail: string) => void,
+): void {
+  for (const [item, delta] of expected) {
+    const qb = b[item] ?? 0;
+    const qa = a[item] ?? 0;
+    check(
+      `inventory-delta ${item}`,
+      qa - qb === delta,
+      `${item}: ${qb} -> ${qa}, expected ${delta > 0 ? '+' : ''}${delta}`,
+    );
+  }
+  const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(
+    (name) => !expected.has(name) && (a[name] ?? 0) !== (b[name] ?? 0),
+  );
+  check(
+    'other-items-unchanged',
+    changed.length === 0,
+    changed.length === 0
+      ? 'no other item changed'
+      : `also changed: ${changed
+          .slice(0, 5)
+          .map((name) => `${name} ${b[name] ?? 0} -> ${a[name] ?? 0}`)
+          .join(', ')}`,
+  );
 }

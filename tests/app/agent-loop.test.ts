@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { runSingleCycle, syncConfigToDatabase } from '../../src/app/agent-loop.ts';
 import { runMockScenario } from '../../src/app/mock-agent.ts';
-import { findScenario, SCENARIOS, type Scenario } from '../../src/app/scenarios.ts';
+import { findScenario, MOCK_CONFIG, SCENARIOS, type Scenario } from '../../src/app/scenarios.ts';
 import type { MockMinecraftClient } from '../../src/bot/mock-minecraft-client.ts';
+import { defaultConfig } from '../../src/config/env.ts';
+import type { SeenChunk } from '../../src/domain/world-memory.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
 import type { DecisionProvider } from '../../src/system1/decision-provider.ts';
@@ -161,6 +163,87 @@ describe('agent loop behaviour', () => {
     );
     expect(client.performed.map((p) => p.action.type)).toEqual(['PAUSE_AND_ASK_USER']);
     db.close();
+  });
+});
+
+describe('world memory and exploring', () => {
+  const sighting: SeenChunk = {
+    dimension: 'overworld',
+    chunkX: 0,
+    chunkZ: 4,
+    biome: { id: 229, name: 'Hot Forest', share: 1 },
+    counts: { log: 12 },
+    examples: { log: [{ x: 3, y: 64, z: 70 }] },
+    seenAt: T0,
+  };
+  const planNeeded: DecisionProvider = {
+    name: 'test',
+    decide: () =>
+      Promise.resolve({
+        decision: 'REQUEST_PLANNER',
+        confidence: 1,
+        reasonCodes: ['NO_KNOWN_STEP'],
+        factsUsed: {},
+        requiresHumanConfirmation: false,
+        provider: 'test',
+      }),
+  };
+  const explorePlan = {
+    kind: 'plan',
+    plan: {
+      goal: 'Find wood',
+      steps: [
+        {
+          step: 1,
+          action: { type: 'EXPLORE', args: { toward: { x: 3, z: 70 }, maxDistance: 96 } },
+          rationale: 'logs were seen there',
+        },
+      ],
+      requiresUserApproval: false,
+      explanation: 'The forest to the south has logs.',
+      failureHandling: { onStepFailure: 'REPLAN', maxRetriesPerStep: 1, escalationMessage: 'x' },
+    },
+  };
+
+  async function cycle(movement: { enabled: boolean; mode: 'fixed' | 'follow' }) {
+    const clock = testClock();
+    const { client } = makeWorld(undefined, clock);
+    await client.connect();
+    const pending = [sighting];
+    const seeing = Object.assign(client, { takeSeenChunks: () => pending.splice(0) });
+    const repos = memoryRepos(clock);
+    const config = defaultConfig({ ...MOCK_CONFIG, minecraft: { movement } });
+    syncConfigToDatabase(config, repos);
+    const planner = new MockPlannerProvider([{ name: 'explore', when: {}, response: explorePlan }]);
+    const result = await runSingleCycle({
+      config,
+      client: seeing,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    });
+    return { result, repos, planner, client };
+  }
+
+  it('stores what the client saw, and offers EXPLORE with it when the play area follows', async () => {
+    const { result, repos, planner, client } = await cycle({ enabled: true, mode: 'follow' });
+    expect(repos.worldMemory.get('overworld', 0, 4)).toEqual(sighting);
+    const request = planner.requests[0];
+    expect(request?.allowedActions).toContain('EXPLORE');
+    expect(request?.exploration?.chunksSeen).toBe(1);
+    expect(request?.exploration?.places[0]).toMatchObject({ resource: 'log', x: 3, z: 70 });
+    // The plan's EXPLORE ran (the mock walks straight toward the point) and was verified.
+    expect(result.status).toBe('succeeded');
+    expect(client.world.player.position.z).toBeGreaterThan(60);
+  });
+
+  it('keeps remembering, but offers no EXPLORE, with a fixed fence', async () => {
+    const { repos, planner } = await cycle({ enabled: true, mode: 'fixed' });
+    expect(repos.worldMemory.count()).toBe(1);
+    expect(planner.requests[0]?.allowedActions).not.toContain('EXPLORE');
+    expect(planner.requests[0]?.exploration).toBeUndefined();
   });
 });
 

@@ -66,8 +66,9 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
       ['furnace', 'missing'],
     ]);
     const lines = describeRoute(route);
+    // The hand-verified GTNH table recipe (2 flint above 2 logs) replaced the generated copy.
     expect(lines).toContain(
-      'station: crafting_table: none known; make one: minecraft:crafting_table#1: 2 minecraft:flint, ' +
+      'station: crafting_table: none known; make one: crafting_table: 2 minecraft:flint, ' +
         '2 minecraft:log (2x2), then place it',
     );
     expect(

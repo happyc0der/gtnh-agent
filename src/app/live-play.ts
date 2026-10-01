@@ -12,6 +12,8 @@ import { randomIds } from '../util/ids.ts';
 import { syncConfigToDatabase } from './agent-loop.ts';
 import { runSession } from './live-session.ts';
 import { withLiveClient } from './live-agent.ts';
+import { passProblem } from '../bot/gtnh1710/terrain.ts';
+import { shelterStatus } from '../goals/shelter.ts';
 import { runPlay, type PlayEvent, type PlayLimits, type PlayResult } from './play.ts';
 
 /**
@@ -52,11 +54,15 @@ export async function runLivePlay(
             : existsSync(stopFile)
               ? `the stop file ${stopFile} exists`
               : null;
+        // When the agent can explore, play first scouts the area while little of it is known.
+        const movement = config.minecraft.movement;
+        const canExplore = movement.enabled && movement.mode === 'follow';
         try {
           const result = await runPlay(
             {
               repos,
               ...(input.abilities ? { abilities: input.abilities } : {}),
+              ...(canExplore ? { scouting: { chunksSeen: () => repos.worldMemory.count() } } : {}),
               inventory: async () => {
                 const state = await client.observe();
                 return state.inventory.known ? state.inventory.value.items : null;
@@ -64,6 +70,19 @@ export async function runLivePlay(
               time: async () => {
                 const state = await client.observe();
                 return state.time.known ? state.time.value : null;
+              },
+              shelter: async () => {
+                const state = await client.observe();
+                const world = client.world.walkWorld();
+                const feet = client.world.ownPosition;
+                if (world === null || feet === null || !state.inventory.known) return null;
+                const solid = {
+                  solidAt: (x: number, y: number, z: number): boolean | undefined => {
+                    const problem = passProblem(world, x, y, z);
+                    return problem === 'chunk not loaded' ? undefined : problem !== null;
+                  },
+                };
+                return shelterStatus(solid, feet, state.inventory.value.items);
               },
               session: (limits, hooks) =>
                 runSession(

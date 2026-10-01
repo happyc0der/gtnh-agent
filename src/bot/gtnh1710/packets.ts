@@ -21,14 +21,15 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 
 // ---------------------------------------------------------------------------
 // Outbound: the ONLY packets this client can ever send. Anything that could change
-// the world (placing, chat/commands, using items, attacking, dropping items) is
-// intentionally absent. The exceptions are walking ('player-move', only for steps
-// walking.ts has checked), vanilla chests and crafting ('activate-block', 'select-slot',
-// 'click-window', 'confirm-transaction', 'close-window', only as container.ts and
-// crafting.ts plan them) and digging one block ('dig-block' with status
-// start/cancel/finish only, for targets digging.ts has checked); see Gtnh1710Client.
-// 'player-look' and 'swing-arm' only change what other players see: where the head
-// points, and the arm swinging while digging.
+// the world (chat/commands, using items, attacking, dropping items) is intentionally
+// absent. The exceptions are walking ('player-move', only for steps walking.ts has
+// checked), vanilla chests, crafting and block windows ('activate-block', 'select-slot',
+// 'click-window', 'confirm-transaction', 'close-window', only as container.ts, crafting.ts
+// and interact.ts plan them), digging one block ('dig-block' with status start/cancel/finish
+// only, for targets digging.ts has checked) and placing one block ('place-block': C08 with
+// the held block item, against a neighbour placing.ts has checked); see Gtnh1710Client.
+// 'player-look' and 'swing-arm' only change what other players see: where the head points,
+// and the arm swinging while digging or placing.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -46,6 +47,7 @@ export type OutboundKind =
   | 'confirm-transaction'
   | 'close-window'
   | 'dig-block'
+  | 'place-block'
   | 'player-look'
   | 'swing-arm';
 
@@ -270,6 +272,66 @@ export const outbound = {
     };
   },
 
+  /**
+   * C08 Player Block Placement WITH the held block item (i32 x, u8 y, i32 z, u8 face, the
+   * held stack, then where the click lands on the face in sixteenths, u8 x/y/z; verified
+   * against the 1.7.10 server's packet class): click face `face` of the block at (x, y, z),
+   * so the held block goes into the cell next to that face. Only faces 0-5 (255, "use the
+   * item in the air", is refused) and only an NBT-free stack of 1-64, claimed exactly as
+   * the client holds it: the server compares the claim to decide whether to re-send the slot.
+   */
+  placeBlock(
+    x: number,
+    y: number,
+    z: number,
+    face: number,
+    held: ItemStackData,
+    cursor: { x: number; y: number; z: number },
+    modularUi: boolean,
+  ): OutboundPacket {
+    if (
+      !Number.isInteger(x) ||
+      !Number.isInteger(z) ||
+      Math.abs(x) > 30_000_000 ||
+      Math.abs(z) > 30_000_000
+    ) {
+      throw new ProtocolError('bad block x/z');
+    }
+    if (!Number.isInteger(y) || y < 0 || y > 255) throw new ProtocolError('bad y');
+    if (!Number.isInteger(face) || face < 0 || face > 5) throw new ProtocolError('bad face');
+    if (
+      !Number.isInteger(held.id) ||
+      held.id < 1 ||
+      held.id > 32767 ||
+      !Number.isInteger(held.damage) ||
+      held.damage < 0 ||
+      held.damage > 32767 ||
+      !Number.isInteger(held.count) ||
+      held.count < 1 ||
+      held.count > 64
+    ) {
+      throw new ProtocolError('refusing to claim a held stack that cannot be placed from');
+    }
+    const c = [cursor.x, cursor.y, cursor.z];
+    if (!c.every((v) => Number.isInteger(v) && v >= 0 && v <= 16)) {
+      throw new ProtocolError('bad cursor position');
+    }
+    return {
+      kind: 'place-block',
+      frame: encodeFrame(
+        0x08,
+        Buffer.concat([
+          i32(x),
+          Buffer.from([y]),
+          i32(z),
+          Buffer.from([face]),
+          writeItemStack(held, modularUi), // refuses a stack with NBT data
+          Buffer.from(c),
+        ]),
+      ),
+    };
+  },
+
   /** C05 Player Look (f32 yaw, f32 pitch, bool on ground): turn the head, without moving. */
   playerLook(yaw: number, pitch: number, onGround: boolean): OutboundPacket {
     if (!Number.isFinite(yaw) || !Number.isFinite(pitch) || Math.abs(pitch) > 90) {
@@ -281,7 +343,10 @@ export const outbound = {
     };
   },
 
-  /** C0A Animation (i32 own entity id, i8 1 = swing the arm), as a client does while digging. */
+  /**
+   * C0A Animation (i32 own entity id, i8 1 = swing the arm), as a client does while digging
+   * and after placing a block.
+   */
   swingArm(entityId: number): OutboundPacket {
     if (!Number.isInteger(entityId)) throw new ProtocolError('bad entity id');
     return {
@@ -371,6 +436,11 @@ export type PlayPacket =
       slotCount: number;
     }
   | { type: 'close-window'; windowId: number }
+  /**
+   * S31 Window Property (u8 window, i16 property, i16 value; verified in the server jar):
+   * e.g. a furnace's cook progress and burn time (src/domain/interactions.ts).
+   */
+  | { type: 'window-property'; windowId: number; property: number; value: number }
   | { type: 'confirm-transaction'; windowId: number; actionNumber: number; accepted: boolean }
   | { type: 'window-items'; windowId: number; items: Array<ItemStackData | null> }
   | { type: 'plugin-message'; channel: string; data: Buffer }
@@ -414,6 +484,16 @@ function fixedPointPosition(r: Reader): EntityPosition {
 export type FmlRuntimeMessage =
   | ({ type: 'fml-entity-spawn'; entityId: number; modId: string; typeId: number } & EntityPosition)
   | ({ type: 'fml-entity-adjust'; entityId: number } & EntityPosition)
+  /** A mod's GUI opened (FMLNetworkHandler.openGui): its window, mod, GUI id and block. */
+  | {
+      type: 'fml-open-gui';
+      windowId: number;
+      modId: string;
+      guiId: number;
+      x: number;
+      y: number;
+      z: number;
+    }
   | { type: 'fml-other'; discriminator: number };
 
 /**
@@ -422,11 +502,24 @@ export type FmlRuntimeMessage =
  * agent does not need). Layout verified against live GTNH traffic on 2026-09-30.
  *   2 EntitySpawnMessage:  int entityId, string modId, int modEntityTypeId, int x/y/z (1/32)
  *   3 EntityAdjustMessage: int entityId, int x/y/z (1/32)
+ *   1 OpenGui:             int windowId, string modId, int modGuiId, int x, int y, int z
+ *     (FMLMessage$OpenGui.toBytes and FMLRuntimeCodec in the Forge 10.13.4.1614 jar; the
+ *     server then sends the window's slots as S30 with that window id)
  */
 export function decodeFmlRuntimeMessage(data: Buffer): FmlRuntimeMessage {
   const r = new Reader(data);
   const discriminator = r.u8();
   switch (discriminator) {
+    case 1:
+      return {
+        type: 'fml-open-gui',
+        windowId: r.i32(),
+        modId: r.string(256),
+        guiId: r.i32(),
+        x: r.i32(),
+        y: r.i32(),
+        z: r.i32(),
+      };
     case 2: {
       const entityId = r.i32();
       const modId = r.string(256);
@@ -589,6 +682,8 @@ export function decodePlay(
     }
     case 0x2e:
       return { type: 'close-window', windowId: r.u8() };
+    case 0x31:
+      return { type: 'window-property', windowId: r.u8(), property: r.i16(), value: r.i16() };
     case 0x32:
       return {
         type: 'confirm-transaction',

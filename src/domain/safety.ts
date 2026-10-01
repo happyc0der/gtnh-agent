@@ -47,7 +47,10 @@ export const SafetyConfigSchema = z.strictObject({
     .max(100)
     .default(['minecraft:bread', 'minecraft:cooked_beef']),
   /** Fuels the agent may put into known generators. */
-  approvedFuels: z.array(ItemNameSchema).max(100).default(['minecraft:coal', 'minecraft:charcoal']),
+  approvedFuels: z
+    .array(ItemNameSchema)
+    .max(100)
+    .default(['minecraft:coal', 'minecraft:coal@1', 'minecraft:planks']),
   /** A failing action may be attempted at most this many times per task before escalation. */
   maxFailuresPerActionPerTask: z.int().min(1).max(5).default(2),
   /** Observations older than this are stale; the agent fails closed. */
@@ -91,6 +94,17 @@ export const VIOLATION_CODES = [
   'NOT_DIGGABLE',
   /** DIG_BLOCK on a block whose removal could hurt the player (support, falling blocks). */
   'UNSAFE_DIG',
+  /** PLACE_BLOCK into a cell that is not an observed placeable cell. */
+  'NOT_PLACEABLE',
+  /** PLACE_BLOCK that could hurt the player (its own body, sand or gravel that would fall). */
+  'UNSAFE_PLACE',
+  /** EXPLORE in the evening or at night (hostile mobs; the agent has no shelter yet). */
+  'NOT_DAYTIME',
+  /**
+   * INTERACT_BLOCK / SMELT / TAKE_OUTPUT on a block the observation does not list as one the
+   * action may use (no profile for it, not allowlisted, not observed, or the wrong kind).
+   */
+  'NOT_INTERACTABLE',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

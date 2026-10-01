@@ -88,6 +88,13 @@ describe('ActionExecutor', () => {
     expect(client.performed).toHaveLength(0);
   });
 
+  it('explores in the mock world: validated, walked straight, verified', async () => {
+    const { client, run } = await setup();
+    const out = await run(action({ type: 'EXPLORE', args: { toward: 'south', maxDistance: 24 } }));
+    expect(out.status).toBe('succeeded');
+    expect(client.world.player.position).toEqual({ x: 1, y: 64, z: 25 });
+  });
+
   it('records client failures as failed', async () => {
     const { client, repos, run } = await setup();
     client.failNext('INSPECT_MACHINE', 'GUI did not open');
@@ -143,6 +150,21 @@ describe('ValidatedAction token', () => {
     expect(Object.isFrozen(token.action)).toBe(true);
     (a.args as { durationMs: number }).durationMs = 60_000;
     expect(token.action.args).toEqual({ durationMs: 100 });
+    expect(token.protectedItems).toEqual([]);
+  });
+
+  it('carry the protected items the action was validated with (a dig never wears them)', () => {
+    const protectedItems = new Set(['minecraft:wooden_shovel', 'minecraft:diamond']);
+    const token = mintValidatedAction(
+      action({ type: 'DIG_BLOCK', args: { position: { x: 2, y: 64, z: 1 } } }),
+      null,
+      new Date(),
+      protectedItems,
+    );
+    expect(token.protectedItems).toEqual(['minecraft:diamond', 'minecraft:wooden_shovel']);
+    expect(Object.isFrozen(token.protectedItems)).toBe(true);
+    protectedItems.clear();
+    expect(token.protectedItems).toHaveLength(2);
   });
 });
 
@@ -181,6 +203,19 @@ describe('preconditions', () => {
     ).toContain('player is not hungry');
   });
 
+  it('EXPLORE needs the position, and a point target at least 2 blocks away', () => {
+    expect(pre({ type: 'EXPLORE', args: { toward: 'east', maxDistance: 16 } }).ok).toBe(true);
+    expect(
+      pre({ type: 'EXPLORE', args: { toward: { x: 2, z: 1.5 }, maxDistance: 16 } }).failures,
+    ).toEqual(['the EXPLORE target is only 1.1 blocks away']);
+    expect(
+      pre(
+        { type: 'EXPLORE', args: { toward: 'east', maxDistance: 16 } },
+        (w) => void (w.unobservable = ['position']),
+      ).failures,
+    ).toEqual(['player position is unknown']);
+  });
+
   it('a dig needs the block within reach of the eyes and room for the drop', () => {
     const dig = (x: number, y: number, z: number): ActionSpec => ({
       type: 'DIG_BLOCK',
@@ -196,6 +231,19 @@ describe('preconditions', () => {
       w.inventory.capacitySlots = 5;
     });
     expect(full.failures).toEqual(['inventory is full (no room for the drop)']);
+  });
+
+  it('a placement needs the cell within reach of the eyes and the item in the inventory', () => {
+    const place = (x: number, y: number, z: number): ActionSpec => ({
+      type: 'PLACE_BLOCK',
+      args: { position: { x, y, z }, item: 'minecraft:sand' },
+    });
+    const withSand = (w: MockWorld): void => void (w.inventory.items['minecraft:sand'] = 1);
+    expect(pre(place(2, 65, 1), withSand).ok).toBe(true);
+    expect(pre(place(-2, 66, 5), withSand).failures).toEqual([
+      'cell (-2, 66, 5) is 5.2 blocks from the eyes (reach 4.5)',
+    ]);
+    expect(pre(place(2, 65, 1)).failures).toEqual(['inventory holds no minecraft:sand to place']);
   });
 
   it('crafting needs the ingredients, and a known crafting table within reach for 3x3', () => {

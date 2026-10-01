@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   BlockPositionSchema,
+  COORDINATE_LIMIT,
   EntityIdSchema,
   ItemNameSchema,
   LocationNameSchema,
@@ -8,19 +9,24 @@ import {
   PositionSchema,
   TimestampSchema,
 } from './common.ts';
+import { PlaceableBlockSchema, PlaceableItemSchema, placedBlockOf } from './blocks.ts';
 import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from './recipes.ts';
 
 /**
  * The complete allowlist of in-game actions. Anything not listed here is rejected
  * by schema validation before it reaches the safety policy or the executor.
  *
- * Deliberately absent: lava interaction, dropping items, combat, block placing,
- * electrical-network or multiblock changes, and rare-item consumption. Blocks are broken
- * only by DIG_BLOCK, and only blocks on its allowlist (src/domain/blocks.ts).
+ * Deliberately absent: lava interaction, dropping items, combat, electrical-network or
+ * multiblock changes, and rare-item consumption. Blocks are broken only by DIG_BLOCK and
+ * placed only by PLACE_BLOCK, each only with the blocks on its allowlist
+ * (src/domain/blocks.ts). Blocks are right-clicked only by the window actions, and only
+ * blocks with an interaction profile or on the observe-only allowlist
+ * (src/domain/interactions.ts).
  */
 export const ACTION_TYPES = [
   'OBSERVE_STATE',
   'MOVE_TO',
+  'EXPLORE',
   'WAIT',
   'EAT_FOOD',
   'RETURN_TO_SAFE_LOCATION',
@@ -30,7 +36,11 @@ export const ACTION_TYPES = [
   'INSPECT_MACHINE',
   'REFUEL_KNOWN_GENERATOR',
   'DIG_BLOCK',
+  'PLACE_BLOCK',
   'CRAFT_ITEM',
+  'INTERACT_BLOCK',
+  'SMELT',
+  'TAKE_OUTPUT',
   'PAUSE_AND_ASK_USER',
 ] as const;
 
@@ -61,6 +71,41 @@ export const MoveToSpec = z.strictObject({
     /** Arrival radius in blocks. */
     tolerance: z.number().min(0.5).max(5),
   }),
+});
+/** Longest EXPLORE: blocks walked (path length) in one action. */
+export const MAX_EXPLORE_DISTANCE = 96;
+/** Shortest EXPLORE worth asking for. */
+export const MIN_EXPLORE_DISTANCE = 8;
+/** Compass directions EXPLORE takes: north is -z, east is +x (Minecraft's own convention). */
+export const EXPLORE_DIRECTIONS = [
+  'north',
+  'north_east',
+  'east',
+  'south_east',
+  'south',
+  'south_west',
+  'west',
+  'north_west',
+] as const;
+export const ExploreDirectionSchema = z.enum(EXPLORE_DIRECTIONS);
+export type ExploreDirection = z.infer<typeof ExploreDirectionSchema>;
+/** Where EXPLORE heads: a compass direction, or a point (x, z) of the world. */
+export const ExploreTowardSchema = z.union([
+  ExploreDirectionSchema,
+  z.strictObject({
+    x: z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT),
+    z: z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT),
+  }),
+]);
+export type ExploreToward = z.infer<typeof ExploreTowardSchema>;
+const exploreDistance = z.int().min(MIN_EXPLORE_DISTANCE).max(MAX_EXPLORE_DISTANCE);
+/**
+ * Walk over land toward a direction or a point, in hops, at most `maxDistance` blocks, and
+ * remember what was seen on the way. See docs/action-contract.md.
+ */
+export const ExploreSpec = z.strictObject({
+  type: z.literal('EXPLORE'),
+  args: z.strictObject({ toward: ExploreTowardSchema, maxDistance: exploreDistance }),
 });
 export const WaitSpec = z.strictObject({
   type: z.literal('WAIT'),
@@ -107,6 +152,15 @@ export const DigBlockSpec = z.strictObject({
   args: z.strictObject({ position: BlockPositionSchema }),
 });
 /**
+ * Place ONE block the player carries (an allowlisted plain block: dirt, cobblestone, sand,
+ * gravel, sandstone, planks, logs) into the empty cell at `position`, which the observation
+ * lists as placeable. See docs/action-contract.md.
+ */
+export const PlaceBlockSpec = z.strictObject({
+  type: z.literal('PLACE_BLOCK'),
+  args: z.strictObject({ position: BlockPositionSchema, item: PlaceableItemSchema }),
+});
+/**
  * Craft `times` times with a recipe from the agent's table (src/domain/recipes.ts), in the
  * player's own 2x2 grid (craftingTableId null) or at a configured crafting table (3x3).
  */
@@ -118,6 +172,38 @@ export const CraftItemSpec = z.strictObject({
     craftingTableId: EntityIdSchema.nullable(),
   }),
 });
+/** Largest number of items one SMELT puts into a furnace slot (one stack). */
+export const MAX_SMELT_QUANTITY = 64;
+
+/**
+ * Right-click (open) ONE block that has an interaction profile, or that the operator
+ * allowlisted to look at, with an empty hand, and report its window
+ * (src/domain/interactions.ts).
+ */
+export const InteractBlockSpec = z.strictObject({
+  type: z.literal('INTERACT_BLOCK'),
+  args: z.strictObject({ position: BlockPositionSchema }),
+});
+/**
+ * Put exactly `quantity` of `input` into a furnace's input slot and `fuelQuantity` of an
+ * approved `fuel` into its fuel slot (0 = no fuel added). The furnace keeps them and
+ * smelts on its own (200 ticks per item); TAKE_OUTPUT collects the result later.
+ */
+export const SmeltSpec = z.strictObject({
+  type: z.literal('SMELT'),
+  args: z.strictObject({
+    position: BlockPositionSchema,
+    input: ItemNameSchema,
+    quantity: z.int().min(1).max(MAX_SMELT_QUANTITY),
+    fuel: ItemNameSchema,
+    fuelQuantity: z.int().min(0).max(MAX_SMELT_QUANTITY),
+  }),
+});
+/** Take everything in a furnace's output slot, which must hold `item`, into the inventory. */
+export const TakeOutputSpec = z.strictObject({
+  type: z.literal('TAKE_OUTPUT'),
+  args: z.strictObject({ position: BlockPositionSchema, item: ItemNameSchema }),
+});
 export const PauseAndAskUserSpec = z.strictObject({
   type: z.literal('PAUSE_AND_ASK_USER'),
   args: z.strictObject({ question: z.string().min(1).max(500) }),
@@ -126,6 +212,7 @@ export const PauseAndAskUserSpec = z.strictObject({
 export const ActionSpecSchema = z.discriminatedUnion('type', [
   ObserveStateSpec,
   MoveToSpec,
+  ExploreSpec,
   WaitSpec,
   EatFoodSpec,
   ReturnToSafeLocationSpec,
@@ -135,7 +222,11 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   InspectMachineSpec,
   RefuelKnownGeneratorSpec,
   DigBlockSpec,
+  PlaceBlockSpec,
   CraftItemSpec,
+  InteractBlockSpec,
+  SmeltSpec,
+  TakeOutputSpec,
   PauseAndAskUserSpec,
 ]);
 export type ActionSpec = z.infer<typeof ActionSpecSchema>;
@@ -151,6 +242,15 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
     kind: z.literal('PLAYER_NEAR'),
     target: PositionSchema,
     tolerance: z.number().min(0.5).max(5),
+  }),
+  /**
+   * The player is observably farther along the heading (toward the point, or in the
+   * direction) by at least 1 block, and moved no more than maxDistance blocks.
+   */
+  z.strictObject({
+    kind: z.literal('EXPLORED'),
+    toward: ExploreTowardSchema,
+    maxDistance: exploreDistance,
   }),
   z.strictObject({ kind: z.literal('TIME_ELAPSED'), minMs: z.int().min(0).max(MAX_WAIT_MS) }),
   z.strictObject({ kind: z.literal('FOOD_CONSUMED'), item: ItemNameSchema }),
@@ -172,6 +272,16 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
   }),
   /** The observed block at the position is air (the observation saw the block removed). */
   z.strictObject({ kind: z.literal('BLOCK_REMOVED'), position: BlockPositionSchema }),
+  /**
+   * The observation saw the empty cell at the position become `block`, which is still there,
+   * and the inventory holds exactly one `item` fewer.
+   */
+  z.strictObject({
+    kind: z.literal('BLOCK_PLACED'),
+    position: BlockPositionSchema,
+    block: PlaceableBlockSchema,
+    item: PlaceableItemSchema,
+  }),
   z.strictObject({
     kind: z.literal('ITEMS_CRAFTED'),
     recipe: RecipeIdSchema,
@@ -195,6 +305,23 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
       .min(1)
       .max(9),
   }),
+  /** A window of the block at the position was opened and seen (still open, unless observe-only). */
+  z.strictObject({ kind: z.literal('BLOCK_WINDOW_SEEN'), position: BlockPositionSchema }),
+  /** The inventory lost exactly the input and fuel, and the furnace window shows them. */
+  z.strictObject({
+    kind: z.literal('FURNACE_LOADED'),
+    position: BlockPositionSchema,
+    input: ItemNameSchema,
+    quantity: z.int().min(1).max(MAX_SMELT_QUANTITY),
+    fuel: ItemNameSchema,
+    fuelQuantity: z.int().min(0).max(MAX_SMELT_QUANTITY),
+  }),
+  /** The inventory gained exactly what the client took from the furnace's output slot. */
+  z.strictObject({
+    kind: z.literal('FURNACE_OUTPUT_TAKEN'),
+    position: BlockPositionSchema,
+    item: ItemNameSchema,
+  }),
   z.strictObject({ kind: z.literal('USER_NOTIFIED') }),
 ]);
 export type Postcondition = z.infer<typeof PostconditionSchema>;
@@ -210,6 +337,8 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
       return { kind: 'STATE_OBSERVED' };
     case 'MOVE_TO':
       return { kind: 'PLAYER_NEAR', target: spec.args.target, tolerance: spec.args.tolerance };
+    case 'EXPLORE':
+      return { kind: 'EXPLORED', toward: spec.args.toward, maxDistance: spec.args.maxDistance };
     case 'WAIT':
       return { kind: 'TIME_ELAPSED', minMs: spec.args.durationMs };
     case 'EAT_FOOD':
@@ -245,6 +374,13 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
       };
     case 'DIG_BLOCK':
       return { kind: 'BLOCK_REMOVED', position: spec.args.position };
+    case 'PLACE_BLOCK':
+      return {
+        kind: 'BLOCK_PLACED',
+        position: spec.args.position,
+        block: placedBlockOf(spec.args.item),
+        item: spec.args.item,
+      };
     case 'CRAFT_ITEM': {
       const recipe = RECIPES[spec.args.recipe];
       const times = spec.args.times;
@@ -259,6 +395,12 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
         })),
       };
     }
+    case 'INTERACT_BLOCK':
+      return { kind: 'BLOCK_WINDOW_SEEN', position: spec.args.position };
+    case 'SMELT':
+      return { kind: 'FURNACE_LOADED', ...spec.args };
+    case 'TAKE_OUTPUT':
+      return { kind: 'FURNACE_OUTPUT_TAKEN', ...spec.args };
     case 'PAUSE_AND_ASK_USER':
       return { kind: 'USER_NOTIFIED' };
   }
@@ -282,6 +424,7 @@ const actionMetadata = {
 export const ActionSchema = z.discriminatedUnion('type', [
   ObserveStateSpec.extend(actionMetadata),
   MoveToSpec.extend(actionMetadata),
+  ExploreSpec.extend(actionMetadata),
   WaitSpec.extend(actionMetadata),
   EatFoodSpec.extend(actionMetadata),
   ReturnToSafeLocationSpec.extend(actionMetadata),
@@ -291,7 +434,11 @@ export const ActionSchema = z.discriminatedUnion('type', [
   InspectMachineSpec.extend(actionMetadata),
   RefuelKnownGeneratorSpec.extend(actionMetadata),
   DigBlockSpec.extend(actionMetadata),
+  PlaceBlockSpec.extend(actionMetadata),
   CraftItemSpec.extend(actionMetadata),
+  InteractBlockSpec.extend(actionMetadata),
+  SmeltSpec.extend(actionMetadata),
+  TakeOutputSpec.extend(actionMetadata),
   PauseAndAskUserSpec.extend(actionMetadata),
 ]);
 export type Action = z.infer<typeof ActionSchema>;

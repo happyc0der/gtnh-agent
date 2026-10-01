@@ -6,9 +6,16 @@ import type { MachineFlags } from '../bot/gtnh1710/gregtech.ts';
 import type { NearbyEntity, TrackedMachine } from '../bot/gtnh1710/world-model.ts';
 import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
 import type { AgentConfig } from '../config/env.ts';
-import type { ActionSpec } from '../domain/actions.ts';
+import {
+  ExploreDirectionSchema,
+  ExploreTowardSchema,
+  type ActionSpec,
+  type ExploreToward,
+} from '../domain/actions.ts';
+import type { PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
+import type { ExplorationSummary } from '../domain/world-memory.ts';
 import { openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../system1/decision-provider.ts';
@@ -16,6 +23,7 @@ import { systemClock } from '../util/clock.ts';
 import { randomIds } from '../util/ids.ts';
 import {
   buildSafetyContext,
+  explorationFor,
   runSingleCycle,
   runUserAction,
   syncConfigToDatabase,
@@ -37,6 +45,8 @@ export async function withLiveClient<T>(
   const client = new Gtnh1710Client({
     config: config.minecraft,
     clock: systemClock,
+    // Movement mode 'follow': the play area never leaves the safety boundary.
+    explorationBoundary: config.safety.boundary,
     ...(log ? { log } : {}),
   });
   try {
@@ -81,6 +91,24 @@ export function summarizeDiggable(state: GameState, limit = 10): Record<string, 
   };
 }
 
+/** The placeable cells an observation lists (nearest first) and the placed blocks, for printing. */
+export function summarizePlacing(state: GameState, limit = 10): Record<string, unknown> | null {
+  if (!state.nearbyBlocks.known) return null;
+  const b = state.nearbyBlocks.value;
+  return {
+    count: b.placeable.length,
+    nearest: b.placeable
+      .slice(0, limit)
+      .map(
+        (c) =>
+          `(${c.position.x}, ${c.position.y}, ${c.position.z})${c.takesFalling ? '' : ' (no sand or gravel)'}`,
+      ),
+    placed: b.placed.map(
+      (p) => `${p.block} at (${p.position.x}, ${p.position.y}, ${p.position.z})`,
+    ),
+  };
+}
+
 export function summarizeObservation(
   state: GameState,
   info: ConnectionInfo,
@@ -106,6 +134,7 @@ export function summarizeObservation(
         .map(([item, count]) => `${count} x ${item}`),
     },
     threats: state.nearbyThreats.known ? state.nearbyThreats.value : null,
+    interactables: summarizeInteractables(state),
     nearbyEntities: nearby.map(
       (e) => `${e.distance.toFixed(1).padStart(5)} m  ${e.category.padEnd(12)} ${e.name}`,
     ),
@@ -134,6 +163,7 @@ export function summarizeObservation(
             }
           : { unavailable: wideHazardScan.reason },
     diggable: summarizeDiggable(state),
+    placing: summarizePlacing(state),
     machines: machines
       .map((m) => ({
         m,
@@ -186,19 +216,40 @@ export async function runLiveCycle(
 // Walking
 // ---------------------------------------------------------------------------
 
-/** Movement (and digging) settings, and whether the stop file currently halts everything. */
+/**
+ * Movement (and digging and placing) settings, and whether the stop file currently halts
+ * everything.
+ */
 export function movementStatus(config: AgentConfig): Record<string, unknown> {
   const m = config.minecraft.movement;
   const d = config.minecraft.digging;
+  const p = config.minecraft.placing;
   return {
     enabled: m.enabled,
+    mode: m.mode,
     fence: m.fence,
+    playArea:
+      m.mode === 'follow'
+        ? {
+            ...m.area,
+            note: 'centred on the player, inside the exploration boundary (safety.boundary)',
+            explorationBoundary: {
+              min: config.safety.boundary.min,
+              max: config.safety.boundary.max,
+            },
+          }
+        : null,
     stopFile: resolve(m.stopFile),
     halted: existsSync(resolve(m.stopFile)),
     digging: {
       enabled: d.enabled,
       heights:
         m.fence === null ? null : `y=${m.fence.min.y}..${m.fence.min.y + d.maxHeightAboveFence}`,
+    },
+    placing: {
+      enabled: p.enabled,
+      heights:
+        m.fence === null ? null : `y=${m.fence.min.y}..${m.fence.min.y + p.maxHeightAboveFence}`,
     },
   };
 }
@@ -453,6 +504,255 @@ export async function runLiveDig(
           return {
             result,
             diggable: summarizeDiggable(state),
+            inventory: state.inventory.known ? state.inventory.value.items : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Placing
+// ---------------------------------------------------------------------------
+
+export interface LivePlaceResult {
+  result: CycleResult;
+  /** Placeable cells, placed blocks and the inventory after the placement (when known). */
+  placing: Record<string, unknown> | null;
+  inventory: Record<string, number> | null;
+  info: ConnectionInfo;
+}
+
+/**
+ * Places ONE block as a user-requested action: validated (schema, safety policy,
+ * preconditions), placed, re-observed and verified like the agent's own actions.
+ */
+export async function runLivePlace(
+  config: AgentConfig,
+  dbPath: string,
+  at: BlockPosition,
+  item: PlaceableItem,
+  log?: (line: string) => void,
+): Promise<LivePlaceResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const result = await runUserAction(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: null,
+              clock: systemClock,
+              newId: randomIds,
+            },
+            { type: 'PLACE_BLOCK', args: { position: at, item } },
+            `requested by the operator: place --at ${at.x},${at.y},${at.z} --item ${item}`,
+          );
+          const state = await client.observe();
+          return {
+            result,
+            placing: summarizePlacing(state),
+            inventory: state.inventory.known ? state.inventory.value.items : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Exploring
+// ---------------------------------------------------------------------------
+
+const POINT_XZ = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+
+/** "north", "south_east" (or "south-east"), or "x,z": where EXPLORE heads; null if neither. */
+export function parseExploreToward(text: string): ExploreToward | null {
+  const direction = ExploreDirectionSchema.safeParse(text.trim().toLowerCase().replace('-', '_'));
+  if (direction.success) return direction.data;
+  const m = POINT_XZ.exec(text);
+  if (m === null) return null;
+  const point = ExploreTowardSchema.safeParse({ x: Number(m[1]), z: Number(m[2]) });
+  return point.success ? point.data : null;
+}
+
+export interface LiveExploreResult {
+  result: CycleResult;
+  /** What world memory knows afterwards (null unless the play area follows the player). */
+  exploration: ExplorationSummary | null;
+  info: ConnectionInfo;
+}
+
+/**
+ * EXPLOREs once as a user-requested action: validated (schema, safety policy, preconditions),
+ * walked in hops, re-observed and verified like the agent's own actions; what the player saw
+ * goes into world memory. Ctrl+C or the stop file stops it at its next step.
+ */
+export async function runLiveExplore(
+  config: AgentConfig,
+  dbPath: string,
+  toward: ExploreToward,
+  maxDistance: number,
+  log?: (line: string) => void,
+): Promise<LiveExploreResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const where = typeof toward === 'string' ? toward : `${toward.x},${toward.z}`;
+          const result = await runUserAction(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: null,
+              clock: systemClock,
+              newId: randomIds,
+            },
+            { type: 'EXPLORE', args: { toward, maxDistance } },
+            `requested by the operator: explore --toward ${where} --distance ${maxDistance}`,
+          );
+          const state = await client.observe();
+          return {
+            result,
+            exploration: explorationFor(config, repos, state, new Date()) ?? null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Interacting with blocks
+// ---------------------------------------------------------------------------
+
+export interface LiveInteractResult {
+  results: CycleResult[];
+  /** The block window after the last action, and the blocks the agent may use. */
+  window: GameState['blockWindow'];
+  interactables: string[];
+  inventory: Record<string, number> | null;
+  info: ConnectionInfo;
+}
+
+/** One line per interactable block: profile, block, position (and a furnace's state). */
+export function summarizeInteractables(state: GameState): string[] {
+  if (!state.interactables.known) return [`unknown: ${state.interactables.reason}`];
+  return state.interactables.value.blocks.map((b) => {
+    const p = `(${b.position.x}, ${b.position.y}, ${b.position.z})`;
+    const seen = b.furnace?.seen;
+    const furnace =
+      b.furnace === undefined
+        ? ''
+        : ` ${b.furnace.burning ? 'burning' : 'not burning'}` +
+          (seen == null
+            ? ''
+            : `; in ${seen.input?.count ?? 0} ${seen.input?.item ?? '-'}, fuel ${seen.fuel?.count ?? 0} ${seen.fuel?.item ?? '-'}, out ${seen.output?.count ?? 0} ${seen.output?.item ?? '-'}`);
+    return `${b.profile ?? 'observe-only'} ${b.block} at ${p}${furnace}`;
+  });
+}
+
+/**
+ * Opens a block (INTERACT_BLOCK) and optionally smelts in it or takes its output, as checked
+ * user actions in one connection: each validated, executed and verified like the agent's own.
+ * Stops after the first action that does not succeed.
+ */
+export async function runLiveInteract(
+  config: AgentConfig,
+  dbPath: string,
+  at: BlockPosition,
+  then:
+    | { kind: 'smelt'; input: string; quantity: number; fuel: string; fuelQuantity: number }
+    | { kind: 'take'; item: string }
+    | null,
+  log?: (line: string) => void,
+): Promise<LiveInteractResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const deps = {
+            config,
+            client,
+            repos,
+            decisionProvider: new DeterministicDecisionProvider(),
+            planner: null,
+            clock: systemClock,
+            newId: randomIds,
+          };
+          const specs: ActionSpec[] = [{ type: 'INTERACT_BLOCK', args: { position: at } }];
+          if (then?.kind === 'smelt') {
+            specs.push({
+              type: 'SMELT',
+              args: {
+                position: at,
+                input: then.input,
+                quantity: then.quantity,
+                fuel: then.fuel,
+                fuelQuantity: then.fuelQuantity,
+              },
+            });
+          }
+          if (then?.kind === 'take') {
+            specs.push({ type: 'TAKE_OUTPUT', args: { position: at, item: then.item } });
+          }
+          const results: CycleResult[] = [];
+          for (const spec of specs) {
+            const result = await runUserAction(
+              deps,
+              spec,
+              `requested by the operator: interact --at ${at.x},${at.y},${at.z}`,
+            );
+            results.push(result);
+            if (result.status !== 'succeeded') break;
+          }
+          const state = await client.observe();
+          return {
+            results,
+            window: state.blockWindow,
+            interactables: summarizeInteractables(state),
             inventory: state.inventory.known ? state.inventory.value.items : null,
             info: client.info(),
           };
