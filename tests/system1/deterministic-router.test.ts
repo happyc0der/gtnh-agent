@@ -216,13 +216,21 @@ describe('System1 deterministic router', () => {
       expect(d.reasonCodes).toEqual(['HUNGRY', 'NO_APPROVED_FOOD']);
     });
 
-    it('low health still comes first on the food task', () => {
+    it('low health from hunger does not stop the food trip by day: food is the cure', () => {
       const d = route((w) => {
         starvingOnFoodTask(w);
         w.player.health = 5;
       });
-      expect(d.decision).toBe('RETREAT_HOME');
-      expect(d.reasonCodes).toEqual(['LOW_HEALTH']);
+      expect(d.decision).toBe('REQUEST_PLANNER');
+      expect(d.factsUsed).toMatchObject({ health: 5, gettingFood: true });
+      // In the evening (no food trip) it retreats as before.
+      const evening = route((w) => {
+        starvingOnFoodTask(w);
+        w.player.health = 5;
+        w.timeOfDay = 12_500;
+      });
+      expect(evening.decision).toBe('RETREAT_HOME');
+      expect(evening.reasonCodes).toEqual(['LOW_HEALTH']);
     });
 
     it('eats the carried food that restores the most now (Spice of Life)', () => {

@@ -2658,7 +2658,12 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     if (this.#confirmedPositions !== guard.placementsAtStart) return this.#corrected();
     const health = this.#world.health;
-    if (guard.healthAtStart !== null && health !== null && health < guard.healthAtStart) {
+    if (
+      !this.#starving() &&
+      guard.healthAtStart !== null &&
+      health !== null &&
+      health < guard.healthAtStart
+    ) {
       return `health dropped from ${guard.healthAtStart} to ${health}`;
     }
     const now = this.#opts.clock.now();
@@ -4172,7 +4177,12 @@ export class Gtnh1710Client implements MinecraftClient {
     if (blocker !== null) return blocker;
     if (this.#confirmedPositions !== guard.placementsAtStart) return this.#corrected();
     const health = this.#world.health;
-    if (guard.healthAtStart !== null && health !== null && health < guard.healthAtStart) {
+    if (
+      !this.#starving() &&
+      guard.healthAtStart !== null &&
+      health !== null &&
+      health < guard.healthAtStart
+    ) {
       return `health dropped from ${guard.healthAtStart} to ${health}`;
     }
     if (guard.stopForThreats) {
@@ -4836,6 +4846,17 @@ export class Gtnh1710Client implements MinecraftClient {
       `to ${at(to.x, feetY, to.z)}, ${moved.toFixed(2)} blocks from where the client had it ` +
       at(was.x, was.y, was.z);
     this.#log(`the server moved the player ${this.#lastCorrection}`);
+  }
+
+  /**
+   * The food bar is empty: the server takes health every few seconds (on Hard, with
+   * HungerOverhaul's damageOnStarve, until the player dies), so a drop in health is hunger,
+   * and a walk or a dig that stopped for each would never reach food (seen live: the food
+   * trip's walks stopped after 34 and 104 steps, "health dropped"). Threats still stop them
+   * (stopForThreats, the dig's own entity check), as do the agent loop's dangers.
+   */
+  #starving(): boolean {
+    return this.#world.food === 0;
   }
 
   /** The stop reason for a server correction, with where it put the player (#noteCorrection). */

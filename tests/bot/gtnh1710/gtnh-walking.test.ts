@@ -192,6 +192,23 @@ describe('Gtnh1710Client walking', () => {
     expect(server.walkSteps()).toHaveLength(0);
   });
 
+  it('stops when health drops, but not for hunger: at food 0 a walk goes on to its food', async () => {
+    // Seen live: starving, the food trip's walks stopped after 34 and 104 steps, "health
+    // dropped", every few seconds, and never reached the garden.
+    const fed = await start();
+    const walk = perform(fed.client, moveTo(-8.5, -11.5));
+    await vi.waitFor(() => expect(fed.server.walkSteps().length).toBeGreaterThanOrEqual(5));
+    fed.server.combatSim.hurtPlayer(2);
+    expect((await walk).message).toMatch(/health dropped from 20 to 18/);
+
+    const starving = await start({ health: { health: 20, food: 0, saturation: 0 } });
+    const going = perform(starving.client, moveTo(-8.5, -11.5));
+    await vi.waitFor(() => expect(starving.server.walkSteps().length).toBeGreaterThanOrEqual(5));
+    starving.server.combatSim.hurtPlayer(2);
+    const r = await going;
+    expect(r, r.message).toMatchObject({ ok: true });
+  });
+
   it('stops at once when the server corrects the position, and echoes the correction', async () => {
     const { server, client } = await start();
     const walk = perform(client, moveTo(-8.5, -11.5));

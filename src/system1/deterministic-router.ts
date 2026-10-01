@@ -170,11 +170,14 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     // home was 100 blocks through a forest, and the pause there healed nothing: nothing heals
     // offline). Too hungry to heal: retreat or pause, as before.
     if (hunger < ctx.safety.config.minHungerToHeal) {
-      return retreatOrPause(['LOW_HEALTH'], CONFIDENCE.vitals);
-    }
-    // At dusk the night shelter comes first: the pit is where resting is safe (seen live: it
-    // rested in the open before digging in). Its steps run below (rule 6).
-    if (state.currentTask?.taskId !== NIGHT_SHELTER_TASK_ID) {
+      // Too hungry to heal: on the food trip by day, getting food is the cure for both (seen
+      // live: starving, health fell below minHealth on the way, and a pause would only have
+      // left it too weak to fetch food and too hungry to heal). Otherwise retreat or pause.
+      if (!gettingFood(state)) return retreatOrPause(['LOW_HEALTH'], CONFIDENCE.vitals);
+      facts['gettingFood'] = true;
+    } else if (state.currentTask?.taskId !== NIGHT_SHELTER_TASK_ID) {
+      // At dusk the night shelter comes first: the pit is where resting is safe (seen live:
+      // it rested in the open before digging in). Its steps run below (rule 6).
       return decide('REST', CONFIDENCE.vitals, ['LOW_HEALTH']);
     }
   }

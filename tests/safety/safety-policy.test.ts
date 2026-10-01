@@ -267,7 +267,18 @@ describe('rule 3: health and hunger thresholds', () => {
       ).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
     });
 
-    it('refuses the same actions for any other task, or by night, or with low health', () => {
+    it('allows them with low health too: health lost to hunger comes back only with food', () => {
+      // Seen live: at food 0, health fell below minHealth on the way, and the EXPLORE toward
+      // the garden was refused: too weak to fetch food, too hungry to heal.
+      const weak = starving((w) => {
+        w.player.health = 4;
+        w.player.hunger = 0;
+      });
+      for (const spec of [walk, explore, digGarden]) expect(foodCodes(spec, weak)).toEqual([]);
+      expect(foodCodes(digDirt, weak)).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+    });
+
+    it('refuses the same actions for any other task, by night, or near danger', () => {
       expect(foodCodes(walk, starving(), 'task-test')).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
       const quest = starving((w) => {
         if (w.task !== null) w.task.taskId = 'task-test';
@@ -275,8 +286,6 @@ describe('rule 3: health and hunger thresholds', () => {
       expect(foodCodes(walk, quest, 'task-test')).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
       const evening = starving((w) => void (w.timeOfDay = 12_500));
       expect(foodCodes(walk, evening)).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
-      const hurt = starving((w) => void (w.player.health = 4));
-      expect(foodCodes(walk, hurt)).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
       const hostile = starving((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
       expect(foodCodes(walk, hostile)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
     });

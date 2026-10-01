@@ -639,7 +639,10 @@ function hurtLately(state: GameState): number | null {
  * that gets food (`getsFood`, below) may run then, since with no food carried a retreat home
  * finds none there, and a pause only starves: nothing heals offline, and on Hard a food bar
  * at 0 starves the player to death. Seen live: food 2 with no food, the agent offline. Low
- * health still stops it (LOW_HEALTH is another danger).
+ * health too, on that trip: health lost to an empty food bar comes back only with food
+ * (seen live: at food 0 the trip's own walks cost health, it fell below minHealth while the
+ * planner planned, and the next EXPLORE was refused: too weak to fetch food, too hungry to
+ * heal). Hostiles, hazards, the boundary and the night still stop it.
  */
 function dangerGate(
   type: ActionType,
@@ -650,7 +653,6 @@ function dangerGate(
   const codes = new Set(dangers.map((d) => d.code));
   const outsideWorkArea = codes.has('OUT_OF_BOUNDS') || codes.has('DIMENSION_NOT_ALLOWED');
   const onlyVitals = [...codes].every((c) => c === 'LOW_HEALTH' || c === 'LOW_HUNGER');
-  const onlyHunger = [...codes].every((c) => c === 'LOW_HUNGER');
   // Fighting back is how the agent survives a hostile it cannot retreat from; any other
   // danger (lava, an unidentified entity, low health or food) forbids it.
   const onlyHostiles = [...codes].every((c) => c === 'HOSTILES_NEARBY');
@@ -663,7 +665,7 @@ function dangerGate(
       // Resting is how health comes back when nothing else is wrong (REST).
       (type === 'WAIT' && onlyVitals) ||
       (type === 'ATTACK_ENTITY' && onlyHostiles) ||
-      (getsFood && onlyHunger);
+      (getsFood && onlyVitals);
   }
   if (permitted) return [];
   return [
