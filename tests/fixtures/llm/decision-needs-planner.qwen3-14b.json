@@ -1,0 +1,17 @@
+{
+  "model": "qwen3:14b",
+  "created_at": "2026-09-30T23:55:52.1515686Z",
+  "message": {
+    "role": "assistant",
+    "content": "{\"stateProblems\":false,\"outOfBounds\":false,\"danger\":false,\"lowHealth\":false,\"hungryWithFood\":false,\"starvingWithoutFood\":false,\"inventoryNearlyFull\":false,\"generatorNeedsFuel\":false,\"taskNotActive\":false,\"machineNotReady\":false,\"knownNextStep\":false,\"decision\":\"REQUEST_PLANNER\",\"reasonCodes\":[\"NO_KNOWN_STEP\"],\"confidence\":85}"
+  },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 1933263700,
+  "load_duration": 6000400,
+  "prompt_eval_count": 841,
+  "prompt_eval_cached_count": 797,
+  "prompt_eval_duration": 41207000,
+  "eval_count": 87,
+  "eval_duration": 1874833000
+}

@@ -11,8 +11,6 @@ import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
-import { MockPlannerProvider } from '../planner/mock-planner-provider.ts';
-import { DeterministicDecisionProvider } from '../system1/decision-provider.ts';
 import { systemClock } from '../util/clock.ts';
 import { randomIds } from '../util/ids.ts';
 import {
@@ -23,6 +21,7 @@ import {
   type CycleResult,
 } from './agent-loop.ts';
 import { runSession, type SessionLimits, type SessionResult } from './live-session.ts';
+import { createProviders } from './providers.ts';
 
 /**
  * Connects the READ-ONLY GTNH client, runs `fn`, and always disconnects afterwards.
@@ -153,8 +152,7 @@ export async function runLiveCycle(
           config,
           client,
           repos,
-          decisionProvider: new DeterministicDecisionProvider(),
-          planner: new MockPlannerProvider([]),
+          ...createProviders(config),
           clock: systemClock,
           newId: randomIds,
         });
@@ -265,7 +263,8 @@ export async function runLiveMove(
               config,
               client,
               repos,
-              decisionProvider: new DeterministicDecisionProvider(),
+              // A human's own action: no decision is made and no planner is asked.
+              ...createProviders(config),
               planner: null,
               clock: systemClock,
               newId: randomIds,
@@ -330,7 +329,8 @@ export async function runLiveChest(
             config,
             client,
             repos,
-            decisionProvider: new DeterministicDecisionProvider(),
+            // A human's own actions: no decision is made and no planner is asked.
+            ...createProviders(config),
             planner: null,
             clock: systemClock,
             newId: randomIds,
@@ -407,8 +407,7 @@ export async function runLiveSession(
               config,
               client,
               repos,
-              decisionProvider: new DeterministicDecisionProvider(),
-              planner: new MockPlannerProvider([]),
+              ...createProviders(config),
               clock: systemClock,
               newId: randomIds,
             },

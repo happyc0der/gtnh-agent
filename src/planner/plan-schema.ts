@@ -93,12 +93,19 @@ export const CompactStateSchema = z.strictObject({
         name: z.string(),
         status: MachineStatusSchema,
         position: PositionSchema.nullable(),
+        /** Blocks from the player (null if either position is unknown). */
+        distance: z.number().min(0).nullable(),
       }),
     )
     .max(32),
   storage: z
     .array(
-      z.strictObject({ id: EntityIdSchema, name: z.string(), position: PositionSchema.nullable() }),
+      z.strictObject({
+        id: EntityIdSchema,
+        name: z.string(),
+        position: PositionSchema.nullable(),
+        distance: z.number().min(0).nullable(),
+      }),
     )
     .max(32),
   generators: z
@@ -108,6 +115,7 @@ export const CompactStateSchema = z.strictObject({
         name: z.string(),
         status: z.enum(GENERATOR_STATUSES),
         position: PositionSchema.nullable(),
+        distance: z.number().min(0).nullable(),
         acceptedFuels: z.array(z.string()),
       }),
     )

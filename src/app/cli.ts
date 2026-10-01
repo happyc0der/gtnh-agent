@@ -203,7 +203,11 @@ async function main(argv: string[]): Promise<number> {
         );
         return 1;
       }
-      const { result, db } = await runMockScenario(scenario, { dbPath });
+      // The mock world keeps its own config; only the provider choice comes from yours.
+      const { result, db } = await runMockScenario(scenario, {
+        dbPath,
+        config: { planner: config.planner, decisions: config.decisions, llm: config.llm },
+      });
       db.close();
       print(values.full ? result : compact(scenario.name, dbPath, result));
       return result.status === 'error' ? 1 : 0;

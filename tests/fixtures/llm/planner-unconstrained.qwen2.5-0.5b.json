@@ -1,0 +1,17 @@
+{
+  "model": "qwen2.5:0.5b",
+  "created_at": "2026-10-01T00:07:03.8494059Z",
+  "message": {
+    "role": "assistant",
+    "content": "{\"kind\":\"plan\",\"plan\":{\"goal\":\"Process iron ore\",\"steps\":[{\"step\":1,\"action\":{\"type\":\"OBSERVE_STATE\",\"args\":{\"state\":{\"observedAt\":\"2026-01-01T12:00:00.000Z\",\"position\":{\"x\":1,\"y\":64,\"z\":1},\"dimension\":\"overworld\",\"health\":20,\"hunger\":18,\"inventoryTop\":[{\"item\":\"minecraft:cobblestone\",\"quantity\":64},{\"item\":\"minecraft:coal\",\"quantity\":16},{\"item\":\"minecraft:iron_ore\",\"quantity\":12},{\"item\":\"minecraft:bread\",\"quantity\":6},{\"item\":\"minecraft:diamond\",\"quantity\":1}],\"inventoryFill\":0.139,\"threats\":{\"hostileCount\":0,\"unclassifiedCount\":0},\"hazards\":{\"lavaNearby\":false,\"voidNearby\":false},\"machines\":[{\"id\":\"machine.macerator.1\",\"name\":\"Macerator (mock)\",\"status\":\"idle\",\"position\":{\"x\":-1,\"y\":64,\"z\":3},\"distance\":2.8}],\"storage\":[{\"id\":\"chest.main\",\"name\":\"Main storage chest\",\"position\":{\"x\":3,\"y\":64,\"z\":0},\"distance\":2.2}],\"generators\":[{\"id\":\"gen.1\",\"name\":\"Mock fuel generator\",\"status\":\"running\",\"position\":{\"x\":-3,\"y\":64,\"z\":0},\"distance\":4.1,\"acceptedFuels\":[\"minecraft:coal\",\"minecraft:charcoal\"]}],...,\"requiresUserApproval\":false,\"explanation\":\"The player needs to process the iron ore, so the plan is to move to the storage chest, wait for the generator to start, and then process the iron ore.\",\"failureHandling\":{\"onStepFailure\":\"PAUSE_AND_ASK_USER\",\"maxRetriesPerStep\":1,\"escalationMessage\":\"..."
+  },
+  "done": true,
+  "done_reason": "length",
+  "total_duration": 3305430200,
+  "load_duration": 1787138000,
+  "prompt_eval_count": 1580,
+  "prompt_eval_cached_count": 0,
+  "prompt_eval_duration": 173507000,
+  "eval_count": 400,
+  "eval_duration": 1330423000
+}

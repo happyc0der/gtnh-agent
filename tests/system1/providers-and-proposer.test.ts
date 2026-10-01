@@ -3,6 +3,7 @@ import type { DecisionResult } from '../../src/domain/decisions.ts';
 import { proposeAction } from '../../src/system1/action-proposer.ts';
 import {
   DeterministicDecisionProvider,
+  isBindingRouterDecision,
   SafetyFirstDecisionProvider,
   type DecisionProvider,
 } from '../../src/system1/decision-provider.ts';
@@ -39,6 +40,28 @@ describe('decision providers', () => {
       const d = await provider.decide(lava, routerCtx());
       expect(d.decision).toBe('RETREAT_HOME');
       expect(d.provider).toBe('safety-first(mock-decision-provider)');
+    });
+
+    it('never lets the inner provider lift a router pause (only a human does)', async () => {
+      const inner = MockDecisionProvider.always('EXECUTE_KNOWN_SAFE_STEP');
+      const provider = new SafetyFirstDecisionProvider(inner);
+      const paused = makeState((w) => {
+        if (w.task !== null) w.task.status = 'paused';
+      });
+      const switchedOff = makeState((w) => {
+        const m = w.machines[0];
+        if (m !== undefined) m.status = 'error';
+      });
+      expect(await provider.decide(paused, routerCtx())).toMatchObject({
+        decision: 'PAUSE_AND_ASK_USER',
+        reasonCodes: ['NO_ACTIVE_TASK'],
+      });
+      expect(await provider.decide(switchedOff, routerCtx())).toMatchObject({
+        decision: 'PAUSE_AND_ASK_USER',
+        reasonCodes: ['MACHINE_ERROR'],
+      });
+      expect(inner.calls).toHaveLength(0);
+      expect(isBindingRouterDecision(routeDecision(makeState(), routerCtx()))).toBe(false);
     });
 
     it('uses the inner decision when nothing is unsafe', async () => {

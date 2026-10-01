@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import { EntityIdSchema, ItemNameSchema, LocationNameSchema } from '../domain/common.ts';
 import { NamedLocationSchema, SafetyConfigSchema } from '../domain/safety.ts';
-import { checkPrivateHost } from './network.ts';
+import { checkPrivateHost, checkPrivateUrl } from './network.ts';
 
 /** Integer block coordinates (a block, not a point). */
 const BlockPositionSchema = z.strictObject({
@@ -121,12 +121,53 @@ export const RoutingConfigSchema = z.strictObject({
 export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 
 export const PlannerConfigSchema = z.strictObject({
-  /** Only `mock` exists in this milestone. A local-LLM provider is future work. */
-  provider: z.enum(['mock', 'none']).default('mock'),
+  /**
+   * `mock`: fixture plans (mock scenarios only; the live agent gets none). `ollama`: a local
+   * model (llm.plannerModel) proposes plans, validated like any other. `none`: no planner.
+   */
+  provider: z.enum(['mock', 'none', 'ollama']).default('mock'),
   maxPlanSteps: z.int().min(1).max(16).default(8),
   recentHistoryLimit: z.int().min(0).max(50).default(10),
 });
 export type PlannerConfig = z.infer<typeof PlannerConfigSchema>;
+
+export const DecisionsConfigSchema = z.strictObject({
+  /**
+   * System 1. `deterministic`: the rule router. `ollama`: a local model (llm.decisionModel)
+   * chooses, always inside SafetyFirstDecisionProvider (the router's safety decisions and
+   * pauses win; invalid model output pauses).
+   */
+  provider: z.enum(['deterministic', 'ollama']).default('deterministic'),
+});
+export type DecisionsConfig = z.infer<typeof DecisionsConfigSchema>;
+
+/** An Ollama model name such as `qwen3:14b` or `namespace/model:tag`. */
+const ModelNameSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/, 'expected an Ollama model name like qwen3:14b');
+
+/** The local model server (Ollama). Used only when a provider above is `ollama`. */
+export const LlmConfigSchema = z
+  .strictObject({
+    /** Only loopback, private-LAN or Tailscale addresses, or an allowlisted hostname. */
+    baseUrl: z.string().min(1).max(500).default('http://127.0.0.1:11434'),
+    /** Hostnames (not IPs) you have verified are private; checked again by DNS on every request. */
+    allowedHostnames: z.array(z.string().min(1).max(253)).max(20).default([]),
+    plannerModel: ModelNameSchema.default('qwen3:14b'),
+    decisionModel: ModelNameSchema.default('qwen2.5:0.5b'),
+    /** Per request, including loading the model. A timeout escalates (planner) or pauses (decisions). */
+    timeoutMs: z.int().min(1000).max(600_000).default(120_000),
+    /** How long Ollama keeps a model in memory after a request: short, the GPU is shared. */
+    keepAlive: z
+      .string()
+      .regex(/^\d{1,5}(ms|s|m|h)$/, 'expected a duration like 30s or 5m')
+      .default('30s'),
+  })
+  .superRefine((llm, ctx) => {
+    const check = checkPrivateUrl(llm.baseUrl, llm.allowedHostnames, 'OLLAMA_ALLOWED_HOSTNAMES');
+    if (!check.ok) ctx.addIssue({ code: 'custom', path: ['baseUrl'], message: check.reason });
+  });
+export type LlmConfig = z.infer<typeof LlmConfigSchema>;
 
 export const MemoryConfigSchema = z.strictObject({
   /**
@@ -144,6 +185,8 @@ export const AgentConfigSchema = z.strictObject({
   safety: SafetyConfigSchema.prefault({}),
   routing: RoutingConfigSchema.prefault({}),
   planner: PlannerConfigSchema.prefault({}),
+  decisions: DecisionsConfigSchema.prefault({}),
+  llm: LlmConfigSchema.prefault({}),
   memory: MemoryConfigSchema.prefault({}),
   locations: z.record(LocationNameSchema, NamedLocationSchema).default({}),
 });
@@ -238,6 +281,13 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
     set(['safety', 'maxStateAgeMs'], num('SAFETY_MAX_STATE_AGE_MS', v));
   if ((v = e('SAFETY_HAZARD_RADIUS')))
     set(['safety', 'hazardAvoidanceRadius'], num('SAFETY_HAZARD_RADIUS', v));
+  if ((v = e('AGENT_PLANNER'))) set(['planner', 'provider'], v);
+  if ((v = e('AGENT_DECISIONS'))) set(['decisions', 'provider'], v);
+  if ((v = e('OLLAMA_URL'))) set(['llm', 'baseUrl'], v);
+  if ((v = e('OLLAMA_ALLOWED_HOSTNAMES'))) set(['llm', 'allowedHostnames'], list(v));
+  if ((v = e('OLLAMA_PLANNER_MODEL'))) set(['llm', 'plannerModel'], v);
+  if ((v = e('OLLAMA_DECISION_MODEL'))) set(['llm', 'decisionModel'], v);
+  if ((v = e('OLLAMA_TIMEOUT_MS'))) set(['llm', 'timeoutMs'], num('OLLAMA_TIMEOUT_MS', v));
   return o;
 }
 

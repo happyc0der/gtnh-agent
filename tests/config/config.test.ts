@@ -7,6 +7,7 @@ import { defaultConfig, loadConfig } from '../../src/config/env.ts';
 import {
   assertPrivateDestination,
   checkPrivateHost,
+  checkPrivateUrl,
   isPrivateIpAddress,
 } from '../../src/config/network.ts';
 import { testClock } from '../fixtures/index.ts';
@@ -75,6 +76,85 @@ describe('configuration', () => {
       loadConfig({ cwd: emptyDir(), env: { MC_HOST: 'msi', MC_ALLOWED_HOSTNAMES: 'msi' } }).config
         .minecraft.host,
     ).toBe('msi');
+  });
+});
+
+describe('local model configuration', () => {
+  it('defaults keep the deterministic router and the mock planner, with a local Ollama', () => {
+    const c = defaultConfig();
+    expect(c.planner.provider).toBe('mock');
+    expect(c.decisions.provider).toBe('deterministic');
+    expect(c.llm).toEqual({
+      baseUrl: 'http://127.0.0.1:11434',
+      allowedHostnames: [],
+      plannerModel: 'qwen3:14b',
+      decisionModel: 'qwen2.5:0.5b',
+      timeoutMs: 120_000,
+      keepAlive: '30s',
+    });
+  });
+
+  it('environment variables select the providers and models', () => {
+    const { config } = loadConfig({
+      cwd: emptyDir(),
+      env: {
+        AGENT_PLANNER: 'ollama',
+        AGENT_DECISIONS: 'ollama',
+        OLLAMA_URL: 'http://100.101.102.103:11434',
+        OLLAMA_PLANNER_MODEL: 'gemma4:12b',
+        OLLAMA_DECISION_MODEL: 'qwen3:14b',
+        OLLAMA_TIMEOUT_MS: '30000',
+      },
+    });
+    expect(config.planner.provider).toBe('ollama');
+    expect(config.decisions.provider).toBe('ollama');
+    expect(config.llm).toMatchObject({
+      baseUrl: 'http://100.101.102.103:11434',
+      plannerModel: 'gemma4:12b',
+      decisionModel: 'qwen3:14b',
+      timeoutMs: 30_000,
+    });
+  });
+
+  it.each([
+    [{ AGENT_PLANNER: 'openai' }, /planner.provider/],
+    [{ AGENT_DECISIONS: 'llm' }, /decisions.provider/],
+    [{ OLLAMA_URL: 'http://8.8.8.8:11434' }, /public IP/],
+    [{ OLLAMA_URL: 'https://api.example.com' }, /OLLAMA_ALLOWED_HOSTNAMES/],
+    [{ OLLAMA_URL: 'http://user:secret@127.0.0.1:11434' }, /credentials/],
+    [{ OLLAMA_URL: 'ftp://127.0.0.1' }, /http/],
+    [{ OLLAMA_PLANNER_MODEL: 'qwen3:14b; rm -rf /' }, /model name/],
+    [{ OLLAMA_TIMEOUT_MS: 'soon' }, /must be a number/],
+  ])('rejects %o', (env, message) => {
+    expect(() => loadConfig({ cwd: emptyDir(), env })).toThrow(message);
+  });
+
+  it('accepts a model server hostname only when allowlisted', () => {
+    expect(
+      loadConfig({
+        cwd: emptyDir(),
+        env: { OLLAMA_URL: 'http://msi:11434', OLLAMA_ALLOWED_HOSTNAMES: 'msi' },
+      }).config.llm.baseUrl,
+    ).toBe('http://msi:11434');
+  });
+});
+
+describe('checkPrivateUrl', () => {
+  it.each([
+    ['http://127.0.0.1:11434', true],
+    ['http://localhost:11434', true],
+    ['http://[::1]:11434', true],
+    ['http://127.1:11434', true],
+    ['http://192.168.1.5:11434/ollama', true],
+    ['https://100.64.1.2', true],
+    ['http://0x7f000001:11434', true],
+    ['http://8.8.8.8:11434', false],
+    ['http://[2001:4860:4860::8888]:11434', false],
+    ['http://ollama.local:11434', false],
+    ['http://127.0.0.1:11434/#x', false],
+    ['javascript:alert(1)', false],
+  ])('%s ok=%s', (url, ok) => {
+    expect(checkPrivateUrl(url, [], 'OLLAMA_ALLOWED_HOSTNAMES').ok).toBe(ok);
   });
 });
 
