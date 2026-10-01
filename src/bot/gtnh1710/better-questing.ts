@@ -63,6 +63,10 @@ export const BQ_MESSAGE = {
 /** NetQuestAction actions the agent may request (2, a forced claim with a random choice, is not). */
 export const BQ_QUEST_ACTION = { claim: 0, detect: 1 } as const;
 
+/** Why GameState.questBook is unknown while the server's sync after login has not arrived. */
+export const QUEST_BOOK_SYNC_PENDING =
+  'waiting for the quest book sync from the server (Better Questing)';
+
 /** The whole gzip'd message a client accepts (the full quest database is a few MB). */
 const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 /** The decompressed payload a client accepts. */
@@ -695,7 +699,7 @@ export class QuestBookModel {
   toState(scope: readonly string[]): Known<QuestBook> {
     if (this.#problem !== null) return unknown(`quest book: ${this.#problem}`.slice(0, 200));
     if (!this.synced) {
-      return unknown('waiting for the quest book sync from the server (Better Questing)');
+      return unknown(QUEST_BOOK_SYNC_PENDING);
     }
     const quests: QuestBook['quests'] = [];
     for (const id of scope) {

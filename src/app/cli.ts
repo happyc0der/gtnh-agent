@@ -28,7 +28,7 @@ import {
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
-import { runLivePlay } from './live-play.ts';
+import { observeWithQuestBook, runLivePlay } from './live-play.ts';
 import {
   checkPlayLimits,
   DEFAULT_PLAY_LIMITS,
@@ -37,7 +37,7 @@ import {
   type PlayLimits,
 } from './play.ts';
 import { createProviders } from './providers.ts';
-import { describeQuests, updateQuests } from './quest-commands.ts';
+import { describeQuests, freeSlotsOf, updateQuests } from './quest-commands.ts';
 import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
@@ -81,14 +81,18 @@ Usage:
       AUTONOMOUS PLAY through the Age 0 quest book: the agent picks its next quest, the
       configured decision maker and planner (AGENT_DECISIONS / AGENT_PLANNER, e.g. ollama)
       choose what to do, and every action is validated, executed and verified as always.
+      Quests count only as the server's quest book records them; with
+      MC_ENABLE_QUEST_BOOK=true play also claims rewards, ticks checkboxes and submits
+      finished quests itself (decided in code, never by a model).
       Stops when no doable quest is left, when anything needs you, after 3 sessions without
       progress on a quest, at the time limit, the stop file (pnpm cli halt) or Ctrl+C.
       --needs pursues your own goal instead (e.g. --needs minecraft:diamond=100): the planner
       gets its route the same way, and play ends when the items are held.
   node src/app/cli.ts quests [--live] [--db <path>]
-      The agent's Age 0 quest book (GTNH "Tier 0 Stone Age"): progress, completed quests
-      and the next goal. --live reads the inventory first and records the quests it now
-      satisfies (the agent's own bookkeeping; the server's quest book is not touched).
+      The Age 0 quest book (GTNH "Tier 0 - Stone Age") AS THE SERVER RECORDS IT (Better
+      Questing): chapter progress, completed and active quests, unclaimed rewards, due
+      quest-book clicks and the next goal. --live reads it from the server first (it clicks
+      nothing); without --live it shows the last observation.
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
       Create / remove the stop file (nothing walks, uses chests, digs or places while it
       exists) / show movement, digging and placing settings.
@@ -571,22 +575,22 @@ async function main(argv: string[]): Promise<number> {
       try {
         const repos = createRepositories(db, systemClock);
         if (!values.live) {
-          const latest = repos.snapshots.latest('gtnh1710');
-          print(
-            describeQuests(repos, latest?.inventory.known ? latest.inventory.value.items : null),
-          );
+          print(describeQuests(repos, repos.snapshots.latest('gtnh1710')));
           return 0;
         }
-        const state = await withLiveClient(config, (client) => client.observe(), log);
-        if (!state.inventory.known) {
-          process.stderr.write(`the inventory is unknown: ${state.inventory.reason}
-`);
+        const state = await withLiveClient(config, (client) => observeWithQuestBook(client), log);
+        if (!state.questBook.known) {
+          process.stderr.write(`the server's quest book is unknown: ${state.questBook.reason}\n`);
+          print(describeQuests(repos, state));
           return 1;
         }
-        const inventory = state.inventory.value.items;
-        const update = updateQuests(repos, inventory);
+        // Records the server's completions (the CLI clicks nothing in the quest book).
+        const update = updateQuests(repos, state.questBook.value, {
+          items: state.inventory.known ? state.inventory.value.items : {},
+          freeSlots: freeSlotsOf(state),
+        });
         print({
-          ...describeQuests(repos, inventory),
+          ...describeQuests(repos, state),
           newlyCompleted: update.added.map((q) => q.name),
         });
         return 0;

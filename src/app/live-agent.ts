@@ -10,6 +10,7 @@ import type { ActionSpec } from '../domain/actions.ts';
 import type { PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
+import { AGE0_QUESTS } from '../goals/age0-quests.ts';
 import { openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../system1/decision-provider.ts';
@@ -38,6 +39,8 @@ export async function withLiveClient<T>(
   const client = new Gtnh1710Client({
     config: config.minecraft,
     clock: systemClock,
+    // GameState.questBook lists the Age 0 quests and their prerequisites (the quest goals).
+    questScope: AGE0_QUESTS.map((q) => q.id),
     ...(log ? { log } : {}),
   });
   try {
