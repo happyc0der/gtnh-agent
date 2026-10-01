@@ -12,6 +12,7 @@ import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
 import type { DecisionProvider } from '../../src/system1/decision-provider.ts';
 import { MockDecisionProvider } from '../../src/system1/mock-decision-provider.ts';
 import type { ManualClock } from '../../src/util/clock.ts';
+import { actionFingerprint } from '../../src/safety/safety-policy.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
 import { makeWorld, memoryRepos, T0, testClock, testConfig } from '../fixtures/index.ts';
 
@@ -289,6 +290,95 @@ describe('world memory and exploring', () => {
     expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
     expect(repos.memory.journal(taskId).map((e) => e.text)).toContainEqual(
       expect.stringContaining('although EXPLORE was open; asked again'),
+    );
+  });
+
+  it('asks the planner once more when its first step already failed twice from here', async () => {
+    const clock = testClock();
+    const { client } = makeWorld((w) => {
+      if (w.task !== null) w.task.requirements = { 'minecraft:gravel': 8 };
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = defaultConfig({
+      ...MOCK_CONFIG,
+      minecraft: { movement: { enabled: true, mode: 'follow' } },
+    });
+    syncConfigToDatabase(config, repos);
+    const state = await client.observe();
+    const taskId = state.currentTask?.taskId ?? '';
+    // The EXPLORE of explorePlan failed twice from where the player stands (seen live: toward
+    // a tree behind water, no way further).
+    const fingerprint = actionFingerprint(
+      { type: 'EXPLORE', args: { toward: { x: 3, z: 70 }, maxDistance: 96 } },
+      state.player.position.known ? state.player.position.value : null,
+    );
+    for (const id of ['old-1', 'old-2']) {
+      repos.actions.insert({
+        actionId: id,
+        cycleId: null,
+        taskId,
+        actionType: 'EXPLORE',
+        origin: 'planner',
+        fingerprint,
+        reason: 'an earlier plan',
+        action: {},
+        status: 'failed',
+        validation: { ok: true },
+      });
+      repos.actions.update(id, {
+        status: 'failed',
+        execution: {
+          ok: false,
+          code: 'FAILED',
+          message: 'not exploring: no way further',
+          data: {},
+        },
+      });
+    }
+    const elsewhere: PlannerResponse = {
+      kind: 'plan',
+      plan: {
+        ...(explorePlan as Extract<PlannerResponse, { kind: 'plan' }>).plan,
+        steps: [
+          {
+            step: 1,
+            action: { type: 'EXPLORE', args: { toward: { x: -30, z: 20 }, maxDistance: 96 } },
+            rationale: 'another way round',
+          },
+        ],
+      },
+    };
+    const requests: PlannerRequest[] = [];
+    const planner: PlannerProvider = {
+      name: 'stubborn',
+      plan: (request) => {
+        requests.push(request);
+        return Promise.resolve(
+          requests.length === 1 ? (explorePlan as PlannerResponse) : elsewhere,
+        );
+      },
+    };
+    const result = await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.journal.at(-1)).toMatch(
+      /step 1, EXPLORE .* already failed 2 time\(s\) from where the player stands \(last time: not exploring: no way further\)/,
+    );
+    expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
+    expect(result.action).toMatchObject({
+      type: 'EXPLORE',
+      args: { toward: { x: -30, z: 20 } },
+    });
+    expect(repos.memory.journal(taskId).map((e) => e.text)).toContainEqual(
+      expect.stringContaining('which failed 2 time(s) from here; asked again'),
     );
   });
 

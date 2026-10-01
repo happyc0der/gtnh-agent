@@ -168,7 +168,10 @@ describe('stored plans advance one verified step per cycle', () => {
     expect(s.repos.tasks.get(s.taskId)?.status).toBe('active');
 
     const third = await s.cycle();
-    expect(s.planner.requests).toHaveLength(2);
+    // The new plan starts with the step that failed twice: the planner is asked once more,
+    // told so; it answers the same, and the repeated-failure rule refuses the step.
+    expect(s.planner.requests).toHaveLength(3);
+    expect(s.planner.requests[2]?.journal.at(-1)).toMatch(/WITHDRAW_ITEM .* already failed 2/);
     expect(third.planner).toMatchObject({ kind: 'plan-accepted', planId: 2 });
     expect(third.summary).toBe('REQUEST_PLANNER -> WITHDRAW_ITEM -> rejected [REPEATED_FAILURE]');
     expect(s.repos.plans.get(2)).toMatchObject({ status: 'failed' });

@@ -27,13 +27,17 @@ import {
 import { trimStaleSteps, validatePlan } from '../planner/plan-validator.ts';
 import { buildPlannerRequest, type PlannerProvider } from '../planner/planner-provider.ts';
 import { mergeProtectedItems } from '../safety/protected-items.ts';
-import { assessStateReliability, type SafetyContext } from '../safety/safety-policy.ts';
+import {
+  actionFingerprint,
+  assessStateReliability,
+  type SafetyContext,
+} from '../safety/safety-policy.ts';
 import { proposeAction } from '../system1/action-proposer.ts';
 import type { DecisionProvider } from '../system1/decision-provider.ts';
 import type { PlanFacts, RouterContext } from '../system1/state-queries.ts';
 import type { Clock } from '../util/clock.ts';
 import type { IdGenerator } from '../util/ids.ts';
-import { errorMessage } from '../util/json.ts';
+import { errorMessage, stableStringify } from '../util/json.ts';
 import { gatherAfterAction, gatherStopped, gatherTurn, type GatherRef } from './gather-step.ts';
 
 export interface AgentDeps {
@@ -943,6 +947,47 @@ function updatePlanProgress(
   }
 }
 
+/**
+ * The plan's first step when the safety policy would refuse it as a repeated failure: it has
+ * failed maxFailuresPerActionPerTask times for this task already (a walk: from this very
+ * block). With a note for the planner that says so, and what the last failure said.
+ */
+function repeatedFirstStep(
+  deps: AgentDeps,
+  plan: Plan,
+  state: GameState,
+  ctx: SafetyContext,
+  taskId: string,
+): { step: string; failures: number; note: string } | null {
+  const first = plan.steps[0]?.action;
+  if (first === undefined || first.type === GATHER) return null;
+  const from = state.player.position.known ? state.player.position.value : null;
+  const fingerprint = actionFingerprint(first, from);
+  const failures = deps.repos.actions.countFailures(taskId, fingerprint);
+  if (failures < ctx.config.maxFailuresPerActionPerTask) return null;
+  const last = deps.repos.actions
+    .recent(50, taskId)
+    .find(
+      (a) =>
+        a.fingerprint === fingerprint &&
+        (a.status === 'failed' || a.status === 'verification_failed'),
+    );
+  const e = last?.execution;
+  const said =
+    typeof e === 'object' && e !== null && 'message' in e && typeof e.message === 'string'
+      ? ` (last time: ${e.message.slice(0, 200)})`
+      : '';
+  const step = `${first.type} ${stableStringify(first.args)}`;
+  return {
+    step,
+    failures,
+    note:
+      `Your plan's step 1, ${step}, already failed ${failures} time(s) from where the player ` +
+      `stands${said}, so code would refuse it. Plan something else: another target or another ` +
+      'kind of step.',
+  };
+}
+
 /** What the planner is told when it escalated for want of a place while exploring was open. */
 const EXPLORE_REMINDER =
   'Your last answer escalated for want of a place, but EXPLORE is in allowedActions and it is ' +
@@ -1117,7 +1162,28 @@ async function consultPlanner(
 
   // Steps after an EXPLORE (and view-bound steps after a GATHER) were planned from a view
   // that will be gone when they run: they are dropped, and the next plan starts from there.
-  const { plan, note: trimmed } = trimStaleSteps(validation.plan);
+  let { plan, note: trimmed } = trimStaleSteps(validation.plan);
+  // A first step the safety policy would refuse as a repeated failure ends the session for a
+  // human (seen live, in 5 runs: the model planned the same EXPLORE toward an unreachable
+  // tree, or the same MOVE_TO, a third time). Ask once more, saying so; should that answer
+  // not do, the first plan stands and the policy refuses its step as before.
+  const repeat = repeatedFirstStep(deps, plan, state, ctx, taskId);
+  if (repeat !== null) {
+    repos.memory.appendJournal(
+      taskId,
+      `planner chose ${repeat.step} again, which failed ${repeat.failures} time(s) from here; asked again`.slice(
+        0,
+        300,
+      ),
+    );
+    const again = await ask({ ...request, journal: [...request.journal, repeat.note] });
+    repos.events.append(cycleId, 'PLAN', { provider: planner.name, response: again });
+    const checked =
+      again.kind === 'plan' ? validatePlan(again.plan, ctx, config.planner.maxPlanSteps) : null;
+    if (checked?.ok === true && checked.plan !== null) {
+      ({ plan, note: trimmed } = trimStaleSteps(checked.plan));
+    }
+  }
   const stored = repos.plans.create(
     taskId,
     plan,
