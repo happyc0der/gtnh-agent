@@ -8,7 +8,8 @@ import {
   type QuestProgress,
 } from '../goals/quest-goals.ts';
 import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../domain/recipes.ts';
-import type { WorldTime } from '../domain/game-state.ts';
+import { TICKS_PER_DAY, TICKS_PER_SECOND, type WorldTime } from '../domain/game-state.ts';
+import { describeShelter, type ShelterStatus } from '../goals/shelter.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { CycleResult } from './agent-loop.ts';
@@ -82,6 +83,13 @@ export interface PlayDeps {
   /** Reads the world's clock now (null when unknown). Without it, play ignores the time. */
   time?: () => Promise<WorldTime | null>;
   /**
+   * What a night shelter around the player still needs (null when unknown). With it, play
+   * shelters at dusk and waits for the morning inside; without it, play stops before dark.
+   */
+  shelter?: () => Promise<ShelterStatus | null>;
+  /** Waits (injectable for tests). */
+  sleep?: (ms: number) => Promise<void>;
+  /**
    * A goal of the player's own instead of the quest book: items to have (item -> count).
    * Play pursues it like a quest (the planner gets its route) and ends when it is reached.
    */
@@ -135,6 +143,7 @@ export type PlayEvent =
       /** What the executor reported for the action, if one ran. */
       detail: string | null;
     }
+  | { kind: 'night'; message: string }
   | {
       kind: 'session-end';
       session: number;
@@ -240,8 +249,44 @@ function reachGoal(repos: Repositories, goal: FreeGoal): void {
   });
 }
 
-/** Evening or night: hostile mobs come out, and the agent has no shelter yet. */
+/** Real minutes until the next sunrise (tick 0 of the next day). */
+const untilSunrise = (t: WorldTime): number =>
+  Number(((TICKS_PER_DAY - t.timeOfDay) / TICKS_PER_SECOND / 60).toFixed(1));
+
+/** Evening or night: hostile mobs come out. */
 export const isDark = (t: WorldTime): boolean => t.phase === 'evening' || t.phase === 'night';
+
+/** Real minutes before night when play starts on a shelter (placing is refused once mobs are near). */
+export const SHELTER_LEAD_MINUTES = 2;
+
+/** Dark, or dark within SHELTER_LEAD_MINUTES: time to be in a shelter. */
+export const nightSoon = (t: WorldTime): boolean =>
+  isDark(t) || (t.phase === 'day' && t.minutesUntilNight <= SHELTER_LEAD_MINUTES);
+
+/**
+ * Inside the shelter: waits until it is day again, checking the stop file / Ctrl+C and the
+ * time limit every few seconds. Returns why play must stop, or null at sunrise.
+ */
+async function waitForMorning(
+  deps: PlayDeps,
+  hooks: { stopRequested: () => string | null },
+  limits: PlayLimits,
+  started: number,
+  now: () => number,
+): Promise<string | null> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (;;) {
+    const stop = hooks.stopRequested();
+    if (stop !== null) return stop;
+    if (now() - started >= limits.maxMinutes * 60_000) {
+      return `reached the limit of ${limits.maxMinutes} minutes`;
+    }
+    const t = (await deps.time?.()) ?? null;
+    if (t === null) return 'the clock is unknown, so the morning cannot be awaited';
+    if (t.phase === 'day' && !nightSoon(t)) return null;
+    await sleep(5000);
+  }
+}
 
 function nightReason(t: WorldTime): string {
   return (
@@ -272,6 +317,10 @@ export async function runPlay(
   let progress: QuestProgress | null = null;
   let sessions = 0;
   let lastStop = '';
+  /** Shelter sessions tonight (reset in daylight). */
+  let shelterTries = 0;
+  /** A note for the next goal's journal (e.g. how to leave the night shelter). */
+  let wakeNote: string | null = null;
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
   let last: { questId: string; missing: number; stuck: number } | null = null;
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
@@ -295,7 +344,89 @@ export async function runPlay(
     }
 
     const clock = (await deps.time?.()) ?? null;
-    if (clock !== null && isDark(clock)) return done(nightReason(clock), clock);
+    if (clock !== null && nightSoon(clock)) {
+      if (deps.shelter === undefined) {
+        if (isDark(clock)) return done(nightReason(clock), clock);
+      } else {
+        const status = await deps.shelter();
+        if (status === null)
+          return done(`${nightReason(clock)}: the shelter cannot be checked`, clock);
+        if (status.sheltered) {
+          emit({
+            kind: 'night',
+            message: `sheltered: waiting for the morning (${untilSunrise(clock)} min)`,
+          });
+          const stop = await waitForMorning(deps, hooks, limits, started, now);
+          if (stop !== null) return done(stop);
+          emit({ kind: 'night', message: 'morning: leaving the shelter' });
+          wakeNote =
+            'morning: the player is inside its night shelter (walls around it, a roof above): ' +
+            'to get out, dig one wall, the head-level block first, then the one below it';
+          continue;
+        }
+        if (status.problem !== null || shelterTries >= limits.maxStuckSessions) {
+          const why = status.problem ?? `${shelterTries} sessions did not finish it`;
+          return done(`${nightReason(clock)}; no shelter: ${why}`, clock);
+        }
+        shelterTries += 1;
+        const taskId = 'night-shelter';
+        const steps = describeShelter(status);
+        deps.repos.transaction(() => {
+          deps.repos.tasks.ensure({
+            id: taskId,
+            goal: 'Night is coming: build a shelter around yourself (the route), then stay inside until morning',
+            subgoal: `${status.todo.length} blocks to place before dark`,
+            status: 'active',
+          });
+          deps.repos.tasks.setStatus(taskId, 'active');
+          deps.repos.memory.setTaskBlueprint(taskId, steps);
+          deps.repos.memory.setTaskRequirements(taskId, null);
+          deps.repos.memory.setValue(CURRENT_TASK_KEY, taskId);
+        });
+        emit({
+          kind: 'goal',
+          quest: 'shelter for the night',
+          goal: `place ${status.todo.length} blocks`,
+          missing: status.needs,
+          taskId,
+          created: false,
+        });
+        const session = sessions + 1;
+        const result = await deps.session(
+          {
+            ...limits.session,
+            maxCycles: Math.min(limits.session.maxCycles, status.todo.length * 2 + 2),
+          },
+          {
+            stopRequested: hooks.stopRequested,
+            onCycle: (r, index) =>
+              emit({
+                kind: 'cycle',
+                session,
+                index,
+                summary: r.summary,
+                decision: null,
+                newPlan:
+                  r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
+                detail: r.outcome?.execution?.message ?? null,
+              }),
+          },
+        );
+        sessions = session;
+        emit({
+          kind: 'session-end',
+          session,
+          stopKind: result.stopKind,
+          stopReason: result.stopReason,
+          cycles: result.cycles.length,
+        });
+        if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
+          return done(result.stopReason);
+        }
+        continue;
+      }
+    }
+    shelterTries = 0;
 
     const inventory = await deps.inventory();
     if (inventory === null) return done('the inventory is unknown, so progress is unknown');
@@ -379,6 +510,10 @@ export async function runPlay(
       taskId: adopted.taskId,
       created: adopted.created,
     });
+    if (wakeNote !== null) {
+      deps.repos.memory.appendJournal(adopted.taskId, wakeNote);
+      wakeNote = null;
+    }
 
     // One session on this quest. It also ends as soon as an observation shows the quest's
     // items are all held, so the planner is never asked to do what is already done.
@@ -415,7 +550,13 @@ export async function runPlay(
         if (after?.inventory.known === true) {
           met = current.missingWith(after.inventory.value.items) === 0;
         }
-        if (after?.time.known === true && isDark(after.time.value)) dark = after.time.value;
+        // Shelter time (or dark, without shelters) ends the session in time to act on it.
+        if (
+          after?.time.known === true &&
+          (deps.shelter === undefined ? isDark(after.time.value) : nightSoon(after.time.value))
+        ) {
+          dark = after.time.value;
+        }
       },
     });
     sessions = session;
@@ -435,7 +576,10 @@ export async function runPlay(
         `interrupted: ${dark !== null ? nightReason(dark) : result.stopReason}`,
       );
     }
-    if (dark !== null) return done(nightReason(dark), dark);
+    if (dark !== null) {
+      if (deps.shelter === undefined) return done(nightReason(dark), dark);
+      continue; // the next round builds the shelter
+    }
     if (result.stopKind === 'stop-requested' && !met) return done(result.stopReason);
     if (!CONTINUE_AFTER.has(result.stopKind)) return done(result.stopReason);
   }
@@ -473,5 +617,7 @@ export function describePlayEvent(e: PlayEvent): string {
     }
     case 'session-end':
       return `session ${e.session}: ${e.cycles} cycle(s); ${e.stopReason}`;
+    case 'night':
+      return `night: ${e.message}`;
   }
 }

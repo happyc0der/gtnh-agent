@@ -114,9 +114,10 @@ export const OPERATOR_PLANNER = 'operator';
 function requirementsOf(
   repos: Repositories,
   taskId: string,
-): { requirements?: Record<string, number> } {
+): { requirements?: Record<string, number>; blueprint?: string[] } {
   const r = repos.memory.taskRequirements(taskId);
-  return r === null ? {} : { requirements: r };
+  const b = repos.memory.taskBlueprint(taskId);
+  return { ...(r === null ? {} : { requirements: r }), ...(b === null ? {} : { blueprint: b }) };
 }
 
 export function overlayAgentMemory(
@@ -570,7 +571,7 @@ function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'):
  * blocks (already dug, or out of the scan since the player moved). The step is still
  * refused; only the reaction differs (see isStaleRejection).
  */
-const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set(['NOT_DIGGABLE']);
+const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set(['NOT_DIGGABLE', 'NOT_PLACEABLE']);
 
 /**
  * A planner's step rejected only because it no longer fits the world NOW: preconditions

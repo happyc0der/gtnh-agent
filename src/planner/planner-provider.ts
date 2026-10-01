@@ -223,6 +223,9 @@ function placesInView(state: GameState): PlaceLookup {
 
 /** The route for the current task's required items, as the planner reads it. */
 export function routeForPlanner(state: GameState): PlannerRequest['route'] {
+  // A building task (e.g. the night shelter): the blueprint is the route.
+  const blueprint = state.currentTask?.blueprint;
+  if (blueprint !== undefined && blueprint.length > 0) return { stock: [], steps: blueprint };
   const goal = state.currentTask?.requirements;
   if (goal === undefined || Object.keys(goal).length === 0) return null;
   const inventory = state.inventory.known ? state.inventory.value.items : {};
