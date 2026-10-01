@@ -890,6 +890,11 @@ export class WorldModel {
     return this.#window !== null;
   }
 
+  /** Whether the hazard scan around the player can run: the chunks it needs have arrived. */
+  get surroundingsKnown(): boolean {
+    return this.#hazards().known;
+  }
+
   get lastPacketAt(): Date | null {
     return this.#lastPacketAt;
   }

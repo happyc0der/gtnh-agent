@@ -203,8 +203,11 @@ export const MinecraftConfigSchema = z
      * ticks the player and reports health/food. Only walking (below) changes that position.
      */
     presenceTicks: z.boolean().default(true),
-    /** After joining, how long to wait for the first health and inventory packets. */
-    initialStateGraceMs: z.int().min(0).max(30_000).default(3_000),
+    /**
+     * After joining, how long to wait at most for health, inventory, the entities and the
+     * chunks around the player (the wait ends as soon as all have arrived).
+     */
+    initialStateGraceMs: z.int().min(0).max(30_000).default(10_000),
     movement: MovementConfigSchema.prefault({}),
     containers: ContainersConfigSchema.prefault({}),
     digging: DiggingConfigSchema.prefault({}),

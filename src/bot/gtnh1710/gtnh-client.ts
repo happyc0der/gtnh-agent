@@ -495,12 +495,15 @@ export class Gtnh1710Client implements MinecraftClient {
       `item stack format: ${this.#decoding.itemStackSizeVarInt ? 'ModularUI (VarInt stack size)' : 'vanilla'}`,
     );
     await this.#join(deadline);
-    // Wait (bounded) until health, inventory and a complete entity picture have arrived.
+    // Wait (bounded) until health, inventory, a complete entity picture and the chunks the
+    // hazard scan needs have arrived: a first observation without them is unreliable, and the
+    // safety policy pauses on it (seen live right after a login).
     await this.#waitFor(
       () =>
         this.#world.hasHealth &&
         this.#world.hasInventory &&
-        this.#world.entitiesReady(this.#opts.clock.now()),
+        this.#world.entitiesReady(this.#opts.clock.now()) &&
+        this.#world.surroundingsKnown,
       cfg.initialStateGraceMs,
     );
   }
