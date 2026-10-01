@@ -14,7 +14,7 @@ describe('OllamaClient', () => {
   it('sends one constrained, deterministic, non-streaming chat request', async () => {
     const fake = fakeOllama({ body: chatBody('{"ok":true}', { prompt_eval_count: 12 }) });
     const client = new OllamaClient(TEST_LLM, { fetch: fake.fetch });
-    const result = await client.chat({ ...request, contextTokens: 8192 });
+    const result = await client.chat(request);
 
     expect(result).toMatchObject({ ok: true, content: '{"ok":true}', promptTokens: 12 });
     expect(fake.calls).toHaveLength(1);

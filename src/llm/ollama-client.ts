@@ -48,8 +48,6 @@ export interface ChatRequest {
   format: Record<string, unknown>;
   /** Upper bound on generated tokens (num_predict). */
   maxOutputTokens: number;
-  /** Context window (num_ctx); omitted, the server's default applies. */
-  contextTokens?: number;
 }
 
 export type ChatFailure = 'refused' | 'timeout' | 'http' | 'network' | 'bad-response';
@@ -77,6 +75,12 @@ export interface OllamaClientDeps {
 
 /** Fixed sampling, so the same prompt gives the same answer. */
 export const SAMPLING = { temperature: 0, seed: 7 } as const;
+/**
+ * The context window for EVERY request (a planner request is about 1.6k tokens plus up to
+ * 2k of reply). One size for all roles matters: Ollama reloads a model whose num_ctx
+ * changes, so a model serving both decisions and plans would reload on every switch.
+ */
+export const CONTEXT_TOKENS = 8192;
 export const MAX_REQUEST_CHARS = 256_000;
 export const MAX_RESPONSE_CHARS = 1_000_000;
 
@@ -146,11 +150,7 @@ export class OllamaClient {
       think: false,
       keep_alive: keepAlive,
       format: request.format,
-      options: {
-        ...SAMPLING,
-        num_predict: request.maxOutputTokens,
-        ...(request.contextTokens === undefined ? {} : { num_ctx: request.contextTokens }),
-      },
+      options: { ...SAMPLING, num_predict: request.maxOutputTokens, num_ctx: CONTEXT_TOKENS },
       messages: [
         { role: 'system', content: request.system },
         { role: 'user', content: request.user },

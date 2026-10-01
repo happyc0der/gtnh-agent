@@ -11,8 +11,6 @@ import type { OllamaClient } from './ollama-client.ts';
 
 /** Room for a full plan (16 steps with rationales) plus its explanation. */
 export const PLANNER_MAX_OUTPUT_TOKENS = 2048;
-/** The request (about 2-3k tokens) and the reply must both fit. */
-export const PLANNER_CONTEXT_TOKENS = 8192;
 
 export const PLANNER_SYSTEM_PROMPT = `You are the planner of a safety-first agent that plays Minecraft 1.7.10 with the GregTech: New Horizons modpack on a private test server. You only PROPOSE plans. Code checks every step against a schema and safety rules and runs one step per cycle; a step that breaks a rule is refused and the task stops until a human looks.
 
@@ -136,7 +134,6 @@ export class OllamaPlannerProvider implements PlannerProvider {
         user: plannerUserMessage(checked.data),
         format: plannerFormat(checked.data.maxPlanSteps),
         maxOutputTokens: PLANNER_MAX_OUTPUT_TOKENS,
-        contextTokens: PLANNER_CONTEXT_TOKENS,
       });
       if (!result.ok) {
         return result.failure === 'timeout'

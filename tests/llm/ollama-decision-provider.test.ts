@@ -47,7 +47,8 @@ describe('OllamaDecisionProvider', () => {
     const body = calls[0]?.body;
     expect(body?.messages[0]).toEqual({ role: 'system', content: DECISION_SYSTEM_PROMPT });
     expect(body?.format).toEqual(DECISION_FORMAT);
-    expect(body?.options).toMatchObject({ temperature: 0, seed: 7 });
+    // The planner's context size too, so one model serving both roles never reloads.
+    expect(body?.options).toMatchObject({ temperature: 0, seed: 7, num_ctx: 8192 });
   });
 
   it('sends only code-computed facts: no names, goals or other free text from the world', async () => {
