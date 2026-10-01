@@ -28,6 +28,9 @@ const FORBIDDEN_KEYWORDS = [
   'EXPLODE',
   'ATTACK',
   'KILL',
+  'FIGHT',
+  'SHOOT',
+  'HUNT',
   'DROP',
   'TOSS',
   'DISCARD',
@@ -41,10 +44,12 @@ const FORBIDDEN_KEYWORDS = [
 
 /**
  * Action types the operator allows although they contain a forbidden keyword, matched
- * EXACTLY (case included). DIG_BLOCK breaks one allowlisted natural block; every other type
- * with a forbidden keyword (BREAK_BLOCK, MINE_ORE, DIG_AREA, dig_block, ...) stays forbidden.
+ * EXACTLY (case included). DIG_BLOCK breaks one allowlisted natural block; ATTACK_ENTITY
+ * strikes one observed hostile or farm animal (src/domain/combat.ts). Every other type with a
+ * forbidden keyword (BREAK_BLOCK, MINE_ORE, DIG_AREA, dig_block, ATTACK_PLAYER, KILL_ENTITY,
+ * attack_entity, ...) stays forbidden.
  */
-const OPERATOR_APPROVED_TYPES: ReadonlySet<string> = new Set(['DIG_BLOCK']);
+const OPERATOR_APPROVED_TYPES: ReadonlySet<string> = new Set(['DIG_BLOCK', 'ATTACK_ENTITY']);
 
 export type ActionTypeClass = 'allowlisted' | 'forbidden' | 'unsupported';
 

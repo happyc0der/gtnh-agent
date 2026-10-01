@@ -1,9 +1,20 @@
 import type { ActionType } from '../domain/actions.ts';
 import type { DiggableBlock } from '../domain/blocks.ts';
+import {
+  BARE_HAND,
+  MAX_BURST_MS,
+  MAX_SWINGS_PER_BURST,
+  strikeReach,
+  SWING_INTERVAL_TICKS,
+  type EntityCategory,
+  type Weapon,
+} from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
+  MAX_REPORTED_DEATHS,
+  MAX_REPORTED_ENTITIES,
   MAX_REPORTED_REMOVED,
   MAX_REPORTED_RESOURCES,
   type CurrentTask,
@@ -11,6 +22,7 @@ import {
   type Hazard,
   type KnownRecipeState,
   type MachineStatus,
+  type NearbyEntity,
   worldTime,
 } from '../domain/game-state.ts';
 import { blockCentre, distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
@@ -85,6 +97,25 @@ export interface MockMachine {
   lastInspectedAt: string | null;
 }
 
+/** A creature with an entity id, for combat (ATTACK_ENTITY, DEFEND). */
+export interface MockMob {
+  id: number;
+  /** As the live client names it: minecraft:Zombie, SpecialMobs.FireCreeper, mob#120, ... */
+  type: string;
+  category: EntityCategory;
+  kind?: 'mob' | 'player' | 'object';
+  position: Position;
+  /** null: not known (no metadata), treated as 20 when struck. */
+  health: number | null;
+  owned?: boolean | null;
+  baby?: boolean | null;
+  lastHurtAt?: string | null;
+}
+
+/** Legacy `hostiles` / `unclassified` positions are listed with these ids (index added). */
+export const MOCK_HOSTILE_ID_BASE = 9000;
+export const MOCK_UNCLASSIFIED_ID_BASE = 9500;
+
 /** Fields the mock can pretend it cannot observe, to exercise fail-closed paths. */
 export type MockUnobservable =
   'position' | 'dimension' | 'health' | 'hunger' | 'inventory' | 'threats' | 'hazards' | 'blocks';
@@ -125,6 +156,16 @@ export interface MockWorld {
   blocksPerSecond: number;
   /** Ticks into the Minecraft day (0 sunrise, 6000 noon, 18000 midnight); default noon. */
   timeOfDay?: number;
+  /**
+   * Creatures with ids and health (ATTACK_ENTITY targets them). They count in the threat
+   * numbers like `hostiles` and `unclassified`, which are listed as nameless zombies
+   * (minecraft:Zombie, health unknown) and unidentified mobs.
+   */
+  mobs?: MockMob[];
+  /** What ATTACK_ENTITY strikes with; a bare hand by default. */
+  weapon?: Weapon;
+  /** Entities that died, most recent first (ATTACK_ENTITY's kills). */
+  deaths?: Array<{ id: number; type: string; at: string }>;
 }
 
 type FailureMode =
@@ -189,12 +230,13 @@ export class MockMinecraftClient implements MinecraftClient {
     const pos = w.player.position;
     const timestamp = new Date(this.#clock.now().getTime() - w.observationLagMs).toISOString();
 
-    const hostileDistances = w.hostiles
-      .map((h) => distance(pos, h))
-      .filter((d) => d <= SCAN_RADIUS);
-    const unclassifiedDistances = w.unclassified
-      .map((u) => distance(pos, u))
-      .filter((d) => d <= SCAN_RADIUS);
+    const entities = this.#nearbyEntities();
+    const hostileDistances = entities
+      .filter((e) => e.category === 'hostile')
+      .map((e) => e.distance);
+    const unclassifiedDistances = entities
+      .filter((e) => e.category === 'unclassified')
+      .map((e) => e.distance);
     const nearbyHazards = w.hazards.filter((h) => distance(pos, h.position) <= HAZARD_SCAN_RADIUS);
     const near = (b: BlockPosition): number => distance(pos, blockCentre(b));
     // Like the live client: at or above the feet level (never the ground it stands on).
@@ -219,6 +261,7 @@ export class MockMinecraftClient implements MinecraftClient {
         hunger: hidden.has('hunger') ? unknown('mock: hunger hidden') : known(w.player.hunger),
         armor: known({ equippedPieces: 0, lowestDurabilityFraction: null }),
         heldTool: known(null),
+        weapon: known({ ...(w.weapon ?? BARE_HAND) }),
       },
       inventory: hidden.has('inventory')
         ? unknown('mock: inventory hidden')
@@ -237,6 +280,13 @@ export class MockMinecraftClient implements MinecraftClient {
             unclassifiedCount: unclassifiedDistances.length,
             nearestUnclassifiedDistance:
               unclassifiedDistances.length > 0 ? Math.min(...unclassifiedDistances) : null,
+          }),
+      nearbyEntities: hidden.has('threats')
+        ? unknown('mock: threats hidden')
+        : known({
+            scanRadius: SCAN_RADIUS,
+            entities: entities.slice(0, MAX_REPORTED_ENTITIES),
+            recentDeaths: (w.deaths ?? []).slice(0, MAX_REPORTED_DEATHS).map((d) => ({ ...d })),
           }),
       environmentHazards: hidden.has('hazards')
         ? unknown('mock: hazards hidden')
@@ -290,6 +340,107 @@ export class MockMinecraftClient implements MinecraftClient {
       lastAction: null,
     };
     return GameStateSchema.parse(state);
+  }
+
+  /**
+   * Every creature within the scan, nearest first: `mobs`, plus the legacy `hostiles` (as
+   * zombies of unknown health) and `unclassified` positions, with stable ids.
+   */
+  #nearbyEntities(): NearbyEntity[] {
+    const w = this.world;
+    const pos = w.player.position;
+    const listed: Array<Omit<NearbyEntity, 'distance'>> = [
+      ...(w.mobs ?? []).map((m) => ({
+        id: m.id,
+        type: m.type,
+        category: m.category,
+        kind: m.kind ?? (m.category === 'player' ? ('player' as const) : ('mob' as const)),
+        position: { ...m.position },
+        health: m.health,
+        // Animals are unowned grown-ups unless the test says otherwise (null: not known).
+        owned: m.owned === undefined ? (m.category === 'passive' ? false : null) : m.owned,
+        baby: m.baby === undefined ? (m.category === 'passive' ? false : null) : m.baby,
+        lastHurtAt: m.lastHurtAt ?? null,
+      })),
+      ...w.hostiles.map((p, i) => ({
+        id: MOCK_HOSTILE_ID_BASE + i,
+        type: 'minecraft:Zombie',
+        category: 'hostile' as const,
+        kind: 'mob' as const,
+        position: { ...p },
+        health: null,
+        owned: null,
+        baby: null,
+        lastHurtAt: null,
+      })),
+      ...w.unclassified.map((p, i) => ({
+        id: MOCK_UNCLASSIFIED_ID_BASE + i,
+        type: 'mob#200',
+        category: 'unclassified' as const,
+        kind: 'mob' as const,
+        position: { ...p },
+        health: null,
+        owned: null,
+        baby: null,
+        lastHurtAt: null,
+      })),
+    ];
+    return listed
+      .map((e) => ({ ...e, distance: distance(pos, e.position) }))
+      .filter((e) => e.distance <= SCAN_RADIUS)
+      .sort((a, b) => a.distance - b.distance || a.id - b.id);
+  }
+
+  /**
+   * One ATTACK_ENTITY burst: full hits of the weapon's damage, one per 12 ticks, while the
+   * target is within reach (the mock has no blocks, so the server would always see it), until
+   * it dies or the burst ends. A killed mob disappears and is recorded as a death.
+   */
+  #attack(entityId: number): ClientActionResult {
+    const w = this.world;
+    const mobs = w.mobs ?? [];
+    const mob = mobs.find((m) => m.id === entityId);
+    if (mob === undefined) return failed(`no entity ${entityId} to attack`);
+    const weapon = w.weapon ?? BARE_HAND;
+    const reach = strikeReach(weapon, true);
+    const d = distance(w.player.position, mob.position);
+    if (d > reach) {
+      this.#clock.advance(MAX_BURST_MS);
+      return failed(
+        `${mob.type} ${entityId} stayed ${d.toFixed(1)} blocks away (reach ${reach}): no hit`,
+      );
+    }
+    const healthBefore = mob.health;
+    let health = mob.health ?? 20;
+    let hits = 0;
+    while (hits < MAX_SWINGS_PER_BURST && health > 0) {
+      health = Math.max(0, health - weapon.damage);
+      hits += 1;
+      this.#clock.advance(SWING_INTERVAL_TICKS * 50);
+    }
+    const at = this.#clock.now().toISOString();
+    mob.lastHurtAt = at;
+    const killed = health <= 0;
+    if (killed) {
+      w.mobs = mobs.filter((m) => m !== mob);
+      w.deaths = [{ id: mob.id, type: mob.type, at }, ...(w.deaths ?? [])];
+    } else {
+      mob.health = health;
+    }
+    return ok(
+      `${killed ? 'killed' : 'hit'} ${mob.type} ${entityId}: ${hits} hit(s) with ${weapon.item ?? 'a bare hand'}`,
+      {
+        entityId,
+        target: mob.type,
+        weapon: weapon.item,
+        swings: hits,
+        hits,
+        kills: killed ? 1 : 0,
+        targetHealthBefore: healthBefore,
+        targetHealthAfter: killed ? 0 : health,
+        damageTaken: 0,
+      },
+    );
   }
 
   perform(validated: ValidatedAction): Promise<ClientActionResult> {
@@ -398,6 +549,8 @@ export class MockMinecraftClient implements MinecraftClient {
         return this.#dig(action.args.position);
       case 'CRAFT_ITEM':
         return this.#craft(action.args);
+      case 'ATTACK_ENTITY':
+        return this.#attack(action.args.entityId);
 
       case 'PAUSE_AND_ASK_USER':
         this.userMessages.push(action.args.question);

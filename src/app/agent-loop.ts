@@ -368,7 +368,11 @@ export async function runSingleCycle(
   if (stateViolations.length > 0) repos.violations.insertMany(cycleId, null, stateViolations);
 
   // 4. System 1 decision (forced to PAUSE if the state is unreliable, whatever the provider says).
-  const routerCtx: RouterContext = { safety: ctx, routing: config.routing };
+  const routerCtx: RouterContext = {
+    safety: ctx,
+    routing: config.routing,
+    combatEnabled: config.minecraft.combat.enabled,
+  };
   let decision: DecisionResult;
   if (stateViolations.length > 0) {
     decision = pauseDecision('hard-safety', stateViolations.map((v) => v.code).join(','));
@@ -558,10 +562,11 @@ function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'):
 /**
  * Safety refusals that only say a step no longer matches what is observed, not that it is
  * dangerous: NOT_DIGGABLE means the block is not in the current list of observed diggable
- * blocks (already dug, or out of the scan since the player moved). The step is still
+ * blocks (already dug, or out of the scan since the player moved); TARGET_GONE means the
+ * entity to attack is no longer near (it died, wandered off or despawned). The step is still
  * refused; only the reaction differs (see isStaleRejection).
  */
-const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set(['NOT_DIGGABLE']);
+const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set(['NOT_DIGGABLE', 'TARGET_GONE']);
 
 /**
  * A planner's step rejected only because it no longer fits the world NOW: preconditions

@@ -24,6 +24,28 @@ export const BoundarySchema = z
 export type Boundary = z.infer<typeof BoundarySchema>;
 
 /**
+ * When the agent may fight at all (ATTACK_ENTITY, and System 1's DEFEND). The client's own
+ * switch is minecraft.combat.enabled (MC_ENABLE_COMBAT); these limits apply on top of it.
+ */
+export const CombatSafetySchema = z.strictObject({
+  /**
+   * No fight is started below this health (half-hearts); System 1 retreats instead. GTNH
+   * runs on Hard, and a kill may explode (src/domain/combat.ts), so this is high.
+   */
+  minHealthToFight: z.number().min(1).max(1024).default(14),
+  /** No fight below this food level: HungerOverhaul stops natural healing under 8 here. */
+  minHungerToFight: z.number().min(0).max(20).default(8),
+  /** More hostiles than this within the threat radius: overwhelmed, flee instead. */
+  maxHostilesToFight: z.int().min(1).max(8).default(2),
+  /**
+   * A creeper (or a hostile that might be one) this close forbids every fight. Special Mobs'
+   * Death and Gravity creepers explode with power 5, which hurts up to 10 blocks away.
+   */
+  creeperFleeRadius: z.number().min(1).max(64).default(16),
+});
+export type CombatSafety = z.infer<typeof CombatSafetySchema>;
+
+/**
  * Hard safety limits. Enforced by ordinary code in src/safety; never delegated to a model.
  * Defaults are deliberately conservative.
  */
@@ -62,6 +84,8 @@ export const SafetyConfigSchema = z.strictObject({
   inventoryNearlyFullFraction: z.number().min(0.5).max(1).default(0.9),
   /** Maximum distance for interacting with a container, machine or generator. */
   interactionReach: z.number().min(1).max(6).default(4.5),
+  /** Limits for fighting (ATTACK_ENTITY, DEFEND). */
+  combat: CombatSafetySchema.prefault({}),
 });
 export type SafetyConfig = z.infer<typeof SafetyConfigSchema>;
 
@@ -91,6 +115,12 @@ export const VIOLATION_CODES = [
   'NOT_DIGGABLE',
   /** DIG_BLOCK on a block whose removal could hurt the player (support, falling blocks). */
   'UNSAFE_DIG',
+  /** ATTACK_ENTITY on something never attacked (a player, villager, owned animal, creeper...). */
+  'NOT_ATTACKABLE',
+  /** ATTACK_ENTITY when fighting is unsafe now (low health, too many hostiles, a creeper...). */
+  'UNSAFE_ATTACK',
+  /** ATTACK_ENTITY on an entity the observation no longer lists (it died, left or despawned). */
+  'TARGET_GONE',
 ] as const;
 export const ViolationCodeSchema = z.enum(VIOLATION_CODES);
 export type ViolationCode = z.infer<typeof ViolationCodeSchema>;

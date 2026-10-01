@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { ActionIdSchema, ActionSpecSchema, ActionTypeSchema } from './actions.ts';
 import { DiggableBlockSchema } from './blocks.ts';
+import { ENTITY_CATEGORIES, WeaponSchema } from './combat.ts';
 import {
   BlockPositionSchema,
   DimensionSchema,
   EntityIdSchema,
+  EntityNumberSchema,
   ItemCountsSchema,
   ItemNameSchema,
   PositionSchema,
@@ -38,6 +40,14 @@ export const PlayerSchema = z.strictObject({
   hunger: knownSchema(z.number().min(0).max(20)),
   armor: knownSchema(ArmorSchema),
   heldTool: knownSchema(HeldToolSchema),
+  /**
+   * What ATTACK_ENTITY would strike with now: the best allowlisted weapon in the hotbar, or
+   * an empty hand (src/domain/combat.ts). Snapshots stored before combat read back as unknown.
+   */
+  weapon: knownSchema(WeaponSchema).default({
+    known: false,
+    reason: 'not reported by this observation',
+  }),
 });
 
 export const InventorySchema = z.strictObject({
@@ -59,6 +69,62 @@ export const HazardSchema = z.strictObject({
   position: PositionSchema,
 });
 export type Hazard = z.infer<typeof HazardSchema>;
+
+/** Largest `nearbyThreats.entities` list (the nearest ones). */
+export const MAX_REPORTED_ENTITIES = 32;
+/** Largest `nearbyThreats.recentDeaths` list. */
+export const MAX_REPORTED_DEATHS = 16;
+
+/**
+ * A creature, player or dangerous object near the player, with what combat needs. Names
+ * come from the agent's classification tables (never from name tags or chat).
+ */
+export const NearbyEntitySchema = z.strictObject({
+  id: EntityNumberSchema,
+  /** What it is: minecraft:Zombie, SpecialMobs.FireCreeper, mob#120, ... or `player`. */
+  type: z.string().min(1).max(100),
+  category: z.enum(ENTITY_CATEGORIES),
+  /** `object`: not a creature (primed TNT, fireballs, projectiles). */
+  kind: z.enum(['mob', 'player', 'object']),
+  position: PositionSchema,
+  /** Blocks from the player's feet to its feet: how the server measures attack reach. */
+  distance: z.number().min(0),
+  /** Health (half-hearts) from the server's entity metadata; null until it was sent. */
+  health: z.number().min(0).max(1_000_000).nullable(),
+  /** Someone's animal (a name tag or a saddle); null when not known or not applicable. */
+  owned: z.boolean().nullable(),
+  /** A baby animal; null when not known or not applicable. */
+  baby: z.boolean().nullable(),
+  /** When this connection last saw it take a hit (the server's hurt status), or null. */
+  lastHurtAt: TimestampSchema.nullable(),
+});
+export type NearbyEntity = z.infer<typeof NearbyEntitySchema>;
+
+/** An entity this connection saw die (the server's death status), most recent first. */
+export const RecentDeathSchema = z.strictObject({
+  id: EntityNumberSchema,
+  type: z.string().min(1).max(100),
+  at: TimestampSchema,
+});
+
+/**
+ * The details behind `nearbyThreats`, for combat and planning: what is near, how far, how
+ * healthy. Observed with the threats (same scan), so the two must agree.
+ */
+export const NearbyEntitiesSchema = z.strictObject({
+  /** The same scan radius as `nearbyThreats`. */
+  scanRadius: z.number().min(0).max(256),
+  /**
+   * The nearest entities within `scanRadius` (hostile, passive and unclassified creatures,
+   * dangerous objects and players; dropped items and the like are left out), nearest first.
+   * With fewer than MAX_REPORTED_ENTITIES listed the list is complete: its hostile and
+   * unclassified entries then match the `nearbyThreats` counts.
+   */
+  entities: z.array(NearbyEntitySchema).max(MAX_REPORTED_ENTITIES),
+  /** Entities seen dying recently (ATTACK_ENTITY's kills are verified against this). */
+  recentDeaths: z.array(RecentDeathSchema).max(MAX_REPORTED_DEATHS),
+});
+export type NearbyEntities = z.infer<typeof NearbyEntitiesSchema>;
 
 /**
  * Entities near the player (within the adapter's scan radius).
@@ -251,6 +317,14 @@ export const GameStateSchema = z.strictObject({
   player: PlayerSchema,
   inventory: knownSchema(InventorySchema),
   nearbyThreats: knownSchema(ThreatsSchema),
+  /**
+   * The entities behind `nearbyThreats` (ATTACK_ENTITY targets one of them). Snapshots
+   * stored before combat existed read back as unknown, and nothing can be attacked then.
+   */
+  nearbyEntities: knownSchema(NearbyEntitiesSchema).default({
+    known: false,
+    reason: 'not reported by this observation',
+  }),
   environmentHazards: knownSchema(EnvironmentHazardsSchema),
   /**
    * Diggable blocks nearby (for DIG_BLOCK). Snapshots stored before this field existed

@@ -1,11 +1,15 @@
 import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
 import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
+import { attackRefusal } from '../domain/combat.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
+import { SafetyConfigSchema, type SafetyConfig } from '../domain/safety.ts';
+import { candidateOf, fightProblems } from '../safety/combat-checks.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
+  MAX_COMPACT_ENTITIES,
   MAX_COMPACT_RESOURCES,
   PlannerRequestSchema,
   type CompactState,
@@ -40,8 +44,14 @@ export interface RecentFailureSummary {
   failures: number;
 }
 
-/** Reduces GameState to what a planner needs. Unknown values stay null and are listed. */
-export function sanitizeStateForPlanner(state: GameState): CompactState {
+/**
+ * Reduces GameState to what a planner needs. Unknown values stay null and are listed.
+ * `config` sets the fighting thresholds behind `fightProblems` (defaults when omitted).
+ */
+export function sanitizeStateForPlanner(
+  state: GameState,
+  config: SafetyConfig = SafetyConfigSchema.parse({}),
+): CompactState {
   const unknownFields: string[] = [];
   const val = <T>(
     name: string,
@@ -60,6 +70,7 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
   const threats = val('nearbyThreats', state.nearbyThreats);
   const hazards = val('environmentHazards', state.environmentHazards);
   const blocks = val('nearbyBlocks', state.nearbyBlocks);
+  const entities = val('nearbyEntities', state.nearbyEntities);
   val('power.availableEUt', state.power.availableEUt);
 
   const inventoryTop = inventory
@@ -131,6 +142,20 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
           missingComponents: state.knownRecipeState.missingComponents,
         }
       : null,
+    // Creatures only: names from the agent's own tables, never name tags or player names.
+    entities: (entities?.entities ?? [])
+      .filter((e) => e.kind === 'mob')
+      .slice(0, MAX_COMPACT_ENTITIES)
+      .map((e) => ({
+        id: e.id,
+        type: e.type,
+        category: e.category,
+        distance: Number(e.distance.toFixed(1)),
+        health: e.health,
+        attackable: attackRefusal(candidateOf(e)) === null,
+      })),
+    weapon: state.player.weapon.known ? { ...state.player.weapon.value } : null,
+    fightProblems: fightProblems(state, config).map((p) => p.code),
     time: state.time.known
       ? {
           phase: state.time.value.phase,
@@ -152,7 +177,7 @@ export function buildPlannerRequest(input: {
 }): PlannerRequest {
   const { config } = input.safety;
   return PlannerRequestSchema.parse({
-    state: sanitizeStateForPlanner(input.state),
+    state: sanitizeStateForPlanner(input.state, config),
     task: input.state.currentTask,
     allowedActions: [...ACTION_TYPES],
     safetyConstraints: {

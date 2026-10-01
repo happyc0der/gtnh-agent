@@ -176,17 +176,20 @@ describe('planner request and mock planner', () => {
 
   it('the request carries the allowlist and constraints', () => {
     const r = request();
-    expect(r.allowedActions).toHaveLength(13);
+    expect(r.allowedActions).toHaveLength(14);
     expect(r.allowedActions).toContain('DIG_BLOCK');
     expect(r.allowedActions).toContain('CRAFT_ITEM');
+    expect(r.allowedActions).toContain('ATTACK_ENTITY');
     expect(r.safetyConstraints.protectedItems).toEqual([
       'minecraft:diamond',
       'minecraft:nether_star',
     ]);
     expect(r.safetyConstraints.safeLocations).toEqual(['home']);
-    // 'DIG' stays a forbidden keyword; exactly DIG_BLOCK is the operator's exception.
+    // 'DIG' and 'ATTACK' stay forbidden keywords; exactly DIG_BLOCK and ATTACK_ENTITY are
+    // the operator's exceptions.
     expect(r.safetyConstraints.forbidden).toContain('DIG');
-    expect(r.safetyConstraints.forbiddenExceptions).toEqual(['DIG_BLOCK']);
+    expect(r.safetyConstraints.forbidden).toContain('ATTACK');
+    expect(r.safetyConstraints.forbiddenExceptions).toEqual(['DIG_BLOCK', 'ATTACK_ENTITY']);
     expect(r.safetyConstraints.diggableBlocks).toContain('minecraft:log');
   });
 

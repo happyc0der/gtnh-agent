@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   BlockPositionSchema,
   EntityIdSchema,
+  EntityNumberSchema,
   ItemNameSchema,
   LocationNameSchema,
   MAX_TRANSFER_QUANTITY,
@@ -14,9 +15,10 @@ import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from
  * The complete allowlist of in-game actions. Anything not listed here is rejected
  * by schema validation before it reaches the safety policy or the executor.
  *
- * Deliberately absent: lava interaction, dropping items, combat, block placing,
- * electrical-network or multiblock changes, and rare-item consumption. Blocks are broken
- * only by DIG_BLOCK, and only blocks on its allowlist (src/domain/blocks.ts).
+ * Deliberately absent: lava interaction, dropping items, block placing, electrical-network or
+ * multiblock changes, and rare-item consumption. Blocks are broken only by DIG_BLOCK, and
+ * only blocks on its allowlist (src/domain/blocks.ts). The only combat is ATTACK_ENTITY on
+ * one observed hostile or farm animal (src/domain/combat.ts).
  */
 export const ACTION_TYPES = [
   'OBSERVE_STATE',
@@ -31,6 +33,7 @@ export const ACTION_TYPES = [
   'REFUEL_KNOWN_GENERATOR',
   'DIG_BLOCK',
   'CRAFT_ITEM',
+  'ATTACK_ENTITY',
   'PAUSE_AND_ASK_USER',
 ] as const;
 
@@ -118,6 +121,16 @@ export const CraftItemSpec = z.strictObject({
     craftingTableId: EntityIdSchema.nullable(),
   }),
 });
+/**
+ * Engage ONE observed entity for a short burst: strike it (with the best allowlisted weapon in
+ * the hotbar, else an empty hand) whenever it is within reach, until it dies or the burst ends.
+ * Only identified hostiles that fight in melee or at range, and unowned farm animals. The
+ * player does not move. See docs/action-contract.md.
+ */
+export const AttackEntitySpec = z.strictObject({
+  type: z.literal('ATTACK_ENTITY'),
+  args: z.strictObject({ entityId: EntityNumberSchema }),
+});
 export const PauseAndAskUserSpec = z.strictObject({
   type: z.literal('PAUSE_AND_ASK_USER'),
   args: z.strictObject({ question: z.string().min(1).max(500) }),
@@ -136,6 +149,7 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   RefuelKnownGeneratorSpec,
   DigBlockSpec,
   CraftItemSpec,
+  AttackEntitySpec,
   PauseAndAskUserSpec,
 ]);
 export type ActionSpec = z.infer<typeof ActionSpecSchema>;
@@ -195,6 +209,11 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
       .min(1)
       .max(9),
   }),
+  /**
+   * The observed entity took damage (its health fell, or the server showed it hurt when its
+   * health is not known) or died, after the action started.
+   */
+  z.strictObject({ kind: z.literal('ENTITY_ATTACKED'), entityId: EntityNumberSchema }),
   z.strictObject({ kind: z.literal('USER_NOTIFIED') }),
 ]);
 export type Postcondition = z.infer<typeof PostconditionSchema>;
@@ -259,6 +278,8 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
         })),
       };
     }
+    case 'ATTACK_ENTITY':
+      return { kind: 'ENTITY_ATTACKED', entityId: spec.args.entityId };
     case 'PAUSE_AND_ASK_USER':
       return { kind: 'USER_NOTIFIED' };
   }
@@ -292,6 +313,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   RefuelKnownGeneratorSpec.extend(actionMetadata),
   DigBlockSpec.extend(actionMetadata),
   CraftItemSpec.extend(actionMetadata),
+  AttackEntitySpec.extend(actionMetadata),
   PauseAndAskUserSpec.extend(actionMetadata),
 ]);
 export type Action = z.infer<typeof ActionSchema>;

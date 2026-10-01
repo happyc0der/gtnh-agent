@@ -10,6 +10,11 @@ import type { SafetyContext } from '../safety/safety-policy.ts';
 export interface RouterContext {
   safety: SafetyContext;
   routing: RoutingConfig;
+  /**
+   * The client may fight (minecraft.combat.enabled, MC_ENABLE_COMBAT). Without it System 1
+   * never decides DEFEND: it retreats or pauses as before.
+   */
+  combatEnabled?: boolean;
 }
 
 /** Deterministic ordering for item names so ties never depend on object key order. */
@@ -26,6 +31,15 @@ export function inventoryItems(state: GameState): Record<string, number> {
 export function homeLocation(ctx: RouterContext): NamedLocation | null {
   const home = ctx.safety.locations.get(ctx.routing.homeLocationName);
   return home !== undefined && home.kind === 'safe' ? home : null;
+}
+
+/** A known safe location the player is not already at: somewhere RETREAT_HOME can go. */
+export function canRetreat(state: GameState, ctx: RouterContext): boolean {
+  const home = homeLocation(ctx);
+  const p = playerPosition(state);
+  return (
+    home !== null && p !== null && distance(p, home.position) > ctx.safety.config.interactionReach
+  );
 }
 
 export function isWithin(state: GameState, target: Position, radius: number): boolean {

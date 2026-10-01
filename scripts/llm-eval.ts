@@ -286,6 +286,12 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
         }
         break;
       }
+      case 'ATTACK_ENTITY': {
+        const target = state.entities.find((e) => e.id === a.args.entityId);
+        if (target === undefined) bad(`entity ${a.args.entityId} is not listed`);
+        else if (!target.attackable) bad(`${target.type} ${target.id} is not attackable`);
+        break;
+      }
       case 'OBSERVE_STATE':
       case 'MOVE_TO':
       case 'WAIT':

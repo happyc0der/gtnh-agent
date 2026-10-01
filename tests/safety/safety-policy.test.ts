@@ -332,7 +332,8 @@ describe('rule 5: no world/base modification', () => {
     'CONFIGURE_CABLE',
     'BUILD_MULTIBLOCK',
     'DROP_ITEM',
-    'ATTACK_ENTITY',
+    'ATTACK_PLAYER',
+    'FIGHT_MOB',
     'USE_LAVA_BUCKET',
     'RUN_SHELL_COMMAND',
   ])('%s is forbidden', (type) => {
@@ -359,6 +360,25 @@ describe('rule 5: no world/base modification', () => {
     'BREAK_BLOCK',
     'DIG_BLOCK ',
   ])('only exactly DIG_BLOCK is exempt from the DIG keyword: %j stays forbidden', (type) => {
+    expect(classifyActionType(type)).toBe('forbidden');
+    const r = evaluateAction(
+      { ...action({ type: 'WAIT', args: { durationMs: 100 } }), type },
+      makeState(),
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['FORBIDDEN_MODIFICATION']);
+  });
+
+  it.each([
+    'ATTACK',
+    'attack_entity',
+    'ATTACK_ENTITIES',
+    'ATTACK_ENTITY ',
+    'KILL_ENTITY',
+    'HUNT_ANIMAL',
+    'SHOOT_ENTITY',
+  ])('only exactly ATTACK_ENTITY is exempt from the ATTACK keyword: %j stays forbidden', (type) => {
     expect(classifyActionType(type)).toBe('forbidden');
     const r = evaluateAction(
       { ...action({ type: 'WAIT', args: { durationMs: 100 } }), type },

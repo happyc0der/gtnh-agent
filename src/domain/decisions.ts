@@ -1,8 +1,12 @@
 import { z } from 'zod';
 
-/** The only decisions System 1 (deterministic now, possibly a model later) may return. */
+/**
+ * The only decisions System 1 (deterministic now, possibly a model later) may return.
+ * DEFEND: fight back (ATTACK_ENTITY) against a hostile when retreating is impossible or worse.
+ */
 export const DECISIONS = [
   'RETREAT_HOME',
+  'DEFEND',
   'EAT',
   'EMPTY_INVENTORY',
   'REFUEL_GENERATOR',
@@ -21,6 +25,12 @@ export const REASON_CODES = [
   'HAZARD_NEARBY',
   'HOSTILES_NEARBY',
   'UNCLASSIFIED_ENTITY_NEARBY',
+  /** A hostile the agent can fight is within striking distance (or coming, with no retreat). */
+  'HOSTILE_IN_REACH',
+  /** A creeper (or a hostile that might be one) is near: never fight, back off. */
+  'CREEPER_NEARBY',
+  /** More hostiles near than the agent may fight at once: flee. */
+  'TOO_MANY_HOSTILES',
   'LOW_HEALTH',
   'HUNGRY',
   'NO_APPROVED_FOOD',

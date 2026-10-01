@@ -1,4 +1,5 @@
 import type { Action } from '../domain/actions.ts';
+import { ENGAGE_RADIUS } from '../domain/combat.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
@@ -159,6 +160,25 @@ export function checkPreconditions(
       if (have(action.args.fuelItem) < action.args.quantity) {
         failures.push(
           `inventory holds ${have(action.args.fuelItem)} ${action.args.fuelItem}, need ${action.args.quantity}`,
+        );
+      }
+      break;
+    }
+
+    case 'ATTACK_ENTITY': {
+      // The player does not move: the target must be close enough to come within strike
+      // reach during the burst (a hostile walks up; an animal must already be near).
+      requirePosition();
+      if (!state.nearbyEntities.known) {
+        failures.push('nearby entities are unknown');
+        break;
+      }
+      const target = state.nearbyEntities.value.entities.find((e) => e.id === action.args.entityId);
+      if (target === undefined) {
+        failures.push(`entity ${action.args.entityId} is not near the player`);
+      } else if (target.distance > ENGAGE_RADIUS) {
+        failures.push(
+          `${target.type} ${target.id} is ${target.distance.toFixed(1)} blocks away (engages within ${ENGAGE_RADIUS})`,
         );
       }
       break;

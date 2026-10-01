@@ -2,8 +2,10 @@ import type { ActionSpec } from '../domain/actions.ts';
 import type { Position } from '../domain/common.ts';
 import type { DecisionResult } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
+import { assessDefense } from './defend.ts';
 import {
   availableApprovedFood,
+  canRetreat,
   findStorage,
   generatorNeedingFuel,
   isWithin,
@@ -63,6 +65,20 @@ export function proposeAction(
         },
         reason: why,
       };
+
+    case 'DEFEND': {
+      // The same assessment the router made: the nearest hostile the agent may fight.
+      const defense = assessDefense(state, ctx, { possible: canRetreat(state, ctx) });
+      if (defense.kind !== 'defend') {
+        return pause('DEFEND was decided but there is no hostile the agent may fight now.');
+      }
+      const t = defense.target;
+      return {
+        kind: 'action',
+        spec: { type: 'ATTACK_ENTITY', args: { entityId: t.id } },
+        reason: `${why}: ${t.type} ${t.id} at ${t.distance.toFixed(1)} blocks`,
+      };
+    }
 
     case 'EAT': {
       const food = availableApprovedFood(state, ctx);

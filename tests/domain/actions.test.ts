@@ -34,6 +34,7 @@ const oneOfEach: ActionSpec[] = [
   },
   { type: 'DIG_BLOCK', args: { position: { x: -8, y: 200, z: -11 } } },
   { type: 'CRAFT_ITEM', args: { recipe: 'chest', times: 2, craftingTableId: 'table.main' } },
+  { type: 'ATTACK_ENTITY', args: { entityId: 1234 } },
   { type: 'PAUSE_AND_ASK_USER', args: { question: 'ok?' } },
 ];
 

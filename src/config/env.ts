@@ -108,6 +108,16 @@ export const CraftingConfigSchema = z.strictObject({
 });
 export type CraftingConfig = z.infer<typeof CraftingConfigSchema>;
 
+/**
+ * Fighting (ATTACK_ENTITY, and System 1's DEFEND; the fifth world-changing ability). Off by
+ * default. It also needs the movement fence: the player and its target must be inside it.
+ * When and what the agent may fight is limited further by safety.combat.
+ */
+export const CombatConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+});
+export type CombatConfig = z.infer<typeof CombatConfigSchema>;
+
 export const MinecraftConfigSchema = z
   .strictObject({
     host: z.string().min(1).max(253).default('127.0.0.1'),
@@ -142,6 +152,7 @@ export const MinecraftConfigSchema = z
     containers: ContainersConfigSchema.prefault({}),
     digging: DiggingConfigSchema.prefault({}),
     crafting: CraftingConfigSchema.prefault({}),
+    combat: CombatConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -309,6 +320,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_ENABLE_CONTAINERS'))) set(['minecraft', 'containers', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_DIGGING'))) set(['minecraft', 'digging', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_CRAFTING'))) set(['minecraft', 'crafting', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_COMBAT'))) set(['minecraft', 'combat', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))
     set(['safety', 'boundary', 'min'], xyz('SAFETY_BOUNDARY_MIN', v));

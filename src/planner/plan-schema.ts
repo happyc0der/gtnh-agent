@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { ActionSpecSchema, ActionTypeSchema } from '../domain/actions.ts';
 import { DiggableBlockSchema } from '../domain/blocks.ts';
+import { ENTITY_CATEGORIES, WeaponSchema } from '../domain/combat.ts';
 import {
   BlockPositionSchema,
   DimensionSchema,
   EntityIdSchema,
+  EntityNumberSchema,
   ItemCountsSchema,
   PositionSchema,
 } from '../domain/common.ts';
@@ -20,6 +22,8 @@ export const MAX_PLAN_STEPS = 16;
 
 /** Diggable blocks passed to the planner (the nearest ones). */
 export const MAX_COMPACT_RESOURCES = 32;
+/** Creatures passed to the planner (the nearest ones). */
+export const MAX_COMPACT_ENTITIES = 16;
 
 export const PlanStepSchema = z.strictObject({
   /** 1-based, sequential. */
@@ -149,6 +153,28 @@ export const CompactStateSchema = z.strictObject({
   knownRecipe: z
     .strictObject({ target: z.string(), missingComponents: ItemCountsSchema })
     .nullable(),
+  /**
+   * Creatures near the player, nearest first (players and objects are left out).
+   * ATTACK_ENTITY may target only one with `attackable` true (a melee or ranged hostile, or an
+   * unowned, grown farm animal), and only when `fightProblems` is empty. `distance` is blocks
+   * from feet to feet; `health` is null when not known.
+   */
+  entities: z
+    .array(
+      z.strictObject({
+        id: EntityNumberSchema,
+        type: z.string(),
+        category: z.enum(ENTITY_CATEGORIES),
+        distance: z.number().min(0),
+        health: z.number().nullable(),
+        attackable: z.boolean(),
+      }),
+    )
+    .max(MAX_COMPACT_ENTITIES),
+  /** What ATTACK_ENTITY would strike with (item null: a bare hand); null when unknown. */
+  weapon: WeaponSchema.nullable(),
+  /** Why fighting is unsafe right now (e.g. CREEPER_NEARBY, LOW_HEALTH); empty when it is not. */
+  fightProblems: z.array(z.string()).max(8),
   /** The world's clock (null when unknown): phase day / evening / night / dawn. */
   time: z
     .strictObject({

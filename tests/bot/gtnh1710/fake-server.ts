@@ -11,6 +11,7 @@ import {
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
 import { encodeStack, FakeChestSim, type FakeChest, type FakeRecipe } from './fake-chests.ts';
+import { FakeCombatSim, type FakeCombatOptions } from './fake-combat.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
 import {
   blockChangeFrame,
@@ -78,6 +79,8 @@ export interface FakeServerOptions {
   rejectClicks?: number[];
   /** How the server treats digging (C07); vanilla by default. */
   dig?: FakeDigOptions;
+  /** Mobs with health, and how the server treats attacks (C02); see fake-combat.ts. */
+  combat?: FakeCombatOptions;
 }
 
 export interface ReceivedPacket {
@@ -223,7 +226,7 @@ export function spawnFrame(e: FakeEntity): Buffer {
           i32(e.typeId),
           fixed(e.x, e.y, e.z),
           Buffer.from([0, 0, 0]), // yaw, pitch, head yaw
-          Buffer.from([0x66, 0, 0, 0, 0, 0x7f]), // some DataWatcher bytes the client must not need
+          Buffer.from([0x66, 0x41, 0xa0, 0, 0, 0x7f]), // DataWatcher: health (index 6) 20.0
           i32(0), // no thrower
         ]),
       );
@@ -240,6 +243,8 @@ export class FakeGtnhServer {
   readonly chestSim: FakeChestSim;
   /** Digging (C07): what the client sent, what broke, what was picked up. */
   readonly digSim: FakeDigSim;
+  /** Fighting (C02): mobs with health, the attacks, kills, explosions, the player's health. */
+  readonly combatSim: FakeCombatSim;
   readonly keepAliveEchoes: number[] = [];
   idleTicks = 0;
   statusPings = 0;
@@ -294,6 +299,7 @@ export class FakeGtnhServer {
       recipes: options.recipes ?? [],
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
+      combat: options.combat ?? {},
     };
     this.chestSim = new FakeChestSim({
       chests: this.#opts.chests,
@@ -324,6 +330,14 @@ export class FakeGtnhServer {
       this.chestSim,
       this.#opts.dig,
     );
+    this.combatSim = new FakeCombatSim(this.#opts.combat, this.chestSim, {
+      feet: () => {
+        const p = this.confirmedPositions.at(-1);
+        return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
+      },
+      health: this.#opts.health.health,
+      food: this.#opts.health.food,
+    });
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
@@ -339,6 +353,7 @@ export class FakeGtnhServer {
   close(): Promise<void> {
     for (const t of this.#timers) clearInterval(t);
     this.digSim.stop();
+    this.combatSim.stop();
     for (const s of this.#sockets) s.destroy();
     return new Promise((resolve) => this.#server.close(() => resolve()));
   }
@@ -509,6 +524,14 @@ export class FakeGtnhServer {
           sim.setSender(send);
           sim.onJoin();
           this.digSim.setSenders(send, (f) => this.broadcast(f));
+          this.combatSim.setSenders(
+            send,
+            (f) => this.broadcast(f),
+            (reason) => {
+              send(encodeFrame(0x40, encodeString(JSON.stringify({ text: reason }))));
+              socket.end();
+            },
+          );
           send(
             plugin(
               'REGISTER',
@@ -533,7 +556,11 @@ export class FakeGtnhServer {
               send(
                 encodeFrame(
                   0x06,
-                  Buffer.concat([f32(h.health), Buffer.from([0, h.food]), f32(h.saturation)]),
+                  Buffer.concat([
+                    f32(this.combatSim.playerHealth),
+                    Buffer.from([0, h.food]),
+                    f32(h.saturation),
+                  ]),
                 ),
               );
             }
@@ -558,6 +585,9 @@ export class FakeGtnhServer {
           }
           case 0x07:
             this.digSim.handle(r);
+            break;
+          case 0x02:
+            this.combatSim.handle(r);
             break;
           default:
             sim?.handle(frame.packetId, r);
@@ -671,6 +701,7 @@ export class FakeGtnhServer {
       }
     }
     for (const entity of o.entities) send(spawnFrame(entity));
+    this.combatSim.onJoin();
     const timer = setInterval(
       () => send(encodeFrame(0x00, i32(Math.floor(Math.random() * 1e6)))),
       o.keepAliveEveryMs,

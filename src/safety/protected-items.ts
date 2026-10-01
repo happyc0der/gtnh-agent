@@ -19,6 +19,10 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
       // Every item the recipe MAY consume: the client picks among them, so all must be allowed.
       return ingredientRequirements(RECIPES[spec.args.recipe]).flatMap((r) => [...r.anyOf]);
     // DIG_BLOCK uses an empty hand and only adds the block's drop to the inventory.
+    // ATTACK_ENTITY wears the weapon it strikes with: the client picks it from the hotbar at
+    // run time, so the policy checks every allowlisted weapon the player carries instead
+    // (src/safety/combat-checks.ts).
+    case 'ATTACK_ENTITY':
     case 'OBSERVE_STATE':
     case 'MOVE_TO':
     case 'WAIT':
