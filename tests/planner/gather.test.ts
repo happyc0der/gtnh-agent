@@ -139,6 +139,19 @@ describe('GATHER chooses each action in code, from the observation', () => {
     });
   });
 
+  it('says when blocks are in view but no walk reaches a spot to dig them from', () => {
+    // Seen live: logs 7 blocks away behind leaf bushes ("none left" read as "look elsewhere").
+    const { state, progress } = setup([sand(8, 64, 1, null), sand(9, 64, 1, null)]);
+    expect(chooseGatherAction(gather(), progress, state, opts())).toEqual({
+      kind: 'end',
+      end: 'no-target',
+      why:
+        '2 minecraft:sand in view, but no walk from here reaches a spot to dig one from ' +
+        '(walled in by leaves, plants or water, too high, or something would fall)',
+      skip: [],
+    });
+  });
+
   it('a walk that did not bring its block within reach is not repeated: the block is skipped', () => {
     const block = sand(8, 64, 1, { x: 7.5, y: 64, z: 1.5 });
     const { state, progress } = setup([block]);
