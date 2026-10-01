@@ -59,7 +59,12 @@ describe('hostile tactics', () => {
   it('anything that explodes, or might (unidentified), is never fought', () => {
     expect(mayExplode('SpecialMobs.GravityCreeper')).toBe(true);
     expect(mayExplode('SpecialMobs#200')).toBe(true);
+    expect(mayExplode('minecraft:Fireball')).toBe(true);
     expect(mayExplode('minecraft:Zombie')).toBe(false);
+    // Any unidentified entity might be a modded exploding mob; a known animal is not.
+    expect(mayExplode('etfuturum#3', 'unclassified')).toBe(true);
+    expect(mayExplode('minecraft:Cow', 'passive')).toBe(false);
+    expect(mayExplode('player', 'player')).toBe(false);
   });
 });
 

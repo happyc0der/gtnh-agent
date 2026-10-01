@@ -7,6 +7,7 @@ import type { NearbyEntity, TrackedMachine } from '../bot/gtnh1710/world-model.t
 import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
 import type { AgentConfig } from '../config/env.ts';
 import type { ActionSpec } from '../domain/actions.ts';
+import { attackRefusal } from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { openDatabase } from '../persistence/database.ts';
@@ -81,6 +82,29 @@ export function summarizeDiggable(state: GameState, limit = 10): Record<string, 
   };
 }
 
+/**
+ * The creatures the agent could name as an ATTACK_ENTITY target, nearest first: id, what it
+ * is, distance, health, and whether it may be attacked at all (and why not).
+ */
+export function summarizeEntities(state: GameState, limit = 12): Record<string, unknown> | null {
+  if (!state.nearbyEntities.known) return null;
+  const e = state.nearbyEntities.value;
+  const weapon = state.player.weapon.known ? state.player.weapon.value : null;
+  return {
+    weapon:
+      weapon === null ? null : `${weapon.item ?? 'bare hand'} (${weapon.damage} per full hit)`,
+    nearest: e.entities.slice(0, limit).map((x) => {
+      const refusal = attackRefusal(x);
+      return (
+        `#${x.id} ${x.type} ${x.distance.toFixed(1)} m` +
+        `${x.health === null ? '' : `, health ${x.health}`}` +
+        `${refusal === null ? ', attackable' : `: never (${refusal})`}`
+      );
+    }),
+    recentDeaths: e.recentDeaths.map((d) => `#${d.id} ${d.type} at ${d.at}`),
+  };
+}
+
 export function summarizeObservation(
   state: GameState,
   info: ConnectionInfo,
@@ -107,8 +131,10 @@ export function summarizeObservation(
     },
     threats: state.nearbyThreats.known ? state.nearbyThreats.value : null,
     nearbyEntities: nearby.map(
-      (e) => `${e.distance.toFixed(1).padStart(5)} m  ${e.category.padEnd(12)} ${e.name}`,
+      (e) =>
+        `${e.distance.toFixed(1).padStart(5)} m  ${e.category.padEnd(12)} ${e.name} #${e.entityId}`,
     ),
+    combat: summarizeEntities(state),
     hazards: state.environmentHazards.known
       ? {
           scanRadius: state.environmentHazards.value.scanRadius,
@@ -200,6 +226,7 @@ export function movementStatus(config: AgentConfig): Record<string, unknown> {
       heights:
         m.fence === null ? null : `y=${m.fence.min.y}..${m.fence.min.y + d.maxHeightAboveFence}`,
     },
+    combat: { enabled: config.minecraft.combat.enabled, ...config.safety.combat },
   };
 }
 
@@ -467,6 +494,66 @@ export async function runLiveDig(
   }
 }
 
+export interface LiveAttackResult {
+  result: CycleResult;
+  /** The creatures, the weapon and recent deaths after the burst (when known). */
+  entities: Record<string, unknown> | null;
+  health: number | null;
+  info: ConnectionInfo;
+}
+
+/**
+ * ONE human-requested ATTACK_ENTITY on the live server: validated (the target and the moment
+ * by the safety policy), executed by the client's checked burst and verified, like the
+ * agent's own. Ctrl+C halts the burst at its next tick.
+ */
+export async function runLiveAttack(
+  config: AgentConfig,
+  dbPath: string,
+  entityId: number,
+  log?: (line: string) => void,
+): Promise<LiveAttackResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const result = await runUserAction(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: null,
+              clock: systemClock,
+              newId: randomIds,
+            },
+            { type: 'ATTACK_ENTITY', args: { entityId } },
+            `requested by the operator: attack --entity ${entityId}`,
+          );
+          const state = await client.observe();
+          return {
+            result,
+            entities: summarizeEntities(state),
+            health: state.player.health.known ? state.player.health.value : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bounded auto-run
 // ---------------------------------------------------------------------------
@@ -552,7 +639,7 @@ export function describeView(client: Gtnh1710Client, state: GameState): string {
   const entities = client.world
     .nearbyEntities(16)
     .slice(0, 4)
-    .map((e) => `${e.name}[${e.category}] ${e.distance.toFixed(1)}m`)
+    .map((e) => `${e.name}#${e.entityId}[${e.category}] ${e.distance.toFixed(1)}m`)
     .join(', ');
   // Other players exactly as the agent tracks them (compare with their own F3 X/Y/Z).
   const players = client.world

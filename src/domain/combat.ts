@@ -54,9 +54,10 @@ const VANILLA_TACTICS: ReadonlyMap<string, HostileTactic> = new Map<string, Host
   ['minecraft:Giant', 'avoid'],
   ['minecraft:EnderDragon', 'avoid'],
   ['minecraft:WitherBoss', 'avoid'],
-  ['minecraft:Fireball', 'avoid'],
+  // Projectiles: a ghast's fireball and a wither skull explode where they hit.
+  ['minecraft:Fireball', 'explodes'],
+  ['minecraft:WitherSkull', 'explodes'],
   ['minecraft:SmallFireball', 'avoid'],
-  ['minecraft:WitherSkull', 'avoid'],
 ]);
 
 /**
@@ -92,8 +93,13 @@ export function hostileTactic(type: string): HostileTactic {
   return 'unknown';
 }
 
-/** Explodes, or might (an unidentified hostile could be a creeper variant). */
-export function mayExplode(type: string): boolean {
+/**
+ * Explodes, or might: an unidentified hostile could be a creeper variant, and an entity of
+ * any unidentified kind (category `unclassified`) could be a modded exploding mob.
+ */
+export function mayExplode(type: string, category: EntityCategory = 'hostile'): boolean {
+  if (category === 'unclassified') return true;
+  if (category !== 'hostile') return false;
   const tactic = hostileTactic(type);
   return tactic === 'explodes' || tactic === 'unknown';
 }

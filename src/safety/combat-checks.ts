@@ -43,8 +43,9 @@ export function candidateOf(e: NearbyEntity): AttackCandidate {
 /**
  * Every reason the player should not fight now (empty when it may):
  *  - its entity picture is not known;
- *  - a creeper, primed TNT or an unidentified hostile (it could be a creeper variant) within
- *    combat.creeperFleeRadius: back off instead;
+ *  - within combat.creeperFleeRadius, a creeper, primed TNT, an exploding projectile, or
+ *    anything unidentified (an unidentified hostile could be a creeper variant, an unidentified
+ *    mob a modded exploding one): back off instead;
  *  - more hostiles within the threat radius than combat.maxHostilesToFight: flee instead;
  *  - an unidentified entity within the threat radius;
  *  - health or food below the fighting thresholds.
@@ -60,15 +61,15 @@ export function fightProblems(state: GameState, config: SafetyConfig): FightProb
   } else {
     const entities = state.nearbyEntities.value.entities;
     const explosive = entities.find(
-      (e) =>
-        e.category === 'hostile' && mayExplode(e.type) && e.distance <= combat.creeperFleeRadius,
+      (e) => mayExplode(e.type, e.category) && e.distance <= combat.creeperFleeRadius,
     );
     if (explosive !== undefined) {
+      const sure = explosive.category === 'hostile' && hostileTactic(explosive.type) === 'explodes';
       problems.push({
         code: 'CREEPER_NEARBY',
         message:
           `${explosive.type} ${explosive.distance.toFixed(1)} blocks away ` +
-          `${hostileTactic(explosive.type) === 'explodes' ? 'explodes' : 'might explode (unidentified)'}: back off`,
+          `${sure ? 'explodes' : 'might explode (unidentified)'}: back off`,
       });
     }
     const hostiles = hostilesWithin(entities, config.hostileThreatRadius);

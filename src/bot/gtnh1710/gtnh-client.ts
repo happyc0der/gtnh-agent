@@ -1479,8 +1479,8 @@ export class Gtnh1710Client implements MinecraftClient {
 
   /**
    * Why the moment is unsafe for fighting, or null: the entity picture is incomplete, an
-   * unidentified entity is within the threat radius, or something that explodes (or might: an
-   * unidentified hostile) is within the scan. Checked before the burst and every tick of it.
+   * unidentified entity is within the threat radius, or something that explodes (or might:
+   * anything unidentified) is within the scan. Checked before the burst and every tick of it.
    */
   #fightMomentProblem(): string | null {
     if (!this.#world.entitiesReady(this.#opts.clock.now())) {
@@ -1494,7 +1494,11 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     const explosive = this.#world
       .nearbyEntities(ENTITY_SCAN_RADIUS)
-      .find((e) => e.category === 'hostile' && mayExplode(e.name));
+      .find(
+        (e) =>
+          (e.category === 'hostile' || e.category === 'unclassified') &&
+          mayExplode(e.name, e.category),
+      );
     if (explosive !== undefined) {
       return `${explosive.name} ${explosive.distance.toFixed(1)} blocks away may explode: back off`;
     }

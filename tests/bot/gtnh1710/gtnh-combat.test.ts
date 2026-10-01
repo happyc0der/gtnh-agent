@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runUserAction, syncConfigToDatabase } from '../../../src/app/agent-loop.ts';
+import { runLiveAttack } from '../../../src/app/live-agent.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig } from '../../../src/config/env.ts';
 import { createAction, type ActionSpec } from '../../../src/domain/actions.ts';
@@ -313,6 +314,41 @@ describe('Gtnh1710Client fighting', () => {
         .summary,
     ).toMatch(/rejected \[TARGET_GONE\]/);
   }, 15_000);
+
+  it('cli attack: one operator-requested strike, checked and verified', async () => {
+    const fake = new FakeGtnhServer({
+      items: ITEMS,
+      inventory: [],
+      combat: {
+        mobs: [zombie(301, 2, 1), { entityId: 302, mobType: 92, ...east(3), health: 10, age: 0 }],
+      },
+    });
+    servers.push(fake);
+    const config = defaultConfig({
+      minecraft: {
+        host: '127.0.0.1',
+        port: await fake.listen(),
+        enableLiveConnection: true,
+        serverIdentityMarker: 'gtnh-agent-test',
+        connectTimeoutMs: 5_000,
+        initialStateGraceMs: 2_000,
+        movement: { enabled: true, fence: FENCE, stopFile },
+        combat: { enabled: true },
+      },
+    });
+    const out = await runLiveAttack(config, IN_MEMORY, 301);
+    expect(out.result.status).toBe('succeeded');
+    expect(out.entities).toMatchObject({
+      weapon: 'bare hand (1 per full hit)',
+      nearest: ['#302 minecraft:Cow 3.0 m, health 10, attackable'],
+      recentDeaths: [expect.stringMatching(/^#301 minecraft:Zombie at /)],
+    });
+    // An id that is not near the player: refused by the policy, nothing is sent.
+    const before = fake.combatSim.attacks.length;
+    const unknownTarget = await runLiveAttack(config, IN_MEMORY, 999);
+    expect(unknownTarget.result.summary).toMatch(/rejected \[TARGET_GONE\]/);
+    expect(fake.combatSim.attacks).toHaveLength(before);
+  }, 20_000);
 
   it('walking, chests and digging wait while a fight runs', async () => {
     const { server, client } = await start({

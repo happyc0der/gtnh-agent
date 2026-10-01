@@ -1,6 +1,6 @@
 # Local LLM integration
 
-> **A model has no execution authority.** It can only return one of eight bounded decisions, or
+> **A model has no execution authority.** It can only return one of nine bounded decisions, or
 > a plan or an escalation. Every decision passes the safety-first wrapper, every plan passes
 > `validatePlan`, and every step is validated again and executed, one per cycle, by the
 > `ActionExecutor`. A model cannot add action types, bypass the safety policy, lift a pause, run
@@ -92,6 +92,11 @@ afterwards, so those come back as invalid output.
   used if it validates; an invalid reply, timeout or error becomes `PAUSE_AND_ASK_USER`
   (`PROVIDER_OUTPUT_INVALID`). The factory never builds an unwrapped model provider.
 - The decision event records the model, the rule it applied and its latency (`factsUsed`).
+- **DEFEND** (fight back, with `MC_ENABLE_COMBAT=true`) is decided by code. The model sees a
+  `defend` fact (the router's own `assessDefense`), and rule 3 says to decide DEFEND when it is
+  true. With hostiles near, the router's decision (DEFEND, a retreat or a pause) is
+  safety-driven, so it stands and the model is not asked. A model's DEFEND anywhere else finds
+  no hostile it may fight and becomes a pause.
 
 ### Slow models and stale observations
 
@@ -109,7 +114,10 @@ The planner receives a `PlannerRequest`, never raw state or logs:
 - `sanitizeStateForPlanner()`: position, dimension, vitals, the top 20 inventory stacks, fill
   fraction, threat summary, machine/storage/generator ids, status, position and **distance from
   the player** (computed by code), the recipe target, and an explicit `unknownFields` list, so it
-  is told what is _not_ known instead of guessing.
+  is told what is _not_ known instead of guessing. Creatures near the player come with their id,
+  type, distance, health and `attackable` (computed by code), plus the weapon and the current
+  `fightProblems`, so a hunting plan can name a real target; the prompt allows `ATTACK_ENTITY`
+  only on an attackable creature, with no fight problems, when the task needs it.
 - The allowlisted action types, safety constraints (boundary, protected items, approved food/fuel,
   safe locations, forbidden keywords), the last N actions and a per-fingerprint failure summary.
 - It still contains a task goal, machine and container names, and the recipe target: operator and

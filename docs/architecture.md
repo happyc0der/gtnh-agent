@@ -13,7 +13,7 @@ flowchart TD
         MC["MinecraftClient interface"]
         MOCK["MockMinecraftClient<br/>(full simulation)"]
         MF["MineflayerClient<br/>(skeleton; cannot join GTNH)"]
-        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes; walks, uses chests,<br/>crafts and digs inside a fence)"]
+        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes; walks, uses chests,<br/>crafts, digs and fights inside a fence)"]
         MC --- G17
         MC --- MOCK
         MC --- MF
@@ -40,7 +40,7 @@ flowchart TD
     LOOP -- "state reliability" --> SAFE
     LOOP -- "GameState" --> S1
     S1M -. "wrapped by SafetyFirstDecisionProvider" .-> S1
-    S1 -- "Decision (8 values)" --> PROP
+    S1 -- "Decision (9 values)" --> PROP
     PROP -- "REQUEST_PLANNER" --> PLAN
     LLM -. "same PlannerProvider contract" .-> PLAN
     PLAN -- "Plan | Escalation (Zod-validated)" --> PROP
@@ -57,8 +57,8 @@ flowchart TD
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **MinecraftClient** (`src/bot`)                                  | The only boundary to the game. `observe()` returns a normalized `GameState`; `perform()` takes a `ValidatedAction` token.                                                            | Performs actions, but only ones minted by the executor (runtime-checked).                                                                                   |
 | **Safety policy** (`src/safety`)                                 | Pure functions: state reliability, dangers, per-action rules, protected items, boundaries, forbidden-modification denylist, repeated-failure cap.                                    | **Veto over everything.** No model can override it.                                                                                                         |
-| **Deterministic router** (`src/system1/deterministic-router.ts`) | System 1: prioritized, transparent rules that map a state to one of 8 bounded decisions, with confidence, reason codes and facts.                                                    | Chooses _what kind_ of step; cannot execute.                                                                                                                |
-| **System-1 model** (`src/llm/ollama-decision-provider.ts`)       | Opt-in (`decisions.provider: ollama`): a local model picks one of the 8 decisions from facts computed by code.                                                                       | Always wrapped in `SafetyFirstDecisionProvider`: the router's safety decisions and every pause win, invalid output becomes PAUSE.                           |
+| **Deterministic router** (`src/system1/deterministic-router.ts`) | System 1: prioritized, transparent rules that map a state to one of 9 bounded decisions, with confidence, reason codes and facts.                                                    | Chooses _what kind_ of step; cannot execute.                                                                                                                |
+| **System-1 model** (`src/llm/ollama-decision-provider.ts`)       | Opt-in (`decisions.provider: ollama`): a local model picks one of the 9 decisions from facts computed by code.                                                                       | Always wrapped in `SafetyFirstDecisionProvider`: the router's safety decisions and every pause win, invalid output becomes PAUSE.                           |
 | **Action proposer** (`src/system1/action-proposer.ts`)           | Turns one decision into exactly one allowlisted action (approaching a target first if it is out of reach).                                                                           | Proposes only.                                                                                                                                              |
 | **LLM planner** (`src/llm/ollama-planner-provider.ts`)           | Opt-in (`planner.provider: ollama`): returns a strict `Plan` or an `Escalation`. Called only for `REQUEST_PLANNER`, and only when the task has no open plan.                         | **None.** Plans are validated and stored; one step per cycle goes through the executor like any other action. Plans that ask for approval wait for a human. |
 | **ActionExecutor** (`src/executor`)                              | The single controlled path: schema → safety → preconditions → persist → execute → observe → verify → persist.                                                                        | Sole minter of `ValidatedAction` (lint-enforced).                                                                                                           |
@@ -350,6 +350,76 @@ GTNH changes many vanilla recipes, so the table is never trusted blindly. In lay
 other, and walking is refused while items are on the cursor or in a crafting grid: walking away
 closes a window server-side.
 
+## Combat
+
+`ATTACK_ENTITY` (one bounded burst against one entity) and System 1's `DEFEND` decision, both
+off unless `MC_ENABLE_COMBAT=true`. The knowledge (whom, with what, how far, how often) is in
+`src/domain/combat.ts`; the rules about the moment (`fightProblems`) and the target
+(`attackChecks`) are in `src/safety/combat-checks.ts`, shared by the safety policy and System 1
+(`src/system1/defend.ts`), so both refuse alike. `src/bot/gtnh1710/combat.ts` holds the live
+client's helpers (entity metadata, line of sight, aim, weapon choice). The server rules it relies
+on are in [GTNH compatibility: combat](gtnh-compatibility.md#combat-2026-09-30). In layers:
+
+1. **Observation.** `nearbyEntities` lists every entity within the entity scan (16 blocks),
+   nearest first, at most 32: id, type, category (hostile, passive, unclassified, player), kind
+   (mob, player, object), distance, health (the server's DataWatcher), whether it is owned (a
+   name tag, a saddle) or a baby, and when the server last showed it hurt. It also lists the
+   deaths seen since joining. It is unknown in older snapshots and whenever the threats are, and
+   the safety policy checks it against `nearbyThreats` (same radius, same counts).
+   `player.weapon` is the best allowlisted weapon in the hotbar, or a bare hand (unknown when
+   the hotbar is, or holds neither). The planner sees the creatures with `attackable`, the
+   weapon and the current `fightProblems`.
+2. **System 1** considers fighting only when hostiles are the only danger. `assessDefense`
+   decides:
+   - **flee** (retreat or pause, adding `CREEPER_NEARBY` or `TOO_MANY_HOSTILES` to the reasons)
+     when anything that explodes, or might (an unidentified entity), is within
+     `creeperFleeRadius`, or more than `maxHostilesToFight` hostiles are near;
+   - **nothing** (retreat or pause, as without combat) when the moment is otherwise unsafe
+     (low health or food, an unidentified entity near, entities unknown) or no hostile near may
+     be attacked;
+   - **DEFEND** the nearest hostile that may be attacked when retreating is impossible or worse:
+     with a home to go to, only when it is within striking distance (2.9 blocks) and dies in at
+     most 3 full hits (its health is known), since turning away would only take its blows; with
+     no home, or already home, when it is within striking distance or a melee mob is within 8
+     blocks. A skeleton at range is not chased.
+
+   DEFEND carries `HOSTILES_NEARBY`, so `SafetyFirstDecisionProvider` keeps it over a model's
+   choice. A model's prompt says to pick DEFEND only when the summary's `defend` fact (the same
+   function) is true. The proposer turns DEFEND into `ATTACK_ENTITY` on the target, or into a
+   pause when there is no hostile it may fight.
+
+3. **The executor validates as usual** (`attackChecks`): the target is listed (`TARGET_GONE` is
+   stale, so a planner's plan is re-made), may be attacked at all (`NOT_ATTACKABLE`), is inside
+   the boundary, the moment is safe (`UNSAFE_ATTACK`), farm animals only for a task and never
+   with hostiles near, no protected weapon is carried; preconditions: within 8 blocks. The
+   danger gate allows `ATTACK_ENTITY` only when hostiles are the only danger.
+4. **The client re-checks it all** on its own entity picture: combat enabled, a fence, presence
+   ticks, no walk, chest, crafting, dig or other fight; the target tracked, attackable, inside
+   the fence and within 8 blocks; nothing that may explode within 16 blocks and nothing
+   unidentified within `threatRadius`.
+5. **The burst.** It selects the best allowlisted weapon in the hotbar (vanilla axes, never a
+   stack with NBT data) or an empty slot, never anything else: a held item's own left-click
+   code could do anything. Then, every tick, while the target is within reach (a bare hand
+   2.2 blocks, a weapon 2.9, or 4.5 with a clear line of sight), it strikes as a player does:
+   C05 look, C0A swing, C02 attack, one full hit per 12 ticks, at most 8 swings or 5 s. The
+   player never moves. A blow that may kill waits while GTNH's kill explosion would leave the
+   player under 4 health. Every tick it stops for the stop file, `halt()`, a server correction
+   or a lost connection (failure), and for the target dying or leaving, any damage taken (so
+   System 1 decides again), or something dangerous appearing.
+6. **Verification:** `ENTITY_ATTACKED` passes when the target is seen dying (a death status
+   after the action started), its health fell, or (health unknown) the server showed it hurt.
+   A target that vanished without a death status fails.
+
+`cli attack --live --entity <id>` runs one burst for a person (origin `user`); `observe` and
+`watch` print the entity ids. Walking, chests, crafting, digging and fighting exclude each
+other. The decision rules' ordering follows the priority chains of open-source bots such as
+AltoClef's `MobDefenseChain` and mineflayer-pvp (both MIT): ideas only, no code was copied.
+
+**Not covered yet:** blocking with a sword (GTNH's swords deal no damage), bows, armour,
+potions, Infernal Mobs elites (indistinguishable without the mod's own channel; see the
+compatibility notes), and moving while fighting (chasing, side-stepping, backing off from a
+creeper: System 1 retreats home instead).
+
 ## Why code, not AI, enforces safety
 
 - **Determinism and auditability.** A rule like "never deposit a protected item" must hold every
@@ -375,6 +445,9 @@ closes a window server-side.
 | Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
+Fighting adds one packet to the live client's list: C02 Use Entity with the "attack" action
+(never "interact"), only with `MC_ENABLE_COMBAT=true` and the fence.
+
 ## Directory map
 
 ```
@@ -384,7 +457,7 @@ src/safety       safety policy, boundaries, protected items, forbidden-action cl
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner (opt-in)
-src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, chests, crafting, dig in a fence), Mineflayer skeleton
+src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, chests, crafting, dig, fight in a fence), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest book (generated) and goal selection

@@ -143,6 +143,18 @@ describe('DEFEND: fight back only when retreating is impossible or worse', () =>
     });
   });
 
+  it('an unidentified mob beyond the threat radius still forbids a fight (it might explode)', () => {
+    expect(
+      route((w) => {
+        w.mobs = [zombie(1, near(2, 0, w.player.position))];
+        w.unclassified = [near(0, 13, w.player.position)];
+      }),
+    ).toMatchObject({
+      decision: 'PAUSE_AND_ASK_USER',
+      reasonCodes: ['HOSTILES_NEARBY', 'CREEPER_NEARBY', 'ALREADY_AT_SAFE_LOCATION'],
+    });
+  });
+
   it('overwhelmed: flees instead of fighting more than two', () => {
     expect(
       route((w) => {
