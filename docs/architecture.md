@@ -348,10 +348,22 @@ dusk, it turns to food by day:
   pause only starves: nothing heals offline, and on Hard a food bar at 0 starves the player to
   death). The safety policy still refuses everything else while the food bar is that low; for
   the food task by day it lets only the actions that get food run: walks, `EXPLORE`s, and the
-  dig of a listed garden (`getsFood` in `src/safety/safety-policy.ts`). Low health, hostiles,
-  hazards or leaving the work area still stop it. Hunting keeps its own limits (food 8 and
+  dig of a listed garden (`getsFood` in `src/safety/safety-policy.ts`), also with low health,
+  since health lost to an empty food bar comes back only with food (seen live: at food 0 the
+  trip's walks cost health, it fell below `minHealth` while the planner planned, and the
+  `EXPLORE` toward the garden it had seen was refused). Hostiles, hazards, the night or leaving
+  the work area still stop it. At food 0 a walk or dig does not stop for a drop in health (it is
+  hunger's, every few seconds); threats still stop it. Hunting keeps its own limits (food 8 and
   health 14: no healing below food 8 here, and a kill may explode), so a starving agent's route
   offers gardens only, and says why.
+- **No food and no food trip** (the evening, the night): System 1 pauses where the player
+  stands. It never walks home for hunger: walking burns food, and home has none (seen live: at
+  food 2 the retreat home walked 143 blocks at dusk, and the food bar reached 0).
+- **Death.** A player that dies stays dead until its client asks to respawn, and whoever logs
+  in next finds it dead. The live client asks once, a second after its health comes as 0, as a
+  player clicks Respawn, and logs "THE PLAYER DIED" with where. Its items lie where it died; it
+  comes back at the spawn point with full health and the food HungerOverhaul gives a respawned
+  player on Hard (12). Seen live once, 2026-10-01: starved on Hard after the food bar reached 0.
 - **Stuck.** A food session that got no food, filled no food bar and saw no new ground is
   stuck; after `maxStuckSessions` in a row play stops and says so.
 
@@ -669,7 +681,8 @@ blocks at the player's feet level, all on one level (a fence with a height range
    block, and nothing dangerous (or unloaded, or unnamed) touches those blocks. Stretches are
    checked exactly: the swept body, not samples.
 3. Every 0.2-block step is re-checked just before it is sent (the world may have changed). The walk
-   stops on a server correction, a health drop, a hostile (not a calm spider: see
+   stops on a server correction, a health drop (not at food 0, where the drops are hunger's), a
+   hostile (not a calm spider: see
    [Combat](#combat)) or unidentified entity within `threatRadius` (not for a retreat, which is
    how the agent escapes one), the stop file, `halt()`
    (Ctrl+C) or a lost connection. After the last step it waits 5 ticks for a server correction
@@ -697,6 +710,12 @@ middle of a step up). So while nothing else runs, twice a second, it checks what
 (`checkSupport` in `terrain.ts`: any block that is not air in the player's box, reaching 0.55
 below the feet); in the air, it falls onto the block below with vanilla gravity, only when walking
 is allowed, within the fence, at most 3 blocks (no damage) and with no hazard next to the landing.
+Feet the server holds up but that hang a little above a block (a player saved mid-jump at logout
+joins 0.42 above the sand) come to rest on it the same way (`restingY`), and an observation lands
+them first, so the night pit sees the player on the ground. A walk starts from the block the
+player stands on: the one under the centre of its feet, or, on the edge of a neighbour (its box,
+0.3 each way, reaches over it), that neighbour (`standingCell`; seen live: a walk stopped at
+z 9.1 over air, on the edge of the block at z 8, and every walk from there was refused).
 
 **Breaking leaves on the way** (2026-10-01, fake server only so far). Seen live: in a Hot Forest
 the logs the agent needed stood 7 blocks away, walled in by one- and two-block-high leaf bushes;
@@ -1224,8 +1243,10 @@ step re-checked, threats stopping `MOVE_TO`, digging's checks, all as above.
    `maxPathLength` and the distance left. The best one becomes an ordinary checked walk
    (`#walkTo`, MOVE_TO's rules: threats stop it). If the walker will not plan it, the next
    candidate is tried.
-3. It stops, OK, at the goal, after `maxDistance` blocks walked, at the boundary, when no spot
-   gets closer (water, a cliff, a wall), when two hops in a row gain less than a block (stuck),
+3. It stops, OK, at the goal, after `maxDistance` blocks walked (or nearly: when the few blocks
+   left are too short for a hop that a full-length one would make, it says "walked nearly the
+   whole maxDistance", not "no way further"), at the boundary, when no spot gets closer (water, a
+   cliff, a wall), when two hops in a row gain less than a block (stuck),
    when it gets dark, or at 12 hops / 3 minutes; it fails on anything that stops a walk (a threat,
    a correction, health, the stop file, `halt()`, the connection). The result says how far it got
    and what it saw.
@@ -1323,7 +1344,11 @@ grid) can be applied later.
   left out of the route and of `exploration.places`: it is in view already, with a stand spot a
   walk reaches, or out of reach from here. A point an `EXPLORE` found "no way further" toward is
   a dead end (`src/app/dead-ends.ts`): while the player is within 24 blocks of where that
-  happened, places and biome patches within 12 blocks of the point are left out too. The biome
+  happened, places and biome patches within 12 blocks of the point are left out too. A compass
+  direction that led nowhere (from where it could not start, or from where it stopped short) is
+  a dead end the same way: near there it shows no room left, so the "new ground" hint names
+  another. An open plan's next step that the repeated-failure rule would refuse ends the plan,
+  and the planner is asked again, told why, instead of the step being refused for a human. The biome
   hint never names the patch the player stands in: it names one farther away, or says to
   explore on through it. Seen live: the model planned `EXPLORE` toward remembered logs it could
   not reach, again and again, even when told it would be refused.
