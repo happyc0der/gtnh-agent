@@ -583,13 +583,19 @@ export class Gtnh1710Client implements MinecraftClient {
     this.#close('disconnected by the agent', true);
   }
 
-  observe(): Promise<GameState> {
+  async observe(): Promise<GameState> {
     if (this.#phase !== 'play') {
-      return Promise.reject(
-        new Error(
-          this.#closedReason === null ? 'not connected' : `connection lost: ${this.#closedReason}`,
-        ),
+      throw new Error(
+        this.#closedReason === null ? 'not connected' : `connection lost: ${this.#closedReason}`,
       );
+    }
+    // A player the server put in the air lands first (#keepSupported), so what is observed,
+    // the night pit's "standing on a block" above all, sees it on the ground. Seen live: saved
+    // mid-jump at logout, the player joined 0.42 above the sand, and the session went offline
+    // for the night ("no pit: the player is not standing on a block").
+    await this.#keepSupported();
+    if (this.#phase !== 'play') {
+      throw new Error(`connection lost: ${this.#closedReason ?? 'closed'}`);
     }
     const now = this.#opts.clock.now();
     const last = this.#world.lastPacketAt;
@@ -597,9 +603,7 @@ export class Gtnh1710Client implements MinecraftClient {
     // timestamp stops advancing, so the safety policy's staleness check fires.
     const asOf = last !== null && now.getTime() - last.getTime() > FRESHNESS_WINDOW_MS ? last : now;
     this.#survey(false);
-    return Promise.resolve(
-      this.#withInteractables(this.#withWorkAreas(this.#world.toGameState(asOf))),
-    );
+    return this.#withInteractables(this.#withWorkAreas(this.#world.toGameState(asOf)));
   }
 
   /**
