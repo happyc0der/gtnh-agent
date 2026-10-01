@@ -523,6 +523,26 @@ describe('accepting a plan drops the steps planned from a view it replaces', () 
     expect(g.requests).toHaveLength(2);
   });
 
+  it('a plan digging blocks that give nothing the task needs is asked again, told so', async () => {
+    // Seen live: "dig the nearest gravel block" eight times at sand, dirt and grass.
+    const digSand = plan([
+      { type: 'DIG_BLOCK', args: { position: { x: 0, y: 64, z: 5 } } },
+      { type: 'DIG_BLOCK', args: { position: { x: 1, y: 64, z: 5 } } },
+    ]);
+    const g = await gathering(
+      sandRows(2),
+      { kind: 'plan', plan: digSand },
+      gatherOf('minecraft:sand', 1),
+    );
+    if (g.world.task === null) throw new Error('no task');
+    g.world.task.requirements = { 'minecraft:gravel': 9 };
+    await g.cycle();
+    expect(g.requests).toHaveLength(2);
+    expect(g.requests[1]?.journal.at(-1)).toMatch(
+      /Your plan would dig the wrong blocks \(it digs blocks that give nothing the task needs \(9 minecraft:gravel\): \(0, 64, 5\) is minecraft:sand/,
+    );
+  });
+
   it('a dropped step is not checked: one that would be refused does not reject the plan', async () => {
     // Seen live: a starving agent's food plan, EXPLORE, GATHER, then EAT_FOOD of the garden
     // block (no food), was rejected whole for its third step, and the agent paused.

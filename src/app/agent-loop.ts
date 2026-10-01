@@ -23,6 +23,7 @@ import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
+import { DIG_YIELDS } from '../goals/route-book.ts';
 import {
   chooseGatherAction,
   GATHER,
@@ -1107,6 +1108,50 @@ function updatePlanProgress(
 }
 
 /**
+ * A plan's DIG_BLOCK steps that dig a listed block giving nothing the task still needs (a
+ * resource goal: currentTask.requirements), as a refusal like refusedFirstStep's, with a note
+ * that names them and the GATHER that digs the right blocks; null when every dig gives
+ * something needed, or the task names no requirements. Seen live: "dig the nearest gravel
+ * block" eight times at blocks that were sand, dirt and grass; every dig was valid, and none
+ * gave gravel.
+ */
+function digsForNothing(plan: Plan, state: GameState): ReturnType<typeof refusedFirstStep> {
+  const needs = state.currentTask?.requirements;
+  if (needs === undefined || Object.keys(needs).length === 0 || !state.nearbyBlocks.known) {
+    return null;
+  }
+  const listed = state.nearbyBlocks.value.resources;
+  const useless: string[] = [];
+  for (const s of plan.steps) {
+    if (s.action.type !== 'DIG_BLOCK') continue;
+    const at = s.action.args.position;
+    const block = listed.find(
+      (r) => r.position.x === at.x && r.position.y === at.y && r.position.z === at.z,
+    )?.block;
+    if (block === undefined) continue; // not listed: the executor refuses it as NOT_DIGGABLE
+    if (DIG_YIELDS[block].some((y) => needs[y.item] !== undefined)) continue;
+    useless.push(`(${at.x}, ${at.y}, ${at.z}) is ${block}`);
+  }
+  if (useless.length === 0) return null;
+  const first = plan.steps.find((s) => s.action.type === 'DIG_BLOCK')?.action as ActionSpec;
+  const wanted = Object.entries(needs)
+    .map(([item, n]) => `${n} ${item}`)
+    .join(', ');
+  const why = `it digs blocks that give nothing the task needs (${wanted}): ${useless.join('; ')}`;
+  const tail = '. To get a block, plan GATHER {block, count}: code digs only that block.';
+  const head = 'Your plan would dig the wrong blocks';
+  const room = MAX_JOURNAL_LINE - head.length - tail.length - 3;
+  return {
+    step: `DIG_BLOCK x${useless.length}`,
+    why,
+    note: `${head} (${why.slice(0, Math.max(0, room))})${tail}`,
+    action: first,
+    lastFailure: null,
+    repeated: false,
+  };
+}
+
+/**
  * Refusals a new plan cannot change: the observation is not trustworthy, or a danger allows
  * only escapes. System 1 deals with those, not the planner.
  */
@@ -1473,7 +1518,7 @@ async function consultPlanner(
   // way the executor will, and if it would refuse it for a reason the planner can change,
   // asks once more, saying why; should that answer not do, the first plan stands and the
   // executor refuses its step as before.
-  const refused = refusedFirstStep(deps, plan, state, ctx, taskId);
+  const refused = digsForNothing(plan, state) ?? refusedFirstStep(deps, plan, state, ctx, taskId);
   if (refused !== null) {
     repos.memory.appendJournal(
       taskId,
