@@ -88,15 +88,31 @@ flowchart TD
 
 ## System 1: who decides each cycle
 
-System 1 chooses the kind of step each cycle, one of the nine decisions
+System 1 chooses the kind of step each cycle, one of the ten decisions
 (`decisions.provider`, built in `src/app/providers.ts`):
 
 - **The rule router** (`deterministic`, the default): `routeDecision`
   (`src/system1/deterministic-router.ts`), a pure, prioritized rule list over the observation.
 - **A local model** (`ollama`): `OllamaDecisionProvider` picks a decision from facts computed by
   code, always inside `SafetyFirstDecisionProvider`. The router's binding decisions (safety,
-  every pause) win without asking it, invalid output pauses, and a pause, retreat, meal or
+  every pause) win without asking it, invalid output pauses, and a pause, retreat, meal, rest or
   fight the facts rule out is overruled (see [local-llm-integration.md](local-llm-integration.md)).
+
+Low health with nothing threatening the player and the food bar high enough to heal
+(`minHungerToHeal`, 8: HungerOverhaul stops natural healing below it) is `REST`: a `WAIT` of
+`restMs` (30 s) where it stands, again until health is back above `minHealth`. Too hungry to
+heal, it retreats or pauses as before; during the night-shelter task the shelter's steps come
+first (the pit is where resting is safe). Seen live: at 8 health with no food, the retreat
+home was 100 blocks through a forest, and the pause there healed nothing (nothing heals
+offline).
+
+A retreat (`RETREAT_HOME`) from a creature goes back along the agent's own trail when that
+is nearer than home (`src/app/trail.ts`): the agent remembers where it stood out of danger
+lately (a point every 4 blocks, the last 48, never in a night task), and the newest point 8 to
+48 blocks back, on the far side of the player from the nearest creature and clear of every one
+by the threat radius plus 4, becomes the safe location `trail` for that cycle. Two failed
+retreats along the trail from the same block send it home instead. Seen live: one spider sent
+the agent 108 blocks back to its spawn.
 
 ### A model at decision points
 
@@ -547,6 +563,19 @@ say what was dropped, and the next plan starts from what the agent then sees. Th
 is validated before anything is dropped, so an unsafe step anywhere still rejects it. A plan a
 human wrote (`cli task-add --plan`) is never trimmed.
 
+Then code dry-runs the plan's start on the current observation (`refusedFirstStep` in
+`src/app/agent-loop.ts`): its leading `GATHER` steps as they will run (one with nothing to dig
+is skipped), and the first other step through the executor's own checks (`validateCandidate`:
+schema, safety policy, preconditions, the repeated-failure rule). When that step would be
+refused for a reason a new plan can change, or every `GATHER` would find nothing to dig, the
+planner is asked once more with why (a journal line of at most 300 characters, the request's
+limit); should that answer not do, the first plan stands. Danger and an unreliable observation
+are System 1's, not the plan's, and never asked again about. Seen live: the same `EXPLORE`
+toward an unreachable tree a third time, `EXPLORE` toward the forest the agent stood in (1.6
+blocks away), and "GATHER logs, GATHER gravel" again and again with neither in reach. The
+model often answers the same plan when told: what changes its answer is what the request
+offers (see [The planner and play](#the-planner-and-play)).
+
 ### Code-made blueprints: known safe steps
 
 Some work is planned by code, not by the planner: the night shelter and the way out of it in
@@ -835,12 +864,17 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
    (`resource-scan.ts`):
    - `resources`: allowlisted blocks within 16 blocks, at or above the feet level, nearest
      first, plus sand, gravel and clay one level below the feet and the nearest 8 dirt and
-     grass blocks of the floor (a sample: the floor is everywhere). At most 64; past that,
-     the declared radius shrinks so the list stays complete within it. The block the player
-     stands on is never listed.
+     grass blocks of the floor (a sample: the floor is everywhere). At most 64, shared fairly
+     between kinds (`nearestOfEachKind`: every kind's nearest before any kind's second), so a
+     kind not listed has none within the declared radius; that radius shrinks only when more
+     kinds are found than the list holds. Seen live: 31 grass, 27 sand and 6 leaves filled the
+     64 nearest, and the logs a `GATHER` wanted were never listed. The block the player stands
+     on is never listed. `standAt` is a spot a walk from the player reaches
+     (`reachableFeet` in `src/bot/gtnh1710/terrain.ts`: the walker's own moves, flooded from the
+     feet), so a block walled in by leaves, plants or water has none.
    - `removed`: positions where the client saw such a block turn into air, while they stay air.
 
-   The planner gets the nearest 32 resources, and `tools`: the allowlisted tools the player
+   The planner gets 32 resources, shared between kinds the same way, and `tools`: the allowlisted tools the player
    carries (from the inventory names, where a worn tool shows its damage), with the digs each
    has left and the blocks it digs faster. Protected tools are left out. To gather many
    blocks, a plan uses one `GATHER` step, which code turns into these digs and the walks to
@@ -1179,6 +1213,15 @@ integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
   toward a known place, or toward the least-seen direction with room; EXPLORE last in a plan
   (code drops any step after it, see [Accepting a plan](#accepting-a-plan)); never in the
   evening or at night. (`pnpm cli places` prints the same summary.)
+- What the request offers is what the model plans toward, so code leaves out what would mislead
+  it. A remembered place the current resource scan covers (its sphere, at or above the feet) is
+  left out of the route and of `exploration.places`: it is in view already, with a stand spot a
+  walk reaches, or out of reach from here. A point an `EXPLORE` found "no way further" toward is
+  a dead end (`src/app/dead-ends.ts`): while the player is within 24 blocks of where that
+  happened, places and biome patches within 12 blocks of the point are left out too. The biome
+  hint never names the patch the player stands in: it names one farther away, or says to
+  explore on through it. Seen live: the model planned `EXPLORE` toward remembered logs it could
+  not reach, again and again, even when told it would be refused.
 - Play (`src/app/scouting.ts`): when the agent can explore and world memory holds fewer than 50
   chunks, play begins with ONE bounded session on a `scout-area` task ("explore two or three
   directions..."), before the quests. It ends once 100 chunks are seen, at the session's limits,
@@ -1193,6 +1236,15 @@ off unless `MC_ENABLE_COMBAT=true`. The knowledge (whom, with what, how far, how
 (`src/system1/defend.ts`), so both refuse alike. `src/bot/gtnh1710/combat.ts` holds the live
 client's helpers (entity metadata, line of sight, aim, weapon choice). The server rules it relies
 on are in [GTNH compatibility: combat](gtnh-compatibility.md#combat-2026-09-30). In layers:
+
+**Danger without a fight.** Whatever combat allows, a creature is a danger (`HOSTILES_NEARBY`,
+so System 1 retreats) within the threat radius (10 blocks), and a hostile that shoots
+(skeletons, witches, blazes and their Special Mobs variants: `hostileTactic`) anywhere in the
+entity scan. Being hurt in the last 15 s (`player.lastHurtAt`, from the server's health
+updates) with a hostile about counts too. A walk threats do not stop (an escape) also keeps
+going when the player is hit. Seen live: a giant skeleton shot the agent from beyond the
+threat radius; its retreat stopped at the first arrow, nothing then counted as danger, and it
+walked back into range (20 health to 8).
 
 1. **Observation.** `nearbyEntities` lists every entity within the entity scan (16 blocks),
    nearest first, at most 32: id, type, category (hostile, passive, unclassified, player), kind
