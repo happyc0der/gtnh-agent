@@ -22,6 +22,7 @@ import type { Box } from './geometry.ts';
 export const SURVEY_KINDS = [
   'log',
   'leaves',
+  'dirt',
   'sand',
   'gravel',
   'clay',
@@ -150,12 +151,22 @@ export function roomToEdge(
 // ---------------------------------------------------------------------------
 
 /** Kinds offered to the planner as places to go (leaves go with logs; lava is a hazard). */
-export const PLACE_KINDS = ['log', 'sand', 'gravel', 'clay', 'water', 'stone', 'ore'] as const;
+export const PLACE_KINDS = [
+  'log',
+  'dirt',
+  'sand',
+  'gravel',
+  'clay',
+  'water',
+  'stone',
+  'ore',
+] as const;
 export type PlaceKind = (typeof PLACE_KINDS)[number];
 
 /** The fewest seen blocks of a kind for a chunk to count as a place to gather it. */
 export const PLACE_MINIMUM: Readonly<Record<PlaceKind, number>> = {
   log: 3,
+  dirt: 4,
   sand: 8,
   gravel: 3,
   clay: 2,

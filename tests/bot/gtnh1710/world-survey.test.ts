@@ -82,7 +82,8 @@ describe('what a survey counts', () => {
     expect(surveyKindOf('minecraft:log2')).toBe('log');
     expect(surveyKindOf('minecraft:flowing_water')).toBe('water');
     expect(surveyKindOf('minecraft:cobblestone')).toBe('stone');
-    expect(surveyKindOf('minecraft:grass')).toBeNull();
+    expect(surveyKindOf('minecraft:grass')).toBe('dirt'); // grass drops dirt when dug
+    expect(surveyKindOf('minecraft:sandstone')).toBeNull();
     for (const ore of [
       'minecraft:iron_ore',
       'minecraft:lit_redstone_ore',
@@ -234,7 +235,9 @@ describe('the survey tracker', () => {
     expect(new Set(keys).size).toBe(keys.length);
     expect(drained.find((c) => c.chunkX === 0 && c.chunkZ === 0)?.counts.sand).toBe(1);
     expect(tracker.drain()).toEqual([]);
-    expect(describeSightings(drained)).toMatch(/^\d+ chunk\(s\) \(Hot Desert \d+\); sand 1/);
+    expect(describeSightings(drained)).toMatch(
+      /^\d+ chunk\(s\) \(Hot Desert \d+\); dirt \d+, sand 1/,
+    );
     expect(describeSightings([])).toMatch(/^nothing/);
   });
 

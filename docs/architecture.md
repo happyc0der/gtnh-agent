@@ -744,7 +744,7 @@ counts as seen only when:
 
 A survey covers the 5 x 5 chunks around the player, when it enters another chunk, every 30 s, and
 after every EXPLORE hop (17-52 ms on real chunks). Per chunk it keeps the dominant biome (decoded
-from the chunk data, named from `biomes.ts`), counts of logs, leaves, sand, gravel, clay, water,
+from the chunk data, named from `biomes.ts`), counts of logs, leaves, dirt (dirt and grass), sand, gravel, clay, water,
 lava, stone (and cobblestone) and ores (by block name; the material is never guessed), and up to
 3 seen positions of each. The agent loop stores the sightings at every observation and after
 every action (`world_chunks`, migration 005). A new sighting is merged with the stored one (the

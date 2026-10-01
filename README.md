@@ -53,7 +53,7 @@ for a task) in a short burst, and System 1 decides `DEFEND` when retreating is i
 **Exploring (2026-09-30, fake server only so far):** with `MC_MOVEMENT_MODE=follow` the walk/dig
 fence becomes a play area that moves with the player, inside the safety boundary. `EXPLORE` walks
 toward a direction or a point in checked hops, in daylight only, and the agent remembers what it
-has seen per chunk (biome, logs, sand, gravel, clay, water, stone, ores; only what a player could
+has seen per chunk (biome, logs, dirt, sand, gravel, clay, water, stone, ores; only what a player could
 see). The planner gets the known places, and play scouts the area once before the quests. See
 [Exploring and world memory](#exploring-and-world-memory).
 

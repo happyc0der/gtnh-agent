@@ -47,6 +47,10 @@ const BY_NAME: ReadonlyMap<string, SurveyKind> = new Map<string, SurveyKind>([
   ['minecraft:log2', 'log'],
   ['minecraft:leaves', 'leaves'],
   ['minecraft:leaves2', 'leaves'],
+  // Dirt, and the blocks that drop it when dug (the quest book's first quest wants 8 dirt).
+  ['minecraft:dirt', 'dirt'],
+  ['minecraft:grass', 'dirt'],
+  ['minecraft:mycelium', 'dirt'],
   ['minecraft:sand', 'sand'],
   ['minecraft:gravel', 'gravel'],
   ['minecraft:clay', 'clay'],
