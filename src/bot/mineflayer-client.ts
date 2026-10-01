@@ -132,6 +132,8 @@ export class MineflayerClient implements MinecraftClient {
       machines: [],
       storage: [],
       craftingTables: [],
+      interactables: unknown('block windows are not implemented for Mineflayer'),
+      blockWindow: null,
       openContainerId: null,
       currentTask: null,
       knownRecipeState: null,
@@ -173,6 +175,9 @@ export class MineflayerClient implements MinecraftClient {
       case 'DIG_BLOCK':
       case 'PLACE_BLOCK':
       case 'CRAFT_ITEM':
+      case 'INTERACT_BLOCK':
+      case 'SMELT':
+      case 'TAKE_OUTPUT':
       case 'SUBMIT_QUEST':
       case 'CHECK_QUEST_BOX':
       case 'CLAIM_QUEST_REWARD':

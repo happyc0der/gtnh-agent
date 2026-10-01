@@ -297,6 +297,20 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
         if (!carried.has(a.args.item)) bad(`${a.args.item} is not carried`);
         break;
       }
+      case 'INTERACT_BLOCK':
+      case 'SMELT':
+      case 'TAKE_OUTPUT': {
+        const p = a.args.position;
+        const block = state.interactables.find(
+          (b) => b.position.x === p.x && b.position.y === p.y && b.position.z === p.z,
+        );
+        if (block === undefined) bad(`(${p.x}, ${p.y}, ${p.z}) is not a listed interactable block`);
+        else if (a.type !== 'INTERACT_BLOCK' && block.profile !== 'furnace') {
+          bad(`(${p.x}, ${p.y}, ${p.z}) is not a furnace`);
+        }
+        if (a.type === 'SMELT' && !carried.has(a.args.input)) bad(`${a.args.input} is not carried`);
+        break;
+      }
       case 'SUBMIT_QUEST':
       case 'CHECK_QUEST_BOX':
       case 'CLAIM_QUEST_REWARD':

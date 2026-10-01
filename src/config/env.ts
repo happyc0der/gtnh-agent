@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { EntityIdSchema, ItemNameSchema, LocationNameSchema } from '../domain/common.ts';
+import { ObservePatternSchema } from '../domain/interactions.ts';
 import { NamedLocationSchema, SafetyConfigSchema } from '../domain/safety.ts';
 import { checkPrivateHost, checkPrivateUrl } from './network.ts';
 
@@ -142,6 +143,20 @@ export const CraftingConfigSchema = z.strictObject({
 export type CraftingConfig = z.infer<typeof CraftingConfigSchema>;
 
 /**
+ * Interacting with blocks (INTERACT_BLOCK, SMELT, TAKE_OUTPUT; world-changing: the agent
+ * right-clicks blocks and moves items into and out of furnaces). Off by default. Only
+ * blocks with an interaction profile (src/domain/interactions.ts) are used; blocks without
+ * one only if listed in `observeOnly`, and then only LOOKED at (their window is opened,
+ * recorded and closed; nothing inside is ever clicked).
+ */
+export const InteractConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  /** Exact block registry names (`IronChest:BlockIronChest`) or whole mods (`IronChest:*`). */
+  observeOnly: z.array(ObservePatternSchema).max(100).default([]),
+});
+export type InteractConfig = z.infer<typeof InteractConfigSchema>;
+
+/**
  * Quest-book clicks (SUBMIT_QUEST, CHECK_QUEST_BOX, CLAIM_QUEST_REWARD on Better Questing's
  * channel). Off by default: a submit can hand items in. Reading the quest book needs no switch.
  */
@@ -185,6 +200,7 @@ export const MinecraftConfigSchema = z
     digging: DiggingConfigSchema.prefault({}),
     placing: PlacingConfigSchema.prefault({}),
     crafting: CraftingConfigSchema.prefault({}),
+    interact: InteractConfigSchema.prefault({}),
     questBook: QuestBookConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
@@ -371,6 +387,8 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_ENABLE_DIGGING'))) set(['minecraft', 'digging', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_PLACING'))) set(['minecraft', 'placing', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_CRAFTING'))) set(['minecraft', 'crafting', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_INTERACT'))) set(['minecraft', 'interact', 'enabled'], v === 'true');
+  if ((v = e('MC_INTERACT_OBSERVE_ONLY'))) set(['minecraft', 'interact', 'observeOnly'], list(v));
   if ((v = e('MC_ENABLE_QUEST_BOOK'))) set(['minecraft', 'questBook', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))

@@ -20,7 +20,9 @@ import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from
  * Deliberately absent: lava interaction, dropping items, combat, electrical-network or
  * multiblock changes, and rare-item consumption. Blocks are broken only by DIG_BLOCK and
  * placed only by PLACE_BLOCK, each only with the blocks on its allowlist
- * (src/domain/blocks.ts).
+ * (src/domain/blocks.ts). Blocks are right-clicked only by the window actions, and only
+ * blocks with an interaction profile or on the observe-only allowlist
+ * (src/domain/interactions.ts).
  */
 export const ACTION_TYPES = [
   'OBSERVE_STATE',
@@ -37,6 +39,9 @@ export const ACTION_TYPES = [
   'DIG_BLOCK',
   'PLACE_BLOCK',
   'CRAFT_ITEM',
+  'INTERACT_BLOCK',
+  'SMELT',
+  'TAKE_OUTPUT',
   'PAUSE_AND_ASK_USER',
   // Quest-book clicks (Better Questing): taken by the play loop, never by a plan.
   'SUBMIT_QUEST',
@@ -172,6 +177,38 @@ export const CraftItemSpec = z.strictObject({
     craftingTableId: EntityIdSchema.nullable(),
   }),
 });
+/** Largest number of items one SMELT puts into a furnace slot (one stack). */
+export const MAX_SMELT_QUANTITY = 64;
+
+/**
+ * Right-click (open) ONE block that has an interaction profile, or that the operator
+ * allowlisted to look at, with an empty hand, and report its window
+ * (src/domain/interactions.ts).
+ */
+export const InteractBlockSpec = z.strictObject({
+  type: z.literal('INTERACT_BLOCK'),
+  args: z.strictObject({ position: BlockPositionSchema }),
+});
+/**
+ * Put exactly `quantity` of `input` into a furnace's input slot and `fuelQuantity` of an
+ * approved `fuel` into its fuel slot (0 = no fuel added). The furnace keeps them and
+ * smelts on its own (200 ticks per item); TAKE_OUTPUT collects the result later.
+ */
+export const SmeltSpec = z.strictObject({
+  type: z.literal('SMELT'),
+  args: z.strictObject({
+    position: BlockPositionSchema,
+    input: ItemNameSchema,
+    quantity: z.int().min(1).max(MAX_SMELT_QUANTITY),
+    fuel: ItemNameSchema,
+    fuelQuantity: z.int().min(0).max(MAX_SMELT_QUANTITY),
+  }),
+});
+/** Take everything in a furnace's output slot, which must hold `item`, into the inventory. */
+export const TakeOutputSpec = z.strictObject({
+  type: z.literal('TAKE_OUTPUT'),
+  args: z.strictObject({ position: BlockPositionSchema, item: ItemNameSchema }),
+});
 export const PauseAndAskUserSpec = z.strictObject({
   type: z.literal('PAUSE_AND_ASK_USER'),
   args: z.strictObject({ question: z.string().min(1).max(500) }),
@@ -216,6 +253,9 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   DigBlockSpec,
   PlaceBlockSpec,
   CraftItemSpec,
+  InteractBlockSpec,
+  SmeltSpec,
+  TakeOutputSpec,
   PauseAndAskUserSpec,
   SubmitQuestSpec,
   CheckQuestBoxSpec,
@@ -296,6 +336,23 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
       )
       .min(1)
       .max(9),
+  }),
+  /** A window of the block at the position was opened and seen (still open, unless observe-only). */
+  z.strictObject({ kind: z.literal('BLOCK_WINDOW_SEEN'), position: BlockPositionSchema }),
+  /** The inventory lost exactly the input and fuel, and the furnace window shows them. */
+  z.strictObject({
+    kind: z.literal('FURNACE_LOADED'),
+    position: BlockPositionSchema,
+    input: ItemNameSchema,
+    quantity: z.int().min(1).max(MAX_SMELT_QUANTITY),
+    fuel: ItemNameSchema,
+    fuelQuantity: z.int().min(0).max(MAX_SMELT_QUANTITY),
+  }),
+  /** The inventory gained exactly what the client took from the furnace's output slot. */
+  z.strictObject({
+    kind: z.literal('FURNACE_OUTPUT_TAKEN'),
+    position: BlockPositionSchema,
+    item: ItemNameSchema,
   }),
   z.strictObject({ kind: z.literal('USER_NOTIFIED') }),
   /** The server's quest book records the quest as completed (and only consume items left). */
@@ -384,6 +441,12 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
         })),
       };
     }
+    case 'INTERACT_BLOCK':
+      return { kind: 'BLOCK_WINDOW_SEEN', position: spec.args.position };
+    case 'SMELT':
+      return { kind: 'FURNACE_LOADED', ...spec.args };
+    case 'TAKE_OUTPUT':
+      return { kind: 'FURNACE_OUTPUT_TAKEN', ...spec.args };
     case 'PAUSE_AND_ASK_USER':
       return { kind: 'USER_NOTIFIED' };
     case 'SUBMIT_QUEST':
@@ -433,6 +496,9 @@ export const ActionSchema = z.discriminatedUnion('type', [
   DigBlockSpec.extend(actionMetadata),
   PlaceBlockSpec.extend(actionMetadata),
   CraftItemSpec.extend(actionMetadata),
+  InteractBlockSpec.extend(actionMetadata),
+  SmeltSpec.extend(actionMetadata),
+  TakeOutputSpec.extend(actionMetadata),
   PauseAndAskUserSpec.extend(actionMetadata),
   SubmitQuestSpec.extend(actionMetadata),
   CheckQuestBoxSpec.extend(actionMetadata),

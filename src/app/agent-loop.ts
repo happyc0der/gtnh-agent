@@ -300,6 +300,9 @@ function rememberContainers(repos: Repositories, state: GameState | null): void 
   for (const s of state.storage) {
     if (s.items.known) repos.memory.rememberContainer(s.id, s.items.value, state.timestamp);
   }
+  // The window of a block the agent opened (a profile's, or an observe-only block's): its
+  // layout is learned per block (window_layouts), the material for a new profile.
+  if (state.blockWindow !== null) repos.windowLayouts.record(state.blockWindow);
 }
 
 /**
@@ -656,10 +659,15 @@ function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'):
 /**
  * Safety refusals that only say a step no longer matches what is observed, not that it is
  * dangerous: NOT_DIGGABLE means the block is not in the current list of observed diggable
- * blocks (already dug, or out of the scan since the player moved). The step is still
+ * blocks (already dug, or out of the scan since the player moved); NOT_INTERACTABLE the
+ * same for blocks to interact with (a furnace out of the scan, or gone). The step is still
  * refused; only the reaction differs (see isStaleRejection).
  */
-const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set(['NOT_DIGGABLE', 'NOT_PLACEABLE']);
+const STALE_VIOLATION_CODES: ReadonlySet<string> = new Set([
+  'NOT_DIGGABLE',
+  'NOT_PLACEABLE',
+  'NOT_INTERACTABLE',
+]);
 
 /**
  * A planner's step rejected only because it no longer fits the world NOW: preconditions

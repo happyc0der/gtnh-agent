@@ -224,9 +224,9 @@ describe('entity packets', () => {
       y: 2,
       z: 3,
     });
-    expect(decodeFmlRuntimeMessage(Buffer.from([1, 9, 9]))).toEqual({
+    expect(decodeFmlRuntimeMessage(Buffer.from([0, 9, 9]))).toEqual({
       type: 'fml-other',
-      discriminator: 1,
+      discriminator: 0,
     });
     expect(() => decodeFmlRuntimeMessage(Buffer.from([2, 0, 0]))).toThrow(ProtocolError);
   });

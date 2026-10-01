@@ -110,6 +110,27 @@ describe('configuration', () => {
     ).toThrow();
   });
 
+  it('interacting with blocks is off unless enabled; observe-only lists exact blocks or whole mods', () => {
+    expect(defaultConfig().minecraft.interact).toEqual({ enabled: false, observeOnly: [] });
+    const { config } = loadConfig({
+      cwd: emptyDir(),
+      env: {
+        MC_ENABLE_INTERACT: 'true',
+        MC_INTERACT_OBSERVE_ONLY: 'appliedenergistics2:*, IronChest:BlockIronChest',
+      },
+    });
+    expect(config.minecraft.interact).toEqual({
+      enabled: true,
+      observeOnly: ['appliedenergistics2:*', 'IronChest:BlockIronChest'],
+    });
+    for (const bad of ['*', 'IronChest', 'IronChest:Block*']) {
+      expect(
+        () => loadConfig({ cwd: emptyDir(), env: { MC_INTERACT_OBSERVE_ONLY: bad } }),
+        bad,
+      ).toThrow(/observeOnly/);
+    }
+  });
+
   it('rejects invalid values with a readable error', () => {
     expect(() => loadConfig({ cwd: emptyDir(), env: { SAFETY_MIN_HEALTH: 'lots' } })).toThrow(
       /must be a number/,

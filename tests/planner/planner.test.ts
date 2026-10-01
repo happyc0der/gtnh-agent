@@ -231,10 +231,13 @@ describe('planner request and mock planner', () => {
 
   it('the request carries the allowlist and constraints', () => {
     const r = request();
-    expect(r.allowedActions).toHaveLength(14);
+    expect(r.allowedActions).toHaveLength(17);
     expect(r.allowedActions).toContain('DIG_BLOCK');
     expect(r.allowedActions).toContain('PLACE_BLOCK');
     expect(r.allowedActions).toContain('CRAFT_ITEM');
+    expect(r.allowedActions).toEqual(
+      expect.arrayContaining(['INTERACT_BLOCK', 'SMELT', 'TAKE_OUTPUT']),
+    );
     expect(r.safetyConstraints.protectedItems).toEqual([
       'minecraft:diamond',
       'minecraft:nether_star',
@@ -317,7 +320,7 @@ describe('planner request and mock planner', () => {
       exploration,
     });
     expect(r.allowedActions).toContain('EXPLORE');
-    expect(r.allowedActions).toHaveLength(15);
+    expect(r.allowedActions).toHaveLength(18);
     expect(r.exploration?.places).toEqual([
       {
         resource: 'log',

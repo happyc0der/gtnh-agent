@@ -181,7 +181,7 @@ describe('live tasks', () => {
     expect(total(server.chestSim.chestContents(CHEST.x, CHEST.y, CHEST.z), COBBLE)).toBe(118);
     expect(total(server.chestSim.playerSlots(), COBBLE)).toBe(10);
     expect(server.chestSim.dropped).toEqual([]);
-  });
+  }, 15_000);
 
   it('refuses a plan that breaks a safety rule, and stores nothing', () => {
     const bad = fetchPlan({

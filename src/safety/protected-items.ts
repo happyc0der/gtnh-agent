@@ -21,10 +21,18 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
     case 'CRAFT_ITEM':
       // Every item the recipe MAY consume: the client picks among them, so all must be allowed.
       return ingredientRequirements(RECIPES[spec.args.recipe]).flatMap((r) => [...r.anyOf]);
+    case 'SMELT':
+      // The fuel counts even when none is added: a protected item is never named as fuel.
+      return [spec.args.input, spec.args.fuel];
+    case 'TAKE_OUTPUT':
+      // Taking a protected item out of a furnace moves it, like a withdrawal.
+      return [spec.args.item];
     // DIG_BLOCK uses an empty hand and only adds the block's drop to the inventory.
+    // INTERACT_BLOCK opens a window and looks; it never moves an item.
     // SUBMIT_QUEST may hand items in, but which depends on the quest book: the rule that
     // keeps protected items out of a submit is in quest-book-rules.ts. A checkbox and a
     // claim take nothing.
+    case 'INTERACT_BLOCK':
     case 'SUBMIT_QUEST':
     case 'CHECK_QUEST_BOX':
     case 'CLAIM_QUEST_REWARD':

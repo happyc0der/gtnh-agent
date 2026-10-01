@@ -11,7 +11,15 @@ import {
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
 import { FakeQuestBookSim, type FakeQuestBookOptions } from './fake-better-questing.ts';
-import { encodeStack, FakeChestSim, type FakeChest, type FakeRecipe } from './fake-chests.ts';
+import {
+  encodeStack,
+  FakeChestSim,
+  type FakeChest,
+  type FakeFurnace,
+  type FakeModBlock,
+  type FakeRecipe,
+  type FakeSmelting,
+} from './fake-chests.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
 import { FakePlaceSim, type FakeBody, type FakePlaceOptions } from './fake-placing.ts';
 import {
@@ -78,6 +86,13 @@ export interface FakeServerOptions {
   tables?: Array<{ x: number; y: number; z: number }>;
   /** The server's crafting recipes (for the 2x2 grid and crafting tables). */
   recipes?: FakeRecipe[];
+  /** Furnaces (their blocks must also be in blockOverrides: minecraft:furnace or lit_furnace). */
+  furnaces?: FakeFurnace[];
+  /** The server's smelting recipes and fuel burn ticks by item id. */
+  smelting?: FakeSmelting[];
+  fuels?: ReadonlyMap<number, number>;
+  /** Modded blocks whose GUI opens with Forge's OpenGui (their blocks in blockOverrides too). */
+  modBlocks?: FakeModBlock[];
   /** 1-based click numbers the server rejects (as if the client's claim did not match). */
   rejectClicks?: number[];
   /** How the server treats digging (C07); vanilla by default. */
@@ -346,6 +361,10 @@ export class FakeGtnhServer {
       chests: options.chests ?? [],
       tables: options.tables ?? [],
       recipes: options.recipes ?? [],
+      furnaces: options.furnaces ?? [],
+      smelting: options.smelting ?? [],
+      fuels: options.fuels ?? new Map(),
+      modBlocks: options.modBlocks ?? [],
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
       place: options.place ?? {},
@@ -360,11 +379,22 @@ export class FakeGtnhServer {
       chests: this.#opts.chests,
       tables: this.#opts.tables,
       recipes: this.#opts.recipes,
+      furnaces: this.#opts.furnaces,
+      smelting: this.#opts.smelting,
+      fuels: this.#opts.fuels,
+      modBlocks: this.#opts.modBlocks,
       playerInventory: this.#opts.inventory,
       modularUi: this.#opts.mods.some((m) => m.modid === 'modularui'),
       rejectClicks: new Set(this.#opts.rejectClicks),
       send: () => undefined,
     });
+    // BlockFurnace.updateFurnaceBlockState: a furnace that lights up becomes lit_furnace.
+    const blockId = (name: string): number | undefined =>
+      this.#opts.blocks.find(([, n]) => n === name)?.[0];
+    this.chestSim.onFurnaceLit = (x, y, z, lit) => {
+      const id = blockId(lit ? 'minecraft:lit_furnace' : 'minecraft:furnace');
+      if (id !== undefined) this.setBlock(x, y, z, id);
+    };
     this.#blocks = new Map(this.#opts.blockOverrides);
     const world = this.#worldNow();
     const blockNames = new Map(this.#opts.blocks);

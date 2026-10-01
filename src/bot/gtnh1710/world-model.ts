@@ -49,6 +49,25 @@ import {
 } from './chunk-data.ts';
 import { scanHazards, type HazardScan } from './hazard-scan.ts';
 import type { WindowSnapshot } from './container.ts';
+import {
+  FURNACE_PROPERTY,
+  FURNACE_SLOT,
+  INTERACTION_PROFILES,
+  matchWindowVariant,
+  observedStorageId,
+  type OpenedWindow,
+  type ProfileId,
+  type WindowLayout,
+} from '../../domain/interactions.ts';
+import { ItemNameSchema } from '../../domain/common.ts';
+import {
+  MAX_REPORTED_INTERACTABLES,
+  type BlockWindow,
+  type FurnaceState,
+  type InteractableBlock,
+  type SlotStack,
+} from '../../domain/game-state.ts';
+import { buildInteractableTable, roleOf, scanInteractables } from './interact.ts';
 import { nameItemStack, type Registry } from './registry.ts';
 import type { Vec3, WalkWorld } from './walking.ts';
 import { ProtocolError } from './wire.ts';
@@ -128,6 +147,18 @@ export function containerSlotsOf(inventoryType: number, announced: number): numb
   return inventoryType === WORKBENCH_WINDOW_TYPE ? announced + 1 : announced;
 }
 
+/** The id a crafting table the scan found gets: `crafting_table:<x>.<y>.<z>`. */
+export function observedTableId(p: { x: number; y: number; z: number }): string {
+  return `crafting_table:${p.x}.${p.y}.${p.z}`;
+}
+
+/** The position in an observed crafting table id, or null for any other id. */
+export function parseObservedTableId(id: string): { x: number; y: number; z: number } | null {
+  const m = /^crafting_table:(-?\d+)\.(-?\d+)\.(-?\d+)$/.exec(id);
+  if (m === null) return null;
+  return { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) };
+}
+
 /** Window 0 as a click target: slots 0-8 (result, 2x2 grid, armor) before the player's 36. */
 const INVENTORY_WINDOW_CONTAINER_SLOTS = 9;
 
@@ -138,14 +169,67 @@ export interface ContainerDefinition {
   position: { x: number; y: number; z: number };
 }
 
+/** The block a window belongs to, when the agent opened it with a right-click (interact.ts). */
+export interface WindowBlock {
+  position: { x: number; y: number; z: number };
+  /** The block's registry name when it was clicked. */
+  block: string;
+  /** Its interaction profile, or null for an observe-only block. */
+  profile: ProfileId | null;
+}
+
 /** The container window the server has open for the player (window 0, the inventory, excluded). */
 export interface OpenWindow extends WindowSnapshot {
   windowId: number;
+  /** S2D inventory type; FML_WINDOW_TYPE for a mod GUI opened with Forge's OpenGui. */
   inventoryType: number;
   /** The configured container it belongs to, when the agent opened it; null otherwise. */
   containerId: string | null;
   /** Slots are known once the server has sent them (S30); until then `slots` is empty. */
   slotsKnown: boolean;
+  /** S2D title (vanilla windows), or null. */
+  title?: string | null;
+  /** The slot count S2D announced (vanilla windows), or null. */
+  announcedSlots?: number | null;
+  /**
+   * The profile layout of the window, when it belongs to a block with a profile and is
+   * exactly a window that profile knows (matchWindowVariant); null otherwise.
+   */
+  layout?: WindowLayout | null;
+  /** Forge OpenGui details for a mod GUI, or null. */
+  fml?: { modId: string; guiId: number; x: number; y: number; z: number } | null;
+  /** The block the agent right-clicked to open it (INTERACT_BLOCK and friends), or null. */
+  block?: WindowBlock | null;
+  /**
+   * The player's 36 slots follow the container slots (every vanilla window; a mod window
+   * only when its profile says so). When false the inventory is unknown while it is open.
+   */
+  layoutKnown?: boolean;
+  /** The client may click in it: false for observe-only blocks and unknown layouts. */
+  clickable?: boolean;
+  /** Window properties (S31) as last sent: property id -> value. */
+  properties?: Map<number, number>;
+  /** Unknown layouts: where 36 slots matched the player's inventory (a hint), or null. */
+  inventoryMatchAt?: number | null;
+}
+
+/** OpenWindow.inventoryType of a mod GUI (Forge OpenGui carries no vanilla type). */
+export const FML_WINDOW_TYPE = -1;
+
+/** A block window as last seen: live while open, frozen when it closed. */
+interface BlockWindowRecord {
+  window: OpenWindow;
+  open: boolean;
+  observedAt: Date;
+}
+
+const positionKey = (p: { x: number; y: number; z: number }): string => `${p.x},${p.y},${p.z}`;
+
+/** Whether a profile's window may be clicked by some action (not only looked at). */
+function profileClickable(profile: ProfileId | null): boolean {
+  if (profile === null) return false;
+  const uses = INTERACTION_PROFILES[profile].usedBy;
+  return uses.some((u) => u !== 'INTERACT_BLOCK');
 }
 
 export interface TrackedMachine {
@@ -264,6 +348,14 @@ export class WorldModel {
   readonly #watches = new Set<BlockWatch>();
   /** Counts the updates recorded by every watch (BlockWatch.order). */
   #watchedUpdates = 0;
+  /** The block the agent is about to right-click: claimed by the next window that opens. */
+  #expectedBlock: WindowBlock | null = null;
+  /** Block windows seen in this connection, by position (live while open, then frozen). */
+  readonly #blockWindows = new Map<string, BlockWindowRecord>();
+  #lastBlockWindowKey: string | null = null;
+  /** Registry id -> interactable code (interact.ts); rebuilt with the registry or the patterns. */
+  #interactTable: Uint8Array | null = null;
+  #observePatterns: readonly string[] = [];
   /** The server's quest book for this player (Better Questing), from its own sync messages. */
   readonly #questBook = new QuestBookModel();
   /** The quests GameState reports (the agent's Age 0 closure); none until it is set. */
@@ -294,6 +386,20 @@ export class WorldModel {
     this.#registry = registry;
     this.#blockCodes = buildBlockCodeTable(registry);
     this.#diggable = buildDiggableTable(registry);
+    this.#interactTable = buildInteractableTable(registry, this.#observePatterns);
+  }
+
+  /** Blocks without a profile the operator allowlisted to look at (config interact.observeOnly). */
+  setObservePatterns(patterns: readonly string[]): void {
+    this.#observePatterns = [...patterns];
+    if (this.#registry !== null) {
+      this.#interactTable = buildInteractableTable(this.#registry, this.#observePatterns);
+    }
+  }
+
+  /** The agent is about to right-click this block: the next window that opens is its window. */
+  expectBlockWindow(block: WindowBlock | null): void {
+    this.#expectedBlock = block;
   }
 
   /** Records every update the server sends for this block until unwatch(). */
@@ -482,11 +588,209 @@ export class WorldModel {
       if (was !== now) slots[i] = now;
     }
     this.#cursor = after.cursor;
+    if (windowId !== 0) this.#touchBlockWindow(this.#lastPacketAt);
+  }
+
+  /** The open window belongs to a block the agent right-clicked: remember what it shows now. */
+  #touchBlockWindow(at: Date | null): void {
+    const w = this.#openWindow;
+    if (w === null || !w.slotsKnown || w.block == null) return;
+    const key = positionKey(w.block.position);
+    this.#blockWindows.set(key, { window: w, open: true, observedAt: at ?? new Date(0) });
+    this.#lastBlockWindowKey = key;
   }
 
   /** The client closed the window (C0D). */
   closeWindowLocally(): void {
     this.#closeWindow();
+  }
+
+  /**
+   * S30 for a mod GUI, or for a block the agent only looks at: any slot count is accepted.
+   * The player's 36 slots are placed only by a profile whose window this is (or, for a
+   * vanilla window, by the vanilla rule: they come last); otherwise the layout is unknown.
+   * Such windows are never clicked unless a profile's actions need clicks.
+   */
+  #acceptLooseWindow(w: OpenWindow, items: ReadonlyArray<ItemStackData | null>): void {
+    w.slots = [...items];
+    w.slotsKnown = true;
+    const layout = this.#profileLayoutOf(w);
+    w.layout = layout;
+    if (layout !== null) {
+      w.containerSlots = layout.containerSlots;
+      w.layoutKnown = true;
+      w.clickable = profileClickable(w.block?.profile ?? null);
+      return;
+    }
+    if (w.fml == null && items.length === w.containerSlots + 36) {
+      w.layoutKnown = true;
+      w.clickable = false;
+      return;
+    }
+    w.containerSlots = items.length;
+    w.layoutKnown = false;
+    w.clickable = false;
+    w.inventoryMatchAt = this.#matchInventory(items);
+  }
+
+  /**
+   * Where 36 slots of a window match the player's inventory exactly (window 0's main
+   * inventory, then hotbar, as last sent): a hint for a profile, never used to click. Only a
+   * non-empty inventory counts (any 36 empty slots would match an empty one); the window's
+   * last 36 slots are tried first, as most containers add the player's inventory last.
+   */
+  #matchInventory(items: ReadonlyArray<ItemStackData | null>): number | null {
+    const inv = this.#window;
+    if (inv === null || inv.length < MIN_PLAYER_WINDOW_SLOTS) return null;
+    const mine = inv.slice(STORAGE_FIRST, STORAGE_LAST + 1);
+    if (mine.every((s) => s == null)) return null;
+    const same = (a: ItemStackData | null | undefined, b: ItemStackData | null | undefined) =>
+      a == null || b == null
+        ? a == b
+        : a.id === b.id && a.damage === b.damage && a.count === b.count && a.hasNbt === b.hasNbt;
+    const at = (o: number): boolean => mine.every((s, i) => same(s, items[o + i]));
+    for (let o = items.length - 36; o >= 0; o--) if (at(o)) return o;
+    return null;
+  }
+
+  /**
+   * The layout of a window that belongs to a block with a profile, when the window is exactly
+   * one the profile knows (its opener and slot count; matchWindowVariant), else null.
+   */
+  #profileLayoutOf(w: OpenWindow): WindowLayout | null {
+    const profileId = w.block?.profile ?? null;
+    if (profileId === null) return null;
+    let opened: OpenedWindow;
+    if (w.fml != null) opened = { kind: 'fml', modId: w.fml.modId, guiId: w.fml.guiId };
+    else if (w.announcedSlots != null) {
+      opened = {
+        kind: 'vanilla',
+        inventoryType: w.inventoryType,
+        announcedSlots: w.announcedSlots,
+      };
+    } else return null;
+    const variant = matchWindowVariant(INTERACTION_PROFILES[profileId], opened, w.slots.length);
+    return variant?.layout ?? null;
+  }
+
+  /** The block window the agent opened last in this connection (live or as it closed). */
+  #blockWindowState(): BlockWindow | null {
+    const key = this.#lastBlockWindowKey;
+    const record = key === null ? undefined : this.#blockWindows.get(key);
+    return record === undefined ? null : this.#describeBlockWindow(record);
+  }
+
+  /** A block window record as the GameState reports it. */
+  #describeBlockWindow(record: BlockWindowRecord): BlockWindow | null {
+    const w = record.window;
+    const block = w.block;
+    if (block == null) return null;
+    const blockName = ItemNameSchema.safeParse(block.block);
+    if (!blockName.success) return null;
+    const layout: WindowLayout | null = w.layoutKnown === false ? null : (w.layout ?? null);
+    const playerFirst = w.layoutKnown === false ? Infinity : w.containerSlots;
+    const slots: BlockWindow['slots'] = [];
+    w.slots.forEach((s, i) => {
+      if (s == null || (i >= playerFirst && i < playerFirst + 36)) return;
+      const naming = nameItemStack(this.#registry, s.id, s.damage);
+      slots.push({
+        slot: i,
+        item: naming.ok ? naming.name : `unknown:${s.id}@${s.damage}`,
+        count: s.count,
+        role: roleOf(layout, i),
+        nbt: s.hasNbt,
+      });
+    });
+    const properties: Record<string, number> = {};
+    for (const [id, value] of w.properties ?? new Map<number, number>()) {
+      properties[String(id)] = value;
+    }
+    return {
+      position: { ...block.position },
+      block: blockName.data,
+      profile: block.profile,
+      opener:
+        w.fml != null
+          ? `fml:${w.fml.modId}:${w.fml.guiId}`.slice(0, 100)
+          : `vanilla:${w.inventoryType}`,
+      title: w.title == null ? null : w.title.slice(0, 200),
+      slotCount: w.slots.length,
+      containerSlots: w.layoutKnown === false ? null : w.containerSlots,
+      inventoryAt: w.layoutKnown === false ? (w.inventoryMatchAt ?? null) : w.containerSlots,
+      slots: slots.slice(0, 512),
+      properties,
+      open: record.open,
+      observedAt: record.observedAt.toISOString(),
+    };
+  }
+
+  /** What the agent last saw in the furnace at this position (null if never seen). */
+  #furnaceSeen(position: { x: number; y: number; z: number }): FurnaceState['seen'] {
+    const record = this.#blockWindows.get(positionKey(position));
+    const w = record?.window;
+    if (record === undefined || w === undefined || w.block?.profile !== 'furnace') return null;
+    let ok = true;
+    const stack = (slot: number): SlotStack | null => {
+      const s = w.slots[slot];
+      if (s == null) return null;
+      const naming = nameItemStack(this.#registry, s.id, s.damage);
+      if (!naming.ok || s.count < 1) {
+        ok = false;
+        return null;
+      }
+      return { item: naming.name, count: s.count };
+    };
+    const input = stack(FURNACE_SLOT.input);
+    const fuel = stack(FURNACE_SLOT.fuel);
+    const output = stack(FURNACE_SLOT.output);
+    if (!ok) return null;
+    const property = (id: number): number | null => w.properties?.get(id) ?? null;
+    return {
+      observedAt: record.observedAt.toISOString(),
+      input,
+      fuel,
+      output,
+      cookTicks: property(FURNACE_PROPERTY.cookTicks),
+      burnTicksLeft: property(FURNACE_PROPERTY.burnTicksLeft),
+      fuelItemTicks: property(FURNACE_PROPERTY.fuelItemTicks),
+    };
+  }
+
+  /** Blocks the agent may right-click near the player (interact.ts scan), nearest first. */
+  #interactables(): GameState['interactables'] {
+    if (this.#hazardProblem !== null) return unknown(this.#hazardProblem);
+    if (!this.#joined) return unknown('not joined yet');
+    const pos = this.#position;
+    if (pos === null) return unknown('player position unknown');
+    const table = this.#interactTable;
+    const registry = this.#registry;
+    if (table === null || registry === null) return unknown('block registry not received yet');
+    const scan = scanInteractables(
+      this.#store,
+      table,
+      { x: pos.x, y: pos.feetY, z: pos.z },
+      undefined,
+      MAX_REPORTED_INTERACTABLES,
+    );
+    if (!scan.ok) return unknown(scan.reason);
+    const blocks: InteractableBlock[] = [];
+    for (const f of scan.blocks) {
+      const name = ItemNameSchema.safeParse(registry.blocks.get(f.blockId));
+      if (!name.success) continue;
+      const entry: InteractableBlock = {
+        profile: f.profile,
+        block: name.data,
+        position: { ...f.position },
+      };
+      if (f.profile === 'furnace') {
+        entry.furnace = {
+          burning: name.data === 'minecraft:lit_furnace',
+          seen: this.#furnaceSeen(f.position),
+        };
+      }
+      blocks.push(entry);
+    }
+    return known({ scanRadius: scan.scanRadius, blocks });
   }
 
   /**
@@ -498,11 +802,23 @@ export class WorldModel {
     if (
       w !== null &&
       w.slotsKnown &&
+      w.layoutKnown !== false &&
       this.#window !== null &&
       this.#window.length >= MIN_PLAYER_WINDOW_SLOTS
     ) {
       for (let i = 0; i < 36; i++)
         this.#window[STORAGE_FIRST + i] = w.slots[w.containerSlots + i] ?? null;
+    }
+    // A block's window is remembered as it was last seen (a furnace keeps cooking unseen).
+    if (w !== null && w.slotsKnown && w.block != null) {
+      const key = positionKey(w.block.position);
+      const seen = this.#blockWindows.get(key);
+      this.#blockWindows.set(key, {
+        window: { ...w, slots: [...w.slots], cursor: null, properties: new Map(w.properties) },
+        open: false,
+        // Every change was sent while it was open: what it showed held until it closed.
+        observedAt: this.#lastPacketAt ?? seen?.observedAt ?? new Date(0),
+      });
     }
     this.#openWindow = null;
     this.#cursor = null;
@@ -618,6 +934,46 @@ export class WorldModel {
         if (e !== undefined) Object.assign(e, { x: message.x, y: message.y, z: message.z });
         return;
       }
+      case 'fml-open-gui': {
+        // A mod GUI: the window's slots follow as S30 with this id. It belongs to the block
+        // the agent clicked only if the message names that block's position.
+        this.#closeWindow();
+        const expected = this.#expectedBlock;
+        const block =
+          expected !== null &&
+          expected.position.x === message.x &&
+          expected.position.y === message.y &&
+          expected.position.z === message.z
+            ? expected
+            : null;
+        this.#openWindow = {
+          windowId: message.windowId,
+          inventoryType: FML_WINDOW_TYPE,
+          containerSlots: 0,
+          slots: [],
+          slotsKnown: false,
+          cursor: null,
+          // A storage block the agent opened is that container (only at the right position).
+          containerId: block === null ? null : this.#expectedContainer,
+          title: null,
+          announcedSlots: null,
+          layout: null,
+          fml: {
+            modId: message.modId,
+            guiId: message.guiId,
+            x: message.x,
+            y: message.y,
+            z: message.z,
+          },
+          block,
+          layoutKnown: false,
+          clickable: false,
+          properties: new Map(),
+        };
+        this.#expectedBlock = null;
+        this.#expectedContainer = null;
+        return;
+      }
       case 'fml-other':
         return;
     }
@@ -720,6 +1076,8 @@ export class WorldModel {
         this.#store.clear();
         this.#removed = [];
         this.#placed = [];
+        this.#blockWindows.clear();
+        this.#lastBlockWindowKey = null;
         for (const w of this.#watches) this.#record(w, -1);
         return;
       case 'chunk-data': {
@@ -860,15 +1218,22 @@ export class WorldModel {
           this.#inventorySyncs += 1;
         } else if (packet.windowId === this.#openWindow?.windowId) {
           const w = this.#openWindow;
-          if (packet.items.length === w.containerSlots + 36) {
+          if (w.fml != null || (w.block != null && w.block.profile === null)) {
+            // A mod GUI, or a block the agent only looks at: any slot count is accepted and
+            // the window is never clicked; where the player's slots are is known only from
+            // a matching profile (or the vanilla rule).
+            this.#acceptLooseWindow(w, packet.items);
+          } else if (packet.items.length === w.containerSlots + 36) {
             w.slots = [...packet.items];
             w.slotsKnown = true;
+            w.layout = this.#profileLayoutOf(w);
           } else {
             w.slots = [];
             w.slotsKnown = false;
             this.#inventoryProblem ??= `container window has ${packet.items.length} slots, expected ${w.containerSlots + 36}`;
           }
           this.#windowSyncs += 1;
+          this.#touchBlockWindow(at);
         }
         return;
       case 'set-slot':
@@ -887,10 +1252,12 @@ export class WorldModel {
           const slots = [...this.#openWindow.slots];
           slots[packet.slot] = packet.item;
           this.#openWindow.slots = slots;
+          this.#touchBlockWindow(at);
         }
         return;
-      case 'open-window':
+      case 'open-window': {
         this.#closeWindow();
+        const block = this.#expectedBlock;
         this.#openWindow = {
           windowId: packet.windowId,
           inventoryType: packet.inventoryType,
@@ -899,9 +1266,28 @@ export class WorldModel {
           slotsKnown: false,
           cursor: null,
           containerId: this.#expectedContainer,
+          title: packet.title,
+          announcedSlots: packet.slotCount,
+          layout: null,
+          fml: null,
+          block,
+          layoutKnown: true,
+          clickable: block === null || profileClickable(block.profile),
+          properties: new Map(),
         };
         this.#expectedContainer = null;
+        this.#expectedBlock = null;
         return;
+      }
+      case 'window-property': {
+        const w = this.#openWindow;
+        if (w !== null && packet.windowId === w.windowId && packet.property >= 0) {
+          w.properties ??= new Map();
+          w.properties.set(packet.property, packet.value);
+          this.#touchBlockWindow(at);
+        }
+        return;
+      }
       case 'close-window':
         if (packet.windowId === this.#openWindow?.windowId) this.#closeWindow();
         return;
@@ -922,6 +1308,7 @@ export class WorldModel {
 
   toGameState(now: Date): GameState {
     const pos = this.#position;
+    const interactables = this.#interactables();
     const state: GameState = {
       schemaVersion: GAME_STATE_SCHEMA_VERSION,
       timestamp: (this.#lastPacketAt ?? now).toISOString(),
@@ -956,18 +1343,87 @@ export class WorldModel {
         generators: [],
       },
       machines: this.#machinesState(),
-      storage: this.#storageState(),
-      craftingTables: this.#craftingTables.map((t) => ({
-        id: t.id,
-        name: t.name,
-        position: known({ ...t.position }),
-      })),
+      storage: [...this.#storageState(), ...this.#observedStorage(interactables)].slice(0, 512),
+      craftingTables: [
+        ...this.#craftingTables.map((t) => ({
+          id: t.id,
+          name: t.name,
+          position: known({ ...t.position }),
+        })),
+        ...this.#observedCraftingTables(interactables),
+      ].slice(0, 64),
+      interactables,
+      blockWindow: this.#blockWindowState(),
       openContainerId: this.#openWindow?.containerId ?? null,
       currentTask: null,
       knownRecipeState: null,
       lastAction: null,
     };
     return GameStateSchema.parse(state);
+  }
+
+  /**
+   * Storage blocks the scan found (a profile whose slots are all storage: chests, Iron
+   * Chests) that are not configured containers: `<profile>:<x>.<y>.<z>`. Their contents are
+   * known while the agent has the block open; the agent's container memory keeps them after.
+   */
+  #observedStorage(interactables: GameState['interactables']): GameState['storage'] {
+    if (!interactables.known) return [];
+    const configured = new Set(this.#containers.map((c) => positionKey(c.position)));
+    const open = this.#openWindow;
+    const out: GameState['storage'] = [];
+    for (const b of interactables.value.blocks) {
+      if (b.profile === null || !INTERACTION_PROFILES[b.profile].storage) continue;
+      if (configured.has(positionKey(b.position))) continue;
+      const { x, y, z } = b.position;
+      const isOpen =
+        open !== null &&
+        open.slotsKnown &&
+        open.layout != null &&
+        open.block?.profile === b.profile &&
+        positionKey(open.block.position) === positionKey(b.position);
+      out.push({
+        id: observedStorageId(b.profile, b.position),
+        name: `${INTERACTION_PROFILES[b.profile].label} at (${x}, ${y}, ${z})`,
+        position: known({ x, y, z }),
+        items: isOpen
+          ? this.#containerCounts(open)
+          : unknown('contents are known only while the agent has it open'),
+      });
+    }
+    return out;
+  }
+
+  /** Item counts of an open window's container slots (unknown if a stack cannot be named). */
+  #containerCounts(w: OpenWindow): GameState['storage'][number]['items'] {
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < w.containerSlots; i++) {
+      const s = w.slots[i];
+      if (s == null) continue;
+      const naming = nameItemStack(this.#registry, s.id, s.damage);
+      if (!naming.ok) return unknown(naming.reason);
+      counts[naming.name] = (counts[naming.name] ?? 0) + s.count;
+    }
+    return known(counts);
+  }
+
+  /**
+   * Vanilla crafting tables the scan found that are not configured ones (same position):
+   * CRAFT_ITEM may use them too, as `crafting_table:<x>.<y>.<z>`.
+   */
+  #observedCraftingTables(interactables: GameState['interactables']): GameState['craftingTables'] {
+    if (!interactables.known) return [];
+    const configured = new Set(this.#craftingTables.map((t) => positionKey(t.position)));
+    return interactables.value.blocks
+      .filter((b) => b.profile === 'crafting_table' && !configured.has(positionKey(b.position)))
+      .map((b) => {
+        const { x, y, z } = b.position;
+        return {
+          id: observedTableId(b.position),
+          name: `Crafting table at (${x}, ${y}, ${z})`,
+          position: known({ x, y, z }),
+        };
+      });
   }
 
   /**
@@ -1215,6 +1671,9 @@ export class WorldModel {
     const open = this.#openWindow;
     if (open !== null) {
       if (!open.slotsKnown) return 'container window contents not received yet';
+      if (open.layoutKnown === false) {
+        return 'a window whose slot layout is unknown is open (the inventory part cannot be placed)';
+      }
       return open.slots.slice(open.containerSlots, open.containerSlots + 36);
     }
     const w = this.#window;
