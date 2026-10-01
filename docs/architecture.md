@@ -73,8 +73,9 @@ flowchart TD
 4. Ask the `DecisionProvider` (the deterministic router, or a model inside
    `SafetyFirstDecisionProvider`) for one decision.
 5. Convert it to exactly one proposed action. For `REQUEST_PLANNER`: run the next step of the
-   task's active plan; or, if its plan still waits for approval, pause; or else ask the planner for
-   a new plan (see [Plans across cycles](#plans-across-cycles)).
+   task's active plan (for a `GATHER` step, the action code chooses for it this cycle); or, if
+   its plan still waits for approval, pause; or else ask the planner for a new plan (see
+   [Plans across cycles](#plans-across-cycles)).
    If deciding or planning took so long (a model) that the observation is now stale, observe
    again: the action is validated against the new observation (a second snapshot, logged as a
    `STATE` event marked `reobserved`). The executor always checks freshness against the clock at
@@ -386,6 +387,78 @@ cycle that runs it, and the repeated-failure rule still applies across plans (a 
 the same failing action is refused with `REPEATED_FAILURE`). Dangers, vitals and upkeep are routed
 before the planner, so a plan simply waits while System 1 handles them.
 
+### GATHER: gathering in one plan step
+
+Gathering used to be planned block by block: the planner wrote an 8-step plan of `DIG_BLOCK`
+(and `MOVE_TO`) steps every 8 blocks, about 16 s per plan with qwen3:14b. Now it writes ONE
+step, `{"type":"GATHER","args":{"block":"minecraft:sand","count":54}}`, and code expands it,
+one cycle at a time, into the same checked actions. `src/planner/gather.ts` chooses each
+action; `src/app/gather-step.ts` keeps the step's progress. The idea is Baritone's mine process
+(pick the nearest known target, walk to it, mine it, repeat until the count is held), written
+anew: no code was taken from Baritone (LGPL-3.0).
+
+- **A plan step, not an action.** `GATHER` is not in `ACTION_TYPES`; it exists only in plans
+  (`PlanActionSchema`), so it never reaches the executor or a client. The safety policy sees
+  exactly the `DIG_BLOCK` and `MOVE_TO` actions it becomes, each validated, executed, verified
+  and logged as before (origin `planner`). Its block must be on `DIG_BLOCK`'s allowlist, and
+  its count (1 to 256) is of what the block drops, from the route book's dig yields: clay
+  gives 4 clay balls, grass gives dirt, gravel gives gravel or flint.
+- **Each cycle** while it is the plan's current step, System 1 decides first, as always
+  (dangers, vitals, upkeep). When it decides `REQUEST_PLANNER`, code picks the action from the
+  fresh observation, without a model:
+  - from the listed blocks of that kind that have a stand spot (`standAt`), minus the ones the
+    step has skipped;
+  - one within reach (4.5 from the eyes) is dug (`DIG_BLOCK`), nearest first; otherwise the
+    agent walks to the nearest stand spot (`MOVE_TO`, tolerance 0.5);
+  - only an action the executor would accept now: code dry-runs the real validation (schema,
+    safety policy, preconditions, the repeated-failure rule; for a walk, also the dig from the
+    stand spot). A block the policy would refuse (sand over the head or on top, a hazard near,
+    outside the boundary, a dig that already failed twice) is passed over, so a GATHER never
+    proposes a refused dig that would block the task.
+- **It ends:**
+  - when the inventory holds `count` more of the block's drops than when the step started: the
+    step is verified and the plan advances (an operator's plan then completes its task);
+  - when no listed block of that kind is left, or none may be dug: the plan fails as a stale
+    step and the next cycle asks the planner, which can `EXPLORE`;
+  - when one of its actions does not succeed: the plan's own failure handling applies
+    (`maxRetriesPerStep` failures in a row, then `REPLAN` or a pause). The block is not tried
+    again in this step, and a verified action starts the count of failures in a row again;
+  - at 64 actions or 5 minutes: a checkpoint. The plan ends and the planner is asked again,
+    with fresh stock.
+
+  When it ends before choosing an action, nothing runs that cycle; the summary is
+  `REQUEST_PLANNER -> GATHER:<done|bound|no-target> -> succeeded`. A plan the planner has just
+  made whose `GATHER` has nothing to dig is `rejected` instead, like a first step refused as
+  stale: the task goes on.
+
+- **Progress** (the drops held at the start, actions, digs, skipped blocks) is kept in agent
+  memory (`task_gather:<taskId>`), so a `GATHER` goes on across cycles, sessions and
+  interruptions without asking the planner. A bounded auto-run (`run --live`) stops at its
+  `--max-cycles` (default 20); the next run continues the same step.
+- **The task journal** gets a line when it starts, every 16 blocks dug, and when it ends, with
+  why: the planner reads it next time.
+
+A gather of 54 sand on the mock world: one planner call, then 61 cycles (54 digs and 7 walks
+to stand spots). Before, the same took about 7 plans, one planner call each.
+
+### Accepting a plan
+
+A planner's plan is made from one observation. When one is accepted, code drops the steps
+that observation cannot plan (`trimStaleSteps` in `src/planner/plan-validator.ts`):
+
+- every step after the first `EXPLORE`, which walks up to 96 blocks into new ground. Seen live:
+  `EXPLORE`, `EXPLORE`, `DIG_BLOCK`; after the walks the dig target was 7.3 blocks away and was
+  refused as stale, which cost a failed cycle and a 16 s replan;
+- after a `GATHER`, which walks from block to block, the first step that names a position or a
+  creature (`MOVE_TO`, `DIG_BLOCK`, `PLACE_BLOCK`, `INTERACT_BLOCK`, `SMELT`, `TAKE_OUTPUT`,
+  `ATTACK_ENTITY`), and everything after it. Steps that name none stay: crafting what it
+  gathered, another `GATHER`, a container or a named location.
+
+The plan's explanation and the journal (`new plan #N: ... (k steps; code dropped steps ...)`)
+say what was dropped, and the next plan starts from what the agent then sees. The whole plan
+is validated before anything is dropped, so an unsafe step anywhere still rejects it. A plan a
+human wrote (`cli task-add --plan`) is never trimmed.
+
 ## Walking
 
 Walking was the live client's first world-changing ability (`src/bot/gtnh1710/walking.ts` plans
@@ -602,7 +675,9 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
 
    The planner gets the nearest 32 resources, and `tools`: the allowlisted tools the player
    carries (from the inventory names, where a worn tool shows its damage), with the digs each
-   has left and the blocks it digs faster. Protected tools are left out.
+   has left and the blocks it digs faster. Protected tools are left out. To gather many
+   blocks, a plan uses one `GATHER` step, which code turns into these digs and the walks to
+   their stand spots (see [GATHER](#gather-gathering-in-one-plan-step)).
 
 2. **The executor validates as usual.**
    - The whole block must be inside the safety boundary.
@@ -881,10 +956,11 @@ integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
 - In mode `follow` (with movement on) the planner request gets `exploration`: per resource the
   nearest place seen with enough of it (and a much richer one), the biomes seen, and per direction
   how far it has been seen and the room left to the boundary. `EXPLORE` is in `allowedActions`
-  only then. Rule 11 of the planner prompt: a good start has wood, gravel and sand near water,
+  only then. Rule 15 of the planner prompt: a good start has wood, gravel and sand near water,
   clay on riverbanks and stone; when the task needs a block that is not listed nearby, EXPLORE
-  toward a known place, or toward the least-seen direction with room; EXPLORE last in a plan;
-  never in the evening or at night. (`pnpm cli places` prints the same summary.)
+  toward a known place, or toward the least-seen direction with room; EXPLORE last in a plan
+  (code drops any step after it, see [Accepting a plan](#accepting-a-plan)); never in the
+  evening or at night. (`pnpm cli places` prints the same summary.)
 - Play (`src/app/scouting.ts`): when the agent can explore and world memory holds fewer than 50
   chunks, play begins with ONE bounded session on a `scout-area` task ("explore two or three
   directions..."), before the quests. It ends once 100 chunks are seen, at the session's limits,

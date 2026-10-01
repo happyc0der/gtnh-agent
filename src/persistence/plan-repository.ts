@@ -150,6 +150,18 @@ export class PlanRepository {
       .run(this.#clock.now().toISOString(), id);
     return this.get(id)?.stepFailures ?? 0;
   }
+
+  /**
+   * One action of the current step succeeded but the step goes on (a GATHER step runs many):
+   * its failures are counted in a row again from zero.
+   */
+  resetStepFailures(id: number): void {
+    this.#db
+      .prepare(
+        'UPDATE plans SET step_failures = 0, updated_at = ? WHERE id = ? AND step_failures > 0',
+      )
+      .run(this.#clock.now().toISOString(), id);
+  }
 }
 
 function toPlan(raw: unknown): StoredPlan {

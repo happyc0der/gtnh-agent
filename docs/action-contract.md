@@ -288,6 +288,36 @@ The other world-changing actions return `NOT_IMPLEMENTED`. See
 [architecture: walking](architecture.md#walking), [digging](architecture.md#digging) and
 [combat](architecture.md#combat).
 
+## Plan steps that are not actions: GATHER
+
+A plan may contain one kind of step that is not an action:
+`{"type":"GATHER","args":{"block":"minecraft:sand","count":54}}`. It is not in the allowlist,
+is never sent to a client and is never logged as an action. While it is the plan's current
+step, code turns it, one cycle at a time, into ordinary `DIG_BLOCK` and `MOVE_TO` actions with
+origin `planner`, and everything above applies to each of them unchanged: schema, safety
+policy, preconditions, execution, verification, the log and the repeated-failure rule.
+See [architecture: GATHER](architecture.md#gather-gathering-in-one-plan-step).
+
+- **Args:** `block`, one of `DIG_BLOCK`'s allowlisted blocks; `count`, 1 to 256 of what that
+  block drops (sand gives sand, grass gives dirt, clay gives 4 clay balls, gravel gives gravel
+  or flint, logs give logs).
+- **Plan validation:** the schema only. GATHER names no position or item to check; every
+  action it becomes is checked when it runs.
+- **Each cycle:** the nearest listed block of that kind with a stand spot. Within reach (4.5
+  from the eyes) it is dug; otherwise the agent walks to its stand spot (tolerance 0.5). Code
+  proposes only an action the executor's validation would accept now (a dry run; for a walk,
+  also of the dig from the stand spot), so a block the policy would refuse is passed over
+  rather than refused.
+- **Ends:** when the inventory holds `count` more of the drops than at the start (the step is
+  verified); when no such block is left in view (a stale step: the plan fails, and the next
+  cycle asks the planner); when one of its actions does not succeed (the plan's own failure
+  handling; that block is not tried again); or at 64 actions or 5 minutes (a checkpoint: the
+  plan ends, and the next cycle asks the planner).
+- **Accepting a plan** drops every step after its first `EXPLORE`, and after a `GATHER` the
+  first step that names a position or a creature together with the steps after it (they were
+  planned from a view the plan itself replaces); see
+  [architecture: accepting a plan](architecture.md#accepting-a-plan).
+
 ## Global rules applied to every action
 
 1. **Unsupported/malformed** (not a schema-valid allowlisted action) → `UNSUPPORTED_ACTION`, pause.

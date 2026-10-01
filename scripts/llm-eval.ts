@@ -19,10 +19,15 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
+import { previewCheck } from '../src/app/gather-step.ts';
 import { MOCK_CONFIG, SCENARIOS, baseWorld } from '../src/app/scenarios.ts';
-import { MockMinecraftClient, type MockWorld } from '../src/bot/mock-minecraft-client.ts';
+import {
+  MockMinecraftClient,
+  type MockResourceBlock,
+  type MockWorld,
+} from '../src/bot/mock-minecraft-client.ts';
 import { defaultConfig, loadConfig, type AgentConfig } from '../src/config/env.ts';
-import { createAction } from '../src/domain/actions.ts';
+import { createAction, type ActionSpec } from '../src/domain/actions.ts';
 import type { DecisionResult } from '../src/domain/decisions.ts';
 import type { GameState } from '../src/domain/game-state.ts';
 import { validateCandidate } from '../src/executor/action-executor.ts';
@@ -34,8 +39,9 @@ import {
 } from '../src/llm/ollama-client.ts';
 import { OllamaDecisionProvider } from '../src/llm/ollama-decision-provider.ts';
 import { OllamaPlannerProvider } from '../src/llm/ollama-planner-provider.ts';
+import { chooseGatherAction, startGather } from '../src/planner/gather.ts';
 import type { Plan, PlannerRequest } from '../src/planner/plan-schema.ts';
-import { validatePlan } from '../src/planner/plan-validator.ts';
+import { trimStaleSteps, validatePlan } from '../src/planner/plan-validator.ts';
 import { buildPlannerRequest } from '../src/planner/planner-provider.ts';
 import { emptyFailureHistory, type SafetyContext } from '../src/safety/safety-policy.ts';
 import {
@@ -213,6 +219,20 @@ function variant(name: string, goal: string, mutate: (w: MockWorld) => void): Pl
   return { name, world: w };
 }
 
+/**
+ * Two rows of sand east of the player (z 4 and 5, x 3 to 29), each block with a stand spot
+ * on its north side, as the live client lists them; the nearer ones are in view.
+ */
+function sandField(): MockResourceBlock[] {
+  return [4, 5].flatMap((z) =>
+    Array.from({ length: 27 }, (_, i) => ({
+      block: 'minecraft:sand' as const,
+      position: { x: 3 + i, y: 64, z },
+      standAt: { x: 3.5 + i, y: 64, z: 3.5 },
+    })),
+  );
+}
+
 function plannerCases(): PlannerCase[] {
   const fromScenarios = SCENARIOS.filter((s) => s.plannerFixtures !== undefined).map((s) => ({
     name: s.name,
@@ -220,6 +240,11 @@ function plannerCases(): PlannerCase[] {
   }));
   return [
     ...fromScenarios,
+    // Gathering: one GATHER step is the answer, not a list of DIG_BLOCK steps (prompt rule 9).
+    variant('gather-sand', 'Gather 54 minecraft:sand', (w) => {
+      if (w.task !== null) w.task.requirements = { 'minecraft:sand': 54 };
+      w.resourceBlocks.push(...sandField());
+    }),
     variant('fetch-cobblestone', 'Take 64 cobblestone out of the main chest', () => undefined),
     variant('store-gravel', 'Put the gravel into the main chest', (w) => {
       w.inventory.items['minecraft:gravel'] = 32;
@@ -317,6 +342,11 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
         else if (!target.attackable) bad(`${target.type} ${target.id} is not attackable`);
         break;
       }
+      case 'GATHER':
+        if (!state.diggableBlocks.some((b) => b.block === a.args.block)) {
+          bad(`no ${a.args.block} is listed in state.diggableBlocks to gather`);
+        }
+        break;
       case 'SUBMIT_QUEST':
       case 'CHECK_QUEST_BOX':
       case 'CLAIM_QUEST_REWARD':
@@ -390,20 +420,34 @@ async function evaluatePlanner(): Promise<void> {
     const first = response.plan.steps[0];
     let step1 = '-';
     if (first !== undefined) {
-      const action = createAction(
-        {
-          spec: first.action,
-          reason: 'eval',
-          origin: 'planner',
-          taskId: request.task?.taskId ?? null,
-        },
-        { newId, now: () => new Date(T0) },
-      );
-      const { report } = validateCandidate(action, state, safety, emptyFailureHistory);
-      if (report.ok) step1Ok += 1;
-      step1 = report.ok
-        ? 'ok'
-        : [...report.violations.map((v) => v.code), ...report.preconditionFailures].join('; ');
+      const taskId = request.task?.taskId ?? null;
+      // A GATHER step's first action is chosen in code, as the agent loop does.
+      const choice: { kind: 'act'; spec: ActionSpec } | { kind: 'end'; why: string } =
+        first.action.type === 'GATHER'
+          ? chooseGatherAction(
+              first.action,
+              startGather(1, 0, first.action, state, new Date(T0)),
+              state,
+              {
+                reach: safety.config.interactionReach,
+                now: new Date(T0),
+                check: previewCheck(emptyFailureHistory, taskId, state, safety),
+              },
+            )
+          : { kind: 'act', spec: first.action };
+      if (choice.kind === 'end') {
+        step1 = `GATHER ends at once: ${choice.why}`;
+      } else {
+        const action = createAction(
+          { spec: choice.spec, reason: 'eval', origin: 'planner', taskId },
+          { newId, now: () => new Date(T0) },
+        );
+        const { report } = validateCandidate(action, state, safety, emptyFailureHistory);
+        if (report.ok) step1Ok += 1;
+        step1 = report.ok
+          ? `ok${first.action.type === 'GATHER' ? ` (${choice.spec.type})` : ''}`
+          : [...report.violations.map((v) => v.code), ...report.preconditionFailures].join('; ');
+      }
     }
     const steps = response.plan.steps
       .map((s) => {
@@ -417,12 +461,17 @@ async function evaluatePlanner(): Promise<void> {
                 ? a.args.containerId
                 : 'target' in a.args
                   ? `${a.args.target.x},${a.args.target.y},${a.args.target.z}`
-                  : '';
+                  : 'block' in a.args
+                    ? `${a.args.count} ${a.args.block}`
+                    : '';
         return `${a.type}${detail ? `(${detail})` : ''}`;
       })
       .join(' > ');
+    // What the agent loop would store: steps after an EXPLORE (or view-bound steps after a
+    // GATHER) are dropped when a plan is accepted.
+    const trimmed = trimStaleSteps(response.plan).note;
     process.stdout.write(
-      `| ${c.name} | plan, ${response.plan.steps.length} step(s)${response.plan.requiresUserApproval ? ', approval' : ''} | ${validation.ok ? 'ok' : issues.join('; ').slice(0, 120)} | ${wrongIds.length === 0 ? 'ok' : wrongIds.join('; ').slice(0, 100)} | ${step1.slice(0, 100)} | ${ms} | ${tokens} | ${steps.slice(0, 160)} |\n`,
+      `| ${c.name} | plan, ${response.plan.steps.length} step(s)${response.plan.requiresUserApproval ? ', approval' : ''} | ${validation.ok ? 'ok' : issues.join('; ').slice(0, 120)} | ${wrongIds.length === 0 ? 'ok' : wrongIds.join('; ').slice(0, 100)} | ${step1.slice(0, 100)} | ${ms} | ${tokens} | ${steps.slice(0, 160)}${trimmed === null ? '' : ` [code ${trimmed}]`} |\n`,
     );
   }
   const n = cases.length;

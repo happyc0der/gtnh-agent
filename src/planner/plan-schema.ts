@@ -18,6 +18,7 @@ import {
   GENERATOR_STATUSES,
 } from '../domain/game-state.ts';
 import { ExplorationSummarySchema } from '../domain/world-memory.ts';
+import { GatherStepSchema } from './gather.ts';
 
 /** Hard ceiling on plan length. Config may lower it (planner.maxPlanSteps), never raise it. */
 export const MAX_PLAN_STEPS = 16;
@@ -34,11 +35,22 @@ export const MAX_COMPACT_PLACEABLE = 16;
 /** Interactable blocks passed to the planner (the nearest ones). */
 export const MAX_COMPACT_INTERACTABLES = 16;
 
+/**
+ * What a plan step does: one of the allowlisted action specs, or a GATHER step, which code
+ * expands into DIG_BLOCK and MOVE_TO actions one cycle at a time (src/planner/gather.ts).
+ * GATHER exists only in plans: it is not an action type and never reaches a client.
+ */
+export const PlanActionSchema = z.discriminatedUnion('type', [
+  ...ActionSpecSchema.options,
+  GatherStepSchema,
+]);
+export type PlanAction = z.infer<typeof PlanActionSchema>;
+
 export const PlanStepSchema = z.strictObject({
   /** 1-based, sequential. */
   step: z.int().min(1).max(MAX_PLAN_STEPS),
-  /** Must be one of the allowlisted action specs; unknown types fail validation. */
-  action: ActionSpecSchema,
+  /** An allowlisted action spec or a GATHER step; unknown types fail validation. */
+  action: PlanActionSchema,
   rationale: z.string().min(1).max(300),
 });
 export type PlanStep = z.infer<typeof PlanStepSchema>;

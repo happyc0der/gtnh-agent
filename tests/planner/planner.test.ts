@@ -6,7 +6,11 @@ import { defaultConfig } from '../../src/config/env.ts';
 import type { PlaceableItem } from '../../src/domain/blocks.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
 import { PlanSchema, plannerResponseJsonSchema, type Plan } from '../../src/planner/plan-schema.ts';
-import { parsePlannerOutput, validatePlan } from '../../src/planner/plan-validator.ts';
+import {
+  parsePlannerOutput,
+  trimStaleSteps,
+  validatePlan,
+} from '../../src/planner/plan-validator.ts';
 import {
   buildPlannerRequest,
   sanitizeStateForPlanner,
@@ -408,5 +412,64 @@ describe('planner request and mock planner', () => {
       kind: 'escalation',
       escalation: { reason: 'INVALID_OUTPUT' },
     });
+  });
+});
+
+describe('trimStaleSteps: no step runs on a view its own plan replaced', () => {
+  type Action = Plan['steps'][number]['action'];
+  const explore: Action = { type: 'EXPLORE', args: { toward: 'east', maxDistance: 64 } };
+  const dig: Action = { type: 'DIG_BLOCK', args: { position: { x: 9, y: 64, z: 1 } } };
+  const walk: Action = {
+    type: 'MOVE_TO',
+    args: { target: { x: 8.5, y: 64, z: 1.5 }, tolerance: 0.5 },
+  };
+  const gather: Action = { type: 'GATHER', args: { block: 'minecraft:log', count: 4 } };
+  const planks: Action = {
+    type: 'CRAFT_ITEM',
+    args: { recipe: 'planks_oak', times: 4, craftingTableId: null },
+  };
+  const planOf = (...actions: Action[]): Plan => ({
+    ...validPlan,
+    steps: actions.map((action, i) => ({ step: i + 1, action, rationale: 'x' })),
+  });
+
+  it('drops every step after the first EXPLORE, and says so in the explanation', () => {
+    // Seen live: EXPLORE, EXPLORE, DIG_BLOCK; the dig target was 7.3 blocks away by then.
+    const { plan, note } = trimStaleSteps(planOf(explore, explore, dig));
+    expect(plan.steps).toEqual([{ step: 1, action: explore, rationale: 'x' }]);
+    expect(note).toBe('dropped steps 2-3 after the EXPLORE at step 1');
+    expect(plan.explanation).toBe(
+      'Low-risk. (Code dropped steps 2-3 after the EXPLORE at step 1: planned from the view ' +
+        'before it, they would run stale; the next plan starts from what the agent sees then.)',
+    );
+    expect(PlanSchema.safeParse(plan).success).toBe(true);
+    // A long explanation is shortened to make room; the plan stays valid.
+    const long = trimStaleSteps({ ...planOf(dig, explore, dig), explanation: 'x'.repeat(1000) });
+    expect(long.plan.steps).toHaveLength(2);
+    expect(long.plan.explanation).toHaveLength(1000);
+    expect(long.plan.explanation).toMatch(/dropped step 3 after the EXPLORE at step 2/);
+    expect(PlanSchema.safeParse(long.plan).success).toBe(true);
+  });
+
+  it('after a GATHER, drops the first step that names a position or a creature, and the rest', () => {
+    const r = trimStaleSteps(planOf(gather, planks, dig, planks));
+    expect(r.plan.steps.map((s) => s.action.type)).toEqual(['GATHER', 'CRAFT_ITEM']);
+    expect(r.note).toBe('dropped steps 3-4 after the GATHER at step 1');
+    expect(trimStaleSteps(planOf(walk, gather, walk)).note).toBe(
+      'dropped step 3 after the GATHER at step 2',
+    );
+  });
+
+  it('keeps plans whose steps do not depend on a view an earlier step replaced', () => {
+    for (const plan of [
+      planOf(walk, dig),
+      planOf(dig, explore),
+      planOf(gather, gather, planks, explore),
+      validPlan,
+    ]) {
+      const r = trimStaleSteps(plan);
+      expect(r.note).toBeNull();
+      expect(r.plan).toBe(plan);
+    }
   });
 });
