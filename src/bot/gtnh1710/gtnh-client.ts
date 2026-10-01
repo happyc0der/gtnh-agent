@@ -382,6 +382,11 @@ const MIN_HOP_LENGTH = 2;
  */
 const MAX_RETREAT_WALK = 768;
 const MAX_RETREAT_HOPS = 48;
+/** A flee (#flee) walks at most this far, to a spot at least FLEE_MIN_GAIN farther from the threats. */
+const FLEE_MAX_PATH = 32;
+const FLEE_MIN_GAIN = 6;
+/** Blocks from the threats a block of walking is worth when choosing where to flee. */
+const FLEE_WALK_WEIGHT = 0.1;
 const MAX_RETREAT_MS = 360_000;
 const RETREAT_ARRIVE = 6;
 
@@ -4453,9 +4458,51 @@ export class Gtnh1710Client implements MinecraftClient {
     const last = await this.#walkTo(target, { stopForThreats: false });
     const data = { ...last.data, walked: Number(trip.walked.toFixed(2)), hops: trip.hops };
     const message = `retreated ${sofar} (${trip.stop.why}), then: ${last.message}`.slice(0, 500);
-    return last.ok
-      ? ok(message, data)
-      : failed(message, last.code === 'OK' ? 'FAILED' : last.code, data);
+    if (last.ok) return ok(message, data);
+    // No way on to the safe location from here, and a threat near: away from it instead.
+    const fled = await this.#flee();
+    if (fled !== null) return failed(`${message}; ${fled}`.slice(0, 500), 'FAILED', data);
+    return failed(message, last.code === 'OK' ? 'FAILED' : last.code, data);
+  }
+
+  /**
+   * Flees from the threats near (hostile, not a calm spider, or unidentified) when a retreat
+   * cannot get on to its safe location: to the reachable spot (a walk of at most
+   * FLEE_MAX_PATH within the play area) farthest from the nearest of them, and farther than
+   * the player is now, as an escape walk (threats do not stop it). Seen live: a fishing
+   * zombie 2.3 blocks off and a husk 11, the trail too close to them, home 90 blocks back
+   * over a cliff: the retreat home failed four times on the spot, and play stopped. Says
+   * where it went, or null when there was no threat near or nowhere farther from them.
+   */
+  async #flee(): Promise<string | null> {
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    const fence = this.#fence().fence;
+    if (world === null || feet === null || fence === null || this.#movementBlocker() !== null) {
+      return null;
+    }
+    const threats = this.#world
+      .nearbyEntities(this.#opts.config.movement.threatRadius, this.#opts.clock.now())
+      .filter((e) => (e.category === 'hostile' && !e.calm) || e.category === 'unclassified');
+    if (threats.length === 0) return null;
+    const away = (x: number, z: number): number =>
+      Math.min(...threats.map((e) => Math.hypot(e.position.x - x, e.position.z - z)));
+    const now = away(feet.x, feet.z);
+    let best: { x: number; y: number; z: number; score: number } | null = null;
+    for (const n of reachableFeet(world, fence, feet, FLEE_MAX_PATH).values()) {
+      const far = away(n.x + 0.5, n.z + 0.5);
+      if (far < now + FLEE_MIN_GAIN) continue;
+      // Farthest from them first; of two about as far, the shorter walk.
+      const score = far - FLEE_WALK_WEIGHT * n.length;
+      if (best === null || score > best.score) best = { x: n.x + 0.5, y: n.y, z: n.z + 0.5, score };
+    }
+    if (best === null) return null;
+    const spot = { x: best.x, y: best.y, z: best.z };
+    const walk = await this.#walkTo(spot, { stopForThreats: false });
+    const where = `(${spot.x}, ${spot.y}, ${spot.z})`;
+    return walk.ok
+      ? `fled instead to ${where}, ${away(spot.x, spot.z).toFixed(1)} blocks from the nearest threat (it was ${now.toFixed(1)})`
+      : `fleeing to ${where} failed: ${walk.message}`;
   }
 
   #startIdle(): void {

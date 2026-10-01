@@ -196,6 +196,8 @@ export interface NearbyEntity {
   name: string;
   category: Classification['category'];
   distance: number;
+  /** Where it is (its feet), as last sent. */
+  position: { x: number; y: number; z: number };
   /** A calm spider (WorldModel#isCalm): listed, but no threat. */
   calm: boolean;
 }
@@ -1144,6 +1146,7 @@ export class WorldModel {
           name: e.classification.name,
           category: e.classification.category,
           distance: reported,
+          position: { x: e.x, y: e.y, z: e.z },
           calm: this.#isCalm(e, reported, now),
         });
       }
