@@ -42,7 +42,7 @@ describe('OllamaPlannerProvider', () => {
     expect(body?.model).toBe('qwen3:14b');
     expect(body?.messages[0]).toEqual({ role: 'system', content: PLANNER_SYSTEM_PROMPT });
     expect(body?.messages[1]?.content).toContain(JSON.stringify(req));
-    expect(body?.options).toMatchObject({ temperature: 0, seed: 7, num_ctx: 8192 });
+    expect(body?.options).toMatchObject({ temperature: 0, seed: 7, num_ctx: 16_384 });
     expect(body?.format).toEqual(plannerFormat(4));
     expect(JSON.stringify(body?.format)).toContain('"maxItems":4');
     expect(JSON.stringify(body?.format)).not.toContain('PLACE_BLOCK');
@@ -166,5 +166,33 @@ describe('OllamaPlannerProvider', () => {
       'qwen3:14b',
     );
     await expect(provider.plan(request())).resolves.toMatchObject({ kind: 'escalation' });
+  });
+});
+
+describe('fitting the request to the context window', () => {
+  it('trims history first and never the task, route or stock', async () => {
+    const { buildPlannerRequest } = await import('../../src/planner/planner-provider.ts');
+    const { fitPlannerRequest } = await import('../../src/llm/ollama-planner-provider.ts');
+    const { makeState, safetyCtx } = await import('../fixtures/index.ts');
+    const long = 'x'.repeat(190);
+    const request = buildPlannerRequest({
+      state: makeState(),
+      safety: safetyCtx(),
+      maxPlanSteps: 8,
+      recentActions: Array.from({ length: 50 }, () => ({
+        actionType: 'DIG_BLOCK' as const,
+        status: 'succeeded',
+        reason: long,
+      })),
+      recentFailures: [],
+      journal: Array.from({ length: 32 }, (_, i) => `plan #${i} done: ${long}`),
+    });
+    const small = fitPlannerRequest(request, 2_500);
+    expect(small.recentActions.length).toBeLessThanOrEqual(5);
+    expect(small.journal.length).toBeLessThanOrEqual(6);
+    expect(small.task).toEqual(request.task);
+    expect(small.route).toEqual(request.route);
+    // Plenty of room: nothing changes.
+    expect(fitPlannerRequest(request, 1_000_000)).toBe(request);
   });
 });

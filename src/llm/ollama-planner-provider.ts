@@ -14,7 +14,7 @@ import {
 } from '../domain/recipes.ts';
 import type { PlannerProvider } from '../planner/planner-provider.ts';
 import { errorMessage } from '../util/json.ts';
-import type { OllamaClient } from './ollama-client.ts';
+import { CONTEXT_TOKENS, type OllamaClient } from './ollama-client.ts';
 
 /** Room for a full plan (16 steps with rationales) plus its explanation. */
 export const PLANNER_MAX_OUTPUT_TOKENS = 2048;
@@ -80,6 +80,37 @@ Rules:
 10. Crafting: CRAFT_ITEM only with a known recipe, only with ingredients the player carries (state.inventoryTop), and never more times than they allow.
 11. Route (request.route, when present): code calculated it exactly. "stock" is have vs need for the goal; "steps" lists the raw materials to gather, then every gather and craft step in order (inputs before what they make), with where each material is known to be ("best": the place to use) or where to look when none is known. Take stock first, then plan the next steps of the route in order: gather at the best known place (walk there, dig there), craft once the inputs are held. Don't invent other recipes. If a step has no known place or way, escalate (INSUFFICIENT_STATE) and say what to look for. "withdraw" steps mean the items are in a known container: walk within 4 blocks of it, OPEN_CONTAINER, then WITHDRAW_ITEM the exact quantity.
 12. Work in chunks: plan only the next one or two route steps (never the whole route); when they are done the agent checkpoints and asks you again with fresh stock. request.journal is the compact record of this task so far (plans made, done or failed and why, interruptions by mobs or night): continue from where it stopped, and never repeat a step that failed for the same reason.`;
+
+/** Rough characters per token for these JSON prompts (conservative). */
+const CHARS_PER_TOKEN = 3;
+
+/**
+ * Trims a request that would not fit the context window, oldest and least useful first:
+ * history (recent actions, then the journal's oldest lines), then the farthest diggable
+ * blocks. The rules, the task, the route and the stock are never cut.
+ */
+export function fitPlannerRequest(
+  request: PlannerRequest,
+  budgetTokens = CONTEXT_TOKENS - PLANNER_MAX_OUTPUT_TOKENS - 512,
+): PlannerRequest {
+  const size = (r: PlannerRequest): number =>
+    Math.ceil((PLANNER_SYSTEM_PROMPT.length + plannerUserMessage(r).length) / CHARS_PER_TOKEN);
+  let r = request;
+  const steps: Array<(x: PlannerRequest) => PlannerRequest | null> = [
+    (x) => (x.recentActions.length > 5 ? { ...x, recentActions: x.recentActions.slice(-5) } : null),
+    (x) => (x.journal.length > 6 ? { ...x, journal: x.journal.slice(-6) } : null),
+    (x) =>
+      x.state.diggableBlocks.length > 12
+        ? { ...x, state: { ...x.state, diggableBlocks: x.state.diggableBlocks.slice(0, 12) } }
+        : null,
+    (x) => (x.recentActions.length > 0 ? { ...x, recentActions: [] } : null),
+  ];
+  for (const step of steps) {
+    if (size(r) <= budgetTokens) break;
+    r = step(r) ?? r;
+  }
+  return r;
+}
 
 /** The user message: the (already sanitized) request as compact JSON. */
 export function plannerUserMessage(request: PlannerRequest): string {
@@ -160,7 +191,7 @@ export class OllamaPlannerProvider implements PlannerProvider {
       const result = await this.#client.chat({
         model: this.#model,
         system: PLANNER_SYSTEM_PROMPT,
-        user: plannerUserMessage(checked.data),
+        user: plannerUserMessage(fitPlannerRequest(checked.data)),
         format: plannerFormat(checked.data.maxPlanSteps),
         maxOutputTokens: PLANNER_MAX_OUTPUT_TOKENS,
       });

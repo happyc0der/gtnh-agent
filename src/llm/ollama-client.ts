@@ -76,11 +76,14 @@ export interface OllamaClientDeps {
 /** Fixed sampling, so the same prompt gives the same answer. */
 export const SAMPLING = { temperature: 0, seed: 7 } as const;
 /**
- * The context window for EVERY request (a planner request is about 1.6k tokens plus up to
- * 2k of reply). One size for all roles matters: Ollama reloads a model whose num_ctx
- * changes, so a model serving both decisions and plans would reload on every switch.
+ * The context window for EVERY request. A full planner request (rules, state, route, journal)
+ * is about 5-6k tokens and growing, plus up to 2k of reply; Ollama silently drops the START
+ * of a prompt that does not fit (the system rules), so there is ample room, and the planner
+ * also trims its request to fit (see fitPlannerRequest). One size for all roles matters:
+ * Ollama reloads a model whose num_ctx changes, so a model serving both decisions and plans
+ * would reload on every switch. qwen3:14b at 16k: about 11-12 GB of VRAM.
  */
-export const CONTEXT_TOKENS = 8192;
+export const CONTEXT_TOKENS = 16_384;
 export const MAX_REQUEST_CHARS = 256_000;
 export const MAX_RESPONSE_CHARS = 1_000_000;
 
