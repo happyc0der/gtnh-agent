@@ -74,7 +74,23 @@ export const SafetyConfigSchema = z.strictObject({
   approvedFoods: z
     .array(ItemNameSchema)
     .max(100)
-    .default(['minecraft:bread', 'minecraft:cooked_beef']),
+    .default([
+      'minecraft:bread',
+      'minecraft:cooked_beef',
+      // Vanilla foods with no harmful effect, best first: what a first day turns up (an apple
+      // from a leaf, a carrot). Not raw chicken or rotten flesh (hunger), spider eyes or
+      // pufferfish (poison), nor golden apples (worth keeping).
+      'minecraft:cooked_porkchop',
+      'minecraft:cooked_chicken',
+      'minecraft:cooked_fished',
+      'minecraft:baked_potato',
+      'minecraft:pumpkin_pie',
+      'minecraft:mushroom_stew',
+      'minecraft:apple',
+      'minecraft:carrot',
+      'minecraft:melon',
+      'minecraft:cookie',
+    ]),
   /** Fuels the agent may put into known generators. */
   approvedFuels: z
     .array(ItemNameSchema)
