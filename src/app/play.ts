@@ -164,7 +164,7 @@ const CONTINUE_AFTER: ReadonlySet<SessionStopKind> = new Set([
   'stop-requested', // only when the quest itself was met: see below
 ]);
 
-/** A cycle of a play session, for narration. */
+/** A cycle of a play session, for narration (the same event the quest sessions emit). */
 function cycleEvent(
   repos: Repositories,
   session: number,
@@ -371,7 +371,24 @@ export async function runPlay(
             ? nightReason(dark)
             : hooks.stopRequested(),
       onCycle: (r, index) => {
-        emit(cycleEvent(deps.repos, session, r, index));
+        emit({
+          kind: 'cycle',
+          session,
+          index,
+          summary: r.summary,
+          decision:
+            r.decision === null || r.decision === undefined
+              ? null
+              : {
+                  provider: r.decision.provider,
+                  decision: r.decision.decision,
+                  reasons: r.decision.reasonCodes,
+                  confidence: r.decision.confidence,
+                },
+          newPlan:
+            r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
+          detail: r.outcome?.execution?.message ?? null,
+        });
         const after = r.outcome?.stateAfter;
         if (after?.inventory.known === true) {
           met = total(missingItems(goal.quest, after.inventory.value.items)) === 0;

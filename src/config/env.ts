@@ -241,32 +241,33 @@ export const MemoryConfigSchema = z.strictObject({
 });
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 
-export const AgentConfigSchema = z
-  .strictObject({
-    minecraft: MinecraftConfigSchema.prefault({}),
-    database: z
-      .strictObject({ path: z.string().min(1).default('./data/agent.sqlite') })
-      .prefault({}),
-    safety: SafetyConfigSchema.prefault({}),
-    routing: RoutingConfigSchema.prefault({}),
-    planner: PlannerConfigSchema.prefault({}),
-    decisions: DecisionsConfigSchema.prefault({}),
-    llm: LlmConfigSchema.prefault({}),
-    memory: MemoryConfigSchema.prefault({}),
-    locations: z.record(LocationNameSchema, NamedLocationSchema).default({}),
-  })
-  .superRefine((c, ctx) => {
-    // In 'follow' mode the safety boundary is the exploration area: it must be bounded.
-    if (c.minecraft.movement.mode !== 'follow') return;
-    const { min, max } = c.safety.boundary;
-    if (max.x - min.x > MAX_EXPLORATION_SIDE || max.z - min.z > MAX_EXPLORATION_SIDE) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['safety', 'boundary'],
-        message: `with movement mode 'follow' the boundary is the exploration area: at most ${MAX_EXPLORATION_SIDE} blocks per side`,
-      });
-    }
-  });
+const AgentConfigFields = z.strictObject({
+  minecraft: MinecraftConfigSchema.prefault({}),
+  database: z.strictObject({ path: z.string().min(1).default('./data/agent.sqlite') }).prefault({}),
+  safety: SafetyConfigSchema.prefault({}),
+  routing: RoutingConfigSchema.prefault({}),
+  planner: PlannerConfigSchema.prefault({}),
+  decisions: DecisionsConfigSchema.prefault({}),
+  llm: LlmConfigSchema.prefault({}),
+  memory: MemoryConfigSchema.prefault({}),
+  locations: z.record(LocationNameSchema, NamedLocationSchema).default({}),
+});
+
+/**
+ * The whole configuration. With movement mode 'follow' the safety boundary is the exploration
+ * area: it must stay bounded.
+ */
+export const AgentConfigSchema = AgentConfigFields.superRefine((c, ctx) => {
+  if (c.minecraft.movement.mode !== 'follow') return;
+  const { min, max } = c.safety.boundary;
+  if (max.x - min.x > MAX_EXPLORATION_SIDE || max.z - min.z > MAX_EXPLORATION_SIDE) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['safety', 'boundary'],
+      message: `with movement mode 'follow' the boundary is the exploration area: at most ${MAX_EXPLORATION_SIDE} blocks per side`,
+    });
+  }
+});
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 export type AgentConfigInput = z.input<typeof AgentConfigSchema>;
 
