@@ -125,23 +125,49 @@ loop: every run is started by a human and bounded.
 
 ## Quest goals and autonomous play
 
-The agent's goals come from GTNH's own quest book, like a new player's. The benchmark is
-"Finish Age 0": the 92 quests of the "Tier 0 Stone Age" chapter (37 of them main quests).
+The agent's goals come from GTNH's own quest book, like a new player's, and **progress is what
+the server's quest book records**, never the agent's own judgement. The benchmark is "Finish
+Age 0": every quest of the 92-quest "Tier 0 - Stone Age" chapter (37 main quests) completed in
+the server's Better Questing records for the agent's player.
 
-- `scripts/extract-quests.ts` reads the test server's Better Questing files into
-  `src/goals/age0-quests.ts`: each quest's exact 64-bit id, name, prerequisites (AND/OR), main flag
-  and tasks with their items (registry name and damage, the agent's inventory naming).
-- `src/goals/quest-goals.ts` decides, purely from data:
-  - **done:** a quest completes when its prerequisites are done and every required task is
-    satisfied. A checkbox is satisfied at once, items when they are held, and a crafting task when
-    the crafted items are held (the quest book counts crafts; the agent keeps what it crafts).
-    Optional retrieval never blocks a quest. Prerequisites in other chapters count as met.
-  - **doable:** the agent's abilities (items it can gather or craft) cover every required task.
-    Hunting, locations, fluids and the like are not doable yet, so those quests are never picked.
-  - **next:** the shallowest doable, unlocked quest (fewest prerequisites below it), main quests
-    first, then quest-book order.
-- The agent keeps its own completions in agent memory (`quests.age0.completed`). It never touches
-  the server's quest book; claiming there is a GUI action for the player.
+### Quest goals
+
+- **The data.** `scripts/extract-quests.ts` reads the world's own quest database
+  (`<world>/betterquesting/QuestDatabase.json`, what the server runs) into
+  `src/goals/age0-quests.ts`: the chapter's 92 quests and the 14 quests it needs from other
+  chapters (its prerequisites, recursively: the closure, 106 in all). Per quest: the exact 64-bit
+  id, prerequisites with their logic (AND/OR/XOR...), task logic (AND/OR), main flag, chapter,
+  lockedProgress, tasks (index, type, consume, items with ore dictionary names, whether crafts
+  from the player's statistics count) and rewards (which one is a choice).
+- **The server's records.** The live client reads the quest book over Better Questing's own
+  channel (`src/bot/gtnh1710/better-questing.ts`; see gtnh-compatibility.md, "Quest book") into
+  `GameState.questBook`: for each closure quest, completed, claimed, active and unlocked, each
+  task's completion and the server's count, and the rewards still to claim. It is unknown until
+  the server's sync after login has arrived.
+- **The logic** (`src/goals/quest-goals.ts`, pure) follows Better Questing:
+  - a quest unlocks by its prerequisite logic over completed quests (XOR: the two smeltery
+    quests exclude each other, and the next one accepts either, OR);
+  - it completes in the server's quest loop once its tasks satisfy the task logic: AND, or OR
+    (one task is enough); optional retrieval counts as done;
+  - retrieval tasks count what is held (a met count stays); consume tasks count what a submit
+    handed in; crafting tasks count only the server's count of crafts made while the quest was
+    active (holding the item never counts); checkboxes are ticked in the quest book.
+- **The next goal** is the shallowest quest the server lists as active and unlocked, that the
+  agent's abilities can finish (hunting, locations and unknown crafts cannot), and that clicks
+  alone do not finish; main quests first, then quest-book layout. Its task's subgoal lists the
+  quest's remaining tasks by the server's count. Its requirements (the planner's route) name
+  exactly what to have: held ore-dictionary items under their own names (birch logs for
+  `logWood`), and for a crafting task what is held plus the crafts still to make.
+- **Quest-book clicks** (`questBookSteps`), decided in code, never by a model: claims of
+  completed quests' rewards (only with room in the inventory; a choice reward takes the first
+  item an unfinished quest asks for), checkbox ticks (when the tick, plus a submit, completes
+  the quest), and submits (items to hand in, or items held from before the quest was active,
+  which the server has not counted). A quest whose tasks are all done is left to the server's
+  quest loop; play waits a few seconds for it when nothing else is left.
+- The last observation of the server's records is kept in agent memory
+  (`quests.age0.server`), so `cli quests` shows it without a connection.
+
+### Routes, nights and the play loop
 
 **Routes: the planner takes stock before it plans.** A task can name the items its goal
 needs (quests do; `cli task-add --needs item=count,...` for any goal). For those,
@@ -184,17 +210,23 @@ journal instead of a raw log, continues where the task stopped and avoids repeat
 Interruptions (mobs, hunger, lava, night) are still handled first by System 1's reflexes;
 a step that no longer fits the world is refused and replanned.
 
-`src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the inventory, records the
-quests that are now satisfied, makes the next quest the current task (`quest-<id>`, its subgoal
-saying what is still missing) and runs one bounded session on it (`runSession`). In the session
-the configured decision maker and planner choose what to do, and every action is still
-validated, executed and verified like any other. Play stops, and says why, when:
+`src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the server's quest book and
+the inventory, records the quests the server now lists as completed (closing their tasks), and
+makes the quest-book clicks that are due, one per round. Each click is an ordinary action run by
+the executor (`runQuestBookAction`: schema, safety policy, preconditions, execution, and
+verification against the server's next sync), and only when `MC_ENABLE_QUEST_BOOK` is on; a
+click that fails twice is not tried again in that play. Then it makes the next quest the current
+task (`quest-<id>`) and runs one bounded session on it (`runSession`), which ends as soon as an
+observation shows the quest completed or ready for a click. In the session the configured
+decision maker and planner choose what to do, and every action is still validated, executed and
+verified like any other. Play stops, and says why, when:
 
-- no doable quest is left, or the inventory cannot be read;
+- no doable quest is left (the reason names clicks that are due but off or failing), or the
+  inventory or the server's quest book cannot be read;
 - a session asks for a human (an approval, a safety stop), or the quest's task was paused,
   blocked or closed (play never resumes those);
 - the same quest shows no fewer missing items for `maxStuckSessions` sessions in a row, measured
-  from the inventory, not from what a session claims;
+  from the server's count and the inventory, not from what a session claims;
 - the time or session limit, the stop file or Ctrl+C.
 
 A failed action or a safe detour (retreating, eating) does not stop play by itself: that is part
@@ -603,6 +635,7 @@ integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
 | No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; placing: C08 with the held block item, faces 0-5 only (never "use the item in the air"), an NBT-free stack, clicking only a block `placing.ts` checked; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured tables); digging needs `MC_ENABLE_DIGGING=true` and the fence; placing needs `MC_ENABLE_PLACING=true` and the fence; every other world-changing action returns `NOT_IMPLEMENTED`. EXPLORE walks in hops with the same walking steps. |
+| Quest-book messages                | On Better Questing's channel the client can send only four typed messages: the empty main_sync answer (reading the quest book) and, with `MC_ENABLE_QUEST_BOOK=true`, quest_action (submit or claim), task_checkbox and choice_reward, for the Age 0 quests only. The forced claim (random choice) and every editing message cannot be expressed; plans never contain these clicks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -621,6 +654,6 @@ src/llm          Ollama client, model decision provider, model planner (opt-in)
 src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, explore, chests, crafting, dig and place in a fence or a moving play area; world surveys), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
-src/goals        the Age 0 quest book (generated) and goal selection
+src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records
 src/app          agent loop, sessions, play loop (with scouting), quest book, provider factory, mock scenarios, CLI
 ```

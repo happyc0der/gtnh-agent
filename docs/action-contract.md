@@ -52,6 +52,9 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 | `PLACE_BLOCK`             | cell position (integers, y 0–255), allowlisted item             | cell within reach of the eyes; the item in the inventory         | an observed placeable cell (`NOT_PLACEABLE`); whole cell inside boundary; clear of known hazards; item not protected; never a cell the player's body is in, never sand/gravel in the player's columns or where nothing holds it up (`UNSAFE_PLACE`); not allowed during danger | The cell is observed turning into the block, and the item −1 exactly (`BLOCK_PLACED`).       |
 | `CRAFT_ITEM`              | recipe id, 1–64 times, table id or null                         | enough ingredients; 3x3 needs a known table within reach         | no ingredient kind the recipe may use is protected; the table is known                                                                                                                                                                                                         | Result +count×times, ingredients −cells×times, nothing else.                                 |
 | `PAUSE_AND_ASK_USER`      | question ≤ 500 chars                                            | none                                                             | always permitted                                                                                                                                                                                                                                                               | Client acknowledged. The loop marks the task `paused`.                                       |
+| `SUBMIT_QUEST`            | quest id (two signed 64-bit halves)                             | listed in the quest book, not completed; inventory known         | a quest of the Age 0 closure the server has (`UNKNOWN_TARGET`), active and unlocked there (`QUEST_NOT_ACTIVE`); no protected item could be handed in to a consume task, and none at all for an ore-dictionary entry (`PROTECTED_ITEM`); not allowed during danger              | The server records it completed; only consume items left (`QUEST_COMPLETED`).                |
+| `CHECK_QUEST_BOX`         | quest id, task index 0–1023                                     | an unticked checkbox task of a quest not completed               | a listed quest (`UNKNOWN_TARGET`), active and unlocked on the server (`QUEST_NOT_ACTIVE`); not allowed during danger                                                                                                                                                           | The server records the task, or the quest, as complete (`QUEST_TASK_CHECKED`).               |
+| `CLAIM_QUEST_REWARD`      | quest id, choice index or null                                  | completed, unclaimed; a valid choice; room for every reward      | a listed quest (`UNKNOWN_TARGET`); not allowed during danger                                                                                                                                                                                                                   | Claimed on the server; exactly the reward items arrived (`QUEST_REWARD_CLAIMED`).            |
 
 **Not in the allowlist, by design:** lava interaction, dropping items, combat, breaking any
 block that is not on `DIG_BLOCK`'s allowlist, placing any block that is not on
@@ -176,6 +179,24 @@ See [architecture: exploring and world memory](architecture.md#exploring-and-wor
   block falling), or a window opens instead (it is closed again). A placed block whose stack
   did not shrink is reported (`stackUsed: false`) and fails verification.
 
+**The quest-book clicks** (`SUBMIT_QUEST`, `CHECK_QUEST_BOX`, `CLAIM_QUEST_REWARD`) are the
+GUI's own clicks in Better Questing's quest book (see
+[gtnh-compatibility: quest book](gtnh-compatibility.md#quest-book-better-questing-2026-09-30)).
+They need `MC_ENABLE_QUEST_BOOK=true` (otherwise `NOT_IMPLEMENTED`) and presence ticks, and
+are refused while a walk, chest operation, dig or placement runs, or under `halt()` or the stop
+file. Only the play loop chooses them, deterministically from the server's records (origin
+`deterministic-router`); the planner is not offered them and `validatePlan` refuses any plan
+step that is one. The client checks the server's quest book again just before it sends
+anything, and judges the click by the server's next sync:
+
+- **Refused** (`REFUSED`) when the quest is not one the agent tracks or the server has not
+  synced it, or (submit, checkbox) the server does not list it as active and unlocked, or
+  (claim) it is not completed or already claimed, the choice does not fit its rewards, or the
+  inventory has no room for them.
+- **Fails** (`FAILED`) when the server does not record the result in time: the quest completed
+  (8 s after a submit: its quest loop runs every 3 s of the player's ticks), the box ticked or
+  the rewards claimed (5 s), the choice acknowledged (3 s).
+
 The other world-changing actions return `NOT_IMPLEMENTED`. See
 [architecture: walking](architecture.md#walking), [digging](architecture.md#digging) and
 [placing](architecture.md#placing).
@@ -199,7 +220,8 @@ The other world-changing actions return `NOT_IMPLEMENTED`. See
    `environmentHazards.scanRadius`). If the entity scan is smaller than `hostileThreatRadius`, or
    the hazard scan smaller than `hazardAvoidanceRadius`, the state is treated as unknown (pause).
 5. **Protected items** can never be eaten, deposited, withdrawn, burned, crafted with (every
-   kind a recipe may use counts) or placed. `ns:item` also protects every `ns:item@meta` variant. Config
+   kind a recipe may use counts), placed or handed in to a quest (a submit is refused while any
+   protected item could match a consume task). `ns:item` also protects every `ns:item@meta` variant. Config
    items are copied into the database and never silently removed.
 6. **Repeated failures.** Once an identical action (type + canonical args) chosen by the agent
    has failed `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is

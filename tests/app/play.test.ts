@@ -316,6 +316,47 @@ describe('autonomous play', () => {
     expect(events.filter((e) => e.kind === 'quest-book' && !e.ok)).toHaveLength(2);
   });
 
+  it("waits for the server's quest loop when a quest's tasks are all done", async () => {
+    // The checkbox is ticked; the server's loop has not completed the quest yet.
+    const world: World = { inventory: {}, sessions: [], calls: 0, taskDone: new Set(['1#0']) };
+    let waits = 0;
+    const result = await runPlay(
+      {
+        ...deps(open(), world),
+        sleep: () => {
+          waits += 1;
+          sets(world).completed.add('1'); // the quest loop ran
+          return Promise.resolve();
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 1 },
+      noStop,
+    );
+    expect(waits).toBe(1);
+    expect(world.clicks).toEqual(['CLAIM_QUEST_REWARD 1']); // no submit, no second tick
+    expect(result.questsCompleted).toEqual(['Q1']);
+
+    // A loop that never completes it: play gives up after a few waits and says so.
+    const stuck: World = { inventory: {}, sessions: [], calls: 0, taskDone: new Set(['1#0']) };
+    let stuckWaits = 0;
+    const r = await runPlay(
+      {
+        ...deps(open(), stuck),
+        sleep: () => {
+          stuckWaits += 1;
+          return Promise.resolve();
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(stuckWaits).toBe(5);
+    expect(r.stopReason).toBe(
+      'no quest the agent can do is left; the server has not completed "Q1" although its ' +
+        'tasks are done',
+    );
+  });
+
   it("stops when the server's quest book cannot be read", async () => {
     const result = await runPlay(
       deps(open(), { inventory: {}, sessions: [], calls: 0, noBook: true }),

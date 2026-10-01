@@ -71,6 +71,8 @@ export interface QuestUpdate {
   clicks: QuestBookStep[];
   /** Due claims that wait (no room in the inventory, ...). */
   waiting: Array<{ quest: Quest; reason: string }>;
+  /** Quests whose tasks are all done, waiting for the server's quest loop to complete them. */
+  pending: Quest[];
 }
 
 /**
@@ -98,13 +100,19 @@ export function updateQuests(
     );
     for (const q of completed) closeQuestTask(repos, q.id);
   });
-  const { steps, waiting } = questBookSteps(quests, server, inventory.items, inventory.freeSlots);
+  const { steps, waiting, pending } = questBookSteps(
+    quests,
+    server,
+    inventory.items,
+    inventory.freeSlots,
+  );
   return {
     added,
     progress: questProgress(quests, done, abilities),
     next: nextGoal(quests, server, inventory.items, abilities),
     clicks: steps,
     waiting,
+    pending,
   };
 }
 
@@ -178,7 +186,7 @@ export function describeQuests(
   const completed = completedIds(server);
   const items = state.inventory.known ? state.inventory.value.items : {};
   const next = nextGoal(quests, server, items);
-  const { steps, waiting } = questBookSteps(quests, server, items, freeSlotsOf(state));
+  const { steps, waiting, pending } = questBookSteps(quests, server, items, freeSlotsOf(state));
   const active = new Set(
     quests
       .filter((q) => server.get(q.id)?.active === true && !completed.has(q.id))
@@ -196,6 +204,7 @@ export function describeQuests(
       .map((q) => q.name),
     dueClicks: steps.map((s) => s.reason),
     ...(waiting.length > 0 ? { waiting: waiting.map((w) => w.reason) } : {}),
+    ...(pending.length > 0 ? { completingOnServer: pending.map((q) => q.name) } : {}),
     next:
       next === null
         ? 'nothing the agent can do yet'

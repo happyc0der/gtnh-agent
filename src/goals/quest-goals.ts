@@ -509,26 +509,38 @@ export function chooseReward(
   return index === -1 ? 0 : index;
 }
 
+export interface QuestBookSteps {
+  steps: QuestBookStep[];
+  /** Due claims that cannot be made now, and why. */
+  waiting: Array<{ quest: Quest; reason: string }>;
+  /**
+   * Quests whose tasks are all done by the server's records, waiting for its quest loop to
+   * complete them (every 60 of the player's ticks): nothing to click.
+   */
+  pending: Quest[];
+}
+
 /**
  * The quest-book clicks due now, in order: claims (completed quests with unclaimed rewards,
  * when the inventory has room for them), checkbox ticks (when the ticks, plus a submit, would
- * complete the quest), then submits (a submit completes the quest now: items to hand in, items
- * held from before the quest was active, or tasks all done and the server's quest loop still
- * to run). Only closure quests, and for ticks and submits only quests the server lists as
- * active and unlocked. The play loop makes the first, observes again, and asks again.
- * `waiting` says why a due claim cannot be made.
+ * complete the quest), then submits (a submit completes the quest now: items to hand in, or
+ * items held from before the quest was active, which the server has not counted). Only closure
+ * quests, and for ticks and submits only quests the server lists as active and unlocked. A
+ * quest whose tasks are all done is left to the server's quest loop (`pending`). The play loop
+ * makes the first click, observes again, and asks again.
  */
 export function questBookSteps(
   quests: readonly Quest[],
   server: ServerQuests,
   inventory: Readonly<Record<string, number>>,
   freeSlots: number | null,
-): { steps: QuestBookStep[]; waiting: Array<{ quest: Quest; reason: string }> } {
+): QuestBookSteps {
   const completed = completedIds(server);
   const claims: QuestBookStep[] = [];
   const ticks: QuestBookStep[] = [];
   const submits: QuestBookStep[] = [];
   const waiting: Array<{ quest: Quest; reason: string }> = [];
+  const pending: Quest[] = [];
   for (const quest of quests) {
     const record = server.get(quest.id);
     if (record === undefined) continue;
@@ -573,15 +585,17 @@ export function questBookSteps(
       });
       continue;
     }
+    if (view.completableWithoutSubmit) {
+      pending.push(quest);
+      continue;
+    }
     submits.push({
       quest,
       spec: { type: 'SUBMIT_QUEST', args: { questId: quest.id } },
-      reason: view.completableWithoutSubmit
-        ? `submit "${quest.name}": its tasks are all done`
-        : `submit "${quest.name}": everything it needs is held`,
+      reason: `submit "${quest.name}": everything it needs is held`,
     });
   }
-  return { steps: [...claims, ...ticks, ...submits], waiting };
+  return { steps: [...claims, ...ticks, ...submits], waiting, pending };
 }
 
 // ---------------------------------------------------------------------------

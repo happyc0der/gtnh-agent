@@ -289,15 +289,13 @@ describe('quest goals: the next goal and the quest-book clicks', () => {
     ]);
   });
 
-  it('submits a quest whose tasks are all done when the server has not completed it yet', () => {
+  it("leaves a quest whose tasks are all done to the server's quest loop (no click)", () => {
     const server = serverOf(done(START), rec(SAND, { complete: [0] }));
-    expect(questBookSteps(BOOK, server, {}, 30).steps).toEqual([
-      {
-        quest: SAND,
-        spec: { type: 'SUBMIT_QUEST', args: { questId: '0:2' } },
-        reason: 'submit "Quest 0:2": its tasks are all done',
-      },
-    ]);
+    const { steps, pending } = questBookSteps(BOOK, server, {}, 30);
+    expect(steps).toEqual([]);
+    expect(pending).toEqual([SAND]);
+    // Nor is it a goal: there is nothing left to get.
+    expect(nextGoal(BOOK, server, {})).toBeNull();
   });
 });
 

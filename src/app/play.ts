@@ -372,6 +372,13 @@ const total = (missing: Record<string, number>): number =>
 /** A quest-book click that failed this many times in a play is not tried again. */
 const MAX_CLICK_FAILURES = 2;
 
+/**
+ * Better Questing completes a quest whose tasks are done in its quest loop, every 60 of the
+ * player's ticks (3 s): with nothing else to do, play waits this long for it, this many times.
+ */
+const QUEST_LOOP_WAIT_MS = 3_000;
+const MAX_QUEST_LOOP_WAITS = 5;
+
 const clickKey = (s: QuestBookStep): string => `${s.spec.type} ${JSON.stringify(s.spec.args)}`;
 
 /**
@@ -416,6 +423,9 @@ export async function runPlay(
   let last: { questId: string; missing: number; stuck: number } | null = null;
   /** Quest-book clicks that failed, by click. */
   const failedClicks = new Map<string, number>();
+  /** Waits in a row for the server's quest loop, with nothing else to do. */
+  let loopWaits = 0;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
   const done = (stopReason: string, night: WorldTime | null = null): PlayResult => ({
     stopReason,
@@ -640,6 +650,13 @@ export async function runPlay(
       }
 
       const goal = update.next;
+      if (goal === null && update.pending.length > 0 && loopWaits < MAX_QUEST_LOOP_WAITS) {
+        // Tasks all done: the server's quest loop completes the quest within a few seconds.
+        loopWaits += 1;
+        await sleep(QUEST_LOOP_WAIT_MS);
+        continue;
+      }
+      loopWaits = 0;
       if (goal === null) {
         const due = update.clicks.map((c) => c.reason).slice(0, 3);
         const notes =
@@ -652,7 +669,14 @@ export async function runPlay(
                 ]
               : [`quest-book clicks failed ${MAX_CLICK_FAILURES} times: ${due.join('; ')}`];
         const waiting = update.waiting.map((w) => w.reason).slice(0, 3);
-        return done(['no quest the agent can do is left', ...notes, ...waiting].join('; '));
+        const pending = update.pending.map(
+          (q) => `the server has not completed "${q.name}" although its tasks are done`,
+        );
+        return done(
+          ['no quest the agent can do is left', ...notes, ...waiting, ...pending.slice(0, 3)].join(
+            '; ',
+          ),
+        );
       }
       current = {
         id: goal.quest.id,
