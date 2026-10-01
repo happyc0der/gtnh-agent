@@ -175,8 +175,10 @@ needs (quests do; `cli task-add --needs item=count,...` for any goal). For those
 (`src/goals/route-book.ts`) and the places it has seen, exactly what the goal still needs:
 have vs need per item, the raw materials to gather in total, every gather and craft step in
 order (ingredients before what they make), the best known place for each material (the
-nearest with enough seen), where a player would look when no place is known, and a rough
-time. The planner gets the route in its request and plans along it; the model still makes
+nearest with enough seen: blocks in view now, and places world memory remembers from
+exploring, marked "remembered"), where a player would look when no place is known (the
+nearest seen biome where it is common, e.g. grass in a forest, never in a desert), and a
+rough time. The planner gets the route in its request and plans along it; the model still makes
 every decision. The route is general: smelting, tools, mob drops and exported recipe data
 are new book entries, not new planner logic.
 
@@ -184,7 +186,8 @@ are new book entries, not new planner logic.
 goal of the player's own (task `goal-...`) exactly like a quest: the planner gets its route,
 sessions and the journal work the same way, and play ends when the items are held. How
 far a goal can be routed depends on the route book: items it cannot make or find yet are
-listed as such, and the planner escalates rather than guessing.
+listed as such, and the planner escalates rather than guessing; a material that only has
+no known place yet is explored for, not escalated.
 
 **Storage in the stocktake.** Containers whose contents the agent knows (seen now, or
 remembered) count as "stored": the route fetches from them, nearest first, before it

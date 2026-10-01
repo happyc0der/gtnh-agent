@@ -179,8 +179,9 @@ const DirectionOrHereSchema = z.enum([...EXPLORE_DIRECTIONS, 'here']);
 
 export const KnownPlaceSchema = z.strictObject({
   resource: z.enum(PLACE_KINDS),
-  /** A seen block of it (EXPLORE toward this x and z). */
+  /** A seen block of it (EXPLORE toward this x and z); y is null when only its chunk is known. */
   x: z.int(),
+  y: z.int().nullable(),
   z: z.int(),
   /** Blocks from the player (horizontal), and which way. */
   distance: z.int().min(0),
@@ -250,7 +251,8 @@ export function summarizeExploration(input: {
     const candidates = chunks
       .filter((c) => (c.counts[resource] ?? 0) >= PLACE_MINIMUM[resource])
       .map((c) => {
-        const at = c.examples[resource]?.[0] ?? { ...centreOf(c), y: 0 };
+        const example = c.examples[resource]?.[0];
+        const at = example ?? { ...centreOf(c), y: null };
         return { c, at, count: c.counts[resource] ?? 0, distance: flat(at) };
       })
       .sort((a, b) => a.distance - b.distance || b.count - a.count);
@@ -265,6 +267,7 @@ export function summarizeExploration(input: {
       places.push({
         resource,
         x: p.at.x,
+        y: p.at.y,
         z: p.at.z,
         distance: Math.round(p.distance),
         direction: compassDirection(from, p.at),

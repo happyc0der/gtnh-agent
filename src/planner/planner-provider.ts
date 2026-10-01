@@ -9,7 +9,7 @@ import { SafetyConfigSchema, type SafetyConfig } from '../domain/safety.ts';
 import { ROUTE_BOOK } from '../goals/route-book.ts';
 import { describeRoute, planRoute, type PlaceLookup } from '../goals/route.ts';
 import { parseToolName, usesLeft } from '../domain/tools.ts';
-import type { ExplorationSummary } from '../domain/world-memory.ts';
+import type { ExplorationSummary, PlaceKind } from '../domain/world-memory.ts';
 import { candidateOf, fightProblems } from '../safety/combat-checks.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import { isProtected } from '../safety/protected-items.ts';
@@ -226,10 +226,76 @@ export function sanitizeStateForPlanner(
   };
 }
 
+/** The blocks behind each resource kind world memory remembers (world-survey.ts). */
+const PLACE_BLOCKS: Readonly<Record<PlaceKind, readonly string[]>> = {
+  log: ['minecraft:log', 'minecraft:log2'],
+  dirt: ['minecraft:dirt', 'minecraft:grass', 'minecraft:mycelium'],
+  sand: ['minecraft:sand'],
+  gravel: ['minecraft:gravel'],
+  clay: ['minecraft:clay'],
+  water: [],
+  stone: ['minecraft:stone', 'minecraft:cobblestone'],
+  ore: [],
+};
+
 /**
- * Places where blocks were seen, for the route: today the blocks in the current
- * observation (nearest first, with stand spots); exploration adds remembered places.
+ * Where a raw material is common, by biome name: when no place of it is known yet, the
+ * route points the planner at the nearest seen biome like that (vanilla 1.7.10 and
+ * Biomes O' Plenty names; "Hot Forest" is a forest).
  */
+const LIKELY_BIOMES: ReadonlyArray<{ blocks: readonly string[]; biomes: RegExp }> = [
+  {
+    blocks: ['minecraft:dirt', 'minecraft:grass'],
+    biomes: /forest|plains|taiga|jungle|swamp|savanna|hills|meadow|grove|woods|birch|roofed/i,
+  },
+  {
+    blocks: ['minecraft:log', 'minecraft:log2'],
+    biomes: /forest|taiga|jungle|swamp|woods|grove|birch|roofed/i,
+  },
+  { blocks: ['minecraft:sand'], biomes: /desert|beach|river/i },
+  { blocks: ['minecraft:gravel'], biomes: /river|beach|ocean|gravel|extreme/i },
+  { blocks: ['minecraft:clay'], biomes: /river|swamp|beach|lake/i },
+];
+
+/** The nearest seen biome where one of `blocks` is common, as a route hint; or null. */
+function likelyBiome(blocks: readonly string[], exploration: ExplorationSummary): string | null {
+  const rule = LIKELY_BIOMES.find((r) => r.blocks.some((b) => blocks.includes(b)));
+  if (rule === undefined) return null;
+  const biome = exploration.biomes.find((b) => rule.biomes.test(b.biome));
+  if (biome === undefined) return null;
+  const where =
+    biome.direction === 'here' ? 'around here' : `${biome.distance} m ${biome.direction}`;
+  return `the ${biome.biome} ${where} (seen, ${biome.chunks} chunk(s)): it is common there`;
+}
+
+/**
+ * Places where blocks were seen, for the route, nearest first within each kind: the blocks
+ * in the current observation (with stand spots), then the places world memory remembers
+ * from exploring (the summary's nearest and richest per resource; x and z to EXPLORE
+ * toward).
+ */
+function knownPlaces(state: GameState, exploration?: ExplorationSummary): PlaceLookup {
+  const inView = placesInView(state);
+  return (wanted) => {
+    const remembered = (exploration?.places ?? []).flatMap((p) =>
+      p.y !== null && PLACE_BLOCKS[p.resource].some((b) => wanted.includes(b))
+        ? [
+            {
+              where: { x: p.x, y: p.y, z: p.z },
+              distance: p.distance,
+              amount: p.count,
+              label:
+                `remembered${p.biome === null ? '' : ` (${p.biome})`}, ` +
+                `seen ${p.seenMinutesAgo} min ago, ${p.direction}`,
+            },
+          ]
+        : [],
+    );
+    return [...inView(wanted), ...remembered];
+  };
+}
+
+/** The blocks in the current observation, as places (nearest first, with stand spots). */
 function placesInView(state: GameState): PlaceLookup {
   const blocks = state.nearbyBlocks.known ? state.nearbyBlocks.value.resources : [];
   const at = state.player.position.known ? state.player.position.value : null;
@@ -248,8 +314,15 @@ function placesInView(state: GameState): PlaceLookup {
   };
 }
 
-/** The route for the current task's required items, as the planner reads it. */
-export function routeForPlanner(state: GameState): PlannerRequest['route'] {
+/**
+ * The route for the current task's required items, as the planner reads it. With world
+ * memory (`exploration`), remembered places count as known places, and a raw material with
+ * none known gets the nearest seen biome where it is common as its hint.
+ */
+export function routeForPlanner(
+  state: GameState,
+  exploration?: ExplorationSummary,
+): PlannerRequest['route'] {
   // A building task (e.g. the night shelter): the blueprint is the route.
   const blueprint = state.currentTask?.blueprint;
   if (blueprint !== undefined && blueprint.length > 0) return { stock: [], steps: blueprint };
@@ -273,8 +346,17 @@ export function routeForPlanner(state: GameState): PlannerRequest['route'] {
         ]
       : [],
   );
-  const route = planRoute(goal, inventory, ROUTE_BOOK, placesInView(state), storage);
-  return { stock: route.stock.slice(0, 32), steps: describeRoute(route).slice(0, 40) };
+  const route = planRoute(goal, inventory, ROUTE_BOOK, knownPlaces(state, exploration), storage);
+  const legs = route.legs.map((leg) => {
+    if (leg.kind !== 'gather' || leg.places.length > 0 || exploration === undefined) return leg;
+    const biome = likelyBiome(leg.blocks, exploration);
+    if (biome === null) return leg;
+    return { ...leg, hint: leg.hint === null ? biome : `${biome}; ${leg.hint}` };
+  });
+  return {
+    stock: route.stock.slice(0, 32),
+    steps: describeRoute({ ...route, legs }).slice(0, 40),
+  };
 }
 
 /**
@@ -365,7 +447,7 @@ export function buildPlannerRequest(input: {
     recentActions: input.recentActions,
     recentFailures: input.recentFailures,
     maxPlanSteps: input.maxPlanSteps,
-    route: routeForPlanner(input.state),
+    route: routeForPlanner(input.state, exploration),
     journal: [...(input.journal ?? [])].slice(-32),
   });
 }

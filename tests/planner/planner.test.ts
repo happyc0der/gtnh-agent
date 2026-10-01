@@ -332,6 +332,7 @@ describe('planner request and mock planner', () => {
       {
         resource: 'log',
         x: 4,
+        y: 64,
         z: 70,
         distance: 69,
         direction: 'south',
