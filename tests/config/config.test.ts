@@ -159,7 +159,7 @@ describe('local model configuration', () => {
   it('defaults keep the deterministic router and the mock planner, with a local Ollama', () => {
     const c = defaultConfig();
     expect(c.planner.provider).toBe('mock');
-    expect(c.decisions.provider).toBe('deterministic');
+    expect(c.decisions).toEqual({ provider: 'deterministic', modelCadence: 'decision-points' });
     expect(c.llm).toEqual({
       baseUrl: 'http://127.0.0.1:11434',
       allowedHostnames: [],
@@ -184,6 +184,7 @@ describe('local model configuration', () => {
     });
     expect(config.planner.provider).toBe('ollama');
     expect(config.decisions.provider).toBe('ollama');
+    expect(config.decisions.modelCadence).toBe('decision-points');
     expect(config.llm).toMatchObject({
       baseUrl: 'http://100.101.102.103:11434',
       plannerModel: 'gemma4:12b',
@@ -192,9 +193,20 @@ describe('local model configuration', () => {
     });
   });
 
+  it('AGENT_DECISION_CADENCE chooses when the model decides', () => {
+    const at = (cadence: string) =>
+      loadConfig({
+        cwd: emptyDir(),
+        env: { AGENT_DECISIONS: 'ollama', AGENT_DECISION_CADENCE: cadence },
+      }).config.decisions.modelCadence;
+    expect(at('every-cycle')).toBe('every-cycle');
+    expect(at('decision-points')).toBe('decision-points');
+  });
+
   it.each([
     [{ AGENT_PLANNER: 'openai' }, /planner.provider/],
     [{ AGENT_DECISIONS: 'llm' }, /decisions.provider/],
+    [{ AGENT_DECISION_CADENCE: 'sometimes' }, /decisions.modelCadence/],
     [{ OLLAMA_URL: 'http://8.8.8.8:11434' }, /public IP/],
     [{ OLLAMA_URL: 'https://api.example.com' }, /OLLAMA_ALLOWED_HOSTNAMES/],
     [{ OLLAMA_URL: 'http://user:secret@127.0.0.1:11434' }, /credentials/],

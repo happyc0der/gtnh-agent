@@ -39,7 +39,7 @@ flowchart TD
     MC -- "observe(): GameState" --> LOOP
     LOOP -- "state reliability" --> SAFE
     LOOP -- "GameState" --> S1
-    S1M -. "wrapped by SafetyFirstDecisionProvider" .-> S1
+    S1M -. "at decision points, wrapped by SafetyFirstDecisionProvider" .-> S1
     S1 -- "Decision (9 values)" --> PROP
     PROP -- "REQUEST_PLANNER" --> PLAN
     LLM -. "same PlannerProvider contract" .-> PLAN
@@ -58,7 +58,7 @@ flowchart TD
 | **MinecraftClient** (`src/bot`)                                  | The only boundary to the game. `observe()` returns a normalized `GameState`; `perform()` takes a `ValidatedAction` token.                                                                                                               | Performs actions, but only ones minted by the executor (runtime-checked).                                                                                   |
 | **Safety policy** (`src/safety`)                                 | Pure functions: state reliability, dangers, per-action rules, protected items, boundaries, forbidden-modification denylist, repeated-failure cap.                                                                                       | **Veto over everything.** No model can override it.                                                                                                         |
 | **Deterministic router** (`src/system1/deterministic-router.ts`) | System 1: prioritized, transparent rules that map a state to one of 9 bounded decisions, with confidence, reason codes and facts.                                                                                                       | Chooses _what kind_ of step; cannot execute.                                                                                                                |
-| **System-1 model** (`src/llm/ollama-decision-provider.ts`)       | Opt-in (`decisions.provider: ollama`): a local model picks one of the 9 decisions from facts computed by code.                                                                                                                          | Always wrapped in `SafetyFirstDecisionProvider`: the router's safety decisions and every pause win, invalid output becomes PAUSE.                           |
+| **System-1 model** (`src/llm/ollama-decision-provider.ts`)       | Opt-in (`decisions.provider: ollama`): a local model picks one of the 9 decisions from facts computed by code, by default only at decision points (see [System 1](#system-1-who-decides-each-cycle)).                                   | Always wrapped in `SafetyFirstDecisionProvider`: the router's safety decisions and every pause win, invalid output becomes PAUSE.                           |
 | **Action proposer** (`src/system1/action-proposer.ts`)           | Turns one decision into exactly one allowlisted action (approaching a target first if it is out of reach).                                                                                                                              | Proposes only.                                                                                                                                              |
 | **LLM planner** (`src/llm/ollama-planner-provider.ts`)           | Opt-in (`planner.provider: ollama`): returns a strict `Plan` or an `Escalation`. Called only for `REQUEST_PLANNER`, and only when the task has no open plan.                                                                            | **None.** Plans are validated and stored; one step per cycle goes through the executor like any other action. Plans that ask for approval wait for a human. |
 | **ActionExecutor** (`src/executor`)                              | The single controlled path: schema → safety → preconditions → persist → execute → observe → verify → persist.                                                                                                                           | Sole minter of `ValidatedAction` (lint-enforced).                                                                                                           |
@@ -71,7 +71,8 @@ flowchart TD
 3. Hard safety check of the _state_: unknown, stale or inconsistent → forced `PAUSE_AND_ASK_USER`,
    whatever any decision provider says.
 4. Ask the `DecisionProvider` (the deterministic router, or a model inside
-   `SafetyFirstDecisionProvider`) for one decision.
+   `SafetyFirstDecisionProvider`, asked only at decision points by default) for one decision
+   (see [System 1](#system-1-who-decides-each-cycle)).
 5. Convert it to exactly one proposed action. For `REQUEST_PLANNER`: run the next step of the
    task's active plan (for a `GATHER` step, the action code chooses for it this cycle); or, if
    its plan still waits for approval, pause; or else ask the planner for a new plan (see
@@ -84,6 +85,69 @@ flowchart TD
 7. Execute through `MinecraftClient.perform()` only if validation passed.
 8. Observe again and verify the action's postcondition.
 9. Persist the outcome; pause or block the task if needed. **Stop.**
+
+## System 1: who decides each cycle
+
+System 1 chooses the kind of step each cycle, one of the nine decisions
+(`decisions.provider`, built in `src/app/providers.ts`):
+
+- **The rule router** (`deterministic`, the default): `routeDecision`
+  (`src/system1/deterministic-router.ts`), a pure, prioritized rule list over the observation.
+- **A local model** (`ollama`): `OllamaDecisionProvider` picks a decision from facts computed by
+  code, always inside `SafetyFirstDecisionProvider`. The router's binding decisions (safety,
+  every pause) win without asking it, invalid output pauses, and a pause, retreat, meal or
+  fight the facts rule out is overruled (see [local-llm-integration.md](local-llm-integration.md)).
+
+### A model at decision points
+
+On live runs the router decided what qwen3:14b decided on 88 of 89 decisions, and the model
+took 2.2 s a decision (median; 10 s at worst). So since 2026-10-01 the model decides only at
+**decision points** (`decisions.modelCadence: decision-points`, the default;
+`AGENT_DECISION_CADENCE`). Every other cycle continues the open plan at once with the
+router's decision: usually `REQUEST_PLANNER`, which runs the plan's next step (or a GATHER's
+next dig) with no planner call either. `ModelCadenceProvider` (`src/system1/model-cadence.ts`,
+itself a `SafetyFirstDecisionProvider`) does this each cycle:
+
+1. The router decides. A binding decision (safety, any pause) wins, and nobody else is asked.
+2. `decisionPoint`, a pure function, compares this cycle with the session's previous one
+   (`cycleView`: the router's decision, the dangers, the plan, the last action...). The model is
+   asked when:
+   - it is the session's first cycle (`cli once`, `cli run`, each session of `cli play`);
+   - the previous cycle's action failed, was rejected or not verified, or paused;
+   - the model decided the previous cycle and chose otherwise than the router: going on with
+     the router's decision would undo its choice, so it decides until it agrees again;
+   - the task's plan ended since the previous cycle began (completed, failed, superseded), or
+     the router asks for the planner and no plan is open to continue: the model decides before
+     the planner is asked for a new plan;
+   - a condition changed: the router's decision or reason codes, the dangers (a mob, a hazard,
+     low health or food), hunger, the task, the time of day (day, evening, night, dawn), or the
+     inventory became nearly full (or has room again).
+3. Otherwise the router's decision goes on (provider `continuing(deterministic-router)`).
+
+The agent loop gives System 1 the task's latest plan (`RouterContext.plan`, `taskPlanFacts`);
+the rules ignore it. A binding cycle is a previous cycle too, so the cycle after a detour (a
+retreat from a mob, a meal) asks the model: the mob is the router's to handle, what comes after
+it the model's. In `run` and `play` such a detour ends the session anyway, and the next one
+starts with the model. `modelCadence: every-cycle` asks the model on every cycle the router
+does not decide alone, as before.
+
+Every decision records which way it went in `factsUsed` (in the DECISION event):
+
+- `cadence`: `model`, `continuing` or `binding`;
+- `cadenceWhy`: why the model was or was not asked, e.g. "plan #1 ended (completed); no open
+  plan to continue", "the previous DIG_BLOCK failed" or "nothing changed since the previous
+  cycle: plan #1 step 1/1 (GATHER) goes on";
+- `modelMs`: the model call's time.
+
+`cli play` and `cli run` print each cycle's System 1 line with the provider: the model's name
+(`ollama:qwen3:14b`) when it decided, `continuing(deterministic-router)` when the plan went on,
+`safety-first(...)` for a binding decision. Each session ends with a stats line, e.g. "System 1
+over 20 cycle(s): 1 model decision(s) (median 2.1 s), 19 continued without the model, 0 binding
+router decision(s)", and `cli play`'s summary has the total.
+
+Measured on the mock world with a fake model (`tests/app/decision-points.test.ts`): a GATHER of
+54 sand takes 61 cycles (54 digs, 7 walks) and asks the model once, at its start. With the two
+plans after it, that is 3 model decisions in 63 cycles; `every-cycle` makes 63.
 
 ## Live tasks
 
@@ -439,7 +503,9 @@ anew: no code was taken from Baritone (LGPL-3.0).
   why: the planner reads it next time.
 
 A gather of 54 sand on the mock world: one planner call, then 61 cycles (54 digs and 7 walks
-to stand spots). Before, the same took about 7 plans, one planner call each.
+to stand spots). Before, the same took about 7 plans, one planner call each. With a model
+deciding System 1 at decision points, the 61 cycles ask it once, at the start
+([System 1](#a-model-at-decision-points)).
 
 ### Accepting a plan
 
@@ -1073,7 +1139,7 @@ Fighting adds one packet to the live client's list: C02 Use Entity with the "att
 src/config       env + JSON config loading (Zod), private-network guard
 src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Known<T>, interaction profiles
 src/safety       safety policy, boundaries, protected items, forbidden-action classifier
-src/system1      router, decision providers (incl. SafetyFirstDecisionProvider), action proposer
+src/system1      router, decision providers (incl. SafetyFirstDecisionProvider and the model's cadence: decision points), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner (opt-in)
 src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, explore, chests, crafting, dig and place in a fence or a moving play area; block windows; fighting; world surveys), Mineflayer skeleton

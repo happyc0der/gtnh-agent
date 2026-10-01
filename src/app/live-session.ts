@@ -1,5 +1,6 @@
-import type { Decision } from '../domain/decisions.ts';
+import type { Decision, DecisionResult } from '../domain/decisions.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
+import { system1Stats, type System1Stats } from '../system1/model-cadence.ts';
 import { runSingleCycle, type AgentDeps, type CycleResult } from './agent-loop.ts';
 
 /**
@@ -56,6 +57,8 @@ export interface SessionResult {
   taskId: string | null;
   taskStatus: string | null;
   elapsedMs: number;
+  /** How System 1 decided this session's cycles: the model, continuing, or binding rules. */
+  system1?: System1Stats | undefined;
 }
 
 export function checkLimits(limits: SessionLimits): string | null {
@@ -82,6 +85,7 @@ export async function runSession(
   if (problem !== null) throw new Error(problem);
   const started = Date.now();
   const cycles: SessionResult['cycles'] = [];
+  const decisions: Array<DecisionResult | null> = [];
   const taskId = deps.repos.memory.getValue(CURRENT_TASK_KEY);
   const taskStatus = (): string | null =>
     taskId === null ? null : (deps.repos.tasks.get(taskId)?.status ?? null);
@@ -92,7 +96,10 @@ export async function runSession(
     taskId,
     taskStatus: taskStatus(),
     elapsedMs: Date.now() - started,
+    system1: system1Stats(decisions),
   });
+  // A new session: a model asked at decision points decides its first cycle.
+  deps.decisionProvider.startSession?.();
 
   for (;;) {
     const status = taskStatus();
@@ -111,6 +118,7 @@ export async function runSession(
 
     const result = await runSingleCycle(deps);
     cycles.push({ cycleId: result.cycleId, summary: result.summary });
+    decisions.push(result.decision);
     hooks.onCycle?.(result, cycles.length);
 
     if (result.status !== 'succeeded' || result.needsUserAttention) {

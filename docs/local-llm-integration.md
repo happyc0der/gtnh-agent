@@ -10,18 +10,25 @@
 Ollama and are **off by default**: without configuration the agent behaves exactly as before
 (deterministic router, mock planner).
 
+**2026-10-01:** a System 1 model decides only at **decision points** by default: a session's
+first cycle, after a failed action, when a plan ended or none is open, and when a condition
+changed (the router's reasons, dangers, hunger, the task, the time of day, a nearly full
+inventory). Between them the router's decision continues the open plan at once. See
+[System 1 at decision points](#system-1-at-decision-points).
+
 ## Enabling local models
 
-| Setting (env / `agent.config.json`)                 | Values (default first)    | Effect                                                                     |
-| --------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------- |
-| `AGENT_DECISIONS` / `decisions.provider`            | `deterministic`, `ollama` | System 1: the rule router, or a model inside `SafetyFirstDecisionProvider` |
-| `AGENT_PLANNER` / `planner.provider`                | `mock`, `none`, `ollama`  | System 2: fixture plans (mock runs only), no planner, or a model           |
-| `OLLAMA_URL` / `llm.baseUrl`                        | `http://127.0.0.1:11434`  | Loopback, private LAN or Tailscale only                                    |
-| `OLLAMA_ALLOWED_HOSTNAMES` / `llm.allowedHostnames` | empty                     | Hostnames (e.g. `msi`) you verified are private; re-resolved every request |
-| `OLLAMA_DECISION_MODEL` / `llm.decisionModel`       | `qwen2.5:0.5b`            | Use `qwen3:14b`: the 0.5b model only proves the plumbing (see below)       |
-| `OLLAMA_PLANNER_MODEL` / `llm.plannerModel`         | `qwen3:14b`               |                                                                            |
-| `OLLAMA_TIMEOUT_MS` / `llm.timeoutMs`               | `120000`                  | Per request, model load included                                           |
-| `llm.keepAlive`                                     | `30s`                     | The model leaves VRAM soon after use (the GPU is shared)                   |
+| Setting (env / `agent.config.json`)                 | Values (default first)           | Effect                                                                     |
+| --------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------- |
+| `AGENT_DECISIONS` / `decisions.provider`            | `deterministic`, `ollama`        | System 1: the rule router, or a model inside `SafetyFirstDecisionProvider` |
+| `AGENT_DECISION_CADENCE` / `decisions.modelCadence` | `decision-points`, `every-cycle` | When the System 1 model is asked: at decision points, or every cycle       |
+| `AGENT_PLANNER` / `planner.provider`                | `mock`, `none`, `ollama`         | System 2: fixture plans (mock runs only), no planner, or a model           |
+| `OLLAMA_URL` / `llm.baseUrl`                        | `http://127.0.0.1:11434`         | Loopback, private LAN or Tailscale only                                    |
+| `OLLAMA_ALLOWED_HOSTNAMES` / `llm.allowedHostnames` | empty                            | Hostnames (e.g. `msi`) you verified are private; re-resolved every request |
+| `OLLAMA_DECISION_MODEL` / `llm.decisionModel`       | `qwen2.5:0.5b`                   | Use `qwen3:14b`: the 0.5b model only proves the plumbing (see below)       |
+| `OLLAMA_PLANNER_MODEL` / `llm.plannerModel`         | `qwen3:14b`                      |                                                                            |
+| `OLLAMA_TIMEOUT_MS` / `llm.timeoutMs`               | `120000`                         | Per request, model load included                                           |
+| `llm.keepAlive`                                     | `30s`                            | The model leaves VRAM soon after use (the GPU is shared)                   |
 
 Recommended, on this machine (check `model-status` first: go ahead only when it says IDLE):
 
@@ -29,6 +36,7 @@ Recommended, on this machine (check `model-status` first: go ahead only when it 
 $env:AGENT_PLANNER = 'ollama'           # the model writes plans when no step is known
 $env:AGENT_DECISIONS = 'ollama'         # optional: the model makes the System 1 decisions
 $env:OLLAMA_DECISION_MODEL = 'qwen3:14b'
+# $env:AGENT_DECISION_CADENCE = 'every-cycle'  # ask it every cycle, not only at decision points
 pnpm agent:once --scenario needs-planner  # one mock cycle (the mock world, your provider choice)
 pnpm cli once --live                      # one cycle on the test server
 pnpm cli run --live --max-cycles 10       # a bounded run of the current task
@@ -108,6 +116,43 @@ afterwards, so those come back as invalid output.
   true. With hostiles near, the router's decision (DEFEND, a retreat or a pause) is
   safety-driven, so it stands and the model is not asked. A model's DEFEND anywhere else finds
   no hostile it may fight and becomes a pause.
+
+### System 1 at decision points
+
+qwen3:14b reproduced the router on 88 of 89 live decisions, at a median 2.2 s each (10 s at
+worst). So the factory wraps the model in `ModelCadenceProvider` (`src/system1/model-cadence.ts`),
+which is itself a `SafetyFirstDecisionProvider`, and with `decisions.modelCadence:
+decision-points` (the default) asks the model only when something changed:
+
+- the first cycle of a session (`cli once`, `cli run`, each session of `cli play`);
+- the previous cycle's action failed, was rejected or not verified, or paused;
+- the model decided the previous cycle and chose otherwise than the router (going on with the
+  router's decision would undo its choice, so it decides until it agrees again);
+- the task's plan ended (completed, failed, superseded), or the router asks for the planner and
+  there is no open plan or GATHER step to continue (the model decides before a new plan is made);
+- a new condition since the previous cycle: the router's decision or reason codes, the dangers
+  (a mob, a hazard, low health or food), hunger, the task, the time of day, or the inventory
+  nearly full (or no longer).
+
+Otherwise the cycle goes on at once with the router's decision (usually `REQUEST_PLANNER`,
+which runs the open plan's next step or a GATHER's next dig, without a planner call). The
+router's binding decisions (safety, pauses) still win first, without asking anyone. The check
+is a pure function (`decisionPoint`), tested case by case.
+
+- Every decision records which way it went in `factsUsed`: `cadence` (`model`, `continuing` or
+  `binding`), `cadenceWhy` (why the model was or was not asked) and, for the model, `modelMs`.
+- `cli play` and `cli run` print each cycle's System 1 line; the provider shows who decided:
+  `ollama:qwen3:14b` (the model), `continuing(deterministic-router)` (the plan went on),
+  `safety-first(ollama:qwen3:14b)` (a binding router decision, or the model's answer
+  overruled or invalid, as before).
+- Each session ends with a stats line: model decisions (with their median time), continued
+  cycles and binding decisions. `cli play`'s summary has the total.
+- `AGENT_DECISION_CADENCE=every-cycle` (`decisions.modelCadence: every-cycle`) asks the model
+  every cycle, as before.
+
+On the mock world with a fake model, a 54-sand GATHER (61 cycles: 54 digs, 7 walks) asks the
+model once, at its start; with the two plans after it, 3 model decisions in 63 cycles, against
+63 with `every-cycle` (`tests/app/decision-points.test.ts`). Not yet measured live.
 
 ### Slow models and stale observations
 
@@ -229,7 +274,8 @@ repeats a pattern (EAT or PAUSE) whatever the state.
     few; measure any prompt change with the script.
 - **Latency:** the first request loads the model (2-11 s). With `maxStateAgeMs` 5 s, that and
   every plan make the loop observe again before acting. qwen3:14b adds about 2 s to each cycle
-  where the model is consulted.
+  where the model is consulted: since 2026-10-01 that is only at decision points (a session's
+  start, a failure, a plan change, a new condition), not every step of a plan.
 - `model-status` reports BUSY for about a minute after the agent's own requests.
 
 ### Recommendation
@@ -239,8 +285,10 @@ repeats a pattern (EAT or PAUSE) whatever the state.
   Expect a pause for impossible tasks, and plans to need approval or a reply when they touch
   machines.
 - **Decisions:** qwen3:14b reproduces the router exactly on these scenarios, at about 2 s and a
-  loaded GPU per cycle. Today it adds no capability the router lacks; it is there for experiments
-  and for decisions the router does not cover yet. Never qwen2.5:0.5b.
+  loaded GPU per decision. Today it adds no capability the router lacks; it is there for
+  experiments and for decisions the router does not cover yet. Keep the default cadence
+  (decision points): the model decides where something changed, and plan steps in between run
+  at the router's speed. Never qwen2.5:0.5b.
 
 ## Tests without a GPU
 
@@ -249,7 +297,11 @@ bodies from the runs above) served by a fake `fetch` (`tests/fixtures/fake-ollam
 UNSAFE escalation, a plan that treats a machine as a chest, unconstrained and cut-off output,
 markdown-fenced and outdated decision replies, timeouts, HTTP and connection errors, the
 private-host guard, safety decisions overriding the model, router pauses, and full mock cycles
-through the provider factory. `pnpm check` never contacts a model.
+through the provider factory. The decision-point cadence is tested the same way: the pure
+check case by case (`tests/system1/model-cadence.test.ts`), and runs of many agent-loop cycles
+that count the fake model's calls (`tests/app/decision-points.test.ts`: a 54-sand GATHER, a mob
+mid-plan, a failed dig, the evening, sessions, and `every-cycle`). `pnpm check` never contacts a
+model.
 
 ## Adapter requirements and how they are met
 

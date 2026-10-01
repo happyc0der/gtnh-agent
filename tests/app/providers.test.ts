@@ -11,6 +11,7 @@ import {
   DeterministicDecisionProvider,
   SafetyFirstDecisionProvider,
 } from '../../src/system1/decision-provider.ts';
+import { ModelCadenceProvider } from '../../src/system1/model-cadence.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
 import { fakeOllama, golden } from '../fixtures/fake-ollama.ts';
 import { testClock } from '../fixtures/index.ts';
@@ -40,6 +41,21 @@ describe('createProviders', () => {
     );
     expect(decisionProvider).toBeInstanceOf(SafetyFirstDecisionProvider);
     expect(decisionProvider.name).toBe('safety-first(ollama:qwen2.5:0.5b)');
+  });
+
+  it('the model is asked at its cadence: at decision points by default, or every cycle', () => {
+    const at = (modelCadence?: 'decision-points' | 'every-cycle') =>
+      createProviders(
+        defaultConfig({
+          decisions: { provider: 'ollama', ...(modelCadence ? { modelCadence } : {}) },
+        }),
+      ).decisionProvider;
+    expect(at()).toBeInstanceOf(ModelCadenceProvider);
+    expect(at()).toMatchObject({ cadence: 'decision-points' });
+    expect(at('every-cycle')).toMatchObject({ cadence: 'every-cycle' });
+    expect(createProviders(defaultConfig()).decisionProvider).not.toBeInstanceOf(
+      ModelCadenceProvider,
+    );
   });
 
   it('selects the Ollama planner, or none', () => {

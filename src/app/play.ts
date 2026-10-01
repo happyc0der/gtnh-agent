@@ -20,6 +20,7 @@ import { describeShelter, describeShelterExit, type ShelterStatus } from '../goa
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { DecisionResult } from '../domain/decisions.ts';
+import { describeSystem1Stats, type System1Stats } from '../system1/model-cadence.ts';
 import type { CycleResult } from './agent-loop.ts';
 import {
   checkLimits,
@@ -198,6 +199,8 @@ export type PlayEvent =
       stopKind: SessionStopKind;
       stopReason: string;
       cycles: number;
+      /** How System 1 decided the session's cycles (model, continuing, binding). */
+      system1?: System1Stats | undefined;
     };
 
 export interface PlayResult {
@@ -529,6 +532,7 @@ export async function runPlay(
       stopKind: result.stopKind,
       stopReason: result.stopReason,
       cycles: result.cycles.length,
+      system1: result.system1,
     });
     return result;
   };
@@ -586,6 +590,7 @@ export async function runPlay(
         stopKind: r.session.stopKind,
         stopReason: r.session.stopReason,
         cycles: r.session.cycles.length,
+        system1: r.session.system1,
       });
       if (r.dark !== null) return done(nightReason(r.dark), r.dark);
       const mob = mobPause(r.session.stopKind, lastDecision);
@@ -902,6 +907,7 @@ export async function runPlay(
       stopKind: result.stopKind,
       stopReason: result.stopReason,
       cycles: result.cycles.length,
+      system1: result.system1,
     });
 
     // Interruptions are checkpoints too: the planner reads them in the task's journal.
@@ -954,8 +960,11 @@ export function describePlayEvent(e: PlayEvent): string {
       );
       return lines.join('\n');
     }
-    case 'session-end':
-      return `session ${e.session}: ${e.cycles} cycle(s); ${e.stopReason}`;
+    case 'session-end': {
+      const line = `session ${e.session}: ${e.cycles} cycle(s); ${e.stopReason}`;
+      const stats = e.system1 === undefined ? null : describeSystem1Stats(e.system1);
+      return stats === null ? line : `${line}\n  ${stats}`;
+    }
     case 'night':
       return `night: ${e.message}`;
     case 'quest-book':
