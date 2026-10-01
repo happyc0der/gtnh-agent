@@ -369,7 +369,11 @@ function nightReason(t: WorldTime): string {
 const total = (missing: Record<string, number>): number =>
   Object.values(missing).reduce((n, c) => n + c, 0);
 
-/** A quest-book click that failed this many times in a play is not tried again. */
+/**
+ * A quest-book click that failed (or was refused, e.g. in danger) this many times in a row is
+ * not tried again until a session has run. The executor's repeated-failure rule still caps
+ * clicks the server did not honour.
+ */
 const MAX_CLICK_FAILURES = 2;
 
 /**
@@ -768,6 +772,8 @@ export async function runPlay(
     });
     sessions = session;
     lastStop = result.stopReason;
+    // The world has moved on (a mob gone, items gathered): failed clicks may be tried again.
+    failedClicks.clear();
     emit({
       kind: 'session-end',
       session,

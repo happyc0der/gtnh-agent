@@ -316,6 +316,33 @@ describe('autonomous play', () => {
     expect(events.filter((e) => e.kind === 'quest-book' && !e.ok)).toHaveLength(2);
   });
 
+  it('tries a refused click again once a session has run (the danger may be gone)', async () => {
+    const book = [
+      quest('1', [checkbox], [], COOKIE),
+      quest('5', [have('minecraft:sand', 100)]), // a second root: something to do meanwhile
+    ];
+    const world: World = { inventory: {}, sessions: [], calls: 0, book, clicksFail: true };
+    const base = deps(open(), world);
+    await runPlay(
+      {
+        ...base,
+        session: (limits, hooks) => {
+          world.clicksFail = false; // the session dealt with it
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
+      noStop,
+    );
+    expect(world.clicks?.slice(0, 4)).toEqual([
+      'CHECK_QUEST_BOX 1',
+      'CHECK_QUEST_BOX 1',
+      'CHECK_QUEST_BOX 1', // after the session: done
+      'CLAIM_QUEST_REWARD 1',
+    ]);
+    expect(world.completed?.has('1')).toBe(true);
+  });
+
   it("waits for the server's quest loop when a quest's tasks are all done", async () => {
     // The checkbox is ticked; the server's loop has not completed the quest yet.
     const world: World = { inventory: {}, sessions: [], calls: 0, taskDone: new Set(['1#0']) };

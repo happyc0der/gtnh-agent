@@ -215,7 +215,8 @@ the inventory, records the quests the server now lists as completed (closing the
 makes the quest-book clicks that are due, one per round. Each click is an ordinary action run by
 the executor (`runQuestBookAction`: schema, safety policy, preconditions, execution, and
 verification against the server's next sync), and only when `MC_ENABLE_QUEST_BOOK` is on; a
-click that fails twice is not tried again in that play. Then it makes the next quest the current
+click that fails or is refused twice in a row waits until a session has run (the danger that
+refused it may be gone). Then it makes the next quest the current
 task (`quest-<id>`) and runs one bounded session on it (`runSession`), which ends as soon as an
 observation shows the quest completed or ready for a click. In the session the configured
 decision maker and planner choose what to do, and every action is still validated, executed and
