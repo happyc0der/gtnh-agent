@@ -5,10 +5,12 @@ import {
   checkPlayLimits,
   DEFAULT_PLAY_LIMITS,
   describePlayEvent,
+  mobPause,
   runPlay,
   type PlayDeps,
   type PlayEvent,
 } from '../../src/app/play.ts';
+import type { DecisionResult } from '../../src/domain/decisions.ts';
 import { completedQuests, questTaskId } from '../../src/app/quest-commands.ts';
 import { SCOUT_TASK_ID } from '../../src/app/scouting.ts';
 import { worldTime } from '../../src/domain/game-state.ts';
@@ -381,5 +383,67 @@ describe('autonomous play', () => {
     expect(checkPlayLimits({ ...DEFAULT_PLAY_LIMITS, maxStuckSessions: 0 })).toBe(
       'max stuck sessions must be 1-20',
     );
+  });
+});
+
+describe('a mob near home', () => {
+  const pause = (codes: string[]): DecisionResult =>
+    ({
+      decision: 'PAUSE_AND_ASK_USER',
+      confidence: 1,
+      reasonCodes: codes,
+      factsUsed: {},
+      requiresHumanConfirmation: true,
+      provider: 'deterministic-router',
+    }) as DecisionResult;
+
+  it('is waited out: the paused task is active again, and play says why', async () => {
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const result = await runPlay(
+      {
+        ...deps(repos, world),
+        session: (_limits, hooks): Promise<SessionResult> => {
+          const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
+          hooks.onCycle(
+            {
+              summary: 'PAUSE_AND_ASK_USER -> PAUSE_AND_ASK_USER -> paused',
+              decision: pause(['UNCLASSIFIED_ENTITY_NEARBY', 'ALREADY_AT_SAFE_LOCATION']),
+            } as CycleResult,
+            1,
+          );
+          if (taskId !== null) repos.tasks.setStatus(taskId, 'paused'); // as the agent loop does
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'x' }],
+            stopReason: 'needs attention after: PAUSE_AND_ASK_USER',
+            stopKind: 'needs-attention',
+            taskId,
+            taskStatus: 'paused',
+            elapsedMs: 1,
+          });
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(result.mobNearby).toBe('UNCLASSIFIED_ENTITY_NEARBY, ALREADY_AT_SAFE_LOCATION');
+    expect(result.stopReason).toMatch(/waiting offline for it to leave/);
+    expect(repos.tasks.get(questTaskId('2'))?.status).toBe('active');
+    expect(repos.memory.journal(questTaskId('2')).map((e) => e.text)).toContainEqual(
+      expect.stringContaining('waited offline'),
+    );
+  });
+
+  it('only a pause for a mob near, with at most the home codes besides, is waited out', () => {
+    expect(
+      mobPause('needs-attention', pause(['HOSTILES_NEARBY', 'ALREADY_AT_SAFE_LOCATION'])),
+    ).toBe('HOSTILES_NEARBY, ALREADY_AT_SAFE_LOCATION');
+    expect(mobPause('needs-attention', pause(['HUNGRY', 'NO_APPROVED_FOOD']))).toBeNull();
+    expect(mobPause('needs-attention', pause(['HOSTILES_NEARBY', 'LOW_HEALTH']))).toBeNull();
+    expect(mobPause('cycle-failed', pause(['HOSTILES_NEARBY']))).toBeNull();
+    expect(
+      mobPause('needs-attention', { ...pause(['HOSTILES_NEARBY']), decision: 'RETREAT_HOME' }),
+    ).toBeNull();
+    expect(mobPause('needs-attention', null)).toBeNull();
   });
 });

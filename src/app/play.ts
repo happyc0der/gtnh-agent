@@ -12,6 +12,7 @@ import { TICKS_PER_DAY, TICKS_PER_SECOND, type WorldTime } from '../domain/game-
 import { describeShelter, type ShelterStatus } from '../goals/shelter.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
+import type { DecisionResult } from '../domain/decisions.ts';
 import type { CycleResult } from './agent-loop.ts';
 import {
   checkLimits,
@@ -25,6 +26,7 @@ import {
   adoptScoutTask,
   finishScoutTask,
   runScoutSession,
+  SCOUT_TASK_ID,
   scoutingDue,
   type Scouting,
 } from './scouting.ts';
@@ -39,7 +41,8 @@ import {
  * It stops, and says why, when:
  *  - no quest it can do is left, or its inventory cannot be read;
  *  - a session asks for a human (an approval, a safety stop) or the quest's task was
- *    paused, blocked or closed by someone else (it never resumes those by itself);
+ *    paused, blocked or closed by someone else (it never resumes those by itself), except
+ *    a pause only for a mob near home: that it waits out (mobPause);
  *  - the same quest has made no progress for `maxStuckSessions` sessions in a row;
  *  - the time or session limit, the stop file or Ctrl+C.
  * A failed action or a safe detour (retreating, eating) does not stop it by itself: that
@@ -172,6 +175,12 @@ export interface PlayResult {
    * placing), so it leaves the surface before the mobs come. The clock at that moment.
    */
   night: WorldTime | null;
+  /**
+   * Play stopped because a mob is near the player while it is home (or has no home to go
+   * to): the pause's reasons. The task is active again; the caller waits offline a little
+   * (MOB_WAIT_MS) and plays on, as a person would wait it out.
+   */
+  mobNearby: string | null;
   sessions: number;
   /** Quests completed during this play, in order. */
   questsCompleted: string[];
@@ -187,6 +196,33 @@ const CONTINUE_AFTER: ReadonlySet<SessionStopKind> = new Set([
   'non-task-decision',
   'stop-requested', // only when the quest itself was met: see below
 ]);
+
+/** How long the caller waits offline for a mob near home to leave, before playing on. */
+export const MOB_WAIT_MS = 30_000;
+/** Mob waits in a row after which play stops and says so. */
+export const MAX_MOB_WAITS = 6;
+
+/** Pause reasons that only say a mob is near, with the agent home or without a home. */
+const MOB_PAUSE_REASONS: ReadonlySet<string> = new Set([
+  'HOSTILES_NEARBY',
+  'UNCLASSIFIED_ENTITY_NEARBY',
+  'ALREADY_AT_SAFE_LOCATION',
+  'NO_SAFE_LOCATION',
+]);
+
+/**
+ * The reasons of a session that ended on a pause only because a mob was near (System 1's
+ * last decision: PAUSE_AND_ASK_USER with HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY, and
+ * nothing but the home codes besides), else null. Mobs move on or burn in daylight, and an
+ * offline player cannot be hurt: such a pause is waited out, not handed to a person.
+ */
+export function mobPause(stopKind: SessionStopKind, last: DecisionResult | null): string | null {
+  if (stopKind !== 'needs-attention' || last === null) return null;
+  if (last.decision !== 'PAUSE_AND_ASK_USER') return null;
+  const codes = last.reasonCodes;
+  const mob = codes.includes('HOSTILES_NEARBY') || codes.includes('UNCLASSIFIED_ENTITY_NEARBY');
+  return mob && codes.every((c) => MOB_PAUSE_REASONS.has(c)) ? codes.join(', ') : null;
+}
 
 /** A cycle of a play session, for narration (the same event the quest sessions emit). */
 function cycleEvent(
@@ -363,9 +399,24 @@ export async function runPlay(
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
   let last: { questId: string; missing: number; stuck: number } | null = null;
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
+  /** Ends play for a mob near home: the paused task is active again (see mobPause). */
+  const waitOutMob = (taskId: string, reasons: string): PlayResult => {
+    deps.repos.tasks.setStatus(taskId, 'active');
+    deps.repos.memory.appendJournal(
+      taskId,
+      `a mob came near (${reasons}): the agent waited offline for it to leave`,
+    );
+    return {
+      ...done(`a mob is near the player (${reasons}): waiting offline for it to leave`),
+      mobNearby: reasons,
+    };
+  };
+  /** System 1's decision in the latest cycle (for mobPause). */
+  let lastDecision: DecisionResult | null = null;
   const done = (stopReason: string, night: WorldTime | null = null): PlayResult => ({
     stopReason,
     night,
+    mobNearby: null,
     sessions,
     questsCompleted,
     progress,
@@ -389,7 +440,10 @@ export async function runPlay(
         limits: limits.session,
         session: deps.session,
         stopRequested: hooks.stopRequested,
-        onCycle: (c, index) => emit(cycleEvent(deps.repos, session, c, index)),
+        onCycle: (c, index) => {
+          lastDecision = c.decision ?? null;
+          emit(cycleEvent(deps.repos, session, c, index));
+        },
       });
       sessions = session;
       lastStop = r.session.stopReason;
@@ -401,6 +455,8 @@ export async function runPlay(
         cycles: r.session.cycles.length,
       });
       if (r.dark !== null) return done(nightReason(r.dark), r.dark);
+      const mob = mobPause(r.session.stopKind, lastDecision);
+      if (mob !== null) return waitOutMob(SCOUT_TASK_ID, mob);
       if (r.session.stopKind === 'stop-requested' && !r.scouted) return done(r.session.stopReason);
       if (!CONTINUE_AFTER.has(r.session.stopKind)) return done(r.session.stopReason);
       finishScoutTask(deps.repos);
@@ -602,6 +658,7 @@ export async function runPlay(
             ? nightReason(dark)
             : hooks.stopRequested(),
       onCycle: (r, index) => {
+        lastDecision = r.decision ?? null;
         emit({
           kind: 'cycle',
           session,
@@ -655,6 +712,8 @@ export async function runPlay(
       continue; // the next round builds the shelter
     }
     if (result.stopKind === 'stop-requested' && !met) return done(result.stopReason);
+    const mob = mobPause(result.stopKind, lastDecision);
+    if (mob !== null) return waitOutMob(adopted.taskId, mob);
     if (!CONTINUE_AFTER.has(result.stopKind)) return done(result.stopReason);
   }
 }

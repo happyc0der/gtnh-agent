@@ -41,6 +41,8 @@ import {
   describePlayEvent,
   liveAbilities,
   type PlayLimits,
+  MAX_MOB_WAITS,
+  MOB_WAIT_MS,
 } from './play.ts';
 import { createProviders } from './providers.ts';
 import { describeQuests, updateQuests } from './quest-commands.ts';
@@ -453,6 +455,8 @@ async function main(argv: string[]): Promise<number> {
       let interrupted = false;
       const onInterrupt = (): void => void (interrupted = true);
       process.on('SIGINT', onInterrupt);
+      /** runLivePlay ends in a row that stopped for a mob near home (see mobPause). */
+      let mobWaits = 0;
       try {
         for (;;) {
           const minutesLeft = (deadline - Date.now()) / 60_000;
@@ -475,18 +479,36 @@ async function main(argv: string[]): Promise<number> {
             progress: out.progress,
             minutes: Number(((Date.now() - started) / 60_000).toFixed(1)),
           };
-          const sleepMs = out.night === null ? 0 : (out.night.minutesUntilDay + 0.25) * 60_000;
-          if (out.night === null || Date.now() + sleepMs >= deadline) {
-            print(summary);
+          mobWaits = out.mobNearby === null ? 0 : mobWaits + 1;
+          const sleepMs =
+            out.night !== null
+              ? (out.night.minutesUntilDay + 0.25) * 60_000
+              : out.mobNearby !== null && mobWaits <= MAX_MOB_WAITS
+                ? MOB_WAIT_MS
+                : 0;
+          if (sleepMs === 0 || Date.now() + sleepMs >= deadline) {
+            print(
+              out.mobNearby !== null && mobWaits > MAX_MOB_WAITS
+                ? {
+                    ...summary,
+                    stopReason: `${out.stopReason}; it stayed for ${MAX_MOB_WAITS} waits`,
+                  }
+                : summary,
+            );
             return 0;
           }
           process.stderr.write(
-            `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on\n`,
+            out.night !== null
+              ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on\n`
+              : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits}/${MAX_MOB_WAITS}), then playing on\n`,
           );
           const wakeAt = Date.now() + sleepMs;
           while (Date.now() < wakeAt) {
             if (interrupted || existsSync(stopFile)) {
-              print({ ...summary, stopReason: 'stopped while waiting for sunrise' });
+              print({
+                ...summary,
+                stopReason: `stopped while waiting ${out.night !== null ? 'for sunrise' : 'for the mob to leave'}`,
+              });
               return 0;
             }
             await new Promise((r) => setTimeout(r, 1000));

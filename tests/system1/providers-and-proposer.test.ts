@@ -71,6 +71,21 @@ describe('decision providers', () => {
       expect((await provider.decide(makeState(), routerCtx())).decision).toBe('WAIT_FOR_MACHINE');
     });
 
+    it('replaces a pause, retreat or meal the facts rule out with the router decision', async () => {
+      const state = makeState(); // nothing unsafe, full health and food, an active task
+      const router = routeDecision(state, routerCtx());
+      expect(isBindingRouterDecision(router)).toBe(false);
+      for (const chosen of ['PAUSE_AND_ASK_USER', 'RETREAT_HOME', 'EAT'] as const) {
+        const d = await new SafetyFirstDecisionProvider(MockDecisionProvider.always(chosen)).decide(
+          state,
+          routerCtx(),
+        );
+        expect(d.decision).toBe(router.decision);
+        expect(d.provider).toBe('safety-first(mock-decision-provider)');
+        expect(d.factsUsed['overruled']).toContain(`mock-decision-provider chose ${chosen}`);
+      }
+    });
+
     it('turns invalid or throwing providers into PAUSE', async () => {
       const invalid: DecisionProvider = {
         name: 'bad',
