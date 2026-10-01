@@ -10,7 +10,7 @@
  */
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
-import { buildSafetyContext, overlayAgentMemory } from '../src/app/loop/agent-loop.ts';
+import { buildSafetyContext, overlayAgentMemory } from '../src/app/loop/agent-memory.ts';
 import { observeWithQuestBook } from '../src/app/play/live-play.ts';
 import { liveAbilities } from '../src/app/play/play.ts';
 import { createProviders } from '../src/app/providers.ts';

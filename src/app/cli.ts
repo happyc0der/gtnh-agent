@@ -17,7 +17,8 @@ import {
 } from '../system1/model-cadence.ts';
 import { systemClock } from '../util/clock.ts';
 import { errorMessage } from '../util/json.ts';
-import { syncConfigToDatabase, type CycleResult } from './loop/agent-loop.ts';
+import type { CycleResult } from './loop/agent-loop.ts';
+import { syncConfigToDatabase } from './loop/agent-memory.ts';
 import {
   movementStatus,
   parseBlockPosition,

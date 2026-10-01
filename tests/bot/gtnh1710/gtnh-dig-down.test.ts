@@ -2,12 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  runSingleCycle,
-  runUserAction,
-  syncConfigToDatabase,
-  type AgentDeps,
-} from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle, runUserAction, type AgentDeps } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { nextKnownStep, setKnownSteps } from '../../../src/app/loop/known-steps.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type AgentConfig } from '../../../src/config/env.ts';

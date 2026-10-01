@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  runSingleCycle,
-  runUserAction,
-  syncConfigToDatabase,
-} from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle, runUserAction } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { MOCK_CONFIG } from '../../../src/app/mock/scenarios.ts';
 import { failed, ok } from '../../../src/bot/minecraft-client.ts';
 import type { MockMob, MockWorld } from '../../../src/bot/mock-minecraft-client.ts';

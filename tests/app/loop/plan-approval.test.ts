@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  isStaleRejection,
-  OPERATOR_PLANNER,
-  runSingleCycle,
-  syncConfigToDatabase,
-  type CycleResult,
-} from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle, type CycleResult } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
+import { isStaleRejection, OPERATOR_PLANNER } from '../../../src/app/loop/plan-steps.ts';
 import {
   approvePlan,
   rejectPlan,

@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  runSingleCycle,
-  syncConfigToDatabase,
-  type CycleResult,
-} from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle, type CycleResult } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { runSession } from '../../../src/app/loop/live-session.ts';
 import { describePlayEvent, type PlayEvent } from '../../../src/app/play/play.ts';
 import { createProviders } from '../../../src/app/providers.ts';

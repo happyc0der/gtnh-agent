@@ -23,14 +23,8 @@ import { createRepositories } from '../../persistence/repositories.ts';
 import { DeterministicDecisionProvider } from '../../system1/decision-provider.ts';
 import { systemClock } from '../../util/clock.ts';
 import { randomIds } from '../../util/ids.ts';
-import {
-  buildSafetyContext,
-  explorationFor,
-  runSingleCycle,
-  runUserAction,
-  syncConfigToDatabase,
-  type CycleResult,
-} from '../loop/agent-loop.ts';
+import { runSingleCycle, runUserAction, type CycleResult } from '../loop/agent-loop.ts';
+import { buildSafetyContext, explorationFor, syncConfigToDatabase } from '../loop/agent-memory.ts';
 import { runSession, type SessionLimits, type SessionResult } from '../loop/live-session.ts';
 import { createProviders } from '../providers.ts';
 

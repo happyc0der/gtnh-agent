@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  overlayAgentMemory,
-  runSingleCycle,
-  syncConfigToDatabase,
-  type AgentDeps,
-} from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle, type AgentDeps } from '../../../src/app/loop/agent-loop.ts';
+import { overlayAgentMemory, syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { nextKnownStep, setKnownSteps } from '../../../src/app/loop/known-steps.ts';
 import type { ActionSpec } from '../../../src/domain/actions.ts';
 import type { GameState } from '../../../src/domain/game-state.ts';

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { runSingleCycle, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { readDeadEnds } from '../../../src/app/loop/dead-ends.ts';
 import { runMockScenario } from '../../../src/app/mock/mock-agent.ts';
 import {

@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { syncConfigToDatabase, type AgentDeps } from '../../../src/app/loop/agent-loop.ts';
+import type { AgentDeps } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { DEFAULT_SESSION_LIMITS, runSession } from '../../../src/app/loop/live-session.ts';
 import { liveShelter } from '../../../src/app/play/live-play.ts';
 import {

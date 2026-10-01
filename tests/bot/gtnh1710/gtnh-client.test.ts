@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
-import { runSingleCycle, syncConfigToDatabase } from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { defaultConfig, type MinecraftConfig } from '../../../src/config/env.ts';
 import { ACTION_TYPES, createAction, type ActionSpec } from '../../../src/domain/actions.ts';
 import { GameStateSchema } from '../../../src/domain/game-state.ts';

@@ -5,7 +5,8 @@ import { IN_MEMORY, openDatabase, type Db } from '../../persistence/database.ts'
 import { createRepositories, type Repositories } from '../../persistence/repositories.ts';
 import { manualClock, type ManualClock } from '../../util/clock.ts';
 import { randomIds, type IdGenerator } from '../../util/ids.ts';
-import { runSingleCycle, syncConfigToDatabase, type CycleResult } from '../loop/agent-loop.ts';
+import { runSingleCycle, type CycleResult } from '../loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../loop/agent-memory.ts';
 import { createProviders } from '../providers.ts';
 import { MOCK_CONFIG, type Scenario } from './scenarios.ts';
 

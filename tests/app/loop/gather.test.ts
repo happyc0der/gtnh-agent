@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  OPERATOR_PLANNER,
-  runSingleCycle,
-  syncConfigToDatabase,
-  type CycleResult,
-} from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle, type CycleResult } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
+import { OPERATOR_PLANNER } from '../../../src/app/loop/plan-steps.ts';
 import type { MockResourceBlock, MockWorld } from '../../../src/bot/mock-minecraft-client.ts';
 import type { ActionSpec } from '../../../src/domain/actions.ts';
 import type { DiggableBlock } from '../../../src/domain/blocks.ts';

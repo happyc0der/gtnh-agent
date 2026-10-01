@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { explorationFor } from '../../../src/app/loop/agent-loop.ts';
+import { explorationFor } from '../../../src/app/loop/agent-memory.ts';
 import { readDeadEnds, rememberDeadEnd, withoutDeadEnds } from '../../../src/app/loop/dead-ends.ts';
 import { MOCK_CONFIG } from '../../../src/app/mock/scenarios.ts';
 import { defaultConfig } from '../../../src/config/env.ts';

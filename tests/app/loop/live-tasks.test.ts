@@ -2,11 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  runSingleCycle,
-  syncConfigToDatabase,
-  type CycleResult,
-} from '../../../src/app/loop/agent-loop.ts';
+import { runSingleCycle, type CycleResult } from '../../../src/app/loop/agent-loop.ts';
+import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { runMockScenario } from '../../../src/app/mock/mock-agent.ts';
 import { findScenario } from '../../../src/app/mock/scenarios.ts';
 import { addTask, completeTask, listTasks } from '../../../src/app/commands/task-commands.ts';
