@@ -85,6 +85,25 @@ describe('OllamaPlannerProvider', () => {
     expect(request().state.tools).toEqual([]);
   });
 
+  it('tells the model to gather with ONE GATHER step (rule 9); the rules stay numbered 1 to 17', () => {
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      '- GATHER {"block":"minecraft:sand","count":54} a plan step, not an action:',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(
+      /\n9\. Gathering \([^\n]*use ONE GATHER step[^\n]*never a list of DIG_BLOCK steps/,
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/Plans may also use the GATHER step/);
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      'Make EXPLORE the last step of its plan (code drops any step after it)',
+    );
+    const rules = [...PLANNER_SYSTEM_PROMPT.matchAll(/^(\d+b?)\. /gm)].map((m) => m[1]);
+    expect(rules).toEqual([
+      ...['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '11b'],
+      ...['12', '13', '14', '15', '16', '17'],
+    ]);
+    expect(JSON.stringify(plannerFormat(8))).toContain('"GATHER"');
+  });
+
   it('tells the model about EXPLORE, its arguments and when to explore (GTNH start)', () => {
     expect(PLANNER_SYSTEM_PROMPT).toContain('EXPLORE {"toward":"north","maxDistance":64}');
     expect(PLANNER_SYSTEM_PROMPT).toContain('{"toward":{"x":40,"z":120},"maxDistance":64}');

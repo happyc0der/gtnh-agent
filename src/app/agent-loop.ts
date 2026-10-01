@@ -7,6 +7,7 @@ import {
   type ActionOrigin,
   type ActionSpec,
 } from '../domain/actions.ts';
+import type { BlockPosition } from '../domain/common.ts';
 import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.ts';
 import { GameStateSchema, LastActionSchema, type GameState } from '../domain/game-state.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
@@ -16,8 +17,9 @@ import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
+import { GATHER } from '../planner/gather.ts';
 import { PlannerResponseSchema, type Plan, type PlannerResponse } from '../planner/plan-schema.ts';
-import { validatePlan } from '../planner/plan-validator.ts';
+import { trimStaleSteps, validatePlan } from '../planner/plan-validator.ts';
 import { buildPlannerRequest, type PlannerProvider } from '../planner/planner-provider.ts';
 import { mergeProtectedItems } from '../safety/protected-items.ts';
 import { assessStateReliability, type SafetyContext } from '../safety/safety-policy.ts';
@@ -27,6 +29,7 @@ import type { RouterContext } from '../system1/state-queries.ts';
 import type { Clock } from '../util/clock.ts';
 import type { IdGenerator } from '../util/ids.ts';
 import { errorMessage } from '../util/json.ts';
+import { gatherAfterAction, gatherStopped, gatherTurn, type GatherRef } from './gather-step.ts';
 
 export interface AgentDeps {
   config: AgentConfig;
@@ -446,6 +449,32 @@ export async function runSingleCycle(
   let planStep: PlanStepRef | null = null;
   if (proposal.kind === 'planner') {
     const consulted = await consultPlanner(deps, state, ctx, cycleId, stateSnapshotId);
+    if (consulted.chosen === null) {
+      // A GATHER step ended before choosing an action (done, at a bound, or nothing left to
+      // dig): nothing runs this cycle. Its plan advanced, or ended so that the next cycle
+      // asks the planner again (see gatherEnded).
+      const { ended } = consulted;
+      const task = state.currentTask?.taskId ?? null;
+      if (task !== null) {
+        repos.checkpoints.add(
+          task,
+          ended.label,
+          { cycleId, decision: decision.decision, why: ended.why },
+          stateSnapshotId,
+        );
+      }
+      return finish({
+        status: ended.status,
+        needsUserAttention: decision.requiresHumanConfirmation,
+        stateSnapshotId,
+        stateViolations,
+        decision,
+        planner: consulted.outcome,
+        action: null,
+        outcome: null,
+        summary: `${decision.decision} -> ${ended.label} -> ${ended.status}`,
+      });
+    }
     chosen = consulted.chosen;
     planner = consulted.outcome;
     planStep = consulted.planStep;
@@ -468,7 +497,10 @@ export async function runSingleCycle(
   rememberSeen(deps, cycleId);
 
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.
-  const planHalted = planStep === null ? false : updatePlanProgress(repos, planStep, outcome);
+  const planHalted =
+    planStep === null
+      ? false
+      : updatePlanProgress(repos, planStep, outcome, clock.now(), execution.state);
 
   // Task bookkeeping: pauses, rejections and failed plans halt the task until a human resumes
   // it. A stale planner step (see isStaleRejection) only fails its plan: the task goes on.
@@ -619,14 +651,32 @@ interface PlanStepRef {
   failureHandling: Plan['failureHandling'];
   /** Who wrote the plan (OPERATOR_PLANNER for a human's plan). */
   planner: string;
+  /**
+   * The step is a GATHER (gather-step.ts), which runs many actions: this one is for the
+   * block at `target` (`walk`: the walk to its stand spot).
+   */
+  gather?: { ref: GatherRef; target: BlockPosition; walk: boolean };
 }
 
 const reviewHint = (taskId: string, planId: number): string =>
   `Review: node src/app/cli.ts plan-show --task ${taskId}; then plan-approve (or plan-reject) --task ${taskId} --plan ${planId}.`;
 
-type Consulted = { chosen: ChosenAction; outcome: PlannerOutcome; planStep: PlanStepRef | null };
+type Consulted =
+  | { chosen: ChosenAction; outcome: PlannerOutcome; planStep: PlanStepRef | null }
+  /** A GATHER step ended before choosing an action: nothing runs this cycle. */
+  | {
+      chosen: null;
+      outcome: PlannerOutcome;
+      ended: { status: CycleStatus; label: string; why: string };
+    };
 
-function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'): Consulted {
+function stepOf(
+  deps: AgentDeps,
+  stored: StoredPlan,
+  outcomeKind: 'plan-accepted' | 'plan-step',
+  state: GameState,
+  ctx: SafetyContext,
+): Consulted {
   const step = stored.plan.steps[stored.nextStep];
   if (step === undefined) throw new Error(`plan ${stored.id} has no step ${stored.nextStep}`);
   const total = stored.plan.steps.length;
@@ -640,24 +690,92 @@ function stepOf(stored: StoredPlan, outcomeKind: 'plan-accepted' | 'plan-step'):
           step: stored.nextStep + 1,
           steps: total,
         };
+  const head = `plan #${stored.id} "${stored.plan.goal}" step ${stored.nextStep + 1}/${total}`;
+  const planStep: PlanStepRef = {
+    planId: stored.id,
+    stepIndex: stored.nextStep,
+    failureHandling: stored.plan.failureHandling,
+    planner: stored.planner,
+  };
+  if (step.action.type === GATHER) {
+    // Code picks this cycle's action from the fresh observation (no model is asked).
+    const ref: GatherRef = {
+      taskId: stored.taskId,
+      planId: stored.id,
+      stepIndex: stored.nextStep,
+      gather: step.action,
+    };
+    const turn = gatherTurn(deps.repos, ref, state, ctx);
+    if (turn.kind === 'end') return gatherEnded(deps.repos, stored, turn, outcome);
+    return {
+      chosen: {
+        spec: turn.spec,
+        reason: `${head}: ${turn.reason}`.slice(0, 500),
+        origin: 'planner',
+      },
+      outcome,
+      planStep: { ...planStep, gather: { ref, target: turn.target, walk: turn.walk } },
+    };
+  }
   return {
     chosen: {
       spec: step.action,
-      reason:
-        `plan #${stored.id} "${stored.plan.goal}" step ${stored.nextStep + 1}/${total}: ${step.rationale}`.slice(
-          0,
-          500,
-        ),
+      reason: `${head}: ${step.rationale}`.slice(0, 500),
       origin: 'planner',
     },
     outcome,
-    planStep: {
-      planId: stored.id,
-      stepIndex: stored.nextStep,
-      failureHandling: stored.plan.failureHandling,
-      planner: stored.planner,
-    },
+    planStep,
   };
+}
+
+/**
+ * A GATHER step that ended before choosing an action (its journal line is written):
+ *  - done: the step is verified, and the plan advances like after any verified step;
+ *  - at its bound (64 actions or 5 minutes): a checkpoint; and nothing left to dig: a stale
+ *    step. Either fails the plan, so the next cycle asks the planner again (it reads why in
+ *    the journal, and can EXPLORE).
+ * Nothing runs this cycle. A plan the planner has just made, whose GATHER finds nothing to
+ * dig, is refused like a first step the executor refuses as stale: the cycle is
+ * 'rejected', and the task goes on.
+ */
+function gatherEnded(
+  repos: Repositories,
+  stored: StoredPlan,
+  turn: { end: 'done' | 'bound' | 'no-target'; why: string },
+  outcome: PlannerOutcome,
+): Consulted {
+  const step = stored.nextStep + 1;
+  if (turn.end === 'done') {
+    stepVerified(repos, stored.id);
+  } else {
+    const kind = turn.end === 'bound' ? 'checkpoint' : 'stale';
+    repos.plans.setStatus(
+      stored.id,
+      'failed',
+      `step ${step} GATHER ${kind}: ${turn.why}`.slice(0, 500),
+    );
+  }
+  const stale = turn.end === 'no-target' && outcome.kind === 'plan-accepted';
+  return {
+    chosen: null,
+    outcome,
+    ended: { status: stale ? 'rejected' : 'succeeded', label: `GATHER:${turn.end}`, why: turn.why },
+  };
+}
+
+/** The plan's current step is verified: advance (completing the plan after its last step). */
+function stepVerified(repos: Repositories, planId: number): void {
+  const plan = repos.plans.advance(planId);
+  if (plan.status === 'completed') {
+    repos.memory.appendJournal(
+      plan.taskId,
+      `plan #${plan.id} done: ${plan.plan.goal}`.slice(0, 300),
+    );
+  }
+  // A plan a human wrote for the task IS the task: finishing it finishes the task.
+  if (plan.status === 'completed' && plan.planner === OPERATOR_PLANNER) {
+    repos.tasks.setStatus(plan.taskId, 'completed');
+  }
 }
 
 /**
@@ -699,28 +817,53 @@ export function isStaleRejection(ref: PlanStepRef | null, outcome: ExecutionOutc
  * human (a rejected step, or a failure policy other than REPLAN). A stale rejection fails
  * the plan but lets the task go on: the next cycle asks the planner again, with the
  * rejection in its recent history.
+ *
+ * A GATHER step runs many actions: a verified one advances the plan only once the
+ * inventory holds the step's count; until then the step goes on (its failures are counted
+ * in a row again), and at its bound (64 actions or 5 minutes) the plan ends for a
+ * checkpoint, so the next cycle asks the planner. An action of it that does not succeed
+ * meets the plan's own failure handling, like any step.
  */
 function updatePlanProgress(
   repos: Repositories,
   ref: PlanStepRef,
   outcome: ExecutionOutcome,
+  now: Date,
+  stateBefore: GameState,
 ): boolean {
   const journal = (text: string): void => {
     const plan = repos.plans.get(ref.planId);
     if (plan !== null) repos.memory.appendJournal(plan.taskId, text);
   };
-  switch (outcome.status) {
-    case 'succeeded': {
-      const plan = repos.plans.advance(ref.planId);
-      if (plan.status === 'completed')
-        journal(`plan #${plan.id} done: ${plan.plan.goal}`.slice(0, 300));
-      // A plan a human wrote for the task IS the task: finishing it finishes the task.
-      if (plan.status === 'completed' && plan.planner === OPERATOR_PLANNER) {
-        repos.tasks.setStatus(plan.taskId, 'completed');
-      }
+  const gather = ref.gather;
+  if (gather !== undefined) {
+    const after = gatherAfterAction(repos, gather.ref, gather, outcome, now);
+    if (after.next === 'more') {
+      repos.plans.resetStepFailures(ref.planId);
       return false;
     }
+    if (after.next === 'bound') {
+      repos.plans.setStatus(
+        ref.planId,
+        'failed',
+        `step ${ref.stepIndex + 1} GATHER checkpoint: ${after.why}`.slice(0, 500),
+      );
+      return false;
+    }
+    // 'done' is a verified step (below); 'failed' meets the plan's failure handling (below).
+  }
+  /** A GATHER whose plan stops here: its last journal line. */
+  const gatherEnds = (why: string): void => {
+    if (gather !== undefined) {
+      gatherStopped(repos, gather.ref, why, now, outcome.stateAfter ?? stateBefore);
+    }
+  };
+  switch (outcome.status) {
+    case 'succeeded':
+      stepVerified(repos, ref.planId);
+      return false;
     case 'rejected':
+      gatherEnds(`its ${outcome.actionType} was refused`);
       journal(
         `plan #${ref.planId} failed at step ${ref.stepIndex + 1} (${outcome.actionType}): ` +
           (outcome.validation.preconditionFailures[0] ??
@@ -740,6 +883,7 @@ function updatePlanProgress(
     case 'verification_failed': {
       const failures = repos.plans.recordStepFailure(ref.planId);
       if (failures <= ref.failureHandling.maxRetriesPerStep) return false; // retry next cycle
+      gatherEnds(`its ${outcome.actionType} did not succeed ${failures} time(s) in a row`);
       journal(
         `plan #${ref.planId} failed at step ${ref.stepIndex + 1} (${outcome.actionType}) ` +
           `${failures} time(s): ${outcome.execution?.message ?? 'not verified'}`,
@@ -794,7 +938,7 @@ async function consultPlanner(
       },
     );
   }
-  if (open?.status === 'active') return stepOf(open, 'plan-step');
+  if (open?.status === 'active') return stepOf(deps, open, 'plan-step', state, ctx);
 
   if (planner === null || config.planner.provider === 'none') {
     return pauseWith(
@@ -895,7 +1039,9 @@ async function consultPlanner(
     );
   }
 
-  const plan = validation.plan;
+  // Steps after an EXPLORE (and view-bound steps after a GATHER) were planned from a view
+  // that will be gone when they run: they are dropped, and the next plan starts from there.
+  const { plan, note: trimmed } = trimStaleSteps(validation.plan);
   const stored = repos.plans.create(
     taskId,
     plan,
@@ -905,7 +1051,7 @@ async function consultPlanner(
   repos.checkpoints.add(
     taskId,
     'plan',
-    { planId: stored.id, status: stored.status, plan },
+    { planId: stored.id, status: stored.status, plan, ...(trimmed === null ? {} : { trimmed }) },
     stateSnapshotId,
   );
   if (stored.status === 'pending_approval') {
@@ -917,7 +1063,8 @@ async function consultPlanner(
   }
   repos.memory.appendJournal(
     taskId,
-    `new plan #${stored.id}: ${stored.plan.goal} (${stored.plan.steps.length} steps)`,
+    `new plan #${stored.id}: ${stored.plan.goal} (${stored.plan.steps.length} steps` +
+      `${trimmed === null ? '' : `; code ${trimmed}`})`,
   );
-  return stepOf(stored, 'plan-accepted');
+  return stepOf(deps, stored, 'plan-accepted', state, ctx);
 }

@@ -11,6 +11,8 @@ export const TASK_REQUIREMENTS_PREFIX = 'task_requirements:';
 export const TASK_BLUEPRINT_PREFIX = 'task_blueprint:';
 /** agent_state key prefix for a task's journal: `task_journal:<taskId>`. */
 export const TASK_JOURNAL_PREFIX = 'task_journal:';
+/** agent_state key prefix for the progress of a task's GATHER plan step: `task_gather:<taskId>`. */
+export const TASK_GATHER_PREFIX = 'task_gather:';
 /** Journal lines kept in full; older ones are folded into one summary line. */
 export const JOURNAL_KEEP = 16;
 

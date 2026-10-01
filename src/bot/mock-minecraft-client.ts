@@ -88,6 +88,11 @@ const MOCK_DROPS: Readonly<Record<DiggableBlock, { item: string; count: number }
 export interface MockResourceBlock {
   block: DiggableBlock;
   position: BlockPosition;
+  /**
+   * Where to stand to dig it, as the live client computes it (null: nowhere). Left out, the
+   * observation says nothing about it, like an adapter that does not compute stand spots.
+   */
+  standAt?: Position | null;
 }
 
 export interface MockPlacedBlock {
@@ -379,7 +384,13 @@ export class MockMinecraftClient implements MinecraftClient {
         ? unknown('mock: blocks hidden')
         : known({
             scanRadius: BLOCK_SCAN_RADIUS,
-            resources: resources.map((r) => ({ block: r.block, position: { ...r.position } })),
+            resources: resources.map((r) => ({
+              block: r.block,
+              position: { ...r.position },
+              ...(r.standAt === undefined
+                ? {}
+                : { standAt: r.standAt === null ? null : { ...r.standAt } }),
+            })),
             removed: removed.map((p) => ({ ...p })),
             placeable: this.#placeableCells().slice(0, MAX_REPORTED_PLACEABLE),
             placed: placed.map((p) => ({ block: p.block, position: { ...p.position } })),

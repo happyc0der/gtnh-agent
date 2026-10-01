@@ -66,11 +66,16 @@ afterwards, so those come back as invalid output.
   args, "use only ids and items from the request", "never touch protected items", "prefer short
   plans", and when to escalate instead of planning.
 - The prompt states facts computed from the agent's own tables, never from the model's memory:
-  the known recipes (`src/domain/recipes.ts`), and what a tool saves (rule 11). Rule 11 gives
+  the known recipes (`src/domain/recipes.ts`), and what a tool saves (rule 13). Rule 13 gives
   dig times from `src/domain/dig-time.ts` and `src/domain/tools.ts`, for example "sand or dirt
   21 by hand, 12 with a minecraft:wooden_shovel". It says that a wooden tool lasts 59 digs, and
   that before gathering 32 or more of a block the planner should craft the tool first when a
   known recipe and the ingredients carried allow it. `DIG_BLOCK` picks the tool by itself.
+- Gathering is one `GATHER` step (rule 9): the model names the block and how many of its drops
+  it needs, and code picks every `DIG_BLOCK` and `MOVE_TO` after that, one per cycle, with no
+  model call between them ([architecture](architecture.md#gather-gathering-in-one-plan-step)).
+  When a plan is accepted, code drops the steps after its first `EXPLORE`, and the steps after
+  a `GATHER` from the first one that names a position or a creature on.
 - `format` is the planner response schema with the step count capped at the request's
   `maxPlanSteps`.
 - The reply is parsed with `parsePlannerOutput` (PlannerResponseSchema). Any HTTP error, timeout,
@@ -132,7 +137,7 @@ The planner receives a `PlannerRequest`, never raw state or logs:
   reduced by code to at most 14 places (per resource the nearest seen with enough of it, and a
   much richer one: x, z, distance, direction, count, biome, minutes ago), up to 8 biomes, and per
   direction how far it has been seen and the room left to the boundary. `EXPLORE` is offered
-  (in `allowedActions`) only then, and prompt rule 11 says when to use it: a good GTNH start has
+  (in `allowedActions`) only then, and prompt rule 15 says when to use it: a good GTNH start has
   wood, gravel and sand near water, clay on riverbanks and stone; explore toward a known place
   or the least-seen direction when the task needs a block not listed nearby; never at dusk or
   night. Not evaluated against qwen3:14b yet.
@@ -152,11 +157,14 @@ node scripts/llm-eval.ts --decision-model qwen3:14b --planner-model qwen3:14b [-
 - **Decisions:** each of the 21 mock scenarios' states goes to the model (unwrapped, to measure
   it) and to the router. In 12 of them the router's decision is not binding, so the wrapper would
   use the model's choice; in the other 9 the router decides alone.
-- **Planner:** the 5 planner scenarios (same world, different task ids) plus 5 tasks of its own:
-  fetch cobblestone, store gravel, inspect a distant macerator, craft an iron pickaxe (impossible
-  with the allowed actions) and store the protected diamond (forbidden). It reports schema-valid
-  replies, `validatePlan`, whether every step names a known object of the right kind (which
-  `validatePlan` cannot see: it has no state), and whether step 1 passes the executor's checks.
+- **Planner:** the 5 planner scenarios (same world, different task ids) plus 6 tasks of its own:
+  gather 54 sand (one `GATHER` step is the answer; added 2026-10-01, not in the results below
+  yet), fetch cobblestone, store gravel, inspect a distant macerator, craft an iron pickaxe
+  (impossible with the allowed actions) and store the protected diamond (forbidden). It reports
+  schema-valid replies, `validatePlan`, whether every step names a known object of the right
+  kind (which `validatePlan` cannot see: it has no state), whether step 1 passes the executor's
+  checks (for a `GATHER`, the first action code picks for it), and the steps code would drop
+  when it accepts the plan.
 
 ### Results (2026-09-30, Ollama 0.34.4, RTX 3080 Ti Laptop 16 GB, Minecraft running alongside)
 
