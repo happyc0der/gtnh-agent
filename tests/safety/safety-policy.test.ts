@@ -938,3 +938,46 @@ describe('rule 10: safe defaults', () => {
     expect(v.map((x) => x.code)).toEqual(['UNKNOWN_TARGET']);
   });
 });
+
+describe('dangers from creatures beyond the threat radius', () => {
+  // The player stands at (1, 64, 1); the threat radius is 10 blocks, the entity scan 16.
+  const mob = (type: string, x: number) => ({
+    id: 1,
+    type,
+    category: 'hostile' as const,
+    position: { x, y: 64, z: 1 },
+    health: 20,
+  });
+
+  it('a hostile that shoots is a danger anywhere in the entity scan; one that does not, only within the radius', () => {
+    // Seen live: a giant skeleton shot the agent from beyond the threat radius, 20 -> 8.
+    const skeleton = makeState((w) => void (w.mobs = [mob('SpecialMobs.GiantSkeleton', 15)]));
+    expect(assessDangers(skeleton, safetyCtx())).toMatchObject([
+      {
+        code: 'HOSTILES_NEARBY',
+        message: expect.stringMatching(
+          /SpecialMobs\.GiantSkeleton shoots from 14\.0 blocks/,
+        ) as unknown,
+      },
+    ]);
+    const zombie = makeState((w) => void (w.mobs = [mob('minecraft:Zombie', 15)]));
+    expect(assessDangers(zombie, safetyCtx())).toEqual([]);
+  });
+
+  it('being hurt in the last 15 s with a hostile about is a danger; with none about, it is not', () => {
+    const hurt = (msAgo: number) =>
+      makeState((w) => {
+        w.mobs = [mob('minecraft:Zombie', 15)];
+        w.player.lastHurtAt = new Date(Date.parse(T0) - msAgo).toISOString();
+      });
+    expect(assessDangers(hurt(5_000), safetyCtx()).map((v) => v.code)).toEqual(['HOSTILES_NEARBY']);
+    expect(assessDangers(hurt(30_000), safetyCtx())).toEqual([]);
+    // Hurt with nothing hostile around (a fall, hunger): not an attack.
+    expect(
+      assessDangers(
+        makeState((w) => void (w.player.lastHurtAt = T0)),
+        safetyCtx(),
+      ),
+    ).toEqual([]);
+  });
+});

@@ -9,6 +9,7 @@ import {
   ChunkStore,
   decodeChunkBulk,
   decodeChunkColumn,
+  decodeChunkColumnWithBiomes,
   type ColumnHeader,
 } from '../../../src/bot/gtnh1710/chunk-data.ts';
 import { MAX_REPORTED_HAZARDS, scanHazards } from '../../../src/bot/gtnh1710/hazard-scan.ts';
@@ -26,10 +27,13 @@ import {
   flatWorld,
   neidColumn,
   TEST_BLOCK_REGISTRY,
+  vanillaColumn,
   type BlockFn,
+  type MetaFn,
 } from './chunk-fixtures.ts';
 
 const NEID = { neid: true };
+const VANILLA = { neid: false };
 
 function registryOf(blocks: Array<[number, string]>) {
   const entries = blocks.map(([id, name]) =>
@@ -47,19 +51,28 @@ function registryOf(blocks: Array<[number, string]>) {
 }
 const codes = buildBlockCodeTable(registryOf(TEST_BLOCK_REGISTRY));
 
-/** A chunk store holding the columns within `radius` chunks of (0,0), built from a world function. */
-function storeOf(world: BlockFn, radius = 3): ChunkStore {
+/**
+ * A chunk store holding the columns within `radius` chunks of (0,0), built from a world
+ * function (and its metadata), sent in NEID's or vanilla's layout.
+ */
+function storeOf(world: BlockFn, radius = 3, meta?: MetaFn, neid = true): ChunkStore {
   const store = new ChunkStore();
   const columns = [];
-  for (let cx = -radius; cx <= radius; cx++)
-    for (let cz = -radius; cz <= radius; cz++) columns.push(neidColumn(cx, cz, world));
+  for (let cx = -radius; cx <= radius; cx++) {
+    for (let cz = -radius; cz <= radius; cz++) {
+      const column = neid ? neidColumn : vanillaColumn;
+      columns.push(column(cx, cz, world, true, true, undefined, meta));
+    }
+  }
   const decoded = decodeChunkBulk(
     columns.map((c) => c.header),
     true,
     deflateSync(Buffer.concat(columns.map((c) => c.data))),
-    NEID,
+    neid ? NEID : VANILLA,
   );
-  for (const c of decoded) store.setColumn(c.header.chunkX, c.header.chunkZ, c.sections, 0);
+  for (const c of decoded) {
+    store.setColumn(c.header.chunkX, c.header.chunkZ, c.sections, 0, c.biomes, c.meta);
+  }
   return store;
 }
 
@@ -162,9 +175,91 @@ describe('chunk data decoding', () => {
     ).toThrow(/add mask/);
   });
 
+  it('keeps NotEnoughIDs metadata next to the ids: unsigned 16-bit, 0 where none was sent', () => {
+    const blocks = new Map([
+      ['-3,70,-20', 30000],
+      ['2,106,5', BLOCK.bopFoliage],
+      ['3,106,5', BLOCK.bopFoliage],
+    ]);
+    const meta = new Map([
+      ['-3,70,-20', 40000],
+      ['2,106,5', 7],
+      ['3,106,5', 300],
+    ]);
+    const store = storeOf(flatWorld(blocks), 2, (x, y, z) => meta.get(`${x},${y},${z}`) ?? 0);
+    expect(store.blockAt(-3, 70, -20)).toBe(30000);
+    expect(store.metaAt(-3, 70, -20)).toBe(40000); // above 32767: unsigned
+    expect(store.metaAt(2, 106, 5)).toBe(7);
+    expect(store.metaAt(3, 106, 5)).toBe(300);
+    expect(store.metaAt(5, 105, 5)).toBe(0); // grass
+    expect(store.metaAt(0, 200, 0)).toBe(0); // an all-air section
+    expect(store.metaAt(0, 300, 0)).toBe(0); // above the world: air
+    expect(store.metaAt(100, 64, 100)).toBeUndefined(); // column not loaded
+  });
+
+  it('keeps vanilla metadata nibbles (an even index in the low one) beside add-array ids', () => {
+    // Blocks (0,64,0) and (1,64,0) are indexes 0 and 1: one byte holds both their nibbles.
+    const blocks = new Map([
+      ['0,64,0', BLOCK.log],
+      ['1,64,0', 300],
+      ['-1,64,-1', BLOCK.bopFoliage],
+    ]);
+    const metas = new Map([
+      ['0,64,0', 5],
+      ['1,64,0', 12],
+      ['-1,64,-1', 7],
+    ]);
+    const meta: MetaFn = (x, y, z) => metas.get(`${x},${y},${z}`) ?? 0;
+    const store = storeOf(flatWorld(blocks), 1, meta, false);
+    expect([store.blockAt(0, 64, 0), store.metaAt(0, 64, 0)]).toEqual([BLOCK.log, 5]);
+    expect([store.blockAt(1, 64, 0), store.metaAt(1, 64, 0)]).toEqual([300, 12]);
+    expect([store.blockAt(-1, 64, -1), store.metaAt(-1, 64, -1)]).toEqual([BLOCK.bopFoliage, 7]);
+    expect(store.metaAt(0, 105, 0)).toBe(0);
+    // One column (Chunk Data) without sky light: its length still tells the layout.
+    const c = vanillaColumn(0, 0, flatWorld(blocks), false, true, undefined, meta);
+    expect(c.header.addBitMask).toBe(1 << 4);
+    const one = decodeChunkColumnWithBiomes(c.header, true, deflateSync(c.data), VANILLA);
+    expect([one.sections[4]?.[1], one.meta[4]?.[1], one.meta[4]?.[0]]).toEqual([300, 12, 5]);
+  });
+
+  it('applies block changes with their metadata; a column sent without it has none known', () => {
+    const store = storeOf(flatWorld(), 1, () => 0);
+    store.setBlock(2, 106, 3, BLOCK.bopFoliage, 7);
+    expect([store.blockAt(2, 106, 3), store.metaAt(2, 106, 3)]).toEqual([BLOCK.bopFoliage, 7]);
+    store.setBlock(2, 106, 3, BLOCK.bopFoliage, 1);
+    expect(store.metaAt(2, 106, 3)).toBe(1);
+    store.setBlock(2, 106, 4, 30000, 40000); // past a byte: the section's metadata widens
+    expect([store.metaAt(2, 106, 4), store.metaAt(2, 106, 3)]).toEqual([40000, 1]);
+    store.setBlock(2, 106, 3, 0, 0);
+    expect([store.blockAt(2, 106, 3), store.metaAt(2, 106, 3)]).toEqual([0, 0]);
+    store.setBlock(-5, 150, 7, BLOCK.bopFoliage, 4); // into an all-air section
+    expect(store.metaAt(-5, 150, 7)).toBe(4);
+
+    // A partial update replaces the metadata of its sections too.
+    const c = neidColumn(0, 0, flatWorld());
+    const decode = () => {
+      const [column] = decodeChunkBulk([c.header], true, deflateSync(c.data), NEID);
+      if (column === undefined) throw new Error('no column decoded');
+      return column;
+    };
+    const update = decode();
+    store.updateSections(0, 0, update.sections, c.header.primaryBitMask, 1, update.meta);
+    expect([store.blockAt(2, 106, 4), store.metaAt(2, 106, 4)]).toEqual([0, 0]);
+    // Without metadata (a column or an update), the ids are known and the metadata is not.
+    store.updateSections(0, 0, decode().sections, c.header.primaryBitMask, 2);
+    expect([store.blockAt(2, 105, 4), store.metaAt(2, 105, 4)]).toEqual([BLOCK.grass, undefined]);
+    const bare = new ChunkStore();
+    bare.setColumn(0, 0, decode().sections, 0);
+    bare.setBlock(3, 106, 3, BLOCK.bopFoliage, 1);
+    expect([bare.blockAt(3, 106, 3), bare.metaAt(3, 106, 3)]).toEqual([
+      BLOCK.bopFoliage,
+      undefined,
+    ]);
+  });
+
   it('applies block changes, partial updates, unusable columns and unloads', () => {
     const store = storeOf(flatWorld(), 1);
-    store.setBlock(-5, 150, 7, BLOCK.lava); // creates a new section
+    store.setBlock(-5, 150, 7, BLOCK.lava, 0); // creates a new section
     expect(store.blockAt(-5, 150, 7)).toBe(BLOCK.lava);
     store.markBad(0, 0, 'test', 1);
     expect(store.blockAt(3, 0, 3)).toBeUndefined();
@@ -245,17 +340,19 @@ describe('hazard scan', () => {
 describe('block change packets', () => {
   const neid = { itemStackSizeVarInt: true, neid: true };
 
-  it('decodes Block Change with NEID (short metadata) and vanilla (byte metadata)', () => {
+  it('decodes Block Change with NEID (unsigned short metadata) and vanilla (byte metadata)', () => {
     const base = Buffer.concat([i32(-5), Buffer.from([106]), i32(7), encodeVarInt(30000)]);
-    expect(decodePlay(0x23, new Reader(Buffer.concat([base, Buffer.from([0, 3])])), neid)).toEqual({
+    const wide = new Reader(Buffer.concat([base, Buffer.from([0x80, 0x03])]));
+    expect(decodePlay(0x23, wide, neid)).toEqual({
       type: 'block-change',
       x: -5,
       y: 106,
       z: 7,
       blockId: 30000,
+      blockMeta: 0x8003,
     });
     const r = new Reader(Buffer.concat([base, Buffer.from([3])]));
-    expect(decodePlay(0x23, r, VANILLA_DECODING)).toMatchObject({ blockId: 30000 });
+    expect(decodePlay(0x23, r, VANILLA_DECODING)).toMatchObject({ blockId: 30000, blockMeta: 3 });
     expect(r.remaining).toBe(0);
   });
 
@@ -265,23 +362,23 @@ describe('block change packets', () => {
       i32(2),
       Buffer.from([0, 1]),
       i32(6),
-      Buffer.from([0xf3, 0x6a, 0x00, 0x0b, 0, 0]),
+      Buffer.from([0xf3, 0x6a, 0x00, 0x0b, 0x01, 0x2c]),
     ]);
     expect(decodePlay(0x22, new Reader(neidBody), neid)).toEqual({
       type: 'multi-block-change',
       chunkX: -1,
       chunkZ: 2,
-      records: [{ x: -16 + 15, y: 0x6a, z: 32 + 3, blockId: BLOCK.lava }],
+      records: [{ x: -16 + 15, y: 0x6a, z: 32 + 3, blockId: BLOCK.lava, blockMeta: 300 }],
     });
     const vanillaBody = Buffer.concat([
       i32(0),
       i32(0),
       Buffer.from([0, 1]),
       i32(4),
-      Buffer.from([0x12, 0x40, 0x00, 0xb0]),
+      Buffer.from([0x12, 0x40, 0x00, 0xb7]),
     ]);
     expect(decodePlay(0x22, new Reader(vanillaBody), VANILLA_DECODING)).toMatchObject({
-      records: [{ x: 1, y: 0x40, z: 2, blockId: BLOCK.lava }],
+      records: [{ x: 1, y: 0x40, z: 2, blockId: BLOCK.lava, blockMeta: 7 }],
     });
     expect(() => decodePlay(0x22, new Reader(vanillaBody), neid)).toThrow(
       /4 bytes for 1 records of 6/,

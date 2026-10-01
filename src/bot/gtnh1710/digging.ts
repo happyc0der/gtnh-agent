@@ -10,10 +10,10 @@ import { isBlockInsideBox } from '../../domain/geometry.ts';
 import { isDigDownBlock } from '../../domain/night-shelter.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
+import { passProblem, variantName } from './passable.ts';
 import type { PointBox } from './play-area.ts';
 import {
   FLOAT_CHECK_HALF_WIDTH,
-  PASSABLE_BLOCKS,
   standProblem,
   type ReachedFeet,
   type WalkBreaks,
@@ -65,7 +65,9 @@ export const DIG_SETTLE_TICKS = 5;
  * do not fall, flow or hang on their neighbours (the walker's known full blocks), plus the
  * allowlist itself and air. Anything else next to the target (water, a torch, a flower,
  * a chest, a machine, any modded block, an unnamed id) refuses the dig: removing the block
- * could flood the hole, drop an attached block or change a build.
+ * could flood the hole, drop an attached block or change a build. Beside it (not on top),
+ * the plants the body walks through are fine too (digDoesNotDisturb): they stand on the
+ * block under them, not on the dug one.
  */
 export const DIG_NEIGHBOURS: ReadonlySet<string> = new Set<string>([
   'minecraft:air',
@@ -215,9 +217,9 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
     const nname = nid === 0 ? 'minecraft:air' : world.blockName(nid);
     if (nname === undefined)
       return refuse(`it touches block id ${nid} at ${fmt(n)}, which the registry does not name`);
-    if (!DIG_NEIGHBOURS.has(nname)) {
+    if (!digDoesNotDisturb(world, n, nname, dy)) {
       return refuse(
-        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block)`,
+        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, and plants only beside it)`,
       );
     }
   }
@@ -315,10 +317,11 @@ export const MAX_WALK_BREAKS = 4;
  * Whether the player standing at `feet` may break the block at `cell` to walk on: leaves
  * only, by every rule of checkDig (inside the fence's columns and dig heights, within reach
  * from where it stands, never its own support or a block over its head that falls, only air
- * and plain full blocks touching it, nothing to fall into the hole, no hazard near, nothing
- * unloaded or unnamed), and wholly inside the safety boundary when the client knows it (the
- * safety policy's own rule for DIG_BLOCK). Checked by the walker for every break it plans,
- * and by the client again just before each dig and every tick while digging.
+ * and plain full blocks touching it and plants only beside it, nothing to fall into the
+ * hole, no hazard near, nothing unloaded or unnamed), and wholly inside the safety boundary
+ * when the client knows it (the safety policy's own rule for DIG_BLOCK). Checked by the
+ * walker for every break it plans, and by the client again just before each dig and every
+ * tick while digging.
  */
 export function checkWalkBreak(
   world: WalkWorld,
@@ -369,15 +372,25 @@ export function walkBreaks(area: DigArea, boundary: PointBox | null = null): Wal
 // Digging down: the block under the player's own feet (DIG_DOWN, the night pit only)
 
 /**
- * What the cells around a dig-down may hold (the dug block, the landing, and the player's
- * body before and after the drop): air, plants, plain full blocks and the dig allowlist.
- * Never a fluid (water would pour into the hole), a hazard, a modded, unnamed or unloaded
- * block.
+ * Whether a cell around a dig-down (the dug block, the landing, and the player's body before
+ * and after the drop) may hold its block `name`: air, a plain full block, the dig allowlist,
+ * or a plant the body passes (passable.ts, which tells plant variants apart by metadata).
+ * Never a fluid (water would pour into the hole), a hazard, another modded block, an unnamed
+ * or unloaded one.
  */
-export const DIG_DOWN_SURROUNDINGS: ReadonlySet<string> = new Set<string>([
-  ...DIG_NEIGHBOURS,
-  ...PASSABLE_BLOCKS,
-]);
+function digDownSurroundingOk(world: WalkWorld, n: BlockPos, name: string): boolean {
+  return DIG_NEIGHBOURS.has(name) || passProblem(world, n.x, n.y, n.z) === null;
+}
+
+/**
+ * Whether block `name` at `n` may touch a dug block from a face `dy` above or below it:
+ * DIG_NEIGHBOURS, or on a side face a plant the body passes (passable.ts, by metadata). Seen
+ * live: tall grass beside the ground block ruled out every night pit around. A plant hangs on
+ * the block under it, so only one on top of the dug block would drop.
+ */
+function digDoesNotDisturb(world: WalkWorld, n: BlockPos, name: string, dy: number): boolean {
+  return DIG_NEIGHBOURS.has(name) || (dy === 0 && passProblem(world, n.x, n.y, n.z) === null);
+}
 
 const nameAt = (world: WalkWorld, x: number, y: number, z: number): string | undefined => {
   const id = world.blockAt(x, y, z);
@@ -441,8 +454,8 @@ export function landingProblem(world: WalkWorld, x: number, y: number, z: number
  *  - in every cell around the dug block, the landing and the body before and after the
  *    drop (3 x 3 columns, from the landing's level to the head's): anything not loaded or
  *    not named, a hazard (lava, fire, harmful fluids, damaging blocks), a fluid such as
- *    water, or any other block but air, plants and plain blocks; and hazards one level
- *    lower still.
+ *    water, or any other block but air, plants the walker passes and plain blocks; and
+ *    hazards one level lower still.
  * Checked before the dig starts and again every tick while digging.
  */
 export function checkDigDown(
@@ -506,9 +519,9 @@ export function checkDigDown(
     const nname = nameAt(world, n.x, n.y, n.z);
     if (nname === undefined)
       return refuse(`the block next to it at ${fmt(n)} is not loaded or not named`);
-    if (!DIG_NEIGHBOURS.has(nname)) {
+    if (!digDoesNotDisturb(world, n, nname, dy)) {
       return refuse(
-        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block)`,
+        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, and plants only beside it)`,
       );
     }
     // Sand or gravel beside it, with nothing under it, would fall when the block goes.
@@ -532,9 +545,11 @@ export function checkDigDown(
         }
         if (dy === -2) continue; // below the landing: only hazards matter
         const nname = nid === 0 ? 'minecraft:air' : world.blockName(nid);
-        if (nname === undefined || !DIG_DOWN_SURROUNDINGS.has(nname)) {
+        if (nname === undefined || !digDownSurroundingOk(world, n, nname)) {
+          const what =
+            nname === undefined ? `block id ${nid}` : variantName(world, n.x, n.y, n.z, nname);
           return refuse(
-            `${nname ?? `block id ${nid}`} at ${fmt(n)} is near it (only air, plants and plain blocks may be around a dig down: no fluid)`,
+            `${what} at ${fmt(n)} is near it (only air, plants the walker passes and plain blocks may be around a dig down: no fluid)`,
           );
         }
       }

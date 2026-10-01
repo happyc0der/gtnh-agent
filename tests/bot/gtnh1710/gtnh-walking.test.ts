@@ -16,8 +16,8 @@ import { createRepositories } from '../../../src/persistence/repositories.ts';
 import { SqliteActionLog } from '../../../src/executor/action-log.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
-import { BLOCK } from './chunk-fixtures.ts';
-import { FakeGtnhServer, spawnFrame, type FakeServerOptions } from './fake-server.ts';
+import { BLOCK, FOLIAGE, TEST_BLOCK_REGISTRY } from './chunk-fixtures.ts';
+import { DEFAULT_MODS, FakeGtnhServer, spawnFrame, type FakeServerOptions } from './fake-server.ts';
 
 // The fake world is a grass floor at y=105 with the player at (-4.5, 106, -7.5): the same
 // x/z as the real test pen, whose fence this mirrors one level lower.
@@ -272,7 +272,88 @@ describe('Gtnh1710Client walking', () => {
   });
 });
 
+/** The test registry with BOP foliage (the walker passes it by its metadata). */
+const FOLIAGE_REGISTRY: Array<[number, string]> = [
+  ...TEST_BLOCK_REGISTRY,
+  [BLOCK.bopFoliage, 'BiomesOPlenty:foliage'],
+];
+const TERRAIN_FENCE = { min: { x: -9, y: 106, z: -12 }, max: { x: -1, y: 108, z: -4 } };
+
+describe('Gtnh1710Client block metadata', () => {
+  // NEID metadata is 16-bit (300 needs two bytes); vanilla's is a nibble.
+  it.each<[string, Array<{ modid: string; version: string }>, number]>([
+    ['NotEnoughIDs', DEFAULT_MODS, 300],
+    ['vanilla', DEFAULT_MODS.filter((m) => m.modid !== 'neid'), 12],
+  ])('keeps it from %s chunk data and block changes', async (_format, mods, wide) => {
+    const { server, client } = await start({
+      mods,
+      blocks: FOLIAGE_REGISTRY,
+      blockOverrides: new Map([
+        ['-3,106,-8', BLOCK.bopFoliage],
+        ['-2,106,-8', BLOCK.bopFoliage],
+      ]),
+      blockMeta: new Map([
+        ['-3,106,-8', FOLIAGE.poisonIvy],
+        ['-2,106,-8', wide],
+      ]),
+    });
+    await vi.waitFor(() => expect(client.world.metaAt(-3, 106, -8)).toBe(FOLIAGE.poisonIvy));
+    expect(client.world.blockAt(-3, 106, -8)).toBe(BLOCK.bopFoliage);
+    expect(client.world.metaAt(-2, 106, -8)).toBe(wide);
+    expect(client.world.metaAt(-4, 105, -8)).toBe(0); // grass
+    // A Block Change, then a Multi Block Change, each with its metadata.
+    server.setBlock(-3, 106, -8, BLOCK.bopFoliage, FOLIAGE.shortgrass);
+    await vi.waitFor(() => expect(client.world.metaAt(-3, 106, -8)).toBe(FOLIAGE.shortgrass));
+    server.setBlocks(-1, -1, [
+      { x: -2, y: 106, z: -8, id: BLOCK.bopFoliage, meta: FOLIAGE.berryBush },
+      { x: -3, y: 106, z: -8, id: 0 },
+    ]);
+    await vi.waitFor(() => expect(client.world.metaAt(-2, 106, -8)).toBe(FOLIAGE.berryBush));
+    expect([client.world.blockAt(-3, 106, -8), client.world.metaAt(-3, 106, -8)]).toEqual([0, 0]);
+  });
+});
+
 describe('Gtnh1710Client walking over terrain', () => {
+  /** A hedge of BOP foliage across x = -3, the fence's whole depth: short grass but for `other`. */
+  function hedge(other: Record<string, number> = {}): FakeServerOptions {
+    const blockOverrides = new Map<string, number>();
+    const blockMeta = new Map<string, number>();
+    for (let z = TERRAIN_FENCE.min.z; z <= TERRAIN_FENCE.max.z; z++) {
+      blockOverrides.set(`-3,106,${z}`, BLOCK.bopFoliage);
+      blockMeta.set(`-3,106,${z}`, other[`-3,106,${z}`] ?? FOLIAGE.shortgrass);
+    }
+    return { blocks: FOLIAGE_REGISTRY, blockOverrides, blockMeta };
+  }
+
+  it('walks through BOP foliage, around the poison ivy on its straight line', async () => {
+    // Seen live 2026-10-01: foliage at feet level walled in logs 7 blocks away.
+    const { server, client } = await start(hedge({ '-3,106,-8': FOLIAGE.poisonIvy }), {
+      fence: TERRAIN_FENCE,
+    });
+    const result = await perform(client, moveTo(-1.5, -7.5));
+    expect(result).toMatchObject({ ok: true, code: 'OK' });
+    const steps = server.walkSteps();
+    expect(steps.at(-1)).toMatchObject({ x: -1.5, feetY: FEET_Y, z: -7.5, onGround: true });
+    // Through the hedge (every way across goes through it), never into the ivy's cell.
+    expect(steps.some((s) => s.x - 0.3 < -2 && s.x + 0.3 > -3)).toBe(true);
+    for (const s of steps) {
+      const inIvy = s.x + 0.3 > -3 && s.x - 0.3 < -2 && s.z + 0.3 > -8 && s.z - 0.3 < -7;
+      expect(inIvy, `step at ${s.x}, ${s.z}`).toBe(false);
+    }
+  });
+
+  it('refuses a hedge of poison ivy without sending a step', async () => {
+    const ivy: Record<string, number> = {};
+    for (let z = TERRAIN_FENCE.min.z; z <= TERRAIN_FENCE.max.z; z++) {
+      ivy[`-3,106,${z}`] = FOLIAGE.poisonIvy;
+    }
+    const { server, client } = await start(hedge(ivy), { fence: TERRAIN_FENCE });
+    const result = await perform(client, moveTo(-1.5, -7.5));
+    expect(result).toMatchObject({ ok: false, code: 'REFUSED' });
+    expect(result.message).toMatch(/no walkable path/);
+    expect(server.walkSteps()).toHaveLength(0);
+  });
+
   it('steps up onto a block: rises first, crosses above it, lands on top', async () => {
     const { server, client } = await start(
       { blockOverrides: new Map([['-3,106,-8', BLOCK.stone]]) },

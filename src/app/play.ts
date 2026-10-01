@@ -369,8 +369,11 @@ function reachGoal(repos: Repositories, goal: FreeGoal): void {
   });
 }
 
-/** Real minutes until the next sunrise (tick 0 of the next day). */
-const untilSunrise = (t: WorldTime): number =>
+/**
+ * Real minutes until the next sunrise (tick 0 of the next day): from a day that night is soon
+ * to end, the whole evening and night (minutesUntilDay is 0 by day).
+ */
+export const untilSunrise = (t: WorldTime): number =>
   Number(((TICKS_PER_DAY - t.timeOfDay) / TICKS_PER_SECOND / 60).toFixed(1));
 
 /** Evening or night: hostile mobs come out. */

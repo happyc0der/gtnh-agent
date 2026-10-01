@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runSingleCycle, syncConfigToDatabase } from '../../src/app/agent-loop.ts';
+import { readDeadEnds } from '../../src/app/dead-ends.ts';
 import { runMockScenario } from '../../src/app/mock-agent.ts';
 import { findScenario, MOCK_CONFIG, SCENARIOS, type Scenario } from '../../src/app/scenarios.ts';
 import type { MockMinecraftClient } from '../../src/bot/mock-minecraft-client.ts';
@@ -312,6 +313,8 @@ describe('world memory and exploring', () => {
       minecraft: { movement: { enabled: true, mode: 'follow' } },
     });
     syncConfigToDatabase(config, repos);
+    // World memory knows the logs that EXPLORE heads for.
+    repos.worldMemory.remember([sighting]);
     const state = await client.observe();
     const taskId = state.currentTask?.taskId ?? '';
     // The EXPLORE of explorePlan failed twice from where the player stands (seen live: toward
@@ -393,6 +396,10 @@ describe('world memory and exploring', () => {
     expect(repos.memory.journal(taskId).map((e) => e.text)).toContainEqual(
       expect.stringContaining('which code would refuse (it failed 2 time(s) from where'),
     );
+    // A dead end: asked again, the planner no longer sees the logs it could not get to.
+    expect(readDeadEnds(repos.memory).map((d) => d.toward)).toEqual([{ x: 3, z: 70 }]);
+    expect(requests[0]?.exploration?.places.map((p) => [p.x, p.z])).toEqual([[3, 70]]);
+    expect(requests[1]?.exploration?.places).toEqual([]);
   });
 
   it('asks once more when code would refuse its first step for any reason it can change', async () => {
@@ -445,6 +452,59 @@ describe('world memory and exploring', () => {
     );
     expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
     expect(result.action).toMatchObject({ type: 'EXPLORE', args: { toward: { x: -30, z: 20 } } });
+  });
+
+  it('asks once more when every GATHER in the plan would find nothing to dig', async () => {
+    const clock = testClock();
+    const { client } = makeWorld((w) => {
+      if (w.task !== null) w.task.requirements = { 'minecraft:gravel': 8 };
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = defaultConfig({
+      ...MOCK_CONFIG,
+      minecraft: { movement: { enabled: true, mode: 'follow' } },
+    });
+    syncConfigToDatabase(config, repos);
+    const gatherGravel: PlannerResponse = {
+      kind: 'plan',
+      plan: {
+        ...(explorePlan as Extract<PlannerResponse, { kind: 'plan' }>).plan,
+        steps: [
+          {
+            step: 1,
+            action: { type: 'GATHER', args: { block: 'minecraft:gravel', count: 8 } },
+            rationale: 'gravel is needed',
+          },
+        ],
+      },
+    };
+    // Seen live: "GATHER logs, GATHER gravel" again and again with neither to dig.
+    const requests: PlannerRequest[] = [];
+    const planner: PlannerProvider = {
+      name: 'hopeful',
+      plan: (request) => {
+        requests.push(request);
+        return Promise.resolve(
+          requests.length === 1 ? gatherGravel : (explorePlan as PlannerResponse),
+        );
+      },
+    };
+    const result = await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    });
+    expect(requests).toHaveLength(2);
+    expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
+    expect(requests[1]?.journal.at(-1)).toMatch(
+      /^Your plan would dig nothing \(GATHER minecraft:gravel: no minecraft:gravel left in view to dig\)\. Plan something else: EXPLORE/,
+    );
+    expect(result.action).toMatchObject({ type: 'EXPLORE' });
   });
 
   it('keeps remembering, but offers no EXPLORE, with a fixed fence', async () => {

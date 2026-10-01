@@ -16,7 +16,7 @@ import {
   type BlockPos,
   type DigArea,
 } from './digging.ts';
-import { PASSABLE_BLOCKS } from './terrain.ts';
+import { PASSABLE_BLOCKS, passProblem, variantName } from './passable.ts';
 import { WALKABLE_SURFACES, type Vec3, type WalkWorld } from './walking.ts';
 
 /**
@@ -83,10 +83,12 @@ export const CLICKABLE_SUPPORTS: ReadonlySet<string> = new Set<string>([
 export const FALLING_SUPPORTS: ReadonlySet<string> = WALKABLE_SURFACES;
 
 /**
- * What may touch a cell the agent fills: air, plain full blocks, the dig allowlist and
- * plants (a full block beside a plant changes nothing for it). Anything else (water, lava,
- * a torch, redstone, a chest, a machine, any modded or unnamed block) refuses: a new block
- * next to it could redirect a fluid, power a circuit, cover a machine face or seal a chest.
+ * What may touch a cell the agent fills: air, plain full blocks, the dig allowlist and the
+ * plants the walker passes (a full block beside a plant changes nothing for it). This set
+ * holds the plants passable at any metadata; checkPlaceCell also lets through those passable
+ * only at some metadata, at that metadata (passable.ts). Anything else (water, lava, a torch,
+ * redstone, a chest, a machine, any other modded or unnamed block) refuses: a new block next
+ * to it could redirect a fluid, power a circuit, cover a machine face or seal a chest.
  */
 export const PLACE_NEIGHBOURS: ReadonlySet<string> = new Set<string>([
   ...DIG_NEIGHBOURS,
@@ -265,9 +267,9 @@ export function checkPlaceCell(
     if (nname === undefined) {
       return refuse(`it touches block id ${nid} at ${fmt(n)}, which the registry does not name`);
     }
-    if (!PLACE_NEIGHBOURS.has(nname)) {
+    if (!PLACE_NEIGHBOURS.has(nname) && passProblem(world, n.x, n.y, n.z) !== null) {
       return refuse(
-        `it touches ${nname} at ${fmt(n)} (only air, plants and plain full blocks may touch a placed block)`,
+        `it touches ${variantName(world, n.x, n.y, n.z, nname)} at ${fmt(n)} (only air, plants and plain full blocks may touch a placed block)`,
       );
     }
   }

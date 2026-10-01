@@ -140,6 +140,13 @@ export function proposeAction(
         reason: why,
       };
 
+    case 'REST':
+      return {
+        kind: 'action',
+        spec: { type: 'WAIT', args: { durationMs: ctx.safety.config.restMs } },
+        reason: `${why}: resting to heal (health below ${ctx.safety.config.minHealth})`,
+      };
+
     case 'EXECUTE_KNOWN_SAFE_STEP': {
       const step = state.knownRecipeState?.nextKnownSafeStep ?? null;
       if (step === null)

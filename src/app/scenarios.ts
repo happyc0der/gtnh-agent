@@ -190,10 +190,20 @@ export const SCENARIOS: readonly Scenario[] = [
   ),
   scenario(
     'low-health',
-    'Health 6, away from home.',
+    'Health 6, away from home, food enough to heal: rests where it is.',
+    { decision: 'REST', actionType: 'WAIT', status: 'succeeded' },
+    (w) => {
+      w.player.health = 6;
+      w.player.position = { x: 40, y: 64, z: 40 };
+    },
+  ),
+  scenario(
+    'low-health-hungry',
+    'Health 6 and food 7 (too little to heal), away from home.',
     { decision: 'RETREAT_HOME', actionType: 'RETURN_TO_SAFE_LOCATION', status: 'succeeded' },
     (w) => {
       w.player.health = 6;
+      w.player.hunger = 7;
       w.player.position = { x: 40, y: 64, z: 40 };
     },
   ),

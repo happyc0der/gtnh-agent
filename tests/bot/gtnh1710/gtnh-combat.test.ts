@@ -238,6 +238,18 @@ describe('Gtnh1710Client fighting', () => {
     expect(attackPackets(server)).toEqual([]);
   }, 15_000);
 
+  it('the observation says when the player last lost health (a danger with a hostile about)', async () => {
+    const { server, client } = await start({ combat: { mobs: [] } });
+    expect((await client.observe()).player.lastHurtAt).toBeNull();
+    const before = Date.now();
+    server.combatSim.hurtPlayer(3);
+    await vi.waitFor(async () => {
+      const at = (await client.observe()).player.lastHurtAt;
+      expect(at).not.toBeNull();
+      expect(Date.parse(at ?? '')).toBeGreaterThanOrEqual(before - 1000);
+    });
+  });
+
   it('waits for a zombie to come within reach, and stops as soon as the player is hit', async () => {
     // 4.4 blocks west: out of reach, but inside the fence from the start (a target outside
     // the fence is refused, and under load the fake mob's first steps may come late).

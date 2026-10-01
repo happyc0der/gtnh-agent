@@ -28,10 +28,12 @@ const ID = {
   flower: 37,
   torch: 50,
   chest: 54,
+  foliage: 1102,
   modded: 4000,
   unnamed: 4242,
 } as const;
 const NAMES = new Map<number, string>([
+  [ID.foliage, 'BiomesOPlenty:foliage'],
   [ID.stone, 'minecraft:stone'],
   [ID.water, 'minecraft:water'],
   [ID.lava, 'minecraft:lava'],
@@ -45,13 +47,15 @@ const NAMES = new Map<number, string>([
   [ID.modded, 'gregtech:gt.blockmachines'],
 ]);
 
+/** The test world; with `metas` it reports block metadata (0 where not listed). */
 function world(
   blocks: Record<string, number> = {},
   unloaded: Array<[number, number]> = [],
+  metas?: Record<string, number>,
 ): WalkWorld {
   const overrides = new Map(Object.entries(blocks));
   const missing = new Set(unloaded.map(([x, z]) => `${x},${z}`));
-  return {
+  const w: WalkWorld = {
     blockAt(x, y, z) {
       if (missing.has(`${x},${z}`)) return undefined;
       const o = overrides.get(`${x},${y},${z}`);
@@ -62,6 +66,7 @@ function world(
     hazardCode: (id) =>
       id === ID.lava ? BLOCK_CODE.lava : NAMES.has(id) || id === 0 ? BLOCK_CODE.safe : 255,
   };
+  return metas === undefined ? w : { ...w, metaAt: (x, y, z) => metas[`${x},${y},${z}`] ?? 0 };
 }
 
 const FEET: Vec3 = { x: 0.5, y: 200, z: 0.5 };
@@ -228,6 +233,17 @@ describe('checkPlaceCell', () => {
       [k(1, 200, -1)]: ID.leaves,
     });
     expect(checkPlaceCell(plants, FEET, { x: 1, y: 200, z: 0 }, []).ok).toBe(true);
+  });
+
+  it('BOP foliage may touch the cell as a variant the walker passes, not as poison ivy', () => {
+    const cell = { x: 1, y: 200, z: 0 };
+    const bush = { [k(2, 200, 0)]: ID.foliage };
+    expect(checkPlaceCell(world(bush, [], { [k(2, 200, 0)]: 4 }), FEET, cell, []).ok).toBe(true);
+    expect(checkPlaceCell(world(bush, [], { [k(2, 200, 0)]: 7 }), FEET, cell, [])).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/touches BiomesOPlenty:foliage@7 at \(2, 200, 0\)/) as unknown,
+    });
+    expect(checkPlaceCell(world(bush), FEET, cell, [])).toMatchObject({ ok: false });
   });
 
   it('refuses when the cell or anything around it is not loaded', () => {

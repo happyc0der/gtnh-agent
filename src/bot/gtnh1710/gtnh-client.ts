@@ -164,13 +164,13 @@ import {
   type WalkPlan,
   type WalkWorld,
 } from './walking.ts';
+import { passProblem } from './passable.ts';
 import {
   bodyProblem,
   checkSupport,
   fallDistances,
   landingHazard,
   MAX_SAFE_FALL,
-  passProblem,
   planTerrainWalk,
   reachableFeet,
   standProblem,
@@ -3683,7 +3683,9 @@ export class Gtnh1710Client implements MinecraftClient {
     const steps = moves.flatMap((mv) => mv.steps);
     const guard = {
       placementsAtStart: this.#confirmedPositions,
-      healthAtStart: this.#world.health,
+      // An escape (threats do not stop it) keeps going when hit, too (seen live: a retreat
+      // from a skeleton stopped at its first arrow, and the next walk led back into range).
+      healthAtStart: options.stopForThreats ? this.#world.health : null,
       stopForThreats: options.stopForThreats,
       terrain,
     };

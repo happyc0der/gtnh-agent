@@ -580,13 +580,30 @@ blocks at the player's feet level, all on one level (a fence with a height range
    the state is reliable.
 2. The walker plans on the blocks the server sent: A* inside the fence (no corner cutting), then
    straight stretches where clear. A position is walkable only if every block the player's body
-   touches is air, every block under it is a known full block, and nothing dangerous (or unloaded,
-   or unnamed) touches those blocks. Stretches are checked exactly: the swept body, not samples.
+   touches is air or a plant it passes through (below), every block under it is a known full
+   block, and nothing dangerous (or unloaded, or unnamed) touches those blocks. Stretches are
+   checked exactly: the swept body, not samples.
 3. Every 0.2-block step is re-checked just before it is sent (the world may have changed). The walk
    stops on a server correction, a health drop, a hostile/unidentified entity within
    `threatRadius` (not for a retreat, which is how the agent escapes one), the stop file, `halt()`
    (Ctrl+C) or a lost connection. After the last step it waits 5 ticks for a server correction
    before reporting success, and the executor then verifies the position.
+
+**Plants.** The body passes only through air and plants checked in the code the server runs
+(`src/bot/gtnh1710/passable.ts`; evidence in
+[GTNH compatibility](gtnh-compatibility.md#walking-through-plants-2026-10-01)): no collision
+box, and nothing happens on contact. Seen live on 2026-10-01: BOP foliage at feet level walled
+in logs 7 blocks away. The list: vanilla tall grass, flowers, saplings, mushrooms, sugar cane
+and vines; BOP mushrooms and vines; Natura's wild crops and bluebells; HarvestCraft's gardens.
+Some share a block id with variants that hurt on contact, so the client keeps block metadata
+(chunk data and block changes, vanilla and NotEnoughIDs; `WalkWorld.metaAt`) and passes those
+only at a known, listed metadata: BOP foliage but poison ivy, BOP flowers but deadbloom and
+burning blossom, BOP plants but thorns and cactus, and a snow layer only one layer thick (a
+thicker one would lift the feet). Everything else, an unnamed id, or a variant whose metadata
+is not known, is a wall. A harmful variant hurts only a body inside its cell, so it is no
+hazard to stand beside: it simply stays a wall. The same rule decides what the body occupies
+in the flat walker, the terrain walker (feet and head cells, every step, drops, and the
+gravity check's landing) and the plants allowed around a dig down or a placed block.
 
 **Gravity.** The client does not otherwise simulate physics, and the server kicks a player that
 floats for 4 seconds ("Flying is not enabled on this server"; seen live when a walk stopped in the
@@ -607,9 +624,9 @@ digging enabled, a `MOVE_TO` over terrain may break `minecraft:leaves` and `leav
   and its destination, the column a drop passes and its landing; the upper block first. Each must
   pass `checkWalkBreak` (`digging.ts`) from where the player will stand when it digs: leaves
   only, and every rule of `checkDig` (the dig area and heights, reach, never its own support,
-  nothing to fall into the hole, only air and plain blocks touching it, no hazard near, nothing
-  unloaded or unnamed), wholly inside the safety boundary. At most 4 per walk
-  (`MAX_WALK_BREAKS`).
+  nothing to fall into the hole, only air and plain blocks touching it and plants only beside
+  it, no hazard near, nothing unloaded or unnamed), wholly inside the safety boundary. At most
+  4 per walk (`MAX_WALK_BREAKS`).
 - **The cost.** Each break costs its time at the walking pace: the dig by hand (`digWaitTicks`:
   10 ticks for leaves) and the server's verdict (about 6 ticks), 3.2 blocks. The walker goes
   round a bush when that is at most about 3 blocks longer per leaf, and punches through when the
@@ -932,8 +949,9 @@ other dig still never touches the ground the player stands on. In layers:
    - only air and plain blocks touch the dug block (no plant on it: the feet cell is air), and
      no sand or gravel beside it stands on nothing;
    - every cell of the 3 x 3 columns from the landing's level up to the head's is loaded and
-     named and holds air, a plant or a plain block: no water or other fluid, no modded block,
-     no hazard; one level lower, no hazard either.
+     named and holds air, a plant the walker passes (by its metadata: not poison ivy) or a
+     plain block: no water or other fluid, no other modded block, no hazard; one level lower,
+     no hazard either.
 5. **The dig** is `DIG_BLOCK`'s, with these rules instead of `checkDig`'s: the best allowed tool
    or an empty hand, the dig time, every tick re-checked, success only on the server's change to
    air with no re-send.
@@ -983,8 +1001,9 @@ In layers:
    - inside the fence's columns, from its level up to `maxHeightAboveFence` (default 4); on a
      terrain fence from one below the feet;
    - the cell holds air, tall grass or a dead bush: never water, lava, a flower or a block;
-   - only air, plants, allowlisted blocks and the walker's plain full blocks touch it, and
-     nothing dangerous is in the 3 x 3 x 3 cube around it;
+   - only air, plants the walker passes (by their metadata), allowlisted blocks and the
+     walker's plain full blocks touch it, and nothing dangerous is in the 3 x 3 x 3 cube
+     around it;
    - no tracked entity may be in the cell. Sizes are not observed, so each counts as a box 2
      wide and 3 tall around its position;
    - the block it clicks: the first plain full neighbour, in the order below, north, south,
@@ -1015,7 +1034,8 @@ stop file stop them all.
 
 **Not covered yet:**
 
-- Metadata: only block ids are compared, so a plank's wood type and a log's axis are not checked.
+- Metadata: placing compares block ids only (the client keeps metadata, for walking), so a
+  plank's wood type and a log's axis are not checked.
 - Paintings are not tracked, so one hanging where the block goes pops off. Item frames are
   tracked entities and refuse the cell.
 - Blocks with a GUI or that need support (torches, crafting tables, furnaces, the coke oven)

@@ -1,4 +1,5 @@
 import { BLOCK_CODE } from './block-hazards.ts';
+import { passProblem } from './passable.ts';
 import {
   PLAYER_HALF_WIDTH,
   WALK_BLOCKS_PER_TICK,
@@ -19,21 +20,9 @@ import {
  *  - drop: move across the edge at the current height (the lower column must be clear),
  *    then fall with vanilla gravity and land exactly on the block. A drop of at most
  *    MAX_DROP blocks never causes fall damage (that starts above 3).
- * Water, lava and anything not listed as passable or standable is never entered.
+ * Water, lava and anything not passable (passable.ts: air and plants checked in their
+ * code, some only at certain metadata) or standable is never entered.
  */
-
-/** Blocks the player's body may pass through: air and plants without a collision box. */
-export const PASSABLE_BLOCKS: ReadonlySet<string> = new Set([
-  'minecraft:air',
-  'minecraft:tallgrass',
-  'minecraft:yellow_flower',
-  'minecraft:red_flower',
-  'minecraft:double_plant',
-  'minecraft:deadbush',
-  'minecraft:sapling',
-  'minecraft:brown_mushroom',
-  'minecraft:red_mushroom',
-]);
 
 /** Natural full blocks the player may stand on, on top of the pen's list. */
 const TERRAIN_SURFACES: ReadonlySet<string> = new Set([...WALKABLE_SURFACES, 'minecraft:mycelium']);
@@ -59,15 +48,11 @@ export type TerrainPlan =
 const name = (world: WalkWorld, id: number): string =>
   id === 0 ? 'minecraft:air' : (world.blockName(id) ?? `unnamed block id ${id}`);
 
-/** Why the body could not pass through block (x, y, z), or null. */
-export function passProblem(world: WalkWorld, x: number, y: number, z: number): string | null {
-  const id = world.blockAt(x, y, z);
-  if (id === undefined) return 'chunk not loaded';
-  const n = name(world, id);
-  return PASSABLE_BLOCKS.has(n) ? null : `blocked by ${n}`;
-}
-
-/** Why the player could not stand with its feet in block (x, y, z), or null. */
+/**
+ * Why the player could not stand with its feet in block (x, y, z), or null: a known full
+ * block under it, its feet and head cells passable (a plant the body passes is fine there),
+ * and no hazard in the 3 x 3 columns around, from under the feet to above the head.
+ */
 export function standProblem(world: WalkWorld, x: number, y: number, z: number): string | null {
   const below = world.blockAt(x, y - 1, z);
   if (below === undefined) return 'chunk not loaded';
@@ -175,16 +160,14 @@ interface Label {
   breaks: number;
 }
 
-/**
- * `world` with `cells` read as air: the world as a walk leaves it once it has broken them.
- * Anything else the world offers is passed on unchanged.
- */
+/** `world` with `cells` read as air: the world as a walk leaves it once it has broken them. */
 function withAir(world: WalkWorld, cells: readonly Cell[]): WalkWorld {
   if (cells.length === 0) return world;
   const air = new Set(cells.map(key));
+  const broken = (x: number, y: number, z: number): boolean => air.has(`${x},${y},${z}`);
   return {
-    ...world,
-    blockAt: (x, y, z) => (air.has(`${x},${y},${z}`) ? 0 : world.blockAt(x, y, z)),
+    blockAt: (x, y, z) => (broken(x, y, z) ? 0 : world.blockAt(x, y, z)),
+    metaAt: (x, y, z) => (broken(x, y, z) ? 0 : world.metaAt?.(x, y, z)),
     blockName: (id) => world.blockName(id),
     hazardCode: (id) => world.hazardCode(id),
   };
@@ -654,7 +637,9 @@ function cellsAcross(lo: number, hi: number): number[] {
  * 0.0625 and reaching 0.55 lower; a player floating for 80 position packets, 4 s, is kicked:
  * "Flying is not enabled on this server"). If not, where its feet would land: on the highest
  * block below that stops a fall (one the body cannot pass), looked for MAX_SAFE_FALL + 1
- * levels down. 'unknown' when a block it needs is not loaded.
+ * levels down. 'unknown' when a block it needs is not loaded. A plant the body may not enter
+ * (poison ivy, say) counts as a floor: the player stops on top of it, never in it, and the
+ * server's check holds it up there (the plant is not air).
  */
 export function checkSupport(world: WalkWorld, feet: Vec3): Support {
   const xs = cellsAcross(feet.x - FLOAT_CHECK_HALF_WIDTH, feet.x + FLOAT_CHECK_HALF_WIDTH);

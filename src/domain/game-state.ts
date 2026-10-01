@@ -50,6 +50,11 @@ export const PlayerSchema = z.strictObject({
     known: false,
     reason: 'not reported by this observation',
   }),
+  /**
+   * When the player last lost health on this connection (a hit, an arrow, a fall, hunger), or
+   * null. Snapshots stored before it read back as null.
+   */
+  lastHurtAt: TimestampSchema.nullable().default(null),
 });
 
 export const InventorySchema = z.strictObject({

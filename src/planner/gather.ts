@@ -234,8 +234,12 @@ export function chooseGatherAction(
   const skipped = new Set(progress.skipped.map(key));
   const skip: BlockPosition[] = [];
   const candidates: Array<{ position: BlockPosition; walkTo: Position | null; cost: number }> = [];
+  // In view, but with no spot a walk reaches to dig it from (standAt null).
+  let unreachable = 0;
   for (const r of state.nearbyBlocks.value.resources) {
-    if (!givesSame(r.block, block) || r.standAt === null || skipped.has(key(r.position))) {
+    if (!givesSame(r.block, block) || skipped.has(key(r.position))) continue;
+    if (r.standAt === null) {
+      unreachable += 1;
       continue;
     }
     const reach = eyeDistanceToBlock(feet, r.position);
@@ -280,9 +284,14 @@ export function chooseGatherAction(
     kind: 'end',
     end: 'no-target',
     why:
-      nearestRefusal === null
-        ? `no ${block} left in view to dig`
-        : `none of the ${candidates.length} ${block} in view can be dug now (nearest ${nearestRefusal})`,
+      nearestRefusal !== null
+        ? `none of the ${candidates.length} ${block} in view can be dug now (nearest ${nearestRefusal})`
+        : unreachable > 0
+          ? // Seen live: logs 7 blocks away behind leaf bushes; "none left" sent the planner
+            // looking for logs elsewhere when a way around was what it needed.
+            `${unreachable} ${block} in view, but no walk from here reaches a spot to dig one ` +
+            'from (walled in by leaves, plants or water, too high, or something would fall)'
+          : `no ${block} left in view to dig`,
     skip,
   };
 }

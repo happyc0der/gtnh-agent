@@ -11,7 +11,7 @@ import { biomeName, UNSET_BIOME } from './biomes.ts';
 import type { ColumnView } from './chunk-data.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
 import type { Registry } from './registry.ts';
-import { PASSABLE_BLOCKS } from './terrain.ts';
+import { PASSABLE_BLOCKS } from './passable.ts';
 import type { Vec3 } from './walking.ts';
 
 /**
@@ -71,7 +71,7 @@ export const SIGHT = { blocked: 0, clear: 1, foliage: 2 } as const;
  */
 export const MAX_FOLIAGE_CELLS = 2;
 
-/** Vanilla blocks a line of sight passes through. */
+/** Blocks a line of sight passes through: the walker's passable plants, water, glass... */
 const SEE_THROUGH: ReadonlySet<string> = new Set([
   ...PASSABLE_BLOCKS,
   'minecraft:water',

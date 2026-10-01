@@ -48,6 +48,8 @@ export interface DecisionSummary {
   home: 'unknown' | 'here' | 'away';
   health: number | null;
   lowHealth: boolean;
+  /** Enough food for natural healing (minHungerToHeal): resting brings health back. */
+  canHeal: boolean;
   hunger: number | null;
   hungry: boolean;
   starving: boolean;
@@ -88,6 +90,7 @@ export function summarizeForDecision(state: GameState, ctx: RouterContext): Deci
           : 'away',
     health,
     lowHealth: health !== null && health < config.minHealth,
+    canHeal: hunger !== null && hunger >= config.minHungerToHeal,
     hunger,
     hungry: hunger !== null && hunger < config.hungerEatThreshold,
     starving: hunger !== null && hunger < config.minHunger,
@@ -120,7 +123,7 @@ The rules, in order. The FIRST rule whose check is true decides; all later rules
 1. stateProblems: the stateProblems list is not empty. Decide PAUSE_AND_ASK_USER (reason STATE_UNRELIABLE).
 2. outOfBounds: dangers contains OUT_OF_BOUNDS or DIMENSION_NOT_ALLOWED. Decide PAUSE_AND_ASK_USER (that code as reason).
 3. danger: dangers contains HAZARD_PROXIMITY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY. If defend is true, decide DEFEND (reasons HOSTILES_NEARBY, HOSTILE_IN_REACH; add ALREADY_AT_SAFE_LOCATION when home is "here", NO_SAFE_LOCATION when it is "unknown"). Otherwise, if home is "away", decide RETREAT_HOME (reason HAZARD_NEARBY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY); otherwise PAUSE_AND_ASK_USER (add ALREADY_AT_SAFE_LOCATION or NO_SAFE_LOCATION).
-4. lowHealth: lowHealth is true. If home is "away", decide RETREAT_HOME (reason LOW_HEALTH); otherwise PAUSE_AND_ASK_USER.
+4. lowHealth: lowHealth is true. If canHeal is true, decide REST (reason LOW_HEALTH); otherwise, if home is "away", RETREAT_HOME (reason LOW_HEALTH); otherwise PAUSE_AND_ASK_USER.
 5. hungryWithFood: hungry is true AND approvedFoodCarried is true. Decide EAT (reason HUNGRY).
 6. starvingWithoutFood: starving is true AND approvedFoodCarried is false. If home is "away", decide RETREAT_HOME, otherwise PAUSE_AND_ASK_USER (reasons HUNGRY, NO_APPROVED_FOOD).
 7. inventoryNearlyFull: inventoryNearlyFull is true. If dumpContainerKnown and somethingToDeposit are both true, decide EMPTY_INVENTORY (reason INVENTORY_NEARLY_FULL); otherwise PAUSE_AND_ASK_USER (add NO_DUMP_CONTAINER or NOTHING_DEPOSITABLE).

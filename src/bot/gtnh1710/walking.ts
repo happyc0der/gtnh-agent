@@ -1,4 +1,5 @@
 import { BLOCK_CODE } from './block-hazards.ts';
+import { passProblem } from './passable.ts';
 
 /**
  * Walking for the live GTNH client: path planning and the safety checks for every step.
@@ -6,10 +7,11 @@ import { BLOCK_CODE } from './block-hazards.ts';
  *
  * The scope is deliberately small. The player walks on ONE flat level inside a configured
  * fence: no jumping, climbing, stepping up or down, swimming, falling or block changes.
- * Every block the player's body touches must be air, every block under it must be a
- * known full block (WALKABLE_SURFACES), and nothing dangerous may touch those blocks.
- * Unloaded chunks, unnamed block ids and anything not listed count as obstacles (fail
- * closed). Straight stretches are checked exactly (the swept body, not samples).
+ * Every block the player's body touches must be air or a plant it passes through
+ * (passable.ts), every block under it must be a known full block (WALKABLE_SURFACES), and
+ * nothing dangerous may touch those blocks. Unloaded chunks, unnamed block ids and anything
+ * not listed count as obstacles (fail closed). Straight stretches are checked exactly (the
+ * swept body, not samples).
  */
 
 /** Half the player's width: its body is 0.6 x 1.8 x 0.6 blocks around its feet position. */
@@ -17,7 +19,6 @@ export const PLAYER_HALF_WIDTH = 0.3;
 /** Vanilla walking covers 0.216 blocks per tick (4.3 m/s); the agent walks a little slower. */
 export const WALK_BLOCKS_PER_TICK = 0.2;
 const EPS = 1e-6;
-const AIR = 0;
 
 /**
  * Full-cube 1.7.10 blocks the player may stand on. Anything else (slabs, stairs, soul
@@ -68,6 +69,11 @@ export interface Fence {
 export interface WalkWorld {
   /** Block id at integer block coordinates, or undefined if its chunk is not loaded. */
   blockAt(x: number, y: number, z: number): number | undefined;
+  /**
+   * Block metadata at integer block coordinates, or undefined when it is not known. Without
+   * it, blocks the body passes only at some metadata (passable.ts) count as walls.
+   */
+  metaAt?(x: number, y: number, z: number): number | undefined;
   /** Registry name of a block id (undefined if the registry does not name it). */
   blockName(id: number): string | undefined;
   /** Hazard code (block-hazards.ts BLOCK_CODE) of a block id. */
@@ -91,9 +97,8 @@ export function cellProblem(world: WalkWorld, x: number, y: number, z: number): 
   if (below === undefined || feet === undefined || head === undefined) {
     return { kind: 'unloaded', detail: 'chunk not loaded' };
   }
-  if (feet !== AIR || head !== AIR) {
-    return { kind: 'blocked', detail: `blocked by ${describe(world, feet === AIR ? head : feet)}` };
-  }
+  const body = passProblem(world, x, y, z) ?? passProblem(world, x, y + 1, z);
+  if (body !== null) return { kind: 'blocked', detail: body };
   const surface = world.blockName(below);
   if (surface === undefined || !WALKABLE_SURFACES.has(surface)) {
     return {

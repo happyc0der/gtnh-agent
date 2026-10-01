@@ -185,7 +185,14 @@ export type MockUnobservable =
 
 /** The whole simulated world. Tests may read and mutate it directly. */
 export interface MockWorld {
-  player: { position: Position; dimension: string; health: number; hunger: number };
+  player: {
+    position: Position;
+    dimension: string;
+    health: number;
+    hunger: number;
+    /** When the player last lost health (ISO timestamp), for the danger rules; absent: never. */
+    lastHurtAt?: string | null;
+  };
   inventory: { items: Record<string, number>; capacitySlots: number };
   hostiles: Position[];
   /** Entities the agent cannot identify (e.g. unclassified modded mobs). */
@@ -346,6 +353,7 @@ export class MockMinecraftClient implements MinecraftClient {
         armor: known({ equippedPieces: 0, lowestDurabilityFraction: null }),
         heldTool: known(null),
         weapon: known({ ...(w.weapon ?? BARE_HAND) }),
+        lastHurtAt: w.player.lastHurtAt ?? null,
       },
       inventory: hidden.has('inventory')
         ? unknown('mock: inventory hidden')

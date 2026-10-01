@@ -202,7 +202,7 @@ describe('finding interactable blocks in the chunk data', () => {
     for (let cx = -2; cx <= 1; cx++) {
       for (let cz = -2; cz <= 1; cz++) s.setColumn(cx, cz, emptyColumn(), 0);
     }
-    for (const [x, y, z, id] of blocks) s.setBlock(x, y, z, id);
+    for (const [x, y, z, id] of blocks) s.setBlock(x, y, z, id, 0);
     return s;
   }
 

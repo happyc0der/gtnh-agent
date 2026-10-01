@@ -8,6 +8,7 @@ export const DECISIONS = [
   'RETREAT_HOME',
   'DEFEND',
   'EAT',
+  'REST',
   'EMPTY_INVENTORY',
   'REFUEL_GENERATOR',
   'WAIT_FOR_MACHINE',

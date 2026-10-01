@@ -9,13 +9,23 @@ import {
   MAX_DROP,
   planTerrainWalk,
   reachableFeet,
+  standProblem,
   terrainSteps,
   type TerrainMove,
   type TerrainPlan,
 } from '../../../src/bot/gtnh1710/terrain.ts';
 import type { Fence, Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 
-const ID = { air: 0, stone: 1, grass: 2, water: 9, lava: 11, leaves: 18, tallgrass: 31 } as const;
+const ID = {
+  air: 0,
+  stone: 1,
+  grass: 2,
+  water: 9,
+  lava: 11,
+  leaves: 18,
+  tallgrass: 31,
+  foliage: 1102,
+} as const;
 const NAMES = new Map<number, string>([
   [ID.air, 'minecraft:air'],
   [ID.stone, 'minecraft:stone'],
@@ -24,17 +34,23 @@ const NAMES = new Map<number, string>([
   [ID.lava, 'minecraft:lava'],
   [ID.leaves, 'minecraft:leaves'],
   [ID.tallgrass, 'minecraft:tallgrass'],
+  [ID.foliage, 'BiomesOPlenty:foliage'],
 ]);
+/** BiomesOPlenty:foliage variants. */
+const SHORT_GRASS = 1;
+const POISON_IVY = 7;
 
 /**
  * Terrain from a height map: column (x, z) is solid up to and including `height(x, z)`
- * (grass on top, stone below), then air; `blocks` overrides single blocks.
+ * (grass on top, stone below), then air; `blocks` overrides single blocks, `metas` their
+ * metadata (0 elsewhere). Without `metas` the world reports no metadata at all.
  */
 function terrain(
   height: (x: number, z: number) => number,
   blocks: Record<string, number> = {},
+  metas?: Record<string, number>,
 ): WalkWorld {
-  return {
+  const world: WalkWorld = {
     blockAt(x, y, z) {
       const o = blocks[`${x},${y},${z}`];
       if (o !== undefined) return o;
@@ -44,6 +60,8 @@ function terrain(
     blockName: (id) => NAMES.get(id),
     hazardCode: (id) => (id === ID.lava ? BLOCK_CODE.lava : BLOCK_CODE.safe),
   };
+  if (metas === undefined) return world;
+  return { ...world, metaAt: (x, y, z) => metas[`${x},${y},${z}`] ?? 0 };
 }
 
 const FENCE: Fence = { min: { x: -8, y: 60, z: -8 }, max: { x: 8, y: 70, z: 8 } };
@@ -112,6 +130,70 @@ describe('terrain planning', () => {
     expect(planTerrainWalk(hot, strip, at(0.5, 64, 0.5), at(2.5, 64, 0.5), 64)).toMatchObject({
       ok: false,
     });
+  });
+});
+
+describe('walking through plants (BOP foliage)', () => {
+  // Seen live 2026-10-01: on a Hot Forest hillside the straight line to logs 7 blocks away
+  // was blocked three times by BiomesOPlenty:foliage at feet level.
+  const from = at(0.5, 64, 0.5);
+  const to = at(4.5, 64, 0.5);
+
+  /** A hedge of foliage across x = 2 (the fence's whole width): short grass, but for `other`. */
+  function hedge(other: Record<string, number> = {}) {
+    const blocks: Record<string, number> = {};
+    const metas: Record<string, number> = {};
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) {
+      blocks[`2,64,${z}`] = ID.foliage;
+      metas[`2,64,${z}`] = other[`2,64,${z}`] ?? SHORT_GRASS;
+    }
+    return { blocks, metas };
+  }
+
+  it('walks straight through foliage it used to take for a wall', () => {
+    const { blocks, metas } = hedge();
+    const w = terrain(() => 63, blocks, metas);
+    const plan = mustPlan(w, from, to);
+    expect(new Set(kinds(plan.moves))).toEqual(new Set(['walk']));
+    expect(plan.length).toBeCloseTo(4, 9); // the straight line
+    expect(reachableFeet(w, FENCE, from, 64).get('4,64,0')?.length).toBeCloseTo(4, 9);
+    expect(standProblem(w, 2, 64, 0)).toBeNull(); // standing in it, too
+    // The same hedge where the metadata is not known: a wall, as before.
+    const blind = terrain(() => 63, blocks);
+    expect(planTerrainWalk(blind, FENCE, from, to, 64)).toMatchObject({
+      ok: false,
+      reason: 'there is no walkable path to the target inside the fence',
+    });
+    expect(reachableFeet(blind, FENCE, from, 64).has('4,64,0')).toBe(false);
+  });
+
+  it('goes around poison ivy without touching its cell, and stops at a hedge of it', () => {
+    const { blocks, metas } = hedge({ '2,64,0': POISON_IVY });
+    const w = terrain(() => 63, blocks, metas);
+    const plan = mustPlan(w, from, to);
+    for (const s of terrainSteps(from, plan.moves)) {
+      expect(bodyProblem(w, FENCE, s.pos)).toBeNull();
+      const { x, z } = s.pos;
+      expect(x + 0.3 > 2 && x - 0.3 < 3 && z + 0.3 > 0 && z - 0.3 < 1, `${x}, ${z}`).toBe(false);
+    }
+    const reached = reachableFeet(w, FENCE, from, 64);
+    expect(reached.has('2,64,0')).toBe(false);
+    expect(reached.has('2,64,1')).toBe(true);
+    // Ivy beside a stand spot is no hazard: it hurts only a body inside its cell.
+    expect(standProblem(w, 1, 64, 0)).toBeNull();
+    expect(standProblem(w, 2, 64, 0)).toBe('blocked by BiomesOPlenty:foliage@7');
+
+    const ivy: Record<string, number> = {};
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) ivy[`2,64,${z}`] = POISON_IVY;
+    expect(
+      planTerrainWalk(
+        terrain(() => 63, blocks, ivy),
+        FENCE,
+        from,
+        to,
+        64,
+      ).ok,
+    ).toBe(false);
   });
 });
 
@@ -219,7 +301,7 @@ describe('breaking leaves on the way (WalkBreaks)', () => {
     ]);
   });
 
-  it('breaks only what checkDig allows: never above the dig heights or touching a plant', () => {
+  it('breaks only what checkDig allows: never above the dig heights or under a plant', () => {
     // Digging reaches only the feet level: the head-level leaves stay, so no way through.
     const low = walkBreaks({ fence: FENCE, maxHeightAboveFence: 0 });
     expect(
@@ -245,15 +327,28 @@ describe('breaking leaves on the way (WalkBreaks)', () => {
         low,
       ).ok,
     ).toBe(true);
-    // Tall grass along the wall: removing a leaf could change what touches it, so none is.
-    const grassy = wall(1);
-    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) grassy[`1,64,${z}`] = ID.tallgrass;
+    // Tall grass along the wall stands on the ground beside the leaves: they are broken...
+    const to = at(4.5, 64, 0.5);
+    const beside = wall(1);
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) beside[`1,64,${z}`] = ID.tallgrass;
+    const plan = planTerrainWalk(
+      terrain(() => 63, beside),
+      FENCE,
+      FROM,
+      to,
+      64,
+      BREAKS,
+    );
+    expect(brokenBy(plan)).toEqual([{ x: 2, y: 64, z: 0 }]);
+    // ...but a plant on top of a leaf would drop with it: none is.
+    const onTop = wall(1);
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) onTop[`2,65,${z}`] = ID.tallgrass;
     expect(
       planTerrainWalk(
-        terrain(() => 63, grassy),
+        terrain(() => 63, onTop),
         FENCE,
         FROM,
-        at(4.5, 64, 0.5),
+        to,
         64,
         BREAKS,
       ).ok,
@@ -391,6 +486,14 @@ describe('gravity: what holds the player up', () => {
     // Tall grass does not stop a fall, but it holds the player up for the server (not air).
     const grassy = terrain(() => 63, { '0,64,0': ID.tallgrass });
     expect(checkSupport(grassy, at(0.5, 64.83, 0.5))).toEqual({ kind: 'supported' });
+  });
+
+  it('falls through a plant it passes, but stops on top of one it may not enter', () => {
+    const plant = { '0,64,0': ID.foliage };
+    const grass = terrain(() => 63, plant, { '0,64,0': SHORT_GRASS });
+    expect(checkSupport(grass, at(0.5, 66.5, 0.5))).toEqual({ kind: 'floating', landY: 64 });
+    const ivy = terrain(() => 63, plant, { '0,64,0': POISON_IVY });
+    expect(checkSupport(ivy, at(0.5, 66.5, 0.5))).toEqual({ kind: 'floating', landY: 65 });
   });
 
   it('finds no floor when it is deeper than a safe fall, and nothing when chunks are missing', () => {
