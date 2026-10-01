@@ -27,7 +27,7 @@ describe('OllamaClient', () => {
       think: false,
       keep_alive: '30s',
       format: { type: 'object' },
-      options: { temperature: 0, seed: 7, num_predict: 64, num_ctx: 8192 },
+      options: { temperature: 0, seed: 7, num_predict: 64, num_ctx: 16_384 },
       messages: [
         { role: 'system', content: 'system prompt' },
         { role: 'user', content: 'user prompt' },

@@ -1,13 +1,19 @@
 import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
 import { isQuestBookActionType } from '../domain/quest-book.ts';
-import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
+import { DIGGABLE_BLOCKS, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
+import { ROUTE_BOOK } from '../goals/route-book.ts';
+import { describeRoute, planRoute, type PlaceLookup } from '../goals/route.ts';
+import { parseToolName, usesLeft } from '../domain/tools.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
+import { isProtected } from '../safety/protected-items.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
+  MAX_COMPACT_PLACEABLE,
   MAX_COMPACT_RESOURCES,
+  MAX_COMPACT_TOOLS,
   PlannerRequestSchema,
   type CompactState,
   type PlannerRequest,
@@ -41,8 +47,44 @@ export interface RecentFailureSummary {
   failures: number;
 }
 
-/** Reduces GameState to what a planner needs. Unknown values stay null and are listed. */
-export function sanitizeStateForPlanner(state: GameState): CompactState {
+/**
+ * The tools DIG_BLOCK may hold, from the inventory's names (a worn tool shows its damage:
+ * "minecraft:wooden_shovel@12"), best first: fastest, then most digs left. Protected tools
+ * are left out (the client never uses them).
+ */
+function plannerTools(
+  items: Readonly<Record<string, number>>,
+  protectedItems: ReadonlySet<string>,
+): CompactState['tools'] {
+  return Object.entries(items)
+    .flatMap(([name, count]) => {
+      const parsed = parseToolName(name);
+      if (parsed === null || count <= 0 || isProtected(name, protectedItems)) return [];
+      return [{ ...parsed, count }];
+    })
+    .sort(
+      (a, b) =>
+        b.tool.speed - a.tool.speed ||
+        usesLeft(b.tool, b.damage) - usesLeft(a.tool, a.damage) ||
+        (a.tool.item < b.tool.item ? -1 : 1),
+    )
+    .slice(0, MAX_COMPACT_TOOLS)
+    .map(({ tool, damage, count }) => ({
+      item: tool.item,
+      count,
+      durabilityLeft: usesLeft(tool, damage),
+      digsFaster: [...tool.digsFaster],
+    }));
+}
+
+/**
+ * Reduces GameState to what a planner needs. Unknown values stay null and are listed.
+ * `protectedItems` keeps protected tools out of `tools`.
+ */
+export function sanitizeStateForPlanner(
+  state: GameState,
+  protectedItems: ReadonlySet<string> = new Set(),
+): CompactState {
   const unknownFields: string[] = [];
   const val = <T>(
     name: string,
@@ -100,6 +142,12 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
           position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
         standAt: r.standAt ?? null,
       })),
+    tools: inventory ? plannerTools(inventory.items, protectedItems) : [],
+    placeableCells: (blocks?.placeable ?? []).slice(0, MAX_COMPACT_PLACEABLE).map((c) => ({
+      position: { ...c.position },
+      reach: position === null ? null : Number(eyeDistanceToBlock(position, c.position).toFixed(2)),
+      takesFalling: c.takesFalling,
+    })),
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
       name: m.name,
@@ -112,6 +160,14 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       name: s.name,
       position: s.position.known ? s.position.value : null,
       distance: distanceTo(s.position),
+      // What it holds, if seen or remembered (the 20 largest stacks), else null.
+      items: s.items.known
+        ? Object.entries(s.items.value)
+            .filter(([, q]) => q > 0)
+            .sort(([a, qa], [b, qb]) => qb - qa || (a < b ? -1 : 1))
+            .slice(0, 20)
+            .map(([item, quantity]) => ({ item, quantity }))
+        : null,
     })),
     craftingTables: state.craftingTables.slice(0, 32).map((t) => ({
       id: t.id,
@@ -144,16 +200,66 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
   };
 }
 
+/**
+ * Places where blocks were seen, for the route: today the blocks in the current
+ * observation (nearest first, with stand spots); exploration adds remembered places.
+ */
+function placesInView(state: GameState): PlaceLookup {
+  const blocks = state.nearbyBlocks.known ? state.nearbyBlocks.value.resources : [];
+  const at = state.player.position.known ? state.player.position.value : null;
+  return (wanted) => {
+    const seen = blocks.filter((b) => wanted.includes(b.block) && b.standAt !== null);
+    const nearest = seen[0];
+    if (nearest === undefined || at === null) return [];
+    return [
+      {
+        where: { ...nearest.position },
+        distance: Number(eyeDistanceToBlock(at, nearest.position).toFixed(1)),
+        amount: seen.length,
+        label: 'in view',
+      },
+    ];
+  };
+}
+
+/** The route for the current task's required items, as the planner reads it. */
+export function routeForPlanner(state: GameState): PlannerRequest['route'] {
+  const goal = state.currentTask?.requirements;
+  if (goal === undefined || Object.keys(goal).length === 0) return null;
+  const inventory = state.inventory.known ? state.inventory.value.items : {};
+  const at = state.player.position.known ? state.player.position.value : null;
+  // Containers whose contents are known (seen now, or remembered by the agent).
+  const storage = state.storage.flatMap((s) =>
+    s.items.known
+      ? [
+          {
+            id: s.id,
+            where: s.position.known ? { ...s.position.value } : null,
+            distance:
+              at !== null && s.position.known
+                ? Number(distance(at, s.position.value).toFixed(1))
+                : null,
+            items: s.items.value,
+          },
+        ]
+      : [],
+  );
+  const route = planRoute(goal, inventory, ROUTE_BOOK, placesInView(state), storage);
+  return { stock: route.stock.slice(0, 32), steps: describeRoute(route).slice(0, 40) };
+}
+
 export function buildPlannerRequest(input: {
   state: GameState;
   safety: SafetyContext;
   maxPlanSteps: number;
   recentActions: RecentActionSummary[];
   recentFailures: RecentFailureSummary[];
+  /** The task's compact journal (checkpoints so far), oldest first. */
+  journal?: readonly string[];
 }): PlannerRequest {
   const { config } = input.safety;
   return PlannerRequestSchema.parse({
-    state: sanitizeStateForPlanner(input.state),
+    state: sanitizeStateForPlanner(input.state, input.safety.protectedItems),
     task: input.state.currentTask,
     // Quest-book clicks are the play loop's, never a plan's (plan-validator.ts refuses them).
     allowedActions: ACTION_TYPES.filter((t) => !isQuestBookActionType(t)),
@@ -172,9 +278,12 @@ export function buildPlannerRequest(input: {
       forbidden: [...forbiddenKeywords()],
       forbiddenExceptions: operatorApprovedTypes().filter(isAllowlistedActionType),
       diggableBlocks: [...DIGGABLE_BLOCKS],
+      placeableItems: [...PLACEABLE_ITEMS],
     },
     recentActions: input.recentActions,
     recentFailures: input.recentFailures,
     maxPlanSteps: input.maxPlanSteps,
+    route: routeForPlanner(input.state),
+    journal: [...(input.journal ?? [])].slice(-32),
   });
 }

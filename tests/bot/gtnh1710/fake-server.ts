@@ -13,6 +13,7 @@ import {
 import { FakeQuestBookSim, type FakeQuestBookOptions } from './fake-better-questing.ts';
 import { encodeStack, FakeChestSim, type FakeChest, type FakeRecipe } from './fake-chests.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
+import { FakePlaceSim, type FakeBody, type FakePlaceOptions } from './fake-placing.ts';
 import {
   blockChangeFrame,
   chunkBulkFrame,
@@ -79,6 +80,8 @@ export interface FakeServerOptions {
   rejectClicks?: number[];
   /** How the server treats digging (C07); vanilla by default. */
   dig?: FakeDigOptions;
+  /** How the server treats block placement (C08 with a held block); vanilla by default. */
+  place?: FakePlaceOptions;
   /** Better Questing on the server (adds the betterquesting mod to the mod list). */
   questBook?: Omit<FakeQuestBookOptions, 'items'>;
 }
@@ -174,6 +177,21 @@ export type FakeEntity =
 const fixed = (x: number, y: number, z: number): Buffer =>
   Buffer.concat([i32(Math.floor(x * 32)), i32(Math.floor(y * 32)), i32(Math.floor(z * 32))]);
 
+/** Vanilla object types that stop a block being placed into them (preventEntitySpawning). */
+const SOLID_OBJECTS: ReadonlySet<number> = new Set([1, 10, 50, 51, 70]);
+
+/**
+ * An entity's box as World.canPlaceEntityOnSide sees it: living entities (players, mobs,
+ * modded mobs) as 0.6 x 1.8 (the fake does not model sizes), boats, minecarts, primed TNT,
+ * ender crystals and falling blocks as one block; dropped items and other objects not at all.
+ */
+function bodyOf(e: FakeEntity): FakeBody[] {
+  if (e.kind === 'object') {
+    return SOLID_OBJECTS.has(e.objectType) ? [{ x: e.x, y: e.y, z: e.z, width: 1, height: 1 }] : [];
+  }
+  return [{ x: e.x, y: e.y, z: e.z, width: 0.6, height: 1.8 }];
+}
+
 /** Encodes an entity spawn exactly as a 1.7.10 Forge server would. */
 export function spawnFrame(e: FakeEntity): Buffer {
   switch (e.kind) {
@@ -243,6 +261,8 @@ export class FakeGtnhServer {
   readonly chestSim: FakeChestSim;
   /** Digging (C07): what the client sent, what broke, what was picked up. */
   readonly digSim: FakeDigSim;
+  /** Placing (C08 with a held block): what the client clicked, what was placed. */
+  readonly placeSim: FakePlaceSim;
   /** Better Questing, when the server runs it (questBook option). */
   readonly questBookSim: FakeQuestBookSim | null;
   readonly keepAliveEchoes: number[] = [];
@@ -303,6 +323,7 @@ export class FakeGtnhServer {
       recipes: options.recipes ?? [],
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
+      place: options.place ?? {},
       questBook: options.questBook ?? { quests: [] },
     };
     this.chestSim = new FakeChestSim({
@@ -326,6 +347,9 @@ export class FakeGtnhServer {
         itemId: (name) =>
           this.#opts.items.find(([, n]) => n === name)?.[0] ??
           this.#opts.blocks.find(([, n]) => n === name)?.[0],
+        itemName: (id) =>
+          this.#opts.items.find(([i]) => i === id)?.[1] ??
+          this.#opts.blocks.find(([i]) => i === id)?.[1],
         playerFeet: () => {
           const p = this.confirmedPositions.at(-1);
           return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
@@ -333,6 +357,20 @@ export class FakeGtnhServer {
       },
       this.chestSim,
       this.#opts.dig,
+    );
+    this.placeSim = new FakePlaceSim(
+      {
+        blockAt: world,
+        setBlock: (x, y, z, id) => this.#blocks.set(`${x},${y},${z}`, id),
+        blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
+        playerFeet: () => {
+          const p = this.confirmedPositions.at(-1);
+          return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
+        },
+        entities: () => this.#opts.entities.flatMap(bodyOf),
+      },
+      this.chestSim,
+      this.#opts.place,
     );
     this.questBookSim =
       options.questBook === undefined
@@ -353,6 +391,7 @@ export class FakeGtnhServer {
   close(): Promise<void> {
     for (const t of this.#timers) clearInterval(t);
     this.digSim.stop();
+    this.placeSim.stop();
     for (const s of this.#sockets) s.destroy();
     return new Promise((resolve) => this.#server.close(() => resolve()));
   }
@@ -404,6 +443,11 @@ export class FakeGtnhServer {
   setBlock(x: number, y: number, z: number, id: number): void {
     this.#blocks.set(`${x},${y},${z}`, id);
     this.broadcast(blockChangeFrame(x, y, z, id));
+  }
+
+  /** A block change the client is never told about (as if the update had been lost). */
+  setBlockSilently(x: number, y: number, z: number, id: number): void {
+    this.#blocks.set(`${x},${y},${z}`, id);
   }
 
   setBlocks(
@@ -523,6 +567,7 @@ export class FakeGtnhServer {
           sim.setSender(send);
           sim.onJoin();
           this.digSim.setSenders(send, (f) => this.broadcast(f));
+          this.placeSim.setSenders(send, (f) => this.broadcast(f));
           send(
             plugin(
               'REGISTER',
@@ -575,6 +620,13 @@ export class FakeGtnhServer {
           }
           case 0x07:
             this.digSim.handle(r);
+            break;
+          case 0x08:
+            // Activation first (a chest or table opens), else the held block is placed.
+            this.placeSim.handle(
+              r,
+              this.#opts.mods.some((m) => m.modid === 'modularui'),
+            );
             break;
           default:
             sim?.handle(frame.packetId, r);

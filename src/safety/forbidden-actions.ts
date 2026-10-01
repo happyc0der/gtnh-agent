@@ -41,10 +41,12 @@ const FORBIDDEN_KEYWORDS = [
 
 /**
  * Action types the operator allows although they contain a forbidden keyword, matched
- * EXACTLY (case included). DIG_BLOCK breaks one allowlisted natural block; every other type
- * with a forbidden keyword (BREAK_BLOCK, MINE_ORE, DIG_AREA, dig_block, ...) stays forbidden.
+ * EXACTLY (case included). DIG_BLOCK breaks one allowlisted natural block and PLACE_BLOCK
+ * places one allowlisted plain block (approved 2026-09-30); every other type with a
+ * forbidden keyword (BREAK_BLOCK, MINE_ORE, DIG_AREA, dig_block, PLACE_BLOCKS, PLACE_TNT,
+ * place_block, ...) stays forbidden.
  */
-const OPERATOR_APPROVED_TYPES: ReadonlySet<string> = new Set(['DIG_BLOCK']);
+const OPERATOR_APPROVED_TYPES: ReadonlySet<string> = new Set(['DIG_BLOCK', 'PLACE_BLOCK']);
 
 export type ActionTypeClass = 'allowlisted' | 'forbidden' | 'unsupported';
 

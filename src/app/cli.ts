@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import { loadConfig } from '../config/env.ts';
+import { isPlaceableItem, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import { TaskStatusSchema } from '../domain/tasks.ts';
 import { IN_MEMORY, openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
@@ -16,6 +17,7 @@ import {
   runLiveChest,
   runLiveCycle,
   runLiveDig,
+  runLivePlace,
   runLiveSession,
   runLiveMove,
   setMovementHalted,
@@ -40,7 +42,7 @@ import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
 const USAGE = `gtnh-agent (single cycle, no autonomy; the live client only observes unless walking,
-chests or digging are explicitly enabled)
+chests, crafting, digging or placing are explicitly enabled)
 
 Usage:
   node src/app/cli.ts once [--scenario <name>] [--db <path> | --memory] [--full]
@@ -65,30 +67,37 @@ Usage:
       BREAK one allowlisted block (logs, leaves, dirt, grass, sand, gravel, clay) inside the
       fence with an empty hand (needs MC_ENABLE_DIGGING=true and a fence), as a checked user
       action; prints the diggable blocks and the inventory afterwards. Ctrl+C stops it.
+  node src/app/cli.ts place --live --at <x,y,z> --item <item> [--db <path>]
+      PLACE one allowlisted block the player carries (dirt, cobblestone, sand, gravel,
+      sandstone, planks, logs) into an empty cell inside the fence (needs
+      MC_ENABLE_PLACING=true and a fence), as a checked user action; prints the placeable
+      cells and the inventory afterwards.
   node src/app/cli.ts run --live [--max-cycles N] [--max-minutes M] [--db <path>] [--verbose]
       BOUNDED auto-run of the current task on one connection: ordinary cycles back to back,
       stopping when the task is done or anything needs you (a pause, rejection, failure,
       approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
       stop file (pnpm cli halt) or Ctrl+C.
-  node src/app/cli.ts play --live [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
+  node src/app/cli.ts play --live [--needs item=count,...] [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
       AUTONOMOUS PLAY through the Age 0 quest book: the agent picks its next quest, the
       configured decision maker and planner (AGENT_DECISIONS / AGENT_PLANNER, e.g. ollama)
       choose what to do, and every action is validated, executed and verified as always.
       Stops when no doable quest is left, when anything needs you, after 3 sessions without
       progress on a quest, at the time limit, the stop file (pnpm cli halt) or Ctrl+C.
+      --needs pursues your own goal instead (e.g. --needs minecraft:diamond=100): the planner
+      gets its route the same way, and play ends when the items are held.
   node src/app/cli.ts quests [--live] [--db <path>]
       The agent's Age 0 quest book (GTNH "Tier 0 Stone Age"): progress, completed quests
       and the next goal. --live reads the inventory first and records the quests it now
       satisfies (the agent's own bookkeeping; the server's quest book is not touched).
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
-      Create / remove the stop file (nothing walks, uses chests or digs while it exists) /
-      show movement and digging settings.
+      Create / remove the stop file (nothing walks, uses chests, digs or places while it
+      exists) / show movement, digging and placing settings.
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
   node src/app/cli.ts task-resume --task <id> [--db <path>]
                                            Mark a paused/blocked task active again.
-  node src/app/cli.ts task-add --task <id> --goal <text> [--plan <plan.json>] [--machines <ids>] [--db <path>]
+  node src/app/cli.ts task-add --task <id> --goal <text> [--needs item=count,...] [--plan <plan.json>] [--machines <ids>] [--db <path>]
                                            Add a task and make it the live agent's current task,
                                            with an optional plan you wrote (validated like a
                                            planner's). Each once --live then runs one step.
@@ -106,6 +115,20 @@ Usage:
   node src/app/cli.ts plan-schema          Print the planner output JSON Schema.
   node src/app/cli.ts config               Print the validated configuration.
 `;
+
+/** "minecraft:chest=1,minecraft:torch=8" -> { 'minecraft:chest': 1, 'minecraft:torch': 8 }. */
+function parseNeeds(text: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const part of text.split(',')) {
+    const [item, count] = part.trim().split('=');
+    const n = Number(count);
+    if (item === undefined || item === '' || !Number.isInteger(n) || n < 1) {
+      throw new Error(`--needs takes item=count pairs, e.g. minecraft:chest=1 (got "${part}")`);
+    }
+    out[item] = (out[item] ?? 0) + n;
+  }
+  return out;
+}
 
 function compact(scenario: string, dbPath: string, r: CycleResult): Record<string, unknown> {
   const o = r.outcome;
@@ -159,9 +182,11 @@ async function main(argv: string[]): Promise<number> {
       plan: { type: 'string' },
       goal: { type: 'string' },
       machines: { type: 'string' },
+      needs: { type: 'string' },
       reason: { type: 'string' },
       to: { type: 'string' },
       at: { type: 'string' },
+      item: { type: 'string' },
       container: { type: 'string' },
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
@@ -310,6 +335,19 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`${invalid}\n`);
         return 1;
       }
+      const needs = values.needs === undefined ? null : parseNeeds(values.needs);
+      const freeGoal =
+        needs === null
+          ? null
+          : {
+              taskId: `goal-${Object.entries(needs)
+                .map(([item, n]) => `${item}-${n}`)
+                .join('-')}`.slice(0, 64),
+              name: `get ${Object.entries(needs)
+                .map(([item, n]) => `${n} ${item}`)
+                .join(', ')}`,
+              requirements: needs,
+            };
       const providers = createProviders(config);
       process.stderr.write(
         `playing: decisions by ${providers.decisionProvider.name}, plans by ` +
@@ -333,6 +371,7 @@ async function main(argv: string[]): Promise<number> {
               limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, minutesLeft)) },
               ...providers,
               abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
+              ...(freeGoal === null ? {} : { goal: freeGoal }),
               onEvent: (e) => process.stderr.write(`${describePlayEvent(e)}\n`),
             },
             log,
@@ -448,6 +487,29 @@ async function main(argv: string[]): Promise<number> {
           ? { result: out.result, connection: out.info }
           : compact('live-dig', dbPath, out.result),
         diggable: out.diggable,
+        inventory: out.inventory,
+      });
+      return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'place': {
+      if (!values.live) {
+        process.stderr.write('place puts a block on the test server; pass --live to confirm.\n');
+        return 1;
+      }
+      const at = values.at === undefined ? null : parseBlockPosition(values.at);
+      if (at === null || values.item === undefined || !isPlaceableItem(values.item)) {
+        process.stderr.write(
+          'place requires --at <x,y,z> (whole-block coordinates; use --at=-8,200,-11 for ' +
+            `negatives) and --item, one of: ${PLACEABLE_ITEMS.join(', ')}\n`,
+        );
+        return 1;
+      }
+      const out = await runLivePlace(config, dbPath, at, values.item, log);
+      print({
+        action: values.full
+          ? { result: out.result, connection: out.info }
+          : compact('live-place', dbPath, out.result),
+        placing: out.placing,
         inventory: out.inventory,
       });
       return out.result.status === 'succeeded' ? 0 : 1;
@@ -568,6 +630,7 @@ async function main(argv: string[]): Promise<number> {
                   .split(',')
                   .map((m) => m.trim())
                   .filter((m) => m.length > 0),
+                ...(values.needs === undefined ? {} : { requirements: parseNeeds(values.needs) }),
               })
             : command === 'task-complete'
               ? completeTask(repos, taskId)

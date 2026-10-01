@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ActionSpecSchema, ActionTypeSchema } from '../domain/actions.ts';
-import { DiggableBlockSchema } from '../domain/blocks.ts';
+import { DiggableBlockSchema, PlaceableItemSchema } from '../domain/blocks.ts';
 import {
   BlockPositionSchema,
   DimensionSchema,
@@ -20,6 +20,11 @@ export const MAX_PLAN_STEPS = 16;
 
 /** Diggable blocks passed to the planner (the nearest ones). */
 export const MAX_COMPACT_RESOURCES = 32;
+
+/** Tools passed to the planner (the best ones). */
+export const MAX_COMPACT_TOOLS = 8;
+/** Placeable cells passed to the planner (the nearest ones). */
+export const MAX_COMPACT_PLACEABLE = 16;
 
 export const PlanStepSchema = z.strictObject({
   /** 1-based, sequential. */
@@ -107,6 +112,36 @@ export const CompactStateSchema = z.strictObject({
       }),
     )
     .max(MAX_COMPACT_RESOURCES),
+  /**
+   * Tools the player carries that DIG_BLOCK may hold (src/domain/tools.ts; never a protected
+   * one), best first: how many, how many digs each has left before the agent stops using it
+   * (0 = worn out), and the blocks it digs faster than a hand. DIG_BLOCK picks one by itself.
+   * Built from inventory names, which do not show NBT data: an enchanted or renamed tool is
+   * listed too, though the client never holds one.
+   */
+  tools: z
+    .array(
+      z.strictObject({
+        item: z.string(),
+        count: z.int().min(1),
+        durabilityLeft: z.int().min(0),
+        digsFaster: z.array(DiggableBlockSchema),
+      }),
+    )
+    .max(MAX_COMPACT_TOOLS),
+  /**
+   * Empty cells PLACE_BLOCK may fill (observed), nearest first, with `reach` (blocks from the
+   * eyes to the cell's centre) and `takesFalling` (sand and gravel may go there).
+   */
+  placeableCells: z
+    .array(
+      z.strictObject({
+        position: BlockPositionSchema,
+        reach: z.number().min(0).nullable(),
+        takesFalling: z.boolean(),
+      }),
+    )
+    .max(MAX_COMPACT_PLACEABLE),
   machines: z
     .array(
       z.strictObject({
@@ -126,6 +161,11 @@ export const CompactStateSchema = z.strictObject({
         name: z.string(),
         position: PositionSchema.nullable(),
         distance: z.number().min(0).nullable(),
+        /** What it holds (seen or remembered), largest stacks first; null if unknown. */
+        items: z
+          .array(z.strictObject({ item: z.string(), quantity: z.int() }))
+          .max(20)
+          .nullable(),
       }),
     )
     .max(32),
@@ -178,10 +218,12 @@ export const PlannerRequestSchema = z.strictObject({
     safeLocations: z.array(z.string()),
     /** Action types containing any of these keywords are refused... */
     forbidden: z.array(z.string()),
-    /** ...except exactly these types, which the operator allows (DIG_BLOCK). */
+    /** ...except exactly these types, which the operator allows (DIG_BLOCK, PLACE_BLOCK). */
     forbiddenExceptions: z.array(ActionTypeSchema),
     /** The only blocks DIG_BLOCK may break. */
     diggableBlocks: z.array(DiggableBlockSchema),
+    /** The only items PLACE_BLOCK may place. */
+    placeableItems: z.array(PlaceableItemSchema),
   }),
   recentActions: z
     .array(z.strictObject({ actionType: ActionTypeSchema, status: z.string(), reason: z.string() }))
@@ -192,6 +234,33 @@ export const PlannerRequestSchema = z.strictObject({
     )
     .max(50),
   maxPlanSteps: z.int().min(1).max(MAX_PLAN_STEPS),
+  /**
+   * The exact route to the task's required items, calculated in code from the agent's
+   * recipes, gathering sources and the places it has seen (null when the task names no
+   * items): have vs need, raw materials, the steps in order, where to find each material.
+   */
+  route: z
+    .strictObject({
+      stock: z
+        .array(
+          z.strictObject({
+            item: z.string(),
+            have: z.int().min(0),
+            stored: z.int().min(0),
+            need: z.int().min(0),
+            missing: z.int().min(0),
+          }),
+        )
+        .max(32),
+      steps: z.array(z.string().max(500)).max(40),
+    })
+    .nullable()
+    .default(null),
+  /**
+   * The task's journal, compacted (oldest first): plans made, done or failed and why,
+   * quests completed, interruptions. What the agent already did and must not repeat.
+   */
+  journal: z.array(z.string().max(300)).max(32).default([]),
 });
 export type PlannerRequest = z.infer<typeof PlannerRequestSchema>;
 

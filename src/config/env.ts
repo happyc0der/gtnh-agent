@@ -90,6 +90,18 @@ export const DiggingConfigSchema = z.strictObject({
 export type DiggingConfig = z.infer<typeof DiggingConfigSchema>;
 
 /**
+ * Placing blocks (PLACE_BLOCK; approved 2026-09-30). Off by default. Like digging it also
+ * needs the movement fence: only allowlisted plain blocks, only into cells inside the
+ * fence's columns, from its feet level up to `maxHeightAboveFence` above it.
+ */
+export const PlacingConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  /** Cells from the fence's level (the feet level) up to this many above it may be filled. */
+  maxHeightAboveFence: z.int().min(0).max(MAX_DIG_HEIGHT_ABOVE_FENCE).default(4),
+});
+export type PlacingConfig = z.infer<typeof PlacingConfigSchema>;
+
+/**
  * Crafting (the third world-changing ability: it consumes items). Off by default. The
  * player's own 2x2 grid needs no table; 3x3 recipes use only the crafting tables listed
  * here, and only if the block there is a minecraft:crafting_table.
@@ -150,6 +162,7 @@ export const MinecraftConfigSchema = z
     movement: MovementConfigSchema.prefault({}),
     containers: ContainersConfigSchema.prefault({}),
     digging: DiggingConfigSchema.prefault({}),
+    placing: PlacingConfigSchema.prefault({}),
     crafting: CraftingConfigSchema.prefault({}),
     questBook: QuestBookConfigSchema.prefault({}),
   })
@@ -318,6 +331,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_MOVEMENT_STOP_FILE'))) set(['minecraft', 'movement', 'stopFile'], v);
   if ((v = e('MC_ENABLE_CONTAINERS'))) set(['minecraft', 'containers', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_DIGGING'))) set(['minecraft', 'digging', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_PLACING'))) set(['minecraft', 'placing', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_CRAFTING'))) set(['minecraft', 'crafting', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_QUEST_BOOK'))) set(['minecraft', 'questBook', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);

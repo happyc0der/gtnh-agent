@@ -178,6 +178,10 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
         args: { generatorId: 'g1', fuelItem: 'minecraft:coal', quantity: 1 },
       },
       DIG_BLOCK: { type: 'DIG_BLOCK', args: { position: { x: -4, y: 105, z: -8 } } },
+      PLACE_BLOCK: {
+        type: 'PLACE_BLOCK',
+        args: { position: { x: -3, y: 106, z: -8 }, item: 'minecraft:dirt' },
+      },
       CRAFT_ITEM: {
         type: 'CRAFT_ITEM',
         args: { recipe: 'planks_oak', times: 1, craftingTableId: null },

@@ -13,7 +13,7 @@ flowchart TD
         MC["MinecraftClient interface"]
         MOCK["MockMinecraftClient<br/>(full simulation)"]
         MF["MineflayerClient<br/>(skeleton; cannot join GTNH)"]
-        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes; walks, uses chests,<br/>crafts and digs inside a fence)"]
+        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes; walks, uses chests,<br/>crafts, digs and places inside a fence)"]
         MC --- G17
         MC --- MOCK
         MC --- MF
@@ -143,6 +143,37 @@ The agent's goals come from GTNH's own quest book, like a new player's. The benc
 - The agent keeps its own completions in agent memory (`quests.age0.completed`). It never touches
   the server's quest book; claiming there is a GUI action for the player.
 
+**Routes: the planner takes stock before it plans.** A task can name the items its goal
+needs (quests do; `cli task-add --needs item=count,...` for any goal). For those,
+`src/goals/route.ts` calculates in code, from the agent's recipes and gathering sources
+(`src/goals/route-book.ts`) and the places it has seen, exactly what the goal still needs:
+have vs need per item, the raw materials to gather in total, every gather and craft step in
+order (ingredients before what they make), the best known place for each material (the
+nearest with enough seen), where a player would look when no place is known, and a rough
+time. The planner gets the route in its request and plans along it; the model still makes
+every decision. The route is general: smelting, tools, mob drops and exported recipe data
+are new book entries, not new planner logic.
+
+**Any goal, not only quests.** `cli play --live --needs item=count,...` makes play pursue a
+goal of the player's own (task `goal-...`) exactly like a quest: the planner gets its route,
+sessions and the journal work the same way, and play ends when the items are held. How
+far a goal can be routed depends on the route book: items it cannot make or find yet are
+listed as such, and the planner escalates rather than guessing.
+
+**Storage in the stocktake.** Containers whose contents the agent knows (seen now, or
+remembered) count as "stored": the route fetches from them, nearest first, before it
+gathers or crafts (withdraw steps), and the planner sees what each container holds.
+
+**Checkpoints and compaction.** Long work is done in chunks. The planner plans only the next
+one or two route steps; when they are done the agent checkpoints and asks again with fresh
+stock. Each task keeps a journal written by code at every checkpoint: a plan made, done or
+failed (and why), the planner escalating, a quest completed, an interruption (a mob, the
+night, a stuck session). Like a long conversation, it is compacted: past 16 lines the oldest
+are folded into one "earlier" summary (counts and the latest failures). The planner reads the
+journal instead of a raw log, continues where the task stopped and avoids repeating failures.
+Interruptions (mobs, hunger, lava, night) are still handled first by System 1's reflexes;
+a step that no longer fits the world is refused and replanned.
+
 `src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the inventory, records the
 quests that are now satisfied, makes the next quest the current task (`quest-<id>`, its subgoal
 saying what is still missing) and runs one bounded session on it (`runSession`). In the session
@@ -231,16 +262,18 @@ So, in layers:
 5. The window stays open so the executor can verify both sides (player −/+ exactly, chest +/−
    exactly). It closes only with an empty cursor.
 
-`halt()`, the stop file and an ongoing walk or dig also block chest use.
+`halt()`, the stop file and an ongoing walk, dig or placement also block chest use.
 
 ## Digging
 
 `DIG_BLOCK` breaks ONE block from a fixed allowlist of vanilla natural blocks: `log`, `log2`,
 `leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay` (`src/domain/blocks.ts`). A
 bare hand harvests all of them, and none has a tile entity. It needs `MC_ENABLE_DIGGING=true`
-**and** the movement fence. `src/bot/gtnh1710/digging.ts` holds the facts and checks;
+**and** the movement fence. The block facts and dig times are in `src/domain/dig-time.ts`, the
+tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digging.ts`;
 `Gtnh1710Client` sends. The server-side rules it relies on are in
-[GTNH compatibility: digging](gtnh-compatibility.md#digging). In layers:
+[GTNH compatibility: digging](gtnh-compatibility.md#digging) and
+[tools](gtnh-compatibility.md#tools-2026-09-30). In layers:
 
 1. **Observation.** The `GameState` lists `nearbyBlocks`, computed from the chunk data
    (`resource-scan.ts`):
@@ -249,7 +282,9 @@ bare hand harvests all of them, and none has a tile entity. It needs `MC_ENABLE_
      within it. The ground the player stands on is never listed.
    - `removed`: positions where the client saw such a block turn into air, while they stay air.
 
-   The planner gets the nearest 32 resources.
+   The planner gets the nearest 32 resources, and `tools`: the allowlisted tools the player
+   carries (from the inventory names, where a worn tool shows its damage), with the digs each
+   has left and the blocks it digs faster. Protected tools are left out.
 
 2. **The executor validates as usual.**
    - The whole block must be inside the safety boundary.
@@ -273,13 +308,26 @@ bare hand harvests all of them, and none has a tile entity. It needs `MC_ENABLE_
      attached or change a build.
    - Nothing on top may fall into the hole, and nothing dangerous may be anywhere in the 3 x 3
      x 3 cube around it.
-4. **The dig itself, always with an empty hand.** No tool can wear out, fell a tree or do
-   anything special. With no empty hotbar slot, it refuses.
-   - It selects an empty slot (C09), sends C07 start, and waits the vanilla dig time x 1.25 + 2
-     ticks.
+4. **The dig itself, with the best allowed tool or an empty hand.**
+   - Only the wooden shovel (on dirt, grass, sand, gravel and clay) and the vanilla axes (on
+     logs) may be held. On this server each breaks one block, and its speed and wear are known.
+     The other vanilla shovels dig nothing here (IguanaTweaks), and GregTech and TConstruct tools
+     keep their wear in NBT data the client does not read.
+   - The client picks the fastest such tool in the inventory that has no NBT data, is not
+     protected, and that one more use cannot break. The executor hands the protected items over
+     with the validated action. For wooden tools "cannot break" means damage + 1 ≤ 59, the lower
+     of vanilla's and GregTech's maxima.
+   - At equal speed it prefers the tool in hand, then the hotbar, then the main inventory. A tool
+     in the main inventory is first moved into an empty hotbar slot with two confirmed clicks in
+     window 0. A click that is not accepted puts the cursor back and fails the dig.
+   - With no usable tool it holds an empty hotbar slot (an empty hand). With neither, it
+     refuses.
+   - It selects the slot (C09), sends C07 start, and waits the vanilla dig time at the tool's
+     speed x 1.25 + 2 ticks: sand takes 21 ticks by hand, 12 with a wooden shovel.
    - Every tick it re-checks everything above, plus: the stop file, `halt()`, the connection,
      a server correction, a health drop, a hostile or unidentified entity within
-     `threatRadius`, and any update for the block (the server's refusal is a re-send).
+     `threatRadius`, any update for the block (the server's refusal is a re-send), and that the
+     tool in hand has not changed.
    - On any problem it sends C07 cancel and fails.
 5. **The finish and the verdict.** It sends C07 finish, then waits for the server's block
    changes and a quiet 250 ms. Forge sends "air" to the digging player before mods may cancel
@@ -287,9 +335,13 @@ bare hand harvests all of them, and none has a tile entity. It needs `MC_ENABLE_
    Any re-send (too early, a cancelled break) fails the dig. If the server judged it too
    early, vanilla still breaks the block when its own timer reaches 100%; the next observation
    shows that.
-6. **The drop.** It waits up to 2 s for the inventory to grow. The result reports
-   `dropCollected` and which items arrived; a drop out of pickup range is reported, not
-   fetched.
+6. **The tool and the drop.** It waits up to 1 s for the server to re-send the tool's slot
+   (one more damage) and up to 2 s for the inventory to grow. The result reports the tool
+   (`tool`, null for an empty hand), its uses left (`toolUsesLeft`), why other tools for the
+   block were passed over (`toolNote`), `dropCollected` and which items arrived. The tool's
+   new name (`minecraft:wooden_shovel@1`) is not counted as a drop. A drop out of pickup range
+   is fetched by walking onto it when the fence is terrain and the spot is standable;
+   otherwise it is reported.
 7. **Verification:** `BLOCK_REMOVED` passes only if the new observation lists the position in
    `nearbyBlocks.removed` (seen turning into air, still air) and not among the resources.
 
@@ -303,6 +355,80 @@ Walking, chests and digging never run at the same time. `halt()` and the stop fi
   judge the dig too early, and the dig fails cleanly.
 - Leaves decaying later once nearby logs are gone. That is the world's normal behaviour after
   chopping.
+- Enchanted or renamed tools (NBT data), GregTech tools and TConstruct tools: never held. Their
+  data would have to be decoded first.
+
+## Placing
+
+`PLACE_BLOCK` places ONE block the player carries, from a fixed allowlist of plain vanilla
+blocks: `dirt`, `cobblestone`, `sand`, `gravel`, `sandstone`, `planks` (every wood type) and
+`log`/`log2` (`src/domain/blocks.ts`). It needs `MC_ENABLE_PLACING=true` **and** the movement
+fence. `src/bot/gtnh1710/placing.ts` holds the checks; `Gtnh1710Client` sends. The server-side
+rules it relies on are in [GTNH compatibility: placing](gtnh-compatibility.md#placing-2026-09-30).
+In layers:
+
+1. **Observation.** `nearbyBlocks.placeable` lists the cells a block could go into, nearest to
+   the eyes first (at most 32; the planner gets 16): air, tall grass or a dead bush within 4.5
+   of the eyes, clear of the player's body and of every entity, touching a plain full block
+   that faces the eyes to place it against, with only air, plants and plain blocks around it
+   and no hazard within one block. Each says whether sand and gravel may go there
+   (`takesFalling`: a plain full block under it, and not in the player's own columns). With
+   placing enabled only cells inside the fence and its place heights are listed.
+   `nearbyBlocks.placed` lists cells the client saw turn from empty into a placeable block,
+   while they still hold it.
+2. **The executor validates as usual.**
+   - The whole cell must be inside the safety boundary, and the item must not be protected.
+   - It must be listed as placeable (`NOT_PLACEABLE` otherwise, pause), so no cell can be
+     invented.
+   - Never a cell the player's body is in; never sand or gravel in a column the player stands
+     in, or where `takesFalling` is false (`UNSAFE_PLACE`, pause).
+   - It must clear known hazards by `hazardAvoidanceRadius`.
+   - Preconditions: within `interactionReach` of the eyes, and the item in the inventory.
+   - Like any world action it is refused during danger. Placing is deliberately not an escape:
+     one block does not make a shelter, sealing one with a mob within reach can wall the agent
+     in with it, and a creeper's blast opens it again. Shelters are built before dark, while
+     the state is safe.
+3. **The client re-checks it all on the blocks the server sent** (`checkPlace`), fail closed:
+   - inside the fence's columns, from its level up to `maxHeightAboveFence` (default 4); on a
+     terrain fence from one below the feet;
+   - the cell holds air, tall grass or a dead bush: never water, lava, a flower or a block;
+   - only air, plants, allowlisted blocks and the walker's plain full blocks touch it, and
+     nothing dangerous is in the 3 x 3 x 3 cube around it;
+   - no tracked entity may be in the cell. Sizes are not observed, so each counts as a box 2
+     wide and 3 tall around its position;
+   - the block it clicks: the first plain full neighbour, in the order below, north, south,
+     west, east, above, whose face towards the cell faces the eyes and whose centre is within
+     5.5 of the feet and of the point 2 above them. Never a chest, crafting table, machine or
+     modded block: the server activates the clicked block first, and those would open;
+   - no hostile or unidentified entity within `threatRadius`, no health drop or server
+     correction since it started, and neither `halt()` nor the stop file.
+4. **The hand.** The selected hotbar slot if it holds the item, else the first hotbar slot
+   that does, else a stack from the main inventory goes into the first empty hotbar slot with
+   two confirmed window-0 clicks (a failed click puts the stack back). With neither, or only
+   stacks with NBT data, it refuses. An open chest window is closed first.
+5. **The click.** Everything is checked again just before it. Then C05 to face the centre of
+   the clicked face, C08 with the held stack exactly as held and the cursor on that centre,
+   and C0A to swing the arm, as a vanilla client does after a use.
+6. **The verdict.** The server answers every C08 with S23 for the clicked block, then for the
+   cell. The first is the acknowledgement: cell updates before it are stale. Success needs
+   every cell update after it to be the placed block, over a quiet 250 ms (a mod that cancels
+   the placement restores the cell, and sand with nothing under it would fall within that
+   time). A window that opens instead is closed again, and the placement fails. Then the held
+   slot's S2F with one item fewer is awaited (1 s) and reported as `stackUsed`.
+7. **Verification:** `BLOCK_PLACED` passes only if the new observation lists the cell in
+   `nearbyBlocks.placed` with the expected block, and the inventory holds exactly one of the
+   item fewer.
+
+Walking, chests, crafting, digging and placing never run at the same time. `halt()` and the
+stop file stop them all.
+
+**Not covered yet:**
+
+- Metadata: only block ids are compared, so a plank's wood type and a log's axis are not checked.
+- Paintings are not tracked, so one hanging where the block goes pops off. Item frames are
+  tracked entities and refuse the cell.
+- Blocks with a GUI or that need support (torches, crafting tables, furnaces, the coke oven)
+  are not on the allowlist; each will need its own checks.
 
 ## Crafting
 
@@ -364,16 +490,16 @@ closes a window server-side.
 
 ## Enforced boundaries
 
-| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured tables); digging needs `MC_ENABLE_DIGGING=true` and the fence; every other world-changing action returns `NOT_IMPLEMENTED`. |
-| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; placing: C08 with the held block item, faces 0-5 only (never "use the item in the air"), an NBT-free stack, clicking only a block `placing.ts` checked; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured tables); digging needs `MC_ENABLE_DIGGING=true` and the fence; placing needs `MC_ENABLE_PLACING=true` and the fence; every other world-changing action returns `NOT_IMPLEMENTED`. |
+| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ## Directory map
 
@@ -384,7 +510,7 @@ src/safety       safety policy, boundaries, protected items, forbidden-action cl
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner (opt-in)
-src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, chests, crafting, dig in a fence), Mineflayer skeleton
+src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, chests, crafting, dig and place in a fence), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest book (generated) and goal selection

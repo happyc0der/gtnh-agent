@@ -134,7 +134,7 @@ export class ActionExecutor {
     // 3. Execute through the client, with a token only this executor can mint.
     let execution: ClientActionResult;
     try {
-      const token = mintValidatedAction(action, resolvedTarget, clock.now());
+      const token = mintValidatedAction(action, resolvedTarget, clock.now(), ctx.protectedItems);
       execution = ClientActionResultSchema.parse(await client.perform(token));
     } catch (error) {
       execution = failed(`client error: ${errorMessage(error)}`, 'ERROR');

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { AGE0_QUESTS } from '../goals/age0-quests.ts';
 import {
   BASE_ABILITIES,
+  requiredTasks,
+  TASK,
   newlyCompleted,
   nextGoal,
   questProgress,
@@ -94,10 +96,21 @@ export function adoptGoal(
       subgoal: goal.subgoal,
       status: 'active',
     });
+    repos.memory.setTaskRequirements(taskId, questRequirements(goal.quest));
     if (t.status === 'active') repos.memory.setValue(CURRENT_TASK_KEY, taskId);
     return t;
   });
   return { taskId, created: existing === null, status: task.status };
+}
+
+/** The items a quest's required item tasks ask for (item -> count, summed). */
+export function questRequirements(quest: Quest): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const task of requiredTasks(quest)) {
+    if (task.type !== TASK.retrieval && task.type !== TASK.crafting) continue;
+    for (const i of task.items) out[i.item] = (out[i.item] ?? 0) + i.count;
+  }
+  return out;
 }
 
 /** The quest book as the agent sees it, for the CLI. */

@@ -176,6 +176,37 @@ describe('autonomous play', () => {
     expect(world.calls).toBe(0);
   });
 
+  it('pursues a goal of its own (any items), with its route, until the items are held', async () => {
+    const repos = open();
+    const world: World = {
+      inventory: { 'minecraft:log': 1 },
+      sessions: [{ gain: { 'minecraft:log': 1 } }, { gain: { 'minecraft:log': 1 } }],
+      calls: 0,
+    };
+    const goal = {
+      taskId: 'goal-minecraft:log-3',
+      name: 'get 3 minecraft:log',
+      requirements: { 'minecraft:log': 3 },
+    };
+    const events: PlayEvent[] = [];
+    const result = await runPlay({ ...deps(repos, world), goal }, DEFAULT_PLAY_LIMITS, {
+      ...noStop,
+      onEvent: (e) => events.push(e),
+    });
+    expect(result.stopReason).toBe('the goal "get 3 minecraft:log" is reached');
+    expect(world.calls).toBe(2);
+    // The planner's route comes from the task's requirements.
+    expect(repos.memory.taskRequirements(goal.taskId)).toEqual({ 'minecraft:log': 3 });
+    expect(repos.tasks.get(goal.taskId)?.status).toBe('completed');
+    expect(repos.memory.journal(goal.taskId).at(-1)?.text).toBe(
+      'GOAL "get 3 minecraft:log" reached',
+    );
+    expect(events.filter((e) => e.kind === 'goal').map((e) => describePlayEvent(e))).toEqual([
+      'goal: "get 3 minecraft:log" - missing 2 minecraft:log (new task)',
+      'goal: "get 3 minecraft:log" - missing 1 minecraft:log',
+    ]);
+  });
+
   it('checks its limits', () => {
     expect(checkPlayLimits(DEFAULT_PLAY_LIMITS)).toBeNull();
     expect(checkPlayLimits({ ...DEFAULT_PLAY_LIMITS, maxMinutes: 600 })).toBe(

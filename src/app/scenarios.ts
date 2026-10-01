@@ -1,6 +1,7 @@
 import type { MockMinecraftClient, MockWorld } from '../bot/mock-minecraft-client.ts';
 import type { AgentConfigInput } from '../config/env.ts';
 import type { ActionType } from '../domain/actions.ts';
+import type { PlaceableItem } from '../domain/blocks.ts';
 import type { Decision } from '../domain/decisions.ts';
 import type { PlannerFixture } from '../planner/mock-planner-provider.ts';
 import type { CycleStatus } from './agent-loop.ts';
@@ -57,6 +58,7 @@ export function baseWorld(taskId: string): MockWorld {
       { block: 'minecraft:leaves', position: { x: -2, y: 65, z: 4 } },
     ],
     removedBlocks: [],
+    placedBlocks: [],
     containers: [
       {
         id: 'chest.main',
@@ -134,6 +136,15 @@ const digStep =
   (w: MockWorld): void => {
     if (w.recipe !== null) {
       w.recipe.nextKnownSafeStep = { type: 'DIG_BLOCK', args: { position: { x, y, z } } };
+    }
+  };
+
+/** The task's known next step places `item` into the cell at (x, y, z). */
+const placeStep =
+  (x: number, y: number, z: number, item: PlaceableItem) =>
+  (w: MockWorld): void => {
+    if (w.recipe !== null) {
+      w.recipe.nextKnownSafeStep = { type: 'PLACE_BLOCK', args: { position: { x, y, z }, item } };
     }
   };
 
@@ -291,13 +302,13 @@ export const SCENARIOS: readonly Scenario[] = [
   ),
   scenario(
     'planner-invalid-output',
-    'The planner output contains a non-allowlisted PLACE_BLOCK step.',
+    'The planner output contains a non-allowlisted BREAK_BLOCK step.',
     { decision: 'REQUEST_PLANNER', actionType: 'PAUSE_AND_ASK_USER', status: 'paused' },
     noKnownStep,
     {
       plannerFixtures: [
         {
-          name: 'place-block',
+          name: 'break-block',
           when: {},
           response: {
             kind: 'plan',
@@ -306,8 +317,8 @@ export const SCENARIOS: readonly Scenario[] = [
               steps: [
                 {
                   step: 1,
-                  action: { type: 'PLACE_BLOCK', args: { x: 0, y: 64, z: 0 } },
-                  rationale: 'build',
+                  action: { type: 'BREAK_BLOCK', args: { x: 0, y: 64, z: 0 } },
+                  rationale: 'clear the way',
                 },
               ],
             },
@@ -418,6 +429,34 @@ export const SCENARIOS: readonly Scenario[] = [
     { setup: (client) => client.silentNoop('DIG_BLOCK') },
   ),
   scenario(
+    'place',
+    'The known next step places cobblestone on top of the dirt block next to the player: placed, verified.',
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'PLACE_BLOCK', status: 'succeeded' },
+    placeStep(2, 65, 1, 'minecraft:cobblestone'),
+  ),
+  scenario(
+    'place-sand-overhead',
+    "The known next step would place sand right above the player's head: rejected (UNSAFE_PLACE).",
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'PLACE_BLOCK', status: 'rejected' },
+    (w) => {
+      // A block beside the cell over the head, so that it is a cell to place into at all.
+      w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 2, y: 66, z: 1 } });
+      w.inventory.items['minecraft:sand'] = 4;
+      placeStep(1, 66, 1, 'minecraft:sand')(w);
+    },
+  ),
+  scenario(
+    'place-verification-fails',
+    'The client claims it placed, but the cell is still empty: postcondition check fails.',
+    {
+      decision: 'EXECUTE_KNOWN_SAFE_STEP',
+      actionType: 'PLACE_BLOCK',
+      status: 'verification_failed',
+    },
+    placeStep(2, 65, 1, 'minecraft:cobblestone'),
+    { setup: (client) => client.silentNoop('PLACE_BLOCK') },
+  ),
+  scenario(
     'craft-known-step',
     'The known next step crafts planks from logs in the 2x2 grid.',
     { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'CRAFT_ITEM', status: 'succeeded' },
@@ -433,11 +472,11 @@ export const SCENARIOS: readonly Scenario[] = [
   ),
   scenario(
     'craft-recipe-differs',
-    "The server's recipe differs from the agent's table (2 sticks, not 4): nothing is crafted.",
+    "The server's recipe differs from the agent's table (vanilla's 4 sticks, not GregTech's 2): nothing is crafted.",
     { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'CRAFT_ITEM', status: 'failed' },
     (w) => {
       w.inventory.items['minecraft:planks'] = 4;
-      w.craftingResults.sticks = { item: 'minecraft:stick', count: 2 };
+      w.craftingResults.sticks = { item: 'minecraft:stick', count: 4 };
       if (w.recipe !== null) {
         w.recipe.nextKnownSafeStep = {
           type: 'CRAFT_ITEM',

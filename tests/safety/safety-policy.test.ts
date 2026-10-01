@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
 import { defaultConfig } from '../../src/config/env.ts';
 import { ACTION_TYPES, type ActionSpec } from '../../src/domain/actions.ts';
+import type { PlaceableItem } from '../../src/domain/blocks.ts';
 import type { GameState } from '../../src/domain/game-state.ts';
 import { known, unknown } from '../../src/domain/known.ts';
 import { classifyActionType } from '../../src/safety/forbidden-actions.ts';
@@ -326,7 +328,7 @@ describe('protected items with real GTNH 2.8.4 registry names', () => {
 
 describe('rule 5: no world/base modification', () => {
   it.each([
-    'PLACE_BLOCK',
+    'PLACE_TNT',
     'BREAK_BLOCK',
     'USE_WRENCH',
     'CONFIGURE_CABLE',
@@ -359,6 +361,24 @@ describe('rule 5: no world/base modification', () => {
     'BREAK_BLOCK',
     'DIG_BLOCK ',
   ])('only exactly DIG_BLOCK is exempt from the DIG keyword: %j stays forbidden', (type) => {
+    expect(classifyActionType(type)).toBe('forbidden');
+    const r = evaluateAction(
+      { ...action({ type: 'WAIT', args: { durationMs: 100 } }), type },
+      makeState(),
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['FORBIDDEN_MODIFICATION']);
+  });
+
+  it.each([
+    'PLACE',
+    'place_block',
+    'PLACE_BLOCKS',
+    'PLACE_STRUCTURE',
+    'PLACE_BLOCK ',
+    'BUILD_WALL',
+  ])('only exactly PLACE_BLOCK is exempt from the PLACE keyword: %j stays forbidden', (type) => {
     expect(classifyActionType(type)).toBe('forbidden');
     const r = evaluateAction(
       { ...action({ type: 'WAIT', args: { durationMs: 100 } }), type },
@@ -435,6 +455,94 @@ describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's suppo
   it('is not allowed during danger', () => {
     const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
     expect(codes(dig(2, 64, 1), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+});
+
+describe('PLACE_BLOCK: only observed placeable cells, never the body, nothing that falls on it', () => {
+  // The mock player stands at (1, 64, 1), eyes at (1, 65.62, 1); the cell on top of the dirt
+  // at (2, 64, 1) next to it, (2, 65, 1), is placeable and holds sand up.
+  const place = (
+    x: number,
+    y: number,
+    z: number,
+    item: PlaceableItem = 'minecraft:cobblestone',
+  ): ActionSpec => ({ type: 'PLACE_BLOCK', args: { position: { x, y, z }, item } });
+
+  it('allows a listed placeable cell in a safe state', () => {
+    expect(codes(place(2, 65, 1))).toEqual([]);
+    expect(codes(place(2, 65, 1, 'minecraft:sand'))).toEqual([]);
+  });
+
+  it('refuses (and asks) for a cell the observation does not list as placeable', () => {
+    // The chest's own cell, and the cell the player's head is in.
+    const r = evaluateAction(
+      action(place(3, 64, 0)),
+      makeState(),
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['NOT_PLACEABLE']);
+    expect(r.requiresUserPause).toBe(true);
+    expect(codes(place(1, 65, 1))).toEqual(['NOT_PLACEABLE']);
+  });
+
+  it('refuses when nearby blocks are not observed', () => {
+    const blind = makeState((w) => void (w.unobservable = ['blocks']));
+    expect(codes(place(2, 65, 1), blind)).toEqual(['UNKNOWN_TARGET']);
+  });
+
+  it("refuses the player's own cells even when listed (the server would not stop it)", () => {
+    const state = makeState();
+    if (!state.nearbyBlocks.known) throw new Error('fixture blocks unknown');
+    const listed: GameState = {
+      ...state,
+      nearbyBlocks: known({
+        ...state.nearbyBlocks.value,
+        placeable: [{ position: { x: 1, y: 65, z: 1 }, takesFalling: false }],
+      }),
+    };
+    expect(codes(place(1, 65, 1), listed)).toEqual(['UNSAFE_PLACE']);
+  });
+
+  it('refuses sand or gravel over the head or where nothing holds it up', () => {
+    // With a block beside it, the cell right over the head is placeable, but not for sand.
+    const overhead = makeState((w) => {
+      w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 2, y: 66, z: 1 } });
+    });
+    expect(codes(place(1, 66, 1, 'minecraft:sand'), overhead)).toEqual(['UNSAFE_PLACE']);
+    expect(codes(place(1, 66, 1), overhead)).toEqual([]);
+    // Beside the dirt with nothing under it: gravel would fall.
+    expect(codes(place(2, 64, 2, 'minecraft:gravel'))).toEqual(['UNSAFE_PLACE']);
+    expect(codes(place(2, 64, 2))).toEqual([]);
+  });
+
+  it('keeps the cell clear of known hazards and inside the boundary', () => {
+    const lava = makeState((w) => {
+      w.hazards = [{ kind: 'lava', position: { x: 2, y: 65, z: 7 } }];
+    });
+    expect(assessDangers(lava, safetyCtx())).toEqual([]); // the player is 6.2 blocks away
+    expect(codes(place(2, 65, 1), lava)).toEqual(['HAZARD_PROXIMITY']);
+    const edge = makeState((w) => {
+      w.player.position = { x: 255, y: 64, z: 1 };
+      w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 256, y: 64, z: 1 } });
+    });
+    expect(codes(place(256, 65, 1), edge)).toEqual(['OUT_OF_BOUNDS']);
+  });
+
+  it('never places a protected item, and is not allowed during danger', () => {
+    const ctx = safetyCtx(
+      defaultConfig({ ...MOCK_CONFIG, safety: { protectedItems: ['minecraft:planks'] } }),
+    );
+    expect(
+      evaluateAction(
+        action(place(2, 65, 1, 'minecraft:planks@3')),
+        makeState(),
+        ctx,
+        emptyFailureHistory,
+      ).violations.map((v) => v.code),
+    ).toEqual(['PROTECTED_ITEM']);
+    const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
+    expect(codes(place(2, 65, 1), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
   });
 });
 
