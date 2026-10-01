@@ -105,8 +105,15 @@ export type PlayEvent =
       session: number;
       index: number;
       summary: string;
-      /** A plan the planner just made: its goal and steps (one line each). */
-      newPlan: { goal: string; steps: string[] } | null;
+      /** System 1's choice this cycle: which provider, the decision, and why. */
+      decision: {
+        provider: string;
+        decision: string;
+        reasons: string[];
+        confidence: number;
+      } | null;
+      /** A plan the planner just made: its goal, explanation and steps (one line each). */
+      newPlan: { goal: string; explanation: string; steps: string[] } | null;
       /** What the executor reported for the action, if one ran. */
       detail: string | null;
     }
@@ -137,12 +144,18 @@ const CONTINUE_AFTER: ReadonlySet<SessionStopKind> = new Set([
 ]);
 
 /** A stored plan as one line per step, for narration. */
-function planOf(repos: Repositories, planId: number): { goal: string; steps: string[] } | null {
+function planOf(
+  repos: Repositories,
+  planId: number,
+): { goal: string; explanation: string; steps: string[] } | null {
   const p = repos.plans.get(planId);
   if (p === null) return null;
   return {
     goal: p.plan.goal,
-    steps: p.plan.steps.map((s) => `${s.step}. ${s.action.type} ${JSON.stringify(s.action.args)}`),
+    explanation: p.plan.explanation,
+    steps: p.plan.steps.map(
+      (s) => `${s.step}. ${s.action.type} ${JSON.stringify(s.action.args)}  -- ${s.rationale}`,
+    ),
   };
 }
 
@@ -262,6 +275,15 @@ export async function runPlay(
           session,
           index,
           summary: r.summary,
+          decision:
+            r.decision === null || r.decision === undefined
+              ? null
+              : {
+                  provider: r.decision.provider,
+                  decision: r.decision.decision,
+                  reasons: r.decision.reasonCodes,
+                  confidence: r.decision.confidence,
+                },
           newPlan:
             r.planner?.kind === 'plan-accepted' ? planOf(deps.repos, r.planner.planId) : null,
           detail: r.outcome?.execution?.message ?? null,
@@ -299,9 +321,17 @@ export function describePlayEvent(e: PlayEvent): string {
       return `goal: "${e.quest}"${missing === '' ? '' : ` - missing ${missing}`}${e.created ? ' (new task)' : ''}`;
     }
     case 'cycle': {
+      const tag = `  [${e.session}.${e.index}]`;
       const lines: string[] = [];
+      if (e.decision !== null) {
+        lines.push(
+          `${tag} SYSTEM 1 (${e.decision.provider}): ${e.decision.decision} ` +
+            `[${e.decision.reasons.join(', ')}] confidence ${e.decision.confidence}`,
+        );
+      }
       if (e.newPlan !== null) {
-        lines.push(`  [${e.session}.${e.index}] new plan: ${e.newPlan.goal}`);
+        lines.push(`${tag} PLANNER new plan: ${e.newPlan.goal}`);
+        lines.push(`        why: ${e.newPlan.explanation}`);
         for (const step of e.newPlan.steps) lines.push(`        ${step}`);
       }
       lines.push(
