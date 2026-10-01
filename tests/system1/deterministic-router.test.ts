@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import { DecisionResultSchema } from '../../src/domain/decisions.ts';
+import { NIGHT_SHELTER_TASK_ID } from '../../src/domain/night-shelter.ts';
 import { routeDecision } from '../../src/system1/deterministic-router.ts';
 import { makeState, routerCtx, testConfig } from '../fixtures/index.ts';
 
@@ -117,6 +118,14 @@ describe('System1 deterministic router', () => {
       });
       expect(d.decision).toBe('REST');
       expect(d.reasonCodes).toEqual(['LOW_HEALTH']);
+    });
+
+    it('low health while building the night shelter: its steps first (the pit is where to rest)', () => {
+      const d = route((w) => {
+        w.player.health = 5;
+        if (w.task !== null) w.task.taskId = NIGHT_SHELTER_TASK_ID;
+      });
+      expect(d.decision).not.toBe('REST');
     });
 
     it('low health, too hungry to heal, away from home -> RETREAT_HOME', () => {

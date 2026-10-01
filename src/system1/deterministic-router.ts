@@ -1,6 +1,7 @@
 import type { Decision, DecisionResult, FactValue, ReasonCode } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance } from '../domain/geometry.ts';
+import { NIGHT_SHELTER_TASK_ID } from '../domain/night-shelter.ts';
 import { assessDangers, assessStateReliability } from '../safety/safety-policy.ts';
 import { assessDefense } from './defend.ts';
 import {
@@ -165,10 +166,14 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     // food bar heals it, as a person does (seen live: at 8 health with no food, the retreat
     // home was 100 blocks through a forest, and the pause there healed nothing: nothing heals
     // offline). Too hungry to heal: retreat or pause, as before.
-    if (hunger >= ctx.safety.config.minHungerToHeal) {
+    if (hunger < ctx.safety.config.minHungerToHeal) {
+      return retreatOrPause(['LOW_HEALTH'], CONFIDENCE.vitals);
+    }
+    // At dusk the night shelter comes first: the pit is where resting is safe (seen live: it
+    // rested in the open before digging in). Its steps run below (rule 6).
+    if (state.currentTask?.taskId !== NIGHT_SHELTER_TASK_ID) {
       return decide('REST', CONFIDENCE.vitals, ['LOW_HEALTH']);
     }
-    return retreatOrPause(['LOW_HEALTH'], CONFIDENCE.vitals);
   }
   if (hunger < ctx.safety.config.hungerEatThreshold) {
     const food = availableApprovedFood(state, ctx);
