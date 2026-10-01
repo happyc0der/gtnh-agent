@@ -383,7 +383,7 @@ describe('world memory and exploring', () => {
     // note was too long for a journal line never reached the model).
     expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
     expect(requests[1]?.journal.at(-1)).toMatch(
-      /^Step 1 of your plan, EXPLORE .* failed 2 time\(s\) from where the player stands \(not exploring: no way further.*; code will refuse it\./,
+      /^Step 1 of your plan, EXPLORE .* would be refused \(it failed 2 time\(s\) from where the player stands: not exploring: no way further.*\)\. Plan something else/,
     );
     expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
     expect(result.action).toMatchObject({
@@ -391,8 +391,60 @@ describe('world memory and exploring', () => {
       args: { toward: { x: -30, z: 20 } },
     });
     expect(repos.memory.journal(taskId).map((e) => e.text)).toContainEqual(
-      expect.stringContaining('which failed 2 time(s) from here; asked again'),
+      expect.stringContaining('which code would refuse (it failed 2 time(s) from where'),
     );
+  });
+
+  it('asks once more when code would refuse its first step for any reason it can change', async () => {
+    const clock = testClock();
+    const { client } = makeWorld((w) => {
+      if (w.task !== null) w.task.requirements = { 'minecraft:gravel': 8 };
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = defaultConfig({
+      ...MOCK_CONFIG,
+      minecraft: { movement: { enabled: true, mode: 'follow' } },
+    });
+    syncConfigToDatabase(config, repos);
+    const exploreTo = (x: number, z: number): PlannerResponse => ({
+      kind: 'plan',
+      plan: {
+        ...(explorePlan as Extract<PlannerResponse, { kind: 'plan' }>).plan,
+        steps: [
+          {
+            step: 1,
+            action: { type: 'EXPLORE', args: { toward: { x, z }, maxDistance: 96 } },
+            rationale: 'the forest',
+          },
+        ],
+      },
+    });
+    // Seen live: "EXPLORE toward x 24, z 40", the forest the player stood in, 1.6 blocks away.
+    const requests: PlannerRequest[] = [];
+    const planner: PlannerProvider = {
+      name: 'literal',
+      plan: (request) => {
+        requests.push(request);
+        return Promise.resolve(requests.length === 1 ? exploreTo(1, 2) : exploreTo(-30, 20));
+      },
+    };
+    const result = await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    });
+    expect(requests).toHaveLength(2);
+    expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
+    expect(requests[1]?.journal.at(-1)).toMatch(
+      /^Step 1 of your plan, EXPLORE .* would be refused \(the EXPLORE target is only 1\.0 blocks away\)\./,
+    );
+    expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
+    expect(result.action).toMatchObject({ type: 'EXPLORE', args: { toward: { x: -30, z: 20 } } });
   });
 
   it('keeps remembering, but offers no EXPLORE, with a fixed fence', async () => {

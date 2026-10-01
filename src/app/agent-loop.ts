@@ -12,7 +12,11 @@ import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.t
 import { GameStateSchema, LastActionSchema, type GameState } from '../domain/game-state.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 import { summarizeExploration, type ExplorationSummary } from '../domain/world-memory.ts';
-import { ActionExecutor, type ExecutionOutcome } from '../executor/action-executor.ts';
+import {
+  ActionExecutor,
+  validateCandidate,
+  type ExecutionOutcome,
+} from '../executor/action-executor.ts';
 import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
@@ -988,42 +992,62 @@ function updatePlanProgress(
 }
 
 /**
- * The plan's first step when the safety policy would refuse it as a repeated failure: it has
- * failed maxFailuresPerActionPerTask times for this task already (a walk: from this very
- * block). With a note for the planner that says so, and what the last failure said.
+ * Refusals a new plan cannot change: the observation is not trustworthy, or a danger allows
+ * only escapes. System 1 deals with those, not the planner.
  */
-function repeatedFirstStep(
+const NOT_THE_PLANS: ReadonlySet<string> = new Set(['ACTION_NOT_ALLOWED_IN_DANGER']);
+
+/**
+ * The plan's first step when code would refuse it: the executor's own checks (schema, safety
+ * policy, preconditions: validateCandidate), dry run on this state. Null when it would run,
+ * when it is a GATHER (code expands that), or when the refusal is not the plan's to fix
+ * (danger, an unreliable observation). With why, and a note for the planner; for a repeated
+ * failure, also what the last failure said (for a walk: from this very block).
+ */
+function refusedFirstStep(
   deps: AgentDeps,
   plan: Plan,
   state: GameState,
   ctx: SafetyContext,
   taskId: string,
-): { step: string; failures: number; note: string } | null {
+): { step: string; why: string; note: string } | null {
   const first = plan.steps[0]?.action;
   if (first === undefined || first.type === GATHER) return null;
-  const from = state.player.position.known ? state.player.position.value : null;
-  const fingerprint = actionFingerprint(first, from);
-  const failures = deps.repos.actions.countFailures(taskId, fingerprint);
-  if (failures < ctx.config.maxFailuresPerActionPerTask) return null;
-  const last = deps.repos.actions
-    .recent(50, taskId)
-    .find(
-      (a) =>
-        a.fingerprint === fingerprint &&
-        (a.status === 'failed' || a.status === 'verification_failed'),
-    );
-  const e = last?.execution;
-  const message =
-    typeof e === 'object' && e !== null && 'message' in e && typeof e.message === 'string'
-      ? e.message
-      : '';
+  const action = createAction(
+    { spec: first, reason: "dry run of a new plan's first step", origin: 'planner', taskId },
+    { newId: () => 'dry-run', now: () => deps.clock.now() },
+  );
+  const { report } = validateCandidate(action, state, ctx, deps.repos.actions);
+  if (report.ok) return null;
+  const unreliable = new Set(assessStateReliability(state, ctx).map((v) => v.code));
+  if (report.violations.some((v) => NOT_THE_PLANS.has(v.code) || unreliable.has(v.code))) {
+    return null;
+  }
+  let why = [...report.violations.map((v) => v.message), ...report.preconditionFailures].join('; ');
+  if (report.violations.some((v) => v.code === 'REPEATED_FAILURE')) {
+    const from = state.player.position.known ? state.player.position.value : null;
+    const fingerprint = actionFingerprint(first, from);
+    const last = deps.repos.actions
+      .recent(50, taskId)
+      .find(
+        (a) =>
+          a.fingerprint === fingerprint &&
+          (a.status === 'failed' || a.status === 'verification_failed'),
+      );
+    const e = last?.execution;
+    const failures = deps.repos.actions.countFailures(taskId, fingerprint);
+    // A walk's failures count from this very block only (actionFingerprint).
+    const here = fingerprint === actionFingerprint(first) ? '' : ' from where the player stands';
+    if (typeof e === 'object' && e !== null && 'message' in e && typeof e.message === 'string') {
+      why = `it failed ${failures} time(s)${here}: ${e.message}`;
+    }
+  }
   const step = `${first.type} ${stableStringify(first.args)}`.slice(0, 120);
-  const head = `Step 1 of your plan, ${step}, failed ${failures} time(s) from where the player stands`;
-  const tail = '; code will refuse it. Plan something else: another target or kind of step.';
-  // What the last failure said, in the room the journal line leaves.
+  const head = `Step 1 of your plan, ${step}, would be refused`;
+  const tail = '. Plan something else: another target or kind of step.';
+  // Why, in the room the journal line leaves.
   const room = MAX_JOURNAL_LINE - head.length - tail.length - 3;
-  const said = message !== '' && room > 20 ? ` (${message.slice(0, room)})` : '';
-  return { step, failures, note: `${head}${said}${tail}` };
+  return { step, why, note: `${head} (${why.slice(0, Math.max(0, room))})${tail}` };
 }
 
 /** What the planner is told when it escalated for want of a place while exploring was open. */
@@ -1220,20 +1244,22 @@ async function consultPlanner(
   // Steps after an EXPLORE (and view-bound steps after a GATHER) were planned from a view
   // that will be gone when they run: they are dropped, and the next plan starts from there.
   let { plan, note: trimmed } = trimStaleSteps(validation.plan);
-  // A first step the safety policy would refuse as a repeated failure ends the session for a
-  // human (seen live, in 5 runs: the model planned the same EXPLORE toward an unreachable
-  // tree, or the same MOVE_TO, a third time). Ask once more, saying so; should that answer
-  // not do, the first plan stands and the policy refuses its step as before.
-  const repeat = repeatedFirstStep(deps, plan, state, ctx, taskId);
-  if (repeat !== null) {
+  // A first step code would refuse ends the session, often for a human (seen live: the model
+  // planned the same EXPLORE toward an unreachable tree a third time, and EXPLORE toward the
+  // forest it stood in, 1.6 blocks away, three sessions running). Code checks the step the
+  // way the executor will, and if it would refuse it for a reason the planner can change,
+  // asks once more, saying why; should that answer not do, the first plan stands and the
+  // executor refuses its step as before.
+  const refused = refusedFirstStep(deps, plan, state, ctx, taskId);
+  if (refused !== null) {
     repos.memory.appendJournal(
       taskId,
-      `planner chose ${repeat.step} again, which failed ${repeat.failures} time(s) from here; asked again`.slice(
+      `planner chose ${refused.step}, which code would refuse (${refused.why}); asked again`.slice(
         0,
-        300,
+        MAX_JOURNAL_LINE,
       ),
     );
-    const again = await ask({ ...request, journal: [...request.journal, repeat.note] });
+    const again = await ask({ ...request, journal: [...request.journal, refused.note] });
     repos.events.append(cycleId, 'PLAN', { provider: planner.name, response: again });
     const checked =
       again.kind === 'plan' ? validatePlan(again.plan, ctx, config.planner.maxPlanSteps) : null;

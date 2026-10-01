@@ -259,17 +259,34 @@ const LIKELY_BIOMES: ReadonlyArray<{ blocks: readonly string[]; biomes: RegExp }
   { blocks: ['minecraft:clay'], biomes: /river|swamp|beach|lake/i },
 ];
 
-/** The nearest seen biome where one of `blocks` is common, as a route hint; or null. */
+/**
+ * A biome patch this close (its nearest chunk's centre, blocks) is where the player stands: the
+ * resource scan already covers it.
+ */
+const BIOME_HERE = 16;
+
+/**
+ * The nearest seen biome where one of `blocks` is common, as a route hint; or null. Not the
+ * patch the player stands in: what it has in view is listed already, or out of reach from
+ * here (seen live: "EXPLORE toward x 24, z 40", 1.6 blocks away, three sessions running).
+ * When that patch is the only one, the hint says to explore on through it.
+ */
 function likelyBiome(blocks: readonly string[], exploration: ExplorationSummary): string | null {
   const rule = LIKELY_BIOMES.find((r) => r.blocks.some((b) => blocks.includes(b)));
   if (rule === undefined) return null;
-  const biome = exploration.biomes.find((b) => rule.biomes.test(b.biome));
-  if (biome === undefined) return null;
-  const where =
-    biome.direction === 'here' ? 'around here' : `${biome.distance} m ${biome.direction}`;
+  const matching = exploration.biomes.filter((b) => rule.biomes.test(b.biome));
+  const away = matching.find((b) => b.distance > BIOME_HERE);
+  if (away !== undefined) {
+    return (
+      `the ${away.biome} at x ${away.x}, z ${away.z}, ${away.distance} m ${away.direction} ` +
+      `(seen, ${away.chunks} chunk(s)): it is common there; EXPLORE toward that x and z`
+    );
+  }
+  const here = matching[0];
+  if (here === undefined) return null;
   return (
-    `the ${biome.biome} at x ${biome.x}, z ${biome.z}, ${where} ` +
-    `(seen, ${biome.chunks} chunk(s)): it is common there; EXPLORE toward that x and z`
+    `the player is in the ${here.biome} (seen, ${here.chunks} chunk(s)), but none in view can ` +
+    'be reached from here: EXPLORE on through it, toward a direction with little seen'
   );
 }
 

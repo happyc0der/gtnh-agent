@@ -99,6 +99,22 @@ describe('the route uses what exploring found', () => {
     ).toContain('(6, 65, 7)');
   });
 
+  it('never points at the biome patch the player stands in: past it, or on through it', () => {
+    const forest = WORLD.biomes[1] as (typeof WORLD.biomes)[number];
+    const gather = (biomes: (typeof WORLD)['biomes']) =>
+      routeForPlanner(needing({ 'minecraft:dirt': 8 }), { ...WORLD, biomes })?.steps.find((s) =>
+        s.includes('gather 8 minecraft:dirt'),
+      );
+    // Seen live: the nearest Hot Forest chunk was the one the player stood in.
+    const here = { ...forest, x: 2, z: 1, distance: 1, direction: 'here' as const };
+    const farther = { ...forest, biome: 'Bamboo Forest', x: 40, z: 1, distance: 39 };
+    expect(gather([here, farther])).toContain('the Bamboo Forest at x 40, z 1, 39 m');
+    expect(gather([here])).toContain(
+      'the player is in the Hot Forest (seen, 16 chunk(s)), but none in view can be reached from here: EXPLORE on through it',
+    );
+    expect(gather([here])).not.toContain('x 2, z 1');
+  });
+
   it('points at the nearest seen biome where a material is common when no place is known', () => {
     const route = routeForPlanner(needing({ 'minecraft:dirt': 8 }), WORLD);
     const gather = route?.steps.find((s) => s.includes('gather 8 minecraft:dirt'));
