@@ -46,12 +46,13 @@ export const SURVEY_DEPTH = 24;
 /** Farthest a survey looks from the eyes at every kind (blocks). */
 export const SURVEY_RANGE = 40;
 /**
- * Farthest far sight looks from the eyes (blocks). The server's view distance is 8 chunks: the
- * client holds the 17 x 17 chunks around the player's own, at least 128 blocks each way. 112
- * leaves a chunk's margin for the chunks still on their way after the player crosses a border
- * (the server sends them a few at a time; an unloaded block blocks a line of sight anyway),
- * and it is about as far as a player with that view distance still makes out a lake through
- * the fog. Every line of sight then stays inside this circle, so in loaded chunks.
+ * Farthest far sight looks from the eyes (blocks). With a server view distance of at least 8
+ * chunks (the test server's was 8, and is 12 since 2026-10-01, a player's usual render
+ * distance), the client holds at least the 17 x 17 chunks around the player's own, 128 blocks
+ * each way. 112 leaves a chunk's margin for the chunks still on their way after the player
+ * crosses a border (the server sends them a few at a time; an unloaded block blocks a line of
+ * sight anyway), and it is about as far as a player with view distance 8 still makes out a
+ * lake through the fog. Every line of sight then stays inside this circle, so in loaded chunks.
  */
 export const FAR_SIGHT_RANGE = 112;
 /**

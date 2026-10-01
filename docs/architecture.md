@@ -740,7 +740,7 @@ digging enabled, a `MOVE_TO` over terrain may break `minecraft:leaves` and `leav
   `terrainEdges` and the same costs and limits (blocks walked, breaks), applied while searching,
   so they settle the same walk to each feet block. The observation offers a stand spot behind
   leaves (`standSpotFor`, the cheapest walk first) only when a `MOVE_TO` there plans the same
-  way: the client builds one rule for both (`#walkBreaks`), only with digging enabled, on a
+  way: the client builds one rule for both (`walkBreaks` in `client/movement-actions.ts`), only with digging enabled, on a
   terrain fence, with an empty hotbar slot (leaves are broken by hand).
 - **The walk.** Before a move that needs breaks, it stops and digs each block exactly as
   `DIG_BLOCK` does (one shared routine): the walk's own checks first (the stop file, `halt()`, a
@@ -1074,8 +1074,8 @@ other dig still never touches the ground the player stands on. In layers:
 5. **The dig** is `DIG_BLOCK`'s, with these rules instead of `checkDig`'s: the best allowed tool
    or an empty hand, the dig time, every tick re-checked, success only on the server's change to
    air with no re-send.
-6. **The fall** (`#fallInto`). The client does not otherwise simulate physics, so it falls as a
-   game client would, like the gravity check (`#keepSupported`) does: after `checkSupport`
+6. **The fall** (`#fallInto` in `client/dig-actions.ts`). The client does not otherwise simulate physics, so it falls as a
+   game client would, like the gravity check (`keepSupported` in `client/movement-actions.ts`) does: after `checkSupport`
    shows nothing holds the player and the floor is exactly one block down, with no hazard next
    to the landing, it sends the vanilla-gravity positions (`fallDistances`: 5 packets for one
    block, on the ground only at the last), then waits 5 ticks for a server correction. Walking
@@ -1225,7 +1225,7 @@ planner that knows both.
   at most 2048 blocks per side in this mode). Without the boundary, or with the player outside
   it, nothing walks or digs.
 
-Every use of the fence in the client goes through one function, `Gtnh1710Client#fence()`. A walk
+Every use of the fence in the client goes through one function, `fence()` in `client/core.ts`. A walk
 or dig takes its fence once, when it starts, and every step or tick is checked against that same
 fence, so the moving area never changes the per-step rules: walking, its 0.2-block steps, every
 step re-checked, threats stopping `MOVE_TO`, digging's checks, all as above.
@@ -1241,7 +1241,7 @@ step re-checked, threats stopping `MOVE_TO`, digging's checks, all as above.
    corners, one block up with headroom, drops of at most 2, never into water, lava, unloaded
    chunks or next to a hazard) finds the reachable spots closest to the goal, within
    `maxPathLength` and the distance left. The best one becomes an ordinary checked walk
-   (`#walkTo`, MOVE_TO's rules: threats stop it). If the walker will not plan it, the next
+   (`walkTo` in `client/movement-actions.ts`, MOVE_TO's rules: threats stop it). If the walker will not plan it, the next
    candidate is tried.
 3. It stops, OK, at the goal, after `maxDistance` blocks walked (or nearly: when the few blocks
    left are too short for a hop that a full-length one would make, it says "walked nearly the
@@ -1526,7 +1526,7 @@ src/safety       safety policy (evaluateAction) and its per-action checks (dig, 
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider and the model's cadence: decision points), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner (opt-in)
-src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, explore, chests, crafting, dig and place in a fence or a moving play area; block windows; fighting; world surveys), Mineflayer skeleton
+src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: inventory and chests, crafting, block windows, digging, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, placing, crafting, combat, world surveys, the world model, packets)
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
