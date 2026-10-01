@@ -31,6 +31,21 @@ export function fenceOf(f: { min: Position; max: Position }): Fence {
   return { min: { ...f.min }, max: { ...f.max } };
 }
 
+/** True when feet at `p` would stand in a block of the fence. */
+export function fenceHolds(fence: Fence, p: Vec3): boolean {
+  const x = Math.floor(p.x);
+  const y = Math.floor(p.y + EPS);
+  const z = Math.floor(p.z);
+  return (
+    x >= fence.min.x &&
+    x <= fence.max.x &&
+    y >= fence.min.y &&
+    y <= fence.max.y &&
+    z >= fence.min.z &&
+    z <= fence.max.z
+  );
+}
+
 export function playArea(
   movement: Pick<MovementConfig, 'mode' | 'fence' | 'area'>,
   boundary: PointBox | null,

@@ -36,6 +36,13 @@ fence with an empty hand. The remaining world-changing actions return `NOT_IMPLE
 [Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting) and
 [Digging](#digging).
 
+**Exploring (2026-09-30, fake server only so far):** with `MC_MOVEMENT_MODE=follow` the walk/dig
+fence becomes a play area that moves with the player, inside the safety boundary. `EXPLORE` walks
+toward a direction or a point in checked hops, in daylight only, and the agent remembers what it
+has seen per chunk (biome, logs, sand, gravel, clay, water, stone, ores; only what a player could
+see). The planner gets the known places, and play scouts the area once before the quests. See
+[Exploring and world memory](#exploring-and-world-memory).
+
 ## Requirements
 
 - Node.js ≥ 22.18 (developed on 24.21). `.ts` files run directly via Node's type stripping.
@@ -90,6 +97,8 @@ cp agent.config.example.json agent.config.json
 | The agent's Age 0 quest book and next goal   | `pnpm cli quests [--live]`                                                                |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
 | **Dig** one allowlisted block in the pen     | `pnpm cli dig --live --at=-8,200,-11`                                                     |
+| **Explore** toward a direction or a point    | `pnpm cli explore --live --toward south --distance 64`                                    |
+| What world memory knows (known places)       | `pnpm cli places [--at x,z]`                                                              |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
 | Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`                                              |
@@ -151,11 +160,14 @@ and [docs/action-contract.md](docs/action-contract.md).
   (`OLLAMA_URL`).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 13 action types exist. No block placing, dropping, combat, lava, network/multiblock
+- Only 14 action types exist. No block placing, dropping, combat, lava, network/multiblock
   changes or rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks
   vanilla logs, leaves, dirt, grass, sand, gravel and clay.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
+- Exploring is off unless walking is on **and** `MC_MOVEMENT_MODE=follow`; it never leaves the
+  safety boundary (at most 2048 blocks per side in that mode), walks at most 96 blocks per
+  `EXPLORE`, only in daylight, and stops for threats like any walk.
 - Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
   and only if the block is a plain `minecraft:chest` (see below).
 - Crafting is off unless `MC_ENABLE_CRAFTING=true`; only crafting tables listed in the config are
@@ -319,6 +331,45 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
   drop, a nearby threat, or any change to the block.
 - Success needs the server's own block change to air, with no re-send. The result reports
   whether the drop reached the inventory.
+
+### Exploring and world memory
+
+The fourth ability: leaving the first spot. The test world spawns the agent in a desert, and
+GTNH's early quests want wood, gravel "near water", clay on "the riverbanks" and stone. It has
+been tested against the fake server only (a streamed world with a desert, a forest, a river and
+the boundary); the live test is next.
+
+- Settings:
+  - `MC_ENABLE_MOVEMENT=true` and `MC_MOVEMENT_MODE=follow`: walks and digs then use a play area
+    centred on the player (`minecraft.movement.area`, default 64 x 64 blocks and 32 levels),
+    instead of the fixed fence;
+  - `SAFETY_BOUNDARY_MIN` / `MAX`: the exploration area. The play area never leaves it, and an
+    EXPLORE toward a point outside it is refused. Keep it to a few hundred blocks around spawn
+    (at most 2048 per side in this mode), e.g. `-256,0,-256` to `256,255,256`.
+- `pnpm cli explore --live --toward south --distance 64` explores once as a checked user action
+  (`--toward north_east`, or a point: `--toward=120,-40`). It prints how far it got, why it
+  stopped and what world memory now knows. Ctrl+C or `pnpm cli halt` stops it at its next step.
+- `pnpm cli places` prints what world memory knows, as the planner gets it: per resource the
+  nearest place seen (and a much richer one), the biomes seen, and how far each direction has
+  been seen.
+- `pnpm cli play --live` in this mode first scouts the area (one session, while fewer than 50
+  chunks are known), then plays the quests; the planner explores when a quest needs a block
+  that is not nearby.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and-world-memory)):
+
+- Every hop is an ordinary walk: planned on the server's blocks, every 0.2-block step re-checked
+  just before it is sent, never into water, lava, unloaded chunks or next to a hazard, drops of at
+  most 2 blocks; a hostile or unidentified entity within 10 blocks stops it.
+- At most 96 blocks walked per EXPLORE, 12 hops and 3 minutes; it stops when stuck, at the
+  boundary, at water or cliffs it cannot route around, and when it gets dark. It is refused in the
+  evening, at night and when the time is unknown.
+- The way back: a retreat (`RETURN_TO_SAFE_LOCATION`, e.g. `move --to home`) to a location
+  beyond the play area travels in the same checked hops. Threats do not stop a retreat, at any
+  time of day: it is the escape.
+- World memory records only what a player could see: blocks near the surface with a face
+  touching air, in a clear line of sight from the eyes, in daylight. Ores are recorded as "ore",
+  never by material.
 
 ### Live tasks
 

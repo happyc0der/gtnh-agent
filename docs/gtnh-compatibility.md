@@ -517,6 +517,33 @@ A `passive` entry needs at least 10 votes, all agreeing (enforced by a test).
 - A bug caught by tests before it reached the agent: the first void check looked at the whole
   16x16 layer of a chunk section instead of the single column, so it could never report void.
 
+## Biomes and world memory (2026-09-30)
+
+- **Biome ids arrive with the chunk data.** A ground-up column (every Map Chunk Bulk column,
+  and Chunk Data with ground-up set) ends with 256 bytes: one biome id per column, index
+  `z << 4 | x`, as vanilla 1.7.10 stores them. NotEnoughIDs 2.1.10 does not touch them (its
+  mixins change block ids and metadata only), and the decoder's length check already counted
+  these 256 bytes on the 252 live columns above. `decodeChunkColumnWithBiomes` /
+  `decodeChunkBulk` now keep them; an id of 255 means "not set".
+- **Ids are numbers only.** Forge's registry handshake names blocks and items, never biomes,
+  so names come from a table (`src/bot/gtnh1710/biomes.ts`): vanilla 1.7.10 plus the ids in
+  the test server's config (BiomesOPlenty `ids.cfg`, Realistic World Gen `RWG.cfg` (the world
+  generator), Thaumcraft, BuildCraft, GT++, AE2). Unknown ids show as `biome #<id>`.
+- **Checked against the world itself** (read-only, the test world's region files, 654 chunks):
+  spawn (0, 64, 0) is in 230 Hot Desert (RWG), with 229 Hot Forest to the south (from about
+  z=32), 43 Bamboo Forest (BOP) to the south-east, and 211 River Oasis, 49 Canyon, 209 Wet River,
+  190 Eerie and 207 Hot River further out. Every id found is in the table.
+- **What the survey sees on real chunks** (`world-survey.ts` run on those region files, eyes at
+  ground level): at spawn, 24 chunks of Hot Desert/Hot Forest with 832 sand and 39 leaves in
+  view; in the forest at (40, 78, 72), 23 logs, 352 leaves, 70 sand and 6 stone; in the Bamboo
+  Forest at (140, 64, 90), only leaves (BOP bamboo and BOP logs are not vanilla logs, so not
+  counted). 17-52 ms per 25-chunk survey. Forest floors there are dense with leaf bushes and
+  BOP foliage: the line of sight lets sight through plants and at most 2 leaf blocks.
+- **Limits:** the walker treats every modded block as a wall (BOP foliage, bamboo and gardens
+  included), so dense BOP ground blocks EXPLORE until those blocks are checked and allowed.
+  Ores count only when seen; GregTech keeps an ore's material in a tile entity the client does
+  not read, so the memory says "ore", never which.
+
 ## What was verified (from installed packages, 2026-09-26)
 
 | Fact                                                                                                                                                      | Source                                                                   |

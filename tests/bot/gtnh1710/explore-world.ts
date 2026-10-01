@@ -6,6 +6,7 @@ import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
 import { defaultConfig, type MovementConfig } from '../../../src/config/env.ts';
 import { createAction, type ActionSpec, type ExploreToward } from '../../../src/domain/actions.ts';
+import type { Position } from '../../../src/domain/common.ts';
 import { mintValidatedAction } from '../../../src/domain/validated-action.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
@@ -134,12 +135,17 @@ export function explorerHarness() {
 }
 
 const ids = sequentialIds();
-export function perform(client: Gtnh1710Client, spec: ActionSpec) {
+/** Performs one action as the executor would (a retreat needs its resolved target). */
+export function perform(
+  client: Gtnh1710Client,
+  spec: ActionSpec,
+  resolvedTarget: Position | null = null,
+) {
   const action = createAction(
     { spec, reason: 'test', origin: 'test', taskId: null },
     { newId: ids, now: () => new Date() },
   );
-  return client.perform(mintValidatedAction(action, null, new Date()));
+  return client.perform(mintValidatedAction(action, resolvedTarget, new Date()));
 }
 
 export const moveTo = (x: number, z: number): ActionSpec => ({
