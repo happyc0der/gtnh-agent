@@ -379,8 +379,10 @@ journal instead of a raw log, continues where the task stopped and avoids repeat
 Interruptions (mobs, hunger, lava, night) are still handled first by System 1's reflexes;
 a step that no longer fits the world is refused and replanned.
 
-`src/app/play/play.ts` (`runPlay`) is the play loop. Each round it reads the server's quest book and
-the inventory, records the quests the server now lists as completed (closing their tasks), and
+`src/app/play/play.ts` (`runPlay`) is the play loop: each round is the first of the night, morning,
+food and goal rounds (`night.ts`, `food.ts`, `goal-round.ts`) that has something to do. The goal
+round reads the server's quest book and the inventory, records the quests the server now lists
+as completed (closing their tasks), and
 makes the quest-book clicks that are due, one per round. Each click is an ordinary action run by
 the executor (`runQuestBookAction`: schema, safety policy, preconditions, execution, and
 verification against the server's next sync), and only when `MC_ENABLE_QUEST_BOOK` is on; a
@@ -632,7 +634,7 @@ is validated before anything is dropped, so an unsafe step anywhere still reject
 human wrote (`cli task-add --plan`) is never trimmed.
 
 Then code dry-runs the plan's start on the current observation (`refusedFirstStep` in
-`src/app/loop/agent-loop.ts`): its leading `GATHER` steps as they will run (one with nothing to dig
+`src/app/loop/plan-steps.ts`): its leading `GATHER` steps as they will run (one with nothing to dig
 is skipped), and the first other step through the executor's own checks (`validateCandidate`:
 schema, safety policy, preconditions, the repeated-failure rule). When that step would be
 refused for a reason a new plan can change, or every `GATHER` would find nothing to dig, the
@@ -1531,8 +1533,8 @@ src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
 src/app          cli.ts (the CLI) and providers.ts (the decision-provider and planner factory), plus:
-  loop/          one agent cycle (agent-loop.ts) and a session of them; GATHER steps, dead ends, the trail, known steps
-  play/          the play loop: quest goals and quest-book clicks, night shelters, food trips, scouting
-  commands/      what the CLI runs: live commands (observe, move, dig, ...), plans, tasks, world memory
+  loop/          one agent cycle (agent-loop.ts), agent memory overlaid on the state (agent-memory.ts), the open plan's steps and the planner (plan-steps.ts), a session of cycles; GATHER steps, dead ends, the trail, known steps
+  play/          the play loop (play.ts) over rounds sharing one play state (play-state.ts): night and morning (night.ts), food trips (food.ts), quest goals and quest-book clicks (goal-round.ts), scouting; narration.ts prints its events
+  commands/      what the CLI runs: cli-context.ts (options), cli-live.ts, cli-runs.ts, cli-records.ts (the commands), live commands and their views, plans, tasks, world memory
   mock/          the mock agent and its scenarios
 ```
