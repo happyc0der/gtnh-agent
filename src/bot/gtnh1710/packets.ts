@@ -23,11 +23,12 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // Outbound: the ONLY packets this client can ever send. Anything that could change
 // the world (placing, chat/commands, using items, attacking, dropping items) is
 // intentionally absent. The exceptions are walking ('player-move', only for steps
-// walking.ts has checked), vanilla chests ('activate-block', 'select-slot', 'click-window',
-// 'confirm-transaction', 'close-window', only as container.ts plans them) and digging one
-// block ('dig-block' with status start/cancel/finish only, for targets digging.ts has
-// checked); see Gtnh1710Client. 'player-look' and 'swing-arm' only change what other
-// players see: where the head points, and the arm swinging while digging.
+// walking.ts has checked), vanilla chests and crafting ('activate-block', 'select-slot',
+// 'click-window', 'confirm-transaction', 'close-window', only as container.ts and
+// crafting.ts plan them) and digging one block ('dig-block' with status
+// start/cancel/finish only, for targets digging.ts has checked); see Gtnh1710Client.
+// 'player-look' and 'swing-arm' only change what other players see: where the head
+// points, and the arm swinging while digging.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -172,7 +173,8 @@ export const outbound = {
 
   /**
    * C0E Click Window, normal click (mode 0) only. `claimed` is the slot's stack before the
-   * click, which the server compares with its own (see container.ts).
+   * click, which the server compares with its own (see container.ts). Window 0 is the
+   * player's own inventory container (its 2x2 crafting grid, see crafting.ts).
    */
   clickWindow(
     windowId: number,
@@ -182,7 +184,9 @@ export const outbound = {
     claimed: ItemStackData | null,
     modularUi: boolean,
   ): OutboundPacket {
-    if (windowId < 1 || windowId > 127) throw new ProtocolError('bad window id');
+    if (!Number.isInteger(windowId) || windowId < 0 || windowId > 127) {
+      throw new ProtocolError('bad window id');
+    }
     if (!Number.isInteger(slot) || slot < 0 || slot > 32767) throw new ProtocolError('bad slot');
     if (actionNumber < 1 || actionNumber > 32767) throw new ProtocolError('bad action number');
     return {
@@ -212,8 +216,19 @@ export const outbound = {
     };
   },
 
-  /** C0D Close Window. The caller must make sure nothing is on the cursor (it would be dropped). */
+  /**
+   * C0D Close Window. The caller must make sure nothing is on the cursor, or in a crafting
+   * grid: the server DROPS both into the world. Never for window 0: 1.7.10 closes whatever
+   * window is open whatever id the packet names, and closing the player's own inventory
+   * container drops its 2x2 crafting grid (verified in the server jar).
+   */
   closeWindow(windowId: number): OutboundPacket {
+    if (windowId === 0) {
+      throw new ProtocolError('refusing to close window 0 (it would drop the 2x2 crafting grid)');
+    }
+    if (!Number.isInteger(windowId) || windowId < 1 || windowId > 127) {
+      throw new ProtocolError('bad window id');
+    }
     return { kind: 'close-window', frame: encodeFrame(0x0d, Buffer.from([windowId])) };
   },
 

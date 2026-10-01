@@ -192,11 +192,12 @@ function findInconsistencies(state: GameState): string[] {
     ...state.machines.map((m) => m.id),
     ...state.storage.map((s) => s.id),
     ...state.power.generators.map((g) => g.id),
+    ...state.craftingTables.map((t) => t.id),
   ];
   const duplicates = ids.filter((id, i) => ids.indexOf(id) !== i);
   if (duplicates.length > 0) {
     problems.push(
-      `duplicate machine/storage/generator ids: ${[...new Set(duplicates)].join(', ')}`,
+      `duplicate machine/storage/generator/crafting table ids: ${[...new Set(duplicates)].join(', ')}`,
     );
   }
   if (
@@ -374,6 +375,7 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
     case 'DEPOSIT_ITEM':
     case 'WITHDRAW_ITEM':
     case 'INSPECT_MACHINE':
+    case 'CRAFT_ITEM': // its ingredients are checked as protected items above
     case 'PAUSE_AND_ASK_USER':
       break;
   }
@@ -491,6 +493,13 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
     case 'DIG_BLOCK':
       v.push(...digChecks(action.args.position, state, config));
       break;
+    case 'CRAFT_ITEM': {
+      const tableId = action.args.craftingTableId;
+      if (tableId !== null && !state.craftingTables.some((t) => t.id === tableId)) {
+        v.push(unknownTarget('Crafting table', tableId));
+      }
+      break;
+    }
     case 'REFUEL_KNOWN_GENERATOR': {
       const generator = state.power.generators.find((g) => g.id === action.args.generatorId);
       if (generator === undefined) {

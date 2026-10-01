@@ -84,6 +84,10 @@ export function baseWorld(taskId: string): MockWorld {
         lastInspectedAt: null,
       },
     ],
+    craftingTables: [
+      { id: 'table.main', name: 'Crafting table (mock)', position: { x: 2, y: 64, z: -2 } },
+    ],
+    craftingResults: {},
     openContainerId: null,
     task: { taskId, goal: 'Process iron ore', subgoal: 'Check the macerator', status: 'active' },
     recipe: {
@@ -412,6 +416,35 @@ export const SCENARIOS: readonly Scenario[] = [
     { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'DIG_BLOCK', status: 'verification_failed' },
     digStep(2, 64, 1),
     { setup: (client) => client.silentNoop('DIG_BLOCK') },
+  ),
+  scenario(
+    'craft-known-step',
+    'The known next step crafts planks from logs in the 2x2 grid.',
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'CRAFT_ITEM', status: 'succeeded' },
+    (w) => {
+      w.inventory.items['minecraft:log'] = 4;
+      if (w.recipe !== null) {
+        w.recipe.nextKnownSafeStep = {
+          type: 'CRAFT_ITEM',
+          args: { recipe: 'planks_oak', times: 2, craftingTableId: null },
+        };
+      }
+    },
+  ),
+  scenario(
+    'craft-recipe-differs',
+    "The server's recipe differs from the agent's table (2 sticks, not 4): nothing is crafted.",
+    { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'CRAFT_ITEM', status: 'failed' },
+    (w) => {
+      w.inventory.items['minecraft:planks'] = 4;
+      w.craftingResults.sticks = { item: 'minecraft:stick', count: 2 };
+      if (w.recipe !== null) {
+        w.recipe.nextKnownSafeStep = {
+          type: 'CRAFT_ITEM',
+          args: { recipe: 'sticks', times: 1, craftingTableId: null },
+        };
+      }
+    },
   ),
   scenario(
     'action-fails',

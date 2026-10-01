@@ -119,6 +119,49 @@ describe('verifyPostcondition', () => {
     expect(verify(spec, before, blind).verified).toBe(false);
   });
 
+  it('ITEMS_CRAFTED checks the exact result gain, ingredient use, and that nothing else changed', () => {
+    const spec: ActionSpec = {
+      type: 'CRAFT_ITEM',
+      args: { recipe: 'sticks', times: 2, craftingTableId: null },
+    };
+    const inv = before.inventory.known ? before.inventory.value : null;
+    if (inv === null) throw new Error('fixture inventory unknown');
+    const withPlanks = {
+      ...before,
+      inventory: known({
+        ...inv,
+        items: { ...inv.items, 'minecraft:planks': 3, 'minecraft:planks@2': 5 },
+      }),
+    };
+    const after = (items: Record<string, number>): GameState =>
+      later({ ...withPlanks, inventory: known({ ...inv, items: { ...inv.items, ...items } }) });
+
+    // Any mix of plank kinds counts: 4 planks used, 8 sticks made.
+    const crafted = after({ 'minecraft:planks': 1, 'minecraft:planks@2': 3, 'minecraft:stick': 8 });
+    expect(verify(spec, withPlanks, crafted).verified).toBe(true);
+
+    const short = verify(
+      spec,
+      withPlanks,
+      after({ 'minecraft:planks': 0, 'minecraft:planks@2': 4, 'minecraft:stick': 4 }),
+    );
+    expect(short.checks.filter((c) => !c.passed).map((c) => c.name)).toEqual(['result-delta']);
+    const extra = verify(
+      spec,
+      withPlanks,
+      after({
+        'minecraft:planks': 1,
+        'minecraft:planks@2': 3,
+        'minecraft:stick': 8,
+        'minecraft:bucket': 1,
+      }),
+    );
+    expect(extra.verified).toBe(false);
+    expect(extra.checks.find((c) => c.name === 'other-items-unchanged')?.detail).toMatch(
+      /minecraft:bucket 0 -> 1/,
+    );
+  });
+
   it('USER_NOTIFIED requires an acknowledgement', () => {
     const spec: ActionSpec = { type: 'PAUSE_AND_ASK_USER', args: { question: 'q' } };
     expect(verify(spec, before, later(before), ok('x', { acknowledged: true })).verified).toBe(

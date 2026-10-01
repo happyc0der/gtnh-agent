@@ -197,4 +197,37 @@ describe('preconditions', () => {
     });
     expect(full.failures).toEqual(['inventory is full (no room for the drop)']);
   });
+
+  it('crafting needs the ingredients, and a known crafting table within reach for 3x3', () => {
+    const craft = (
+      recipe: 'planks_oak' | 'chest',
+      times: number,
+      craftingTableId: string | null,
+    ): ActionSpec => ({ type: 'CRAFT_ITEM', args: { recipe, times, craftingTableId } });
+    const withLogs = (w: MockWorld): void => {
+      Object.assign(w.inventory.items, {
+        'minecraft:log': 3,
+        'minecraft:log@2': 2,
+        'minecraft:planks@1': 4,
+        'minecraft:flint': 1,
+      });
+    };
+    expect(pre(craft('planks_oak', 3, null), withLogs).ok).toBe(true);
+    expect(pre(craft('planks_oak', 4, null), withLogs).failures).toEqual([
+      'inventory holds 3 of minecraft:log, need 4 for 4 x planks_oak',
+    ]);
+    // Any mix of log and plank kinds counts toward the chest's needs.
+    expect(pre(craft('chest', 1, 'table.main'), withLogs).ok).toBe(true);
+    expect(pre(craft('chest', 1, null), withLogs).failures).toEqual([
+      'chest needs a crafting table (its pattern does not fit 2x2)',
+    ]);
+    expect(pre(craft('chest', 1, 'table.nope'), withLogs).failures).toEqual([
+      'crafting table table.nope is not known',
+    ]);
+    const far = pre(craft('chest', 1, 'table.main'), (w) => {
+      withLogs(w);
+      w.player.position = { x: 20, y: 64, z: 20 };
+    });
+    expect(far.failures[0]).toMatch(/crafting table table.main is .* blocks away/);
+  });
 });

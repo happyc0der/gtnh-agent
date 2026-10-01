@@ -29,10 +29,11 @@ With everything critical observable, a live cycle pauses only because the agent 
 **Walking and chests (2026-09-30):** with movement explicitly enabled and a fence configured,
 `MOVE_TO` and `RETURN_TO_SAFE_LOCATION` walk the player on one level inside the fence (no jumping,
 climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, `WITHDRAW_ITEM` and
-`DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. With digging enabled,
-`DIG_BLOCK` breaks one allowlisted block inside the fence with an empty hand (built and tested
-against the fake server; the live test is pending). The remaining world-changing actions return
-`NOT_IMPLEMENTED`. See [Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests) and
+`DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. With crafting enabled,
+`CRAFT_ITEM` crafts early-game recipes in the 2x2 grid or at a configured crafting table (fake
+server only so far). With digging enabled, `DIG_BLOCK` breaks one allowlisted block inside the
+fence with an empty hand. The remaining world-changing actions return `NOT_IMPLEMENTED`. See
+[Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting) and
 [Digging](#digging).
 
 ## Requirements
@@ -150,13 +151,15 @@ and [docs/action-contract.md](docs/action-contract.md).
   (`OLLAMA_URL`).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 12 action types exist. No block placing, dropping, combat, lava, network/multiblock
+- Only 13 action types exist. No block placing, dropping, combat, lava, network/multiblock
   changes or rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks
   vanilla logs, leaves, dirt, grass, sand, gravel and clay.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
 - Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
   and only if the block is a plain `minecraft:chest` (see below).
+- Crafting is off unless `MC_ENABLE_CRAFTING=true`; only crafting tables listed in the config are
+  used, and a result is taken only if the server shows exactly what the recipe table expects.
 - Digging is off unless `MC_ENABLE_DIGGING=true` **and** the fence is set. It only breaks
   allowlisted blocks inside the fence, never the floor, and never anything touching water, a
   chest, a machine or any other non-plain block (see below).
@@ -253,6 +256,31 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#chests)):
 - The cursor is never left holding items. A rejected click is re-synced, and the cursor is put
   back into an empty slot.
 - Protected items never move, and neither do stacks with NBT data.
+
+### Crafting
+
+The third world-changing ability: `CRAFT_ITEM` crafts a recipe from the agent's small table of
+early (Age 0) recipes (`src/domain/recipes.ts`: planks, sticks, torches, crafting table, chest). It
+crafts in the player's own 2x2 grid, or for 3x3 recipes at a crafting table you configure. It has
+only run against the fake server so far (see
+[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#crafting-2026-09-30)).
+
+- Settings: `MC_ENABLE_CRAFTING=true`, and for 3x3 recipes the table in `agent.config.json` under
+  `minecraft.crafting.tables` (`{ "table.pen": { "name": "...", "position": { "x": .., "y": .., "z": .. } } }`).
+- Use it as a plan step, e.g.
+  `{ "type": "CRAFT_ITEM", "args": { "recipe": "planks_oak", "times": 4, "craftingTableId": null } }`.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#crafting)):
+
+- GTNH changes many recipes (e.g. a log gives 2 planks, not 4), so the table only says what to put
+  where. A result is taken only if the server shows exactly the expected item and count.
+  Otherwise every ingredient goes back and the action fails with what the server showed.
+- The server drops whatever is left in a crafting grid or on the cursor when a window closes or
+  the player leaves. So the grid only ever holds one craft's worth of items, every failure puts
+  them back first, and the agent never closes window 0.
+- Only predictable clicks are used, each confirmed by the server, and results always go into an
+  empty slot.
+- Protected items are never used as ingredients, and neither are stacks with NBT data.
 
 ### Digging
 

@@ -272,6 +272,13 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
         if (!safetyConstraints.safeLocations.includes(a.args.locationName))
           bad(`${a.args.locationName} is not a safe location`);
         break;
+      case 'CRAFT_ITEM': {
+        const table = a.args.craftingTableId;
+        if (table !== null && !state.craftingTables.some((t) => t.id === table)) {
+          bad(`${table} is not a crafting table`);
+        }
+        break;
+      }
       case 'DIG_BLOCK': {
         const p = a.args.position;
         if (!diggable.has(`${p.x},${p.y},${p.z}`)) {

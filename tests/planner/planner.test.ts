@@ -173,8 +173,9 @@ describe('planner request and mock planner', () => {
 
   it('the request carries the allowlist and constraints', () => {
     const r = request();
-    expect(r.allowedActions).toHaveLength(12);
+    expect(r.allowedActions).toHaveLength(13);
     expect(r.allowedActions).toContain('DIG_BLOCK');
+    expect(r.allowedActions).toContain('CRAFT_ITEM');
     expect(r.safetyConstraints.protectedItems).toEqual([
       'minecraft:diamond',
       'minecraft:nether_star',

@@ -103,7 +103,21 @@ const MAX_REPORTED_MACHINES = 64;
 /** The block every GregTech machine (and pipe) is. */
 const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 
-/** A chest the agent may use (from config). */
+/**
+ * 1.7.10 window type 1, the crafting table. Its S2D announces the 9 grid slots, but the
+ * window also has the result slot (slot 0): 10 container slots, then the player's 36.
+ */
+export const WORKBENCH_WINDOW_TYPE = 1;
+
+/** Container slots (before the player's 36) of a window as S2D announces it. */
+export function containerSlotsOf(inventoryType: number, announced: number): number {
+  return inventoryType === WORKBENCH_WINDOW_TYPE ? announced + 1 : announced;
+}
+
+/** Window 0 as a click target: slots 0-8 (result, 2x2 grid, armor) before the player's 36. */
+const INVENTORY_WINDOW_CONTAINER_SLOTS = 9;
+
+/** A chest or crafting table the agent may use (from config). */
 export interface ContainerDefinition {
   id: string;
   name: string;
@@ -164,13 +178,21 @@ export class WorldModel {
   #heldSlot = 0;
   #window: Array<ItemStackData | null> | null = null;
   #containers: readonly ContainerDefinition[] = [];
+  #craftingTables: readonly ContainerDefinition[] = [];
   #openWindow: OpenWindow | null = null;
-  /** The stack on the cursor (S2F window -1 slot -1), only meaningful while a window is open. */
+  /**
+   * The stack on the cursor (S2F window -1 slot -1). The server sends it after every full
+   * window sync; accepted clicks change it by prediction; closing a window empties it.
+   */
   #cursor: ItemStackData | null = null;
   /** The container the agent is about to open: claimed by the next open-window packet. */
   #expectedContainer: string | null = null;
   /** Counts S30s for the open window (the client waits for a re-sync after a rejected click). */
   #windowSyncs = 0;
+  /** Counts S30s for window 0 (the player's own inventory container). */
+  #inventorySyncs = 0;
+  /** Counts cursor updates (S2F -1/-1), which follow every full window sync. */
+  #cursorSyncs = 0;
   #lastPacketAt: Date | null = null;
   #joined = false;
   /** Set when an inventory packet could not be decoded; cleared by the next full window refresh. */
@@ -298,6 +320,11 @@ export class WorldModel {
     this.#containers = defs;
   }
 
+  /** Crafting tables the agent may use (config); reported in GameState.craftingTables. */
+  setCraftingTables(defs: readonly ContainerDefinition[]): void {
+    this.#craftingTables = defs;
+  }
+
   /** The agent is about to open this container: the next window the server opens is it. */
   expectContainer(containerId: string | null): void {
     this.#expectedContainer = containerId;
@@ -306,6 +333,21 @@ export class WorldModel {
   /** Window 0 (the player's own inventory container), as last sent by the server. */
   get inventoryWindow(): ReadonlyArray<ItemStackData | null> | null {
     return this.#window;
+  }
+
+  /**
+   * Window 0 as a click target (the player's own 2x2 crafting grid), or null while another
+   * window is open (the server only takes clicks for its open window) or it is not known.
+   */
+  get inventoryClickWindow(): WindowSnapshot | null {
+    const w = this.#window;
+    if (this.#openWindow !== null || w === null || w.length < MIN_PLAYER_WINDOW_SLOTS) return null;
+    if (this.#inventoryProblem !== null) return null;
+    return {
+      containerSlots: INVENTORY_WINDOW_CONTAINER_SLOTS,
+      slots: [...w],
+      cursor: this.#cursor,
+    };
   }
 
   get openWindow(): OpenWindow | null {
@@ -317,6 +359,14 @@ export class WorldModel {
     return this.#windowSyncs;
   }
 
+  get inventorySyncs(): number {
+    return this.#inventorySyncs;
+  }
+
+  get cursorSyncs(): number {
+    return this.#cursorSyncs;
+  }
+
   get heldSlot(): number {
     return this.#heldSlot;
   }
@@ -326,12 +376,31 @@ export class WorldModel {
     if (slot >= 0 && slot <= 8) this.#heldSlot = slot;
   }
 
-  /** The server accepted a click: apply the predicted result (it sends no slot updates for it). */
-  applyWindowSnapshot(snapshot: WindowSnapshot): void {
-    const w = this.#openWindow;
-    if (w === null || !w.slotsKnown) return;
-    w.slots = [...snapshot.slots];
-    this.#cursor = snapshot.cursor;
+  /**
+   * The server accepted a click in `windowId` (0 = the player's own inventory container): it
+   * sends no slot updates for it, so apply the client's prediction. Only the slots the click
+   * changes (`before` -> `after`) and the cursor are written, so an unrelated slot update
+   * that arrived while the click was on its way is kept.
+   */
+  applyAcceptedClick(windowId: number, before: WindowSnapshot, after: WindowSnapshot): void {
+    const open = this.#openWindow;
+    let slots: Array<ItemStackData | null>;
+    if (windowId === 0) {
+      if (open !== null || this.#window === null) return;
+      slots = [...this.#window];
+      this.#window = slots;
+    } else {
+      if (open === null || open.windowId !== windowId || !open.slotsKnown) return;
+      slots = [...open.slots];
+      open.slots = slots;
+    }
+    const n = Math.max(before.slots.length, after.slots.length);
+    for (let i = 0; i < n && i < slots.length; i++) {
+      const was = before.slots[i] ?? null;
+      const now = after.slots[i] ?? null;
+      if (was !== now) slots[i] = now;
+    }
+    this.#cursor = after.cursor;
   }
 
   /** The client closed the window (C0D). */
@@ -695,6 +764,7 @@ export class WorldModel {
         if (packet.windowId === 0) {
           this.#window = [...packet.items];
           this.#inventoryProblem = null;
+          this.#inventorySyncs += 1;
         } else if (packet.windowId === this.#openWindow?.windowId) {
           const w = this.#openWindow;
           if (packet.items.length === w.containerSlots + 36) {
@@ -711,6 +781,7 @@ export class WorldModel {
       case 'set-slot':
         if (packet.windowId === -1 && packet.slot === -1) {
           this.#cursor = packet.item;
+          this.#cursorSyncs += 1;
         } else if (packet.windowId === 0 && this.#window !== null && packet.slot >= 0) {
           while (this.#window.length <= packet.slot) this.#window.push(null);
           this.#window[packet.slot] = packet.item;
@@ -730,7 +801,7 @@ export class WorldModel {
         this.#openWindow = {
           windowId: packet.windowId,
           inventoryType: packet.inventoryType,
-          containerSlots: packet.slotCount,
+          containerSlots: containerSlotsOf(packet.inventoryType, packet.slotCount),
           slots: [],
           slotsKnown: false,
           cursor: null,
@@ -789,6 +860,11 @@ export class WorldModel {
       },
       machines: this.#machinesState(),
       storage: this.#storageState(),
+      craftingTables: this.#craftingTables.map((t) => ({
+        id: t.id,
+        name: t.name,
+        position: known({ ...t.position }),
+      })),
       openContainerId: this.#openWindow?.containerId ?? null,
       currentTask: null,
       knownRecipeState: null,
@@ -973,6 +1049,13 @@ export class WorldModel {
     return stack === null || stack === undefined
       ? known(null)
       : unknown('held item durability is not known yet');
+  }
+
+  /** The player's 36 storage slots (main, then hotbar), or null while they are not known. */
+  playerStorage(): Array<ItemStackData | null> | null {
+    if (this.#inventoryProblem !== null) return null;
+    const slots = this.#playerSlots();
+    return typeof slots === 'string' ? null : slots.map((s) => s ?? null);
   }
 
   /**

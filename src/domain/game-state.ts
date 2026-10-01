@@ -163,6 +163,14 @@ export const StorageContainerSchema = z.strictObject({
 });
 export type StorageContainer = z.infer<typeof StorageContainerSchema>;
 
+/** A crafting table the agent may use for 3x3 crafting (the operator configures them). */
+export const CraftingTableSchema = z.strictObject({
+  id: EntityIdSchema,
+  name: z.string().min(1).max(100),
+  position: knownSchema(PositionSchema),
+});
+export type CraftingTable = z.infer<typeof CraftingTableSchema>;
+
 export const CurrentTaskSchema = z.strictObject({
   taskId: EntityIdSchema,
   goal: z.string().min(1).max(300),
@@ -208,6 +216,8 @@ export const GameStateSchema = z.strictObject({
   power: PowerSchema,
   machines: z.array(MachineSchema).max(512),
   storage: z.array(StorageContainerSchema).max(512),
+  /** Crafting tables the agent may use. Defaults to [] for states recorded before crafting. */
+  craftingTables: z.array(CraftingTableSchema).max(64).default([]),
   /** Container whose GUI is currently open, if any. */
   openContainerId: EntityIdSchema.nullable(),
   currentTask: CurrentTaskSchema.nullable(),

@@ -117,6 +117,11 @@ export const CompactStateSchema = z.strictObject({
       }),
     )
     .max(32),
+  craftingTables: z
+    .array(
+      z.strictObject({ id: EntityIdSchema, name: z.string(), position: PositionSchema.nullable() }),
+    )
+    .max(32),
   generators: z
     .array(
       z.strictObject({

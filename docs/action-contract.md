@@ -48,6 +48,7 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 | `INSPECT_MACHINE`         | machine id                                     | machine known and within reach                                   | machine is known                                                                                                                                                                                                                              | Machine `lastInspectedAt` ≥ action time.                       |
 | `REFUEL_KNOWN_GENERATOR`  | generator, fuel, 1–64                          | generator known and within reach; enough fuel                    | fuel approved, not protected, and in that generator's `acceptedFuels`                                                                                                                                                                         | Fuel left inventory (−qty) and generator not `out_of_fuel`.    |
 | `DIG_BLOCK`               | block position (integers, y 0–255)             | block within reach of the eyes; a free inventory slot            | an observed, allowlisted diggable block (`NOT_DIGGABLE`); whole block inside boundary; clear of known hazards; not under the player or a falling block over its head or one with sand/gravel on top (`UNSAFE_DIG`); not allowed during danger | The block is observed turning into air (`BLOCK_REMOVED`).      |
+| `CRAFT_ITEM`              | recipe id, 1–64 times, table id or null        | enough ingredients; 3x3 needs a known table within reach         | no ingredient kind the recipe may use is protected; the table is known                                                                                                                                                                        | Result +count×times, ingredients −cells×times, nothing else.   |
 | `PAUSE_AND_ASK_USER`      | question ≤ 500 chars                           | none                                                             | always permitted                                                                                                                                                                                                                              | Client acknowledged. The loop marks the task `paused`.         |
 
 **Not in the allowlist, by design:** lava interaction, dropping items, combat, placing blocks,
@@ -73,7 +74,24 @@ fails the action (`FAILED`) after the cursor has been emptied back into the wind
 refused (`REFUSED`, nothing sent) when the target is off the fence's level, outside the fence or
 unreachable over walkable blocks. It stops (`FAILED`) on a server correction, a health drop, a
 hostile or unidentified entity within `threatRadius` (`MOVE_TO` only), a blocked or dangerous way
-ahead, the stop file, `halt()` or a lost connection.
+ahead, the stop file, `halt()` or a lost connection. See [architecture: walking](architecture.md#walking).
+
+`CRAFT_ITEM` works when `MC_ENABLE_CRAFTING=true` (otherwise `NOT_IMPLEMENTED`): 2x2 recipes in
+the player's own grid, 3x3 recipes at a crafting table listed in `minecraft.crafting.tables`. The
+recipe table (`src/domain/recipes.ts`) only says what to put where; the server decides:
+
+- It is refused (`REFUSED`, before any click) for an unconfigured table, a block that is not a
+  `minecraft:crafting_table`, no empty hotbar slot, or crafts that cannot all finish exactly (too
+  few NBT-free ingredients, or no empty slot for a result).
+- If the server's result is not exactly the expected item and count, nothing is taken: every
+  ingredient goes back and the action fails (`FAILED`) with what the server showed.
+- A rejected or unanswered click fails it (`FAILED`) after the grid and the cursor are emptied
+  back into the inventory. If that cannot be done, it is `ERROR` and the message starts with
+  "ITEMS MAY BE LEFT IN THE CRAFTING GRID OR ON THE CURSOR".
+- `halt()` and the stop file stop it between crafts.
+
+See [architecture: crafting](architecture.md#crafting). The other world-changing actions return
+`NOT_IMPLEMENTED`.
 
 `DIG_BLOCK` needs `MC_ENABLE_DIGGING=true` and the movement fence (otherwise `NOT_IMPLEMENTED`).
 
@@ -110,8 +128,9 @@ The other world-changing actions return `NOT_IMPLEMENTED`. See
 4. **Coverage.** Observations declare how far they looked (`nearbyThreats.scanRadius`,
    `environmentHazards.scanRadius`). If the entity scan is smaller than `hostileThreatRadius`, or
    the hazard scan smaller than `hazardAvoidanceRadius`, the state is treated as unknown (pause).
-5. **Protected items** can never be eaten, deposited, withdrawn or burned. `ns:item` also protects
-   every `ns:item@meta` variant. Config items are copied into the database and never silently removed.
+5. **Protected items** can never be eaten, deposited, withdrawn, burned or crafted with (every
+   kind a recipe may use counts). `ns:item` also protects every `ns:item@meta` variant. Config
+   items are copied into the database and never silently removed.
 6. **Repeated failures.** Once an identical action (type + canonical args) chosen by the agent
    has failed `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is
    refused with `REPEATED_FAILURE` (pause) and the task is blocked until a human resumes it

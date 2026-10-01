@@ -14,6 +14,13 @@ import {
 } from '../domain/game-state.ts';
 import { blockCentre, distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
 import { known, unknown } from '../domain/known.ts';
+import {
+  describeIngredient,
+  ingredientRequirements,
+  needsCraftingTable,
+  RECIPES,
+  type RecipeId,
+} from '../domain/recipes.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
 import type { Clock, ManualClock } from '../util/clock.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from './minecraft-client.ts';
@@ -62,6 +69,12 @@ export interface MockGenerator {
   acceptedFuels: string[];
 }
 
+export interface MockCraftingTable {
+  id: string;
+  name: string;
+  position: Position;
+}
+
 export interface MockMachine {
   id: string;
   name: string;
@@ -90,6 +103,13 @@ export interface MockWorld {
   containers: MockContainer[];
   generators: MockGenerator[];
   machines: MockMachine[];
+  craftingTables: MockCraftingTable[];
+  /**
+   * What the simulated server's crafting grid shows where it differs from the agent's
+   * recipe table (GTNH changes recipes); null = no result at all. Like the live client, the
+   * mock then crafts nothing and reports what the server showed.
+   */
+  craftingResults: Partial<Record<RecipeId, { item: string; count: number } | null>>;
   openContainerId: string | null;
   task: CurrentTask | null;
   recipe: KnownRecipeState | null;
@@ -109,8 +129,9 @@ type FailureMode =
 
 /**
  * Deterministic in-memory Minecraft stand-in. Simulates the player, inventory,
- * a safe container, a known generator with fuel, machines, hazards and hostiles,
- * with injectable failures and "reports success but changes nothing" behavior.
+ * a safe container, a known generator with fuel, machines, crafting (with server recipes
+ * that may differ from the agent's table), hazards and hostiles, with injectable failures
+ * and "reports success but changes nothing" behavior.
  */
 export class MockMinecraftClient implements MinecraftClient {
   readonly kind = 'mock';
@@ -254,6 +275,11 @@ export class MockMinecraftClient implements MinecraftClient {
         position: known({ ...c.position }),
         items: known(nonZero(c.items)),
       })),
+      craftingTables: w.craftingTables.map((t) => ({
+        id: t.id,
+        name: t.name,
+        position: known({ ...t.position }),
+      })),
       openContainerId: w.openContainerId,
       currentTask: w.task === null ? null : { ...w.task },
       knownRecipeState: w.recipe === null ? null : structuredClone(w.recipe),
@@ -366,6 +392,8 @@ export class MockMinecraftClient implements MinecraftClient {
 
       case 'DIG_BLOCK':
         return this.#dig(action.args.position);
+      case 'CRAFT_ITEM':
+        return this.#craft(action.args);
 
       case 'PAUSE_AND_ASK_USER':
         this.userMessages.push(action.args.question);
@@ -403,6 +431,52 @@ export class MockMinecraftClient implements MinecraftClient {
       block: found.block,
       dropCollected,
       drops: drop === null || !dropCollected ? '' : `${drop.count} x ${drop.item}`,
+    });
+  }
+
+  /** Like the live client: the server's result must match the table, or nothing is crafted. */
+  #craft(args: {
+    recipe: RecipeId;
+    times: number;
+    craftingTableId: string | null;
+  }): ClientActionResult {
+    const w = this.world;
+    const recipe = RECIPES[args.recipe];
+    if (args.craftingTableId !== null) {
+      const table = w.craftingTables.find((t) => t.id === args.craftingTableId);
+      if (table === undefined) return failed(`no crafting table ${args.craftingTableId}`);
+      if (distance(w.player.position, table.position) > w.reach) {
+        return failed(`${table.id} is out of reach`);
+      }
+    } else if (needsCraftingTable(recipe)) {
+      return failed(`${recipe.id} needs a crafting table`, 'REFUSED');
+    }
+    const shown = w.craftingResults[recipe.id];
+    if (
+      shown !== undefined &&
+      (shown === null || shown.item !== recipe.result.item || shown.count !== recipe.result.count)
+    ) {
+      return failed(
+        `the server's crafting result for ${recipe.id} is ${shown === null ? 'empty' : `${shown.count} x ${shown.item}`}, ` +
+          `not the expected ${recipe.result.count} x ${recipe.result.item}; nothing was crafted`,
+      );
+    }
+    const after = { ...w.inventory.items };
+    for (const req of ingredientRequirements(recipe)) {
+      let need = req.perCraft * args.times;
+      for (const item of req.anyOf) {
+        const take = Math.min(need, after[item] ?? 0);
+        after[item] = (after[item] ?? 0) - take;
+        need -= take;
+      }
+      if (need > 0) return failed(`not enough ${describeIngredient(req.anyOf)}`);
+    }
+    const made = recipe.result.count * args.times;
+    after[recipe.result.item] = (after[recipe.result.item] ?? 0) + made;
+    if (usedSlots(after) > w.inventory.capacitySlots) return failed('inventory full');
+    w.inventory.items = after;
+    return ok(`crafted ${args.times} x ${recipe.id}: +${made} ${recipe.result.item}`, {
+      crafts: args.times,
     });
   }
 

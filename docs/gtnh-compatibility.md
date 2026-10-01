@@ -76,9 +76,11 @@ Findings while building it (verified):
 
 What the client can send is fixed in `packets.ts` (`outbound`): handshake, status request, login
 start, keep-alive, plugin messages on `REGISTER`/`FML|HS` only, idle ticks, echoes of
-server-assigned positions, and (since walking, chests and digging) walking steps, the chest
-packets and digging start/cancel/finish. `perform()` supports `OBSERVE_STATE`, `WAIT` and
-`PAUSE_AND_ASK_USER`, plus walks, chests and digs when each is enabled; every other action returns
+server-assigned positions, walking steps, the window packets chests and crafting need
+(empty-hand block activation, hotbar selection, normal clicks, confirmations, and closing a
+window other than window 0), digging start/cancel/finish, and the cosmetic head look and arm
+swing. `perform()` supports `OBSERVE_STATE`, `WAIT` and `PAUSE_AND_ASK_USER`, plus walks,
+chests, crafting and digs when each is enabled; every other action returns
 `NOT_IMPLEMENTED` without sending anything (tested).
 
 ## Walking (2026-09-30)
@@ -185,6 +187,91 @@ Two things this found (_verified_, fixed):
   showed 4990 ms of observed time and failed verification. The live WAIT now also waits until
   the observed time has advanced by the full duration. Rejected clicks and cursor recovery are covered by the fake server's faithful 1.7.10
   click simulation (tests), not live.
+
+## Crafting (2026-09-30)
+
+`CRAFT_ITEM` crafts in the player's own 2x2 grid (window 0) or at a configured crafting table
+(3x3). Everything below was checked in the installed code (_verified_), not live: the shared test
+server was not used. The sources:
+
+- `minecraft_server.1.7.10.jar`, with Forge 10.13.4.1614's server binpatches applied the way FML's
+  `ClassPatchManager` does (`binpatches.pack.lzma` from the Forge universal jar). Forge patches
+  `ContainerPlayer`, `SlotCrafting`, `EntityPlayerMP` and `NetHandlerPlayServer`; it leaves
+  `Container`, `ContainerWorkbench`, `InventoryCrafting` and `InventoryCraftResult` alone. Names
+  come from FML's own `deobfuscation_data-1.7.10.lzma`.
+- Every mixin and class transformer in the 211 mod jars that names these classes or their methods
+  (see "Mods that touch crafting" below).
+
+**Window layouts:**
+
+| Window                                  | Slots                                                                                                                         |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 0, the player's own (`ContainerPlayer`) | 0 result, 1-4 the 2x2 grid (column + 2 x row), 5-8 armor, 9-35 main, 36-44 hotbar, and 45 Backhand's off-hand (46 in all).    |
+| Crafting table (`ContainerWorkbench`)   | S2D type 1, title "Crafting", announcing **9** slots. The window has 0 result, 1-9 the grid (column + 3 x row), 10-45 player. |
+
+**The server never sends the result slot on its own:**
+
+- `EntityPlayerMP.sendSlotContents` returns at once for a `SlotCrafting` slot, and sends nothing at
+  all while `isChangingQuantityOnly` is set. `processClickWindow` sets that flag around the
+  `detectAndSendChanges` that follows an accepted click.
+- `onCraftMatrixChanged` recomputes the result on the server only. A vanilla client works out the
+  result itself, from its own recipes.
+- Only a full window sync carries slot 0: S30 when a window opens (`addCraftingToCrafters`, also at
+  login for window 0), or S30 followed by the cursor (S2F -1/-1) after a rejected click.
+- So the agent **syncs** with a click that changes nothing: a left-click on an EMPTY slot with an
+  empty cursor. `slotClick` returns null for it, so the agent claims a 1-item stack, which cannot
+  match. The server answers S32 rejected plus the full window, result included. The agent
+  acknowledges (C0F) and compares every other slot with its prediction.
+
+**Taking the result** (left-click on slot 0, empty cursor):
+
+- `SlotCrafting.decrStackSize` calls `InventoryCraftResult.decrStackSize`, which hands over the
+  WHOLE stack whatever the button.
+- Forge's `onPickupFromSlot` fires the crafting event and takes one item from every non-empty grid
+  slot.
+- An ingredient with a container item (e.g. a bucket) puts it into the player's inventory, or the
+  grid slot if that is empty, or **drops** it. The agent's recipes use no such ingredients.
+- With a stack of the result already on the cursor, the result merges into it only while it fits
+  the item's stack limit. The agent never does this: it takes results with an empty cursor.
+
+**Grid items are DROPPED, never returned:**
+
+- C0D closes whatever window is open, whatever id it names. With none open, it closes the
+  inventory container itself.
+- `ContainerPlayer.onContainerClosed` drops the cursor and the 2x2 grid;
+  `ContainerWorkbench.onContainerClosed` drops the cursor and the 3x3 grid.
+- On logout, `playerLoggedOut` saves the player first, then removes the entity:
+  `EntityPlayer.setDead` closes both containers, so grid and cursor items are dropped after the
+  save (lost).
+- The server also closes a table window by itself when the block is gone or the player is more
+  than 8 blocks away (`canInteractWith`), dropping its grid.
+- `displayGUIWorkbench` does not close the window that was open before.
+
+**GTNH 2.8.4 recipes** (from the jars; the agent still checks every result against the server):
+
+| Recipe            | On this server                                                                                                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Planks from a log | Shapeless, **2** planks (GregTech `ProcessingLog`; `nerfedWoodPlank=true` in the test server's `GregTech.cfg`). Vanilla gives 4; a saw in the grid gives 4.             |
+| Torch             | Coal above a stick: **3**; charcoal: **2** (NewHorizonsCoreMod `ScriptMinecraft`, `ShapedUniversalRecipe`).                                                             |
+| Chest             | 3x3: logs in the corners, planks on the sides, **flint** in the middle (`ScriptMinecraft`).                                                                             |
+| Crafting table    | Every recipe that outputs `minecraft:crafting_table` is removed (`RecipeRemover`). The replacement was not identified; the agent's vanilla pattern is expected to fail. |
+| Sticks            | Not verified (the agent's table keeps vanilla's 4).                                                                                                                     |
+
+**Mods that touch crafting** (checked; none changes the behaviour above on this server):
+
+- Hodgepodge:
+  - `FIX_BUKKIT_PLAYER_CONTAINER` would send the result slot, but it loads only on Bukkit hybrid
+    servers.
+  - `FIX_LAG_ON_INVENTORY_SYNC` skips setting an already empty grid slot.
+  - `MixinContainer_FixShiftRecursion` handles shift-clicks only.
+- Backhand adds the off-hand slot (45) to window 0. Its click hooks act only on windows opened
+  with the off-hand.
+- Et Futurum's click hooks are for spectators only, and BogoSorter's are client-side.
+- NotEnoughItems patches `ContainerWorkbench.transferStackInSlot` (shift-clicks) only.
+
+**Not verified:** a live run (crafting has only run against the fake server, which simulates the
+behaviour above). As with chests, spawn protection would stop a non-operator from opening a
+crafting table near spawn.
 
 ## Digging (2026-09-30)
 
@@ -496,7 +583,9 @@ with backups, never on a public server.
    checks all verified live.
 5. **One container type at a time. Vanilla chest DONE 2026-09-30** (see "Chests"): exact deltas
    verified live on both sides. Next: each modded container, one at a time, kept on the
-   allowlist only after it passes the same checks.
+   allowlist only after it passes the same checks. **Crafting** (2x2 and crafting table) is
+   built against the fake server (see "Crafting"); a live run in the pen is next: planks from
+   logs in the 2x2 grid, then a chest at a table, checking that nothing is dropped.
 6. **Machines (read-only). DONE 2026-09-30** for GregTech machines' enabled/running state (see
    "Machines"). Still open: power and machine contents (GUI read or a helper mod) before
    `INSPECT_MACHINE` can do more than look.
@@ -511,7 +600,7 @@ with backups, never on a public server.
 ## What is mocked today
 
 Everything in-game. `MockMinecraftClient` simulates the player, inventory, one chest, one
-generator with fuel, one machine, a few diggable blocks, hazards, hostiles and a clock, with
-injectable failures and
-"reports success but changes nothing" behaviour. All item and machine names in the mock are
+generator with fuel, one machine, one crafting table (and server recipes that differ from the
+agent's table), a few diggable blocks, hazards, hostiles and a clock, with injectable failures
+and "reports success but changes nothing" behaviour. All item and machine names in the mock are
 placeholders, not verified GTNH identifiers.

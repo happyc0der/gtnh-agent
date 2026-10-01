@@ -10,7 +10,7 @@ import {
   i32,
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
-import { FakeChestSim, type FakeChest } from './fake-chests.ts';
+import { encodeStack, FakeChestSim, type FakeChest, type FakeRecipe } from './fake-chests.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
 import {
   blockChangeFrame,
@@ -35,6 +35,8 @@ export interface FakeItem {
   id: number;
   count: number;
   damage: number;
+  /** A stack with (trivial) NBT data. */
+  nbt?: boolean | undefined;
 }
 
 export interface FakeServerOptions {
@@ -68,6 +70,10 @@ export interface FakeServerOptions {
   sendChunks?: boolean;
   /** Vanilla chests (their blocks must also be in blockOverrides). */
   chests?: FakeChest[];
+  /** Crafting tables (their blocks must also be in blockOverrides). */
+  tables?: Array<{ x: number; y: number; z: number }>;
+  /** The server's crafting recipes (for the 2x2 grid and crafting tables). */
+  recipes?: FakeRecipe[];
   /** 1-based click numbers the server rejects (as if the client's claim did not match). */
   rejectClicks?: number[];
   /** How the server treats digging (C07); vanilla by default. */
@@ -103,17 +109,6 @@ export const DEFAULT_MODS = [
 
 const plugin = (channel: string, data: Buffer): Buffer =>
   encodeFrame(0x3f, Buffer.concat([encodeString(channel), encodeVarShort(data.length), data]));
-
-function slot(item: FakeItem | undefined, modularUi: boolean): Buffer {
-  if (item === undefined) return Buffer.from([0xff, 0xff]); // short -1 = empty
-  const b = Buffer.alloc(7);
-  b.writeInt16BE(item.id, 0);
-  b.writeInt8(Math.min(item.count, 127), 2); // vanilla byte (truncated for big stacks)
-  b.writeInt16BE(item.damage, 3);
-  b.writeInt16BE(-1, 5); // no NBT
-  // GTNH ModularUI: full stack size as a VarInt after every non-empty stack.
-  return modularUi ? Buffer.concat([b, encodeVarInt(item.count)]) : b;
-}
 
 /** GregTech TILE_ENTITY (type 0): a machine (or pipe) and its common data byte. */
 export function gtTileEntityMessage(
@@ -295,11 +290,15 @@ export class FakeGtnhServer {
       voidColumns: options.voidColumns ?? new Set(),
       corruptChunks: options.corruptChunks ?? false,
       chests: options.chests ?? [],
+      tables: options.tables ?? [],
+      recipes: options.recipes ?? [],
       rejectClicks: options.rejectClicks ?? [],
       dig: options.dig ?? {},
     };
     this.chestSim = new FakeChestSim({
       chests: this.#opts.chests,
+      tables: this.#opts.tables,
+      recipes: this.#opts.recipes,
       playerInventory: this.#opts.inventory,
       modularUi: this.#opts.mods.some((m) => m.modid === 'modularui'),
       rejectClicks: new Set(this.#opts.rejectClicks),
@@ -635,19 +634,17 @@ export class FakeGtnhServer {
       ),
     );
     send(encodeFrame(0x09, Buffer.from([0])));
-    const bySlot = new Map(
-      this.chestSim
-        .playerSlots()
-        .flatMap((s, i) =>
-          s === null ? [] : [[i, { slot: i, id: s.id, count: s.count, damage: s.damage }] as const],
-        ),
-    );
+    const player = this.chestSim.playerSlots();
     const modularUi = o.mods.some((m) => m.modid === 'modularui');
-    const slots = Array.from({ length: o.windowSlots }, (_, s) => slot(bySlot.get(s), modularUi));
+    const slots = Array.from({ length: o.windowSlots }, (_, s) =>
+      encodeStack(player[s] ?? null, modularUi),
+    );
     const count = Buffer.alloc(2);
     count.writeInt16BE(o.windowSlots);
     const window = Buffer.concat([Buffer.from([0]), count, ...slots]);
     send(encodeFrame(0x30, o.corruptInventory ? window.subarray(0, window.length - 3) : window));
+    // addCraftingToCrafters follows the window with the cursor (empty at login).
+    send(encodeFrame(0x2f, Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff])));
     // An unknown packet id the client must skip without desynchronizing.
     send(encodeFrame(0x35, Buffer.from('opaque tile entity data')));
     if (o.sendChunks) {

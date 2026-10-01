@@ -1,4 +1,5 @@
 import type { ActionSpec } from '../domain/actions.ts';
+import { ingredientRequirements, RECIPES } from '../domain/recipes.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 
 /**
@@ -14,6 +15,9 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
       return [spec.args.item];
     case 'REFUEL_KNOWN_GENERATOR':
       return [spec.args.fuelItem];
+    case 'CRAFT_ITEM':
+      // Every item the recipe MAY consume: the client picks among them, so all must be allowed.
+      return ingredientRequirements(RECIPES[spec.args.recipe]).flatMap((r) => [...r.anyOf]);
     // DIG_BLOCK uses an empty hand and only adds the block's drop to the inventory.
     case 'OBSERVE_STATE':
     case 'MOVE_TO':
