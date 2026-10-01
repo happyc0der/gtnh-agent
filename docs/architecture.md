@@ -164,6 +164,16 @@ listed as such, and the planner escalates rather than guessing.
 remembered) count as "stored": the route fetches from them, nearest first, before it
 gathers or crafts (withdraw steps), and the planner sees what each container holds.
 
+**Nights.** Two real minutes before night (and at night), play turns to a shelter
+(`src/goals/shelter.ts`): a 1 x 1 box around the player, four walls at feet level and four at
+head level from blocks a bare hand digs again (sand first), and a roof that does not fall
+(cobblestone, dirt, planks...). Code works out what is still open and what to place there;
+that blueprint is the planner's route, and the planner places the blocks (PLACE_BLOCK is
+refused once mobs are near, hence the lead time). Enclosed, the agent waits for sunrise, then
+the next goal's journal tells the planner how to get out (dig a wall, head level first).
+If no shelter is possible (no blocks to build it), play stops before dark and `cli play`
+waits offline until sunrise.
+
 **Checkpoints and compaction.** Long work is done in chunks. The planner plans only the next
 one or two route steps; when they are done the agent checkpoints and asks again with fresh
 stock. Each task keeps a journal written by code at every checkpoint: a plan made, done or

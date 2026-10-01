@@ -207,6 +207,65 @@ describe('autonomous play', () => {
     ]);
   });
 
+  it('at dusk builds the shelter (the planner gets the blueprint), then waits inside for the morning', async () => {
+    const repos = open();
+    const world: World = {
+      inventory: { 'minecraft:sand': 20, 'minecraft:cobblestone': 2 },
+      sessions: [],
+      calls: 0,
+    };
+    let sheltered = false;
+    let tick = 11_000; // 1.7 min before night: shelter time
+    const status = () => ({
+      sheltered,
+      todo: sheltered
+        ? []
+        : [
+            {
+              position: { x: 1, y: 64, z: 0 },
+              role: 'feet wall' as const,
+              item: 'minecraft:sand',
+            },
+          ],
+      needs: sheltered ? {} : { 'minecraft:sand': 1 },
+      problem: null,
+    });
+    const events: PlayEvent[] = [];
+    const base = deps(repos, world);
+    const result = await runPlay(
+      {
+        ...base,
+        time: () => Promise.resolve(worldTime(tick, true)),
+        shelter: () => Promise.resolve(status()),
+        sleep: () => {
+          tick = 100; // the night passes: morning
+          return Promise.resolve();
+        },
+        session: (limits, hooks) => {
+          if (repos.memory.getValue(CURRENT_TASK_KEY) === 'night-shelter') {
+            expect(repos.memory.taskBlueprint('night-shelter')).toEqual([
+              '1. place minecraft:sand at (1, 64, 0) (feet wall)',
+            ]);
+            sheltered = true;
+          }
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    const night = events.filter((e) => e.kind === 'night').map((e) => describePlayEvent(e));
+    expect(night).toEqual([
+      'night: sheltered: waiting for the morning (10.8 min)',
+      'night: morning: leaving the shelter',
+    ]);
+    // The morning goal's journal says how to get out.
+    expect(repos.memory.journal('quest-2').at(-1)?.text).toMatch(
+      /^morning: the player is inside its night shelter/,
+    );
+    expect(result.night).toBeNull();
+  });
+
   it('checks its limits', () => {
     expect(checkPlayLimits(DEFAULT_PLAY_LIMITS)).toBeNull();
     expect(checkPlayLimits({ ...DEFAULT_PLAY_LIMITS, maxMinutes: 600 })).toBe(

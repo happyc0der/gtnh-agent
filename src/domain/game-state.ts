@@ -227,6 +227,8 @@ export const CurrentTaskSchema = z.strictObject({
    * The planner gets an exact route for them (src/goals/route.ts).
    */
   requirements: ItemCountsSchema.optional(),
+  /** A building task's blueprint: the blocks to place, in order (the planner's route). */
+  blueprint: z.array(z.string().max(300)).max(32).optional(),
 });
 export type CurrentTask = z.infer<typeof CurrentTaskSchema>;
 
