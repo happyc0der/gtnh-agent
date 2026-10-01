@@ -640,8 +640,12 @@ export async function runPlay(
           missing: status.needs,
           maxCycles: status.todo.length * 2 + 2,
         });
-        if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
-          return done(result.stopReason);
+        if (result.stopKind === 'stop-requested') return done(result.stopReason);
+        if (result.stopKind === 'needs-attention') {
+          // A shelter step that stopped for a person (a refusal, a pause) means no shelter
+          // tonight: leave before the dark (cli play waits offline until sunrise). The night
+          // task is made active again at the next dusk.
+          return done(`${nightReason(clock)}; no shelter: ${result.stopReason}`, clock);
         }
         continue;
       }

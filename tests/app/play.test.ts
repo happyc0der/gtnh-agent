@@ -595,6 +595,42 @@ describe('autonomous play', () => {
     expect(result.night).toBeNull();
   });
 
+  it('leaves before the dark when a shelter step stops for a person (a refusal)', async () => {
+    const repos = open();
+    const world: World = {
+      inventory: { 'minecraft:sand': 20, 'minecraft:cobblestone': 2 },
+      sessions: [{ stopKind: 'needs-attention' }],
+      calls: 0,
+    };
+    const clock = worldTime(11_000, true); // 1.7 min before night
+    const result = await runPlay(
+      {
+        ...deps(repos, world),
+        time: () => Promise.resolve(clock),
+        shelter: () =>
+          Promise.resolve({
+            sheltered: false,
+            todo: [
+              {
+                position: { x: 1, y: 66, z: 0 },
+                role: 'roof support' as const,
+                item: 'minecraft:sand',
+              },
+            ],
+            needs: { 'minecraft:sand': 1 },
+            problem: null,
+            walled: true,
+            exit: [],
+          }),
+      },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    // cli play then waits offline until sunrise instead of ending.
+    expect(result.night).toEqual(clock);
+    expect(result.stopReason).toMatch(/no shelter: stop: needs-attention/);
+  });
+
   it('in the morning digs out of the shelter first (the blueprint names the wall), then plays on', async () => {
     const repos = open();
     const world: World = { inventory: {}, sessions: [], calls: 0 };
