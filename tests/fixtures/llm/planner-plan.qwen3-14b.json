@@ -1,0 +1,17 @@
+{
+  "model": "qwen3:14b",
+  "created_at": "2026-10-01T00:10:09.6566064Z",
+  "message": {
+    "role": "assistant",
+    "content": "{\n  \"kind\": \"plan\",\n  \"plan\": {\n    \"goal\": \"Take 64 cobblestone out of the main chest\",\n    \"steps\": [\n      {\n        \"step\": 1,\n        \"action\": {\n          \"type\": \"MOVE_TO\",\n          \"args\": {\n            \"target\": {\n              \"x\": 3,\n              \"y\": 64,\n              \"z\": 0\n            },\n            \"tolerance\": 2\n          }\n        },\n        \"rationale\": \"Move to the main storage chest to access it.\"\n      },\n      {\n        \"step\": 2,\n        \"action\": {\n          \"type\": \"OPEN_CONTAINER\",\n          \"args\": {\n            \"containerId\": \"chest.main\"\n          }\n        },\n        \"rationale\": \"Open the main storage chest to access its contents.\"\n      },\n      {\n        \"step\": 3,\n        \"action\": {\n          \"type\": \"WITHDRAW_ITEM\",\n          \"args\": {\n            \"containerId\": \"chest.main\",\n            \"item\": \"minecraft:cobblestone\",\n            \"quantity\": 64\n          }\n        },\n        \"rationale\": \"Take 64 cobblestone out of the main storage chest.\"\n      }\n    ],\n    \"requiresUserApproval\": false,\n    \"explanation\": \"The plan involves moving to the main storage chest, opening it, and withdrawing 64 cobblestone from it.\",\n    \"failureHandling\": {\n      \"onStepFailure\": \"PAUSE_AND_ASK_USER\",\n      \"maxRetriesPerStep\": 1,\n      \"escalationMessage\": \"Failed to take cobblestone out of the main chest. Please check if the chest is accessible and contains cobblestone.\"\n    }\n  }\n}"
+  },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 8148873000,
+  "load_duration": 5551100,
+  "prompt_eval_count": 1599,
+  "prompt_eval_cached_count": 1296,
+  "prompt_eval_duration": 184858000,
+  "eval_count": 371,
+  "eval_duration": 7944295000
+}

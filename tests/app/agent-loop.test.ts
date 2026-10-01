@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { runSingleCycle, syncConfigToDatabase } from '../../src/app/agent-loop.ts';
 import { runMockScenario } from '../../src/app/mock-agent.ts';
 import { findScenario, SCENARIOS, type Scenario } from '../../src/app/scenarios.ts';
+import type { MockMinecraftClient } from '../../src/bot/mock-minecraft-client.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
+import type { DecisionProvider } from '../../src/system1/decision-provider.ts';
 import { MockDecisionProvider } from '../../src/system1/mock-decision-provider.ts';
+import type { ManualClock } from '../../src/util/clock.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
-import { makeWorld, memoryRepos, testClock, testConfig } from '../fixtures/index.ts';
+import { makeWorld, memoryRepos, T0, testClock, testConfig } from '../fixtures/index.ts';
 
 const scenario = (name: string): Scenario => {
   const s = findScenario(name);
@@ -158,5 +161,86 @@ describe('agent loop behaviour', () => {
     );
     expect(client.performed.map((p) => p.action.type)).toEqual(['PAUSE_AND_ASK_USER']);
     db.close();
+  });
+});
+
+describe('a slow decision provider (a model) never acts on a stale observation', () => {
+  /** Decides EXECUTE_KNOWN_SAFE_STEP after "thinking" for `ms` (and optionally changing the world). */
+  function slowProvider(
+    clock: ManualClock,
+    ms: number,
+    meanwhile: () => void = () => undefined,
+  ): DecisionProvider {
+    return {
+      name: 'slow-model',
+      decide: () => {
+        clock.advance(ms);
+        meanwhile();
+        return Promise.resolve({
+          decision: 'EXECUTE_KNOWN_SAFE_STEP',
+          confidence: 0.9,
+          reasonCodes: ['KNOWN_SAFE_STEP'],
+          factsUsed: {},
+          requiresHumanConfirmation: false,
+          provider: 'slow-model',
+        });
+      },
+    };
+  }
+
+  async function run(
+    provider: (clock: ManualClock, client: MockMinecraftClient) => DecisionProvider,
+  ) {
+    const clock = testClock();
+    const { client } = makeWorld(undefined, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = testConfig();
+    syncConfigToDatabase(config, repos);
+    const result = await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: provider(clock, client),
+      planner: null,
+      clock,
+      newId: sequentialIds(),
+    });
+    return { result, client, repos, config };
+  }
+
+  it('observes again when the state went stale while deciding, then acts on the new state', async () => {
+    const { result, client, repos } = await run((clock) =>
+      slowProvider(clock, testConfig().safety.maxStateAgeMs + 1_000),
+    );
+    const states = repos.events
+      .forCycle(result.cycleId)
+      .filter((e) => e.kind === 'STATE')
+      .map((e) => e.payload as Record<string, unknown>);
+    expect(states).toHaveLength(2);
+    expect(states[1]).toMatchObject({ reobserved: true, previousObservedAt: T0 });
+    expect(repos.snapshots.count()).toBe(2);
+    expect(result.status).toBe('succeeded');
+    expect(client.performed.map((p) => p.action.type)).toEqual(['INSPECT_MACHINE']);
+  });
+
+  it('a decision that is quick enough keeps the original observation', async () => {
+    const { result, repos } = await run((clock) => slowProvider(clock, 1_000));
+    expect(repos.events.forCycle(result.cycleId).filter((e) => e.kind === 'STATE')).toHaveLength(1);
+    expect(result.status).toBe('succeeded');
+  });
+
+  it('danger that appeared while deciding stops the stale decision before it runs', async () => {
+    const { result, client } = await run((clock, c) =>
+      slowProvider(clock, testConfig().safety.maxStateAgeMs + 1_000, () => {
+        c.world.hostiles.push({ x: 3, y: 64, z: 1 });
+      }),
+    );
+    expect(result.status).toBe('rejected');
+    expect(result.outcome?.validation.violations.map((v) => v.code)).toEqual([
+      'ACTION_NOT_ALLOWED_IN_DANGER',
+    ]);
+    expect(result.needsUserAttention).toBe(true);
+    expect(client.performed).toHaveLength(0);
   });
 });

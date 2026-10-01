@@ -5,9 +5,10 @@ import { routeDecision, SAFETY_REASON_CODES } from './deterministic-router.ts';
 import type { RouterContext } from './state-queries.ts';
 
 /**
- * Source of bounded System 1 decisions. Today: the deterministic router and a mock.
- * Later: possibly a small local classifier model. Every provider returns one of the
- * eight Decision values and nothing else; it never produces actions directly.
+ * Source of bounded System 1 decisions: the deterministic router, a mock, or (opt-in) a
+ * local model (src/llm/ollama-decision-provider.ts), which is always wrapped in
+ * SafetyFirstDecisionProvider. Every provider returns one of the eight Decision values and
+ * nothing else; it never produces actions directly.
  */
 export interface DecisionProvider {
   readonly name: string;
@@ -23,8 +24,22 @@ export class DeterministicDecisionProvider implements DecisionProvider {
 }
 
 /**
- * Wraps any provider (e.g. a future model) so that safety is decided by code:
- *  - if the deterministic router makes a safety-driven decision, that decision wins;
+ * Router decisions no other provider may overrule:
+ *  - safety-driven ones (unreliable state, out of bounds, dangers, vitals);
+ *  - every pause: a paused or blocked task, no task, a switched-off machine, or a full
+ *    inventory with nowhere to put things. Only a human lifts a pause.
+ */
+export function isBindingRouterDecision(decision: DecisionResult): boolean {
+  return (
+    decision.decision === 'PAUSE_AND_ASK_USER' ||
+    decision.reasonCodes.some((c) => SAFETY_REASON_CODES.has(c))
+  );
+}
+
+/**
+ * Wraps any provider (e.g. a local model) so that safety is decided by code:
+ *  - if the deterministic router's decision is binding (safety-driven, or a pause), that
+ *    decision wins and the inner provider is not asked;
  *  - the inner provider's output is schema-validated; invalid output or an exception
  *    becomes PAUSE_AND_ASK_USER.
  */
@@ -34,12 +49,12 @@ export class SafetyFirstDecisionProvider implements DecisionProvider {
 
   constructor(inner: DecisionProvider) {
     this.#inner = inner;
-    this.name = `safety-first(${inner.name})`;
+    this.name = `safety-first(${inner.name})`.slice(0, 64);
   }
 
   async decide(state: GameState, ctx: RouterContext): Promise<DecisionResult> {
     const deterministic = routeDecision(state, ctx);
-    if (deterministic.reasonCodes.some((c) => SAFETY_REASON_CODES.has(c))) {
+    if (isBindingRouterDecision(deterministic)) {
       return { ...deterministic, provider: this.name };
     }
 

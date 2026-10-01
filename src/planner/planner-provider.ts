@@ -1,6 +1,8 @@
 import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
 import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
+import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
+import { distance } from '../domain/geometry.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
@@ -67,6 +69,9 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
         .slice(0, 20)
         .map(([item, quantity]) => ({ item, quantity }))
     : [];
+  /** Blocks from the player, computed here so a planner never has to do the arithmetic. */
+  const distanceTo = (p: { known: true; value: Position } | { known: false }): number | null =>
+    position !== null && p.known ? Number(distance(position, p.value).toFixed(1)) : null;
 
   return {
     observedAt: state.timestamp,
@@ -90,17 +95,20 @@ export function sanitizeStateForPlanner(state: GameState): CompactState {
       name: m.name,
       status: m.status,
       position: m.position.known ? m.position.value : null,
+      distance: distanceTo(m.position),
     })),
     storage: state.storage.slice(0, 32).map((s) => ({
       id: s.id,
       name: s.name,
       position: s.position.known ? s.position.value : null,
+      distance: distanceTo(s.position),
     })),
     generators: state.power.generators.slice(0, 32).map((g) => ({
       id: g.id,
       name: g.name,
       status: g.status,
       position: g.position.known ? g.position.value : null,
+      distance: distanceTo(g.position),
       acceptedFuels: g.acceptedFuels,
     })),
     knownRecipe: state.knownRecipeState

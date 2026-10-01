@@ -1,0 +1,17 @@
+{
+  "model": "qwen2.5:0.5b",
+  "created_at": "2026-10-01T00:07:04.6002527Z",
+  "message": {
+    "role": "assistant",
+    "content": "```json\n{\n  \"stateProblems\": false,\n  \"outOfBounds\": false,\n  \"danger\": false,\n  \"lowHealth\": false,\n  \"hungryWithFood\": false,\n  \"starvingWithoutFood\": false,\n  \"inventoryNearlyFull\": false,\n  \"generatorNeedsFuel\": false,\n  \"task\": \"active\",\n  \"machineNotReady\": false,\n  \"knownNextStep\": \"INSPECT_MACHINE\",\n  \"reasonCodes\": [\"NO_APPROVED_FOOD\", \"NO_DUMP_CONTAINER\"],\n  \"confidence\": 100\n}\n```"
+  },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 458766700,
+  "load_duration": 8415300,
+  "prompt_eval_count": 835,
+  "prompt_eval_cached_count": 5,
+  "prompt_eval_duration": 53028000,
+  "eval_count": 122,
+  "eval_duration": 381079000
+}

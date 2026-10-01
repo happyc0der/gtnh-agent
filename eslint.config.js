@@ -9,8 +9,9 @@ import tseslint from 'typescript-eslint';
  *  - no shell/process spawning anywhere in the agent;
  *  - mineflayer may only be imported by the adapter in src/bot/mineflayer-client.ts;
  *  - only the ActionExecutor may mint ValidatedAction tokens;
- *  - only the Minecraft adapters in src/bot/ may open network sockets (plus the operator's
- *    RCON tool, scripts/test-server-admin.ts, which is not part of the agent);
+ *  - only the Minecraft adapters in src/bot/ and the local-model client in src/llm/ may open
+ *    network sockets or use the global fetch API (plus the operator's RCON tool,
+ *    scripts/test-server-admin.ts, which is not part of the agent);
  *  - the agent (src/) may never import operator tools from scripts/.
  */
 const noShell = [
@@ -33,7 +34,13 @@ const noScripts = {
     'The agent must not import operator tools from scripts/ (they run with server-operator rights).',
 };
 
-const socketMessage = 'Only the Minecraft adapters in src/bot/ may open network sockets.';
+const socketMessage =
+  'Only the Minecraft adapters in src/bot/ and the model client in src/llm/ may open network sockets.';
+/** Globals that reach the network without an import. */
+const noNetworkGlobals = ['fetch', 'WebSocket', 'EventSource'].map((name) => ({
+  name,
+  message: socketMessage,
+}));
 const noSockets = [
   ...['net', 'node:net'].map((name) => ({
     name,
@@ -76,15 +83,27 @@ export default tseslint.config(
       'no-eval': 'error',
       'no-new-func': 'error',
       'no-restricted-imports': boundaries({}),
+      'no-restricted-globals': ['error', ...noNetworkGlobals],
     },
   },
   {
     files: ['src/bot/**/*.ts'],
-    rules: { 'no-restricted-imports': boundaries({ sockets: true }) },
+    rules: {
+      'no-restricted-imports': boundaries({ sockets: true }),
+      'no-restricted-globals': 'off',
+    },
   },
   {
     files: ['src/bot/mineflayer-client.ts'],
     rules: { 'no-restricted-imports': boundaries({ mineflayer: true, sockets: true }) },
+  },
+  {
+    // The local-model client (Ollama over HTTP on a private address; see src/llm/).
+    files: ['src/llm/**/*.ts'],
+    rules: {
+      'no-restricted-imports': boundaries({ sockets: true }),
+      'no-restricted-globals': 'off',
+    },
   },
   {
     files: ['src/executor/action-executor.ts'],

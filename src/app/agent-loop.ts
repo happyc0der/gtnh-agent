@@ -252,6 +252,7 @@ async function observeState(
   deps: AgentDeps,
   cycleId: string,
   given: unknown,
+  note: Record<string, unknown> = {},
 ): Promise<{ state: GameState; stateSnapshotId: number } | { error: string }> {
   const { client, repos } = deps;
   let raw: unknown;
@@ -269,7 +270,11 @@ async function observeState(
   rememberContainers(repos, parsedState.data);
   const state = overlayAgentMemory(parsedState.data, repos, deps.config);
   const stateSnapshotId = repos.snapshots.insert(cycleId, state);
-  repos.events.append(cycleId, 'STATE', { stateSnapshotId, observedAt: state.timestamp });
+  repos.events.append(cycleId, 'STATE', {
+    stateSnapshotId,
+    observedAt: state.timestamp,
+    ...note,
+  });
   return { state, stateSnapshotId };
 }
 
@@ -279,6 +284,41 @@ function rememberContainers(repos: Repositories, state: GameState | null): void 
   for (const s of state.storage) {
     if (s.items.known) repos.memory.rememberContainer(s.id, s.items.value, state.timestamp);
   }
+}
+
+/**
+ * The state and safety context the executor validates against. Deciding usually takes
+ * microseconds, and then this is the cycle's own observation. When a decision provider or
+ * the planner took long enough for the observation to go stale, the client is observed
+ * again (a second snapshot and STATE event, marked `reobserved`), so nothing is validated
+ * or done on an outdated view of the world. A state that was already unreliable stays as it
+ * is: the cycle is pausing anyway.
+ */
+async function freshForExecution(
+  deps: AgentDeps,
+  cycleId: string,
+  state: GameState,
+  ctx: SafetyContext,
+  stateViolationCount: number,
+): Promise<{ state: GameState; ctx: SafetyContext } | { error: string }> {
+  const now = deps.clock.now();
+  if (now.getTime() === ctx.now.getTime()) return { state, ctx };
+  const execCtx = buildSafetyContext(deps.config, deps.repos, now);
+  const wentStale =
+    stateViolationCount === 0 &&
+    assessStateReliability(state, execCtx).some((v) => v.code === 'STATE_STALE');
+  if (!wentStale) return { state, ctx: execCtx };
+
+  const again = await observeState(deps, cycleId, undefined, {
+    reobserved: true,
+    previousObservedAt: state.timestamp,
+    decidedAt: now.toISOString(),
+  });
+  if ('error' in again) return { error: `Re-observation failed: ${again.error}` };
+  return {
+    state: again.state,
+    ctx: buildSafetyContext(deps.config, deps.repos, deps.clock.now()),
+  };
 }
 
 function newExecutor(deps: AgentDeps): ActionExecutor {
@@ -358,8 +398,14 @@ export async function runSingleCycle(
   const taskId = state.currentTask?.taskId ?? null;
   const action = createAction({ ...chosen, taskId }, { newId, now: () => clock.now() });
 
+  // A model may take seconds to decide or plan. Validate against the clock as it is now, and
+  // if the observation went stale meanwhile, act only on a fresh one: the executor then
+  // checks the chosen action against the new state (dangers, vitals, preconditions).
+  const execution = await freshForExecution(deps, cycleId, state, ctx, stateViolations.length);
+  if ('error' in execution) return errorResult(execution.error);
+
   // 6-10. Validate, persist, execute, verify, persist: all inside the executor.
-  const outcome = await newExecutor(deps).execute(action, state, ctx, cycleId);
+  const outcome = await newExecutor(deps).execute(action, execution.state, execution.ctx, cycleId);
   rememberContainers(repos, outcome.stateAfter);
 
   // Plan bookkeeping: advance on a verified step; apply the plan's own failure policy.

@@ -57,6 +57,17 @@
     "maxPlanSteps": 8,
     "recentHistoryLimit": 10
   },
+  "decisions": {
+    "provider": "deterministic"
+  },
+  "llm": {
+    "baseUrl": "http://127.0.0.1:11434",
+    "allowedHostnames": [],
+    "plannerModel": "qwen3:14b",
+    "decisionModel": "qwen2.5:0.5b",
+    "timeoutMs": 120000,
+    "keepAlive": "30s"
+  },
   "locations": {
     "home": {
       "dimension": "overworld",

@@ -43,7 +43,12 @@ export type HostCheck =
   | { ok: true; kind: 'loopback' | 'private-ip' | 'allowlisted-hostname' }
   | { ok: false; reason: string };
 
-export function checkPrivateHost(host: string, allowedHostnames: readonly string[]): HostCheck {
+/** `allowlistName` names the setting that allowlists hostnames, for the error message. */
+export function checkPrivateHost(
+  host: string,
+  allowedHostnames: readonly string[],
+  allowlistName = 'MC_ALLOWED_HOSTNAMES',
+): HostCheck {
   const h = host.trim().toLowerCase();
   if (h === 'localhost') return { ok: true, kind: 'loopback' };
   if (isIP(h) !== 0) {
@@ -59,8 +64,42 @@ export function checkPrivateHost(host: string, allowedHostnames: readonly string
   }
   return {
     ok: false,
-    reason: `${host} is a hostname that is not in MC_ALLOWED_HOSTNAMES; add it only if it is a private server you control`,
+    reason: `${host} is a hostname that is not in ${allowlistName}; add it only if it is a private server you control`,
   };
+}
+
+export type UrlCheck =
+  | { ok: true; url: URL; host: string; kind: 'loopback' | 'private-ip' | 'allowlisted-hostname' }
+  | { ok: false; reason: string };
+
+/**
+ * The same guard for an HTTP base URL (e.g. a local model server): plain http(s) to a
+ * private host, with no credentials, query or fragment in the URL.
+ */
+export function checkPrivateUrl(
+  raw: string,
+  allowedHostnames: readonly string[],
+  allowlistName: string,
+): UrlCheck {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { ok: false, reason: `${raw} is not a valid URL` };
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { ok: false, reason: `${raw} must be an http:// or https:// URL` };
+  }
+  if (url.username !== '' || url.password !== '') {
+    return { ok: false, reason: 'the URL must not contain credentials' };
+  }
+  if (url.search !== '' || url.hash !== '') {
+    return { ok: false, reason: 'the URL must not have a query or fragment' };
+  }
+  // URL keeps IPv6 hosts in brackets and normalizes IPv4 forms such as 127.1 or 0x7f.0.0.1.
+  const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
+  const check = checkPrivateHost(host, allowedHostnames, allowlistName);
+  return check.ok ? { ok: true, url, host, kind: check.kind } : check;
 }
 
 /** Refuses anything that is not (or does not resolve exclusively to) a private address. */
@@ -69,8 +108,9 @@ export async function assertPrivateDestination(
   allowedHostnames: readonly string[],
   resolve: (host: string) => Promise<string[]> = async (h) =>
     (await lookup(h, { all: true })).map((a) => a.address),
+  allowlistName = 'MC_ALLOWED_HOSTNAMES',
 ): Promise<void> {
-  const check = checkPrivateHost(host, allowedHostnames);
+  const check = checkPrivateHost(host, allowedHostnames, allowlistName);
   if (!check.ok) throw new Error(`Refusing to connect: ${check.reason}`);
   if (check.kind !== 'allowlisted-hostname') return;
   const addresses = await resolve(host);
