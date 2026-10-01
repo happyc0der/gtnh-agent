@@ -11,6 +11,7 @@ import { MOCK_CONFIG } from '../../src/app/scenarios.ts';
 import type { MockResourceBlock } from '../../src/bot/mock-minecraft-client.ts';
 import { defaultConfig, type ModelCadence } from '../../src/config/env.ts';
 import type { DiggableBlock } from '../../src/domain/blocks.ts';
+import type { GameState } from '../../src/domain/game-state.ts';
 import { CURRENT_TASK_KEY } from '../../src/persistence/memory-repository.ts';
 import type { Plan, PlannerResponse } from '../../src/planner/plan-schema.ts';
 import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
@@ -297,6 +298,35 @@ describe('System 1 asks the model at decision points only', () => {
     expect(describeSystem1Stats(second.system1 ?? NO_SYSTEM1_STATS)).toMatch(
       /^System 1 over 5 cycle\(s\): 1 model decision\(s\) \(median \d+\.\d s\), 4 continued without the model, 0 binding router decision\(s\)$/,
     );
+  });
+
+  it('a session stops on a fresh observation before System 1 decides anything more', async () => {
+    const a = await agent('decision-points', sandRows(27), gather('minecraft:sand', 54));
+    a.repos.tasks.ensure({ id: 'task-test', goal: 'Gather sand', subgoal: null, status: 'active' });
+    a.repos.memory.setValue(CURRENT_TASK_KEY, 'task-test');
+    const sand = (s: GameState): number =>
+      s.inventory.known ? (s.inventory.value.items['minecraft:sand'] ?? 0) : 0;
+    const seen: number[] = [];
+    const run = await runSession(
+      a.deps,
+      { maxCycles: 50, maxMinutes: 1, pauseMs: 0 },
+      {
+        stopRequested: () => {
+          a.deps.clock.advance(500);
+          return null;
+        },
+        stopOnState: (s) => {
+          seen.push(sand(s));
+          return sand(s) >= 3 ? 'three sand are held' : null;
+        },
+      },
+    );
+    expect(run).toMatchObject({ stopKind: 'stop-requested', stopReason: 'three sand are held' });
+    expect(seen.at(-1)).toBe(3);
+    // The stopping observation was the only one with no decision: every counted cycle had one.
+    expect(seen).toHaveLength(run.cycles.length + 1);
+    expect(run.system1?.decisions).toBe(run.cycles.length);
+    expect(a.modelCalls()).toBe(1);
   });
 });
 

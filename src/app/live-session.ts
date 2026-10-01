@@ -1,4 +1,5 @@
 import type { Decision, DecisionResult } from '../domain/decisions.ts';
+import type { GameState } from '../domain/game-state.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import { system1Stats, type System1Stats } from '../system1/model-cadence.ts';
 import { runSingleCycle, type AgentDeps, type CycleResult } from './agent-loop.ts';
@@ -79,6 +80,11 @@ export async function runSession(
   hooks: {
     /** A reason to stop before the next cycle (stop file, Ctrl+C), or null. */
     stopRequested: () => string | null;
+    /**
+     * A reason to stop read from a cycle's fresh observation, before System 1 decides (the
+     * play loop: its quest is met), or null.
+     */
+    stopOnState?: (state: GameState) => string | null;
     onCycle?: (result: CycleResult, index: number) => void;
   },
 ): Promise<SessionResult> {
@@ -117,7 +123,11 @@ export async function runSession(
     const stop = hooks.stopRequested();
     if (stop !== null) return done('stop-requested', stop);
 
-    const result = await runSingleCycle(deps);
+    const result = await runSingleCycle(
+      deps,
+      hooks.stopOnState === undefined ? {} : { stopBefore: hooks.stopOnState },
+    );
+    if (result.stoppedBefore !== undefined) return done('stop-requested', result.stoppedBefore);
     cycles.push({ cycleId: result.cycleId, summary: result.summary });
     decisions.push(result.decision);
     hooks.onCycle?.(result, cycles.length);

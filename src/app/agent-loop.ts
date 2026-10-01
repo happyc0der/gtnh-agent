@@ -115,6 +115,8 @@ export interface CycleResult {
   } | null;
   outcome: ExecutionOutcome | null;
   summary: string;
+  /** Why the cycle stopped after observing, before deciding (runSingleCycle's stopBefore). */
+  stoppedBefore?: string;
 }
 
 /** Copies config-defined locations and protected items into the database (additive). */
@@ -486,7 +488,16 @@ function outcomeSummary(head: string, outcome: ExecutionOutcome, status: CycleSt
  */
 export async function runSingleCycle(
   deps: AgentDeps,
-  options: { state?: unknown } = {},
+  options: {
+    state?: unknown;
+    /**
+     * Asked with the cycle's fresh observation before System 1 decides: a reason ends the
+     * cycle there, with nothing decided or done. The play loop ends a session this way when
+     * the server's own update completes its quest (a crafting task counts the crafts on the
+     * server, a moment after them), so nobody is asked to plan a task that is done.
+     */
+    stopBefore?: (state: GameState) => string | null;
+  } = {},
 ): Promise<CycleResult> {
   const { config, repos, clock, newId } = deps;
   const { cycleId, finish, errorResult } = startCycle(deps, 'cyc');
@@ -500,6 +511,22 @@ export async function runSingleCycle(
   const base = buildSafetyContext(config, repos, clock.now());
   const stateViolations = assessStateReliability(state, base);
   if (stateViolations.length > 0) repos.violations.insertMany(cycleId, null, stateViolations);
+
+  const stop = options.stopBefore?.(state) ?? null;
+  if (stop !== null) {
+    return finish({
+      status: 'succeeded',
+      needsUserAttention: false,
+      stateSnapshotId,
+      stateViolations,
+      decision: null,
+      planner: null,
+      action: null,
+      outcome: null,
+      summary: `stopped before deciding: ${stop}`,
+      stoppedBefore: stop,
+    });
+  }
 
   // The way back: where the player stood out of danger lately. With a creature threatening
   // it, a point back along that trail and away from it is a safe location for this cycle, and

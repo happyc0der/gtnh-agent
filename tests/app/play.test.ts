@@ -441,6 +441,38 @@ describe('autonomous play', () => {
     expect(seen).toEqual([null, '"Q2" is satisfied']);
   });
 
+  it("ends a session on a cycle's fresh observation that shows the quest done", async () => {
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const base = deps(repos, world);
+    const seen: Array<string | null | undefined> = [];
+    await runPlay(
+      {
+        ...base,
+        session: (limits, hooks) => {
+          if (repos.memory.getValue(CURRENT_TASK_KEY) === questTaskId('2')) {
+            const state = (items: Record<string, number>): GameState => {
+              world.inventory = items;
+              return {
+                ...makeState(),
+                inventory: inventoryOf(world),
+                questBook: { known: true, value: serverBook(world) },
+              };
+            };
+            // Before System 1 decides: not yet, then the server's update shows it done.
+            seen.push(hooks.stopOnState?.(state({ 'minecraft:sand': 99 })));
+            seen.push(hooks.stopOnState?.(state({ 'minecraft:sand': 100 })));
+            seen.push(hooks.stopRequested());
+          }
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 1 },
+      noStop,
+    );
+    expect(seen).toEqual([null, '"Q2" is satisfied', '"Q2" is satisfied']);
+  });
+
   it('gives up on a quest after sessions without progress', async () => {
     const world: World = { inventory: {}, sessions: [], calls: 0 };
     const result = await runPlay(

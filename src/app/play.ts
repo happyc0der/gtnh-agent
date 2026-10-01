@@ -154,6 +154,7 @@ export interface PlayDeps {
     limits: SessionLimits,
     hooks: {
       stopRequested: () => string | null;
+      stopOnState?: (state: GameState) => string | null;
       onCycle: (result: CycleResult, index: number) => void;
     },
   ) => Promise<SessionResult>;
@@ -1028,6 +1029,15 @@ export async function runPlay(
             : hungry !== null
               ? hungerReason(hungry)
               : hooks.stopRequested(),
+      // A cycle's own observation too, before anyone decides: the server completes a
+      // crafting task on the craft and sends it a moment after the craft's own observation
+      // (seen live: the third flint crafted, the next cycle asked the planner, which said
+      // the task was done and paused play).
+      stopOnState: (state) => {
+        const metNow = current.met(state);
+        if (metNow !== null) met = metNow;
+        return met ? `"${current.name}" is satisfied` : null;
+      },
       onCycle: (r, index) => {
         lastDecision = r.decision ?? null;
         emit({
