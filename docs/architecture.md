@@ -669,8 +669,10 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
 1. **Observation.** The `GameState` lists `nearbyBlocks`, computed from the chunk data
    (`resource-scan.ts`):
    - `resources`: allowlisted blocks within 16 blocks, at or above the feet level, nearest
-     first. At most 64; past that, the declared radius shrinks so the list stays complete
-     within it. The ground the player stands on is never listed.
+     first, plus sand, gravel and clay one level below the feet and the nearest 8 dirt and
+     grass blocks of the floor (a sample: the floor is everywhere). At most 64; past that,
+     the declared radius shrinks so the list stays complete within it. The block the player
+     stands on is never listed.
    - `removed`: positions where the client saw such a block turn into air, while they stay air.
 
    The planner gets the nearest 32 resources, and `tools`: the allowlisted tools the player
