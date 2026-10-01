@@ -13,26 +13,46 @@ import {
   type WalkWorld,
 } from '../../../src/bot/gtnh1710/walking.ts';
 
-const ID = { air: 0, stone: 1, lava: 11, water: 9, glass: 20, slab: 44, cactus: 81 } as const;
+const ID = {
+  air: 0,
+  stone: 1,
+  lava: 11,
+  water: 9,
+  glass: 20,
+  tallgrass: 31,
+  slab: 44,
+  cactus: 81,
+  foliage: 1102,
+} as const;
 const NAMES = new Map<number, string>([
   [ID.air, 'minecraft:air'],
   [ID.stone, 'minecraft:stone'],
   [ID.lava, 'minecraft:lava'],
   [ID.water, 'minecraft:water'],
   [ID.glass, 'minecraft:glass'],
+  [ID.tallgrass, 'minecraft:tallgrass'],
   [ID.slab, 'minecraft:stone_slab'],
   [ID.cactus, 'minecraft:cactus'],
+  [ID.foliage, 'BiomesOPlenty:foliage'],
 ]);
 const HAZARDS = new Map<number, number>([
   [ID.lava, BLOCK_CODE.lava],
   [ID.cactus, BLOCK_CODE.damaging_block],
 ]);
 
-/** Glass floor at y=199 (feet level 200) from -20 to 20 on x and z; air elsewhere. */
+/**
+ * Glass floor at y=199 (feet level 200) from -20 to 20 on x and z; air elsewhere. `metas`:
+ * block metadata where it is not 0.
+ */
 function world(
-  opts: { blocks?: Record<string, number>; unloaded?: Array<[number, number]> } = {},
+  opts: {
+    blocks?: Record<string, number>;
+    metas?: Record<string, number>;
+    unloaded?: Array<[number, number]>;
+  } = {},
 ): WalkWorld {
   const blocks = new Map(Object.entries(opts.blocks ?? {}));
+  const metas = new Map(Object.entries(opts.metas ?? {}));
   const unloaded = new Set((opts.unloaded ?? []).map(([x, z]) => `${x},${z}`));
   return {
     blockAt(x, y, z) {
@@ -41,6 +61,8 @@ function world(
       if (o !== undefined) return o;
       return y === 199 && Math.abs(x) <= 20 && Math.abs(z) <= 20 ? ID.glass : ID.air;
     },
+    metaAt: (x, y, z) =>
+      unloaded.has(`${x},${z}`) ? undefined : (metas.get(`${x},${y},${z}`) ?? 0),
     blockName: (id) => NAMES.get(id),
     hazardCode: (id) => (NAMES.has(id) ? (HAZARDS.get(id) ?? BLOCK_CODE.safe) : BLOCK_CODE.unknown),
   };
@@ -185,6 +207,29 @@ describe('walk planning', () => {
       expect(plan.ok, name).toBe(false);
       if (!plan.ok) expect(plan.reason, name).toMatch(reason);
     }
+  });
+
+  it('walks through plants the body passes, in the feet and head cells, never into poison ivy', () => {
+    // A hedge of flax across x = 0 (BOP foliage: 3 the lower half, 6 the upper), with poison
+    // ivy (7) where the straight line would cross it.
+    const blocks: Record<string, number> = {};
+    const metas: Record<string, number> = {};
+    for (let z = -4; z <= 4; z++) {
+      blocks[`0,200,${z}`] = ID.foliage;
+      blocks[`0,201,${z}`] = ID.foliage;
+      metas[`0,200,${z}`] = z === 0 ? 7 : 3;
+      metas[`0,201,${z}`] = 6;
+    }
+    const w = world({ blocks, metas });
+    const plan = mustPlan(w, at(-2.5, 0.5), at(2.5, 0.5));
+    for (let i = 1; i < plan.waypoints.length; i++) {
+      const a = plan.waypoints[i - 1] as Vec3;
+      const b = plan.waypoints[i] as Vec3;
+      expect(segmentProblem(w, FENCE, a, b)).toBeNull();
+      for (const [x, z] of sweptColumns(a, b)) expect(x === 0 && z === 0).toBe(false);
+    }
+    expect(positionProblem(w, FENCE, at(0.5, 1.5))).toBeNull();
+    expect(positionProblem(w, FENCE, at(0.5, 0.5))).toMatch(/blocked by BiomesOPlenty:foliage@7/);
   });
 
   it('refuses a path longer than the limit', () => {

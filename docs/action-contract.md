@@ -140,8 +140,9 @@ and drops the player exactly one block, onto the block under it. It is not a min
   the body (with the server's 0.0625 margin) in that one column; the landing a plain full block
   (no cave, fluid or plant under it), sand or gravel only on another; only air and plain blocks
   touching the dug block, and no sand or gravel beside it with nothing under it; every cell of
-  the 3 x 3 columns from the landing's level to the head's air, plants or plain blocks (no
-  water), loaded and named, with no hazard there or one level lower. It needs
+  the 3 x 3 columns from the landing's level to the head's air, plants the walker passes (by
+  their metadata) or plain blocks (no water), loaded and named, with no hazard there or one
+  level lower. It needs
   `MC_ENABLE_DIGGING=true` (else `NOT_IMPLEMENTED`) and walking enabled, since the fall is a
   move (else `REFUSED`).
 - **The dig and the fall.** The dig is `DIG_BLOCK`'s (tool or empty hand, the dig time, every

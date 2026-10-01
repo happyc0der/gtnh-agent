@@ -355,7 +355,10 @@ export class WorldModel {
   }
   /** Set when an entity packet could not be decoded: the entity picture may be incomplete. */
   #entityProblem: string | null = null;
-  /** Loaded chunk columns: arrival times (for entity readiness) and block ids (for hazards). */
+  /**
+   * Loaded chunk columns: arrival times (for entity readiness), block ids (for hazards) and
+   * their metadata (for walking: plant variants).
+   */
   readonly #store = new ChunkStore();
   #chunkFormat: ChunkFormat = { neid: false };
   #modVersions: ReadonlyMap<string, string> = new Map();
@@ -449,12 +452,12 @@ export class WorldModel {
   }
 
   /**
-   * A single block changed: remember removed diggable blocks and placed blocks, and tell
-   * the watchers.
+   * A single block changed (to `id` with metadata `meta`): remember removed diggable blocks
+   * and placed blocks, and tell the watchers.
    */
-  #onBlockChanged(x: number, y: number, z: number, id: number): void {
+  #onBlockChanged(x: number, y: number, z: number, id: number, meta: number): void {
     const before = this.#store.blockAt(x, y, z);
-    this.#store.setBlock(x, y, z, id);
+    this.#store.setBlock(x, y, z, id, meta);
     const table = this.#diggable;
     if (
       id === 0 &&
@@ -1140,14 +1143,14 @@ export class WorldModel {
           return;
         }
         try {
-          const { sections, biomes } = decodeChunkColumnWithBiomes(
+          const { sections, meta, biomes } = decodeChunkColumnWithBiomes(
             packet.header,
             packet.groundUp,
             packet.compressed,
             this.#chunkFormat,
           );
           if (packet.groundUp) {
-            this.#store.setColumn(chunkX, chunkZ, sections, at.getTime(), biomes);
+            this.#store.setColumn(chunkX, chunkZ, sections, at.getTime(), biomes, meta);
           } else {
             this.#store.updateSections(
               chunkX,
@@ -1155,6 +1158,7 @@ export class WorldModel {
               sections,
               packet.header.primaryBitMask,
               at.getTime(),
+              meta,
             );
           }
         } catch (error) {
@@ -1180,6 +1184,7 @@ export class WorldModel {
               c.sections,
               at.getTime(),
               c.biomes,
+              c.meta,
             );
           }
         } catch (error) {
@@ -1190,12 +1195,12 @@ export class WorldModel {
         for (const c of packet.columns) this.#onColumnChanged(c.chunkX, c.chunkZ);
         return;
       case 'block-change':
-        this.#onBlockChanged(packet.x, packet.y, packet.z, packet.blockId);
+        this.#onBlockChanged(packet.x, packet.y, packet.z, packet.blockId, packet.blockMeta);
         this.#forgetReplacedMachine(packet.x, packet.y, packet.z, packet.blockId);
         return;
       case 'multi-block-change':
         for (const r of packet.records) {
-          this.#onBlockChanged(r.x, r.y, r.z, r.blockId);
+          this.#onBlockChanged(r.x, r.y, r.z, r.blockId, r.blockMeta);
           this.#forgetReplacedMachine(r.x, r.y, r.z, r.blockId);
         }
         return;
@@ -1780,6 +1785,7 @@ export class WorldModel {
     return {
       blockAt: (x, y, z) =>
         this.#hazardProblem === null ? this.#store.blockAt(x, y, z) : undefined,
+      metaAt: (x, y, z) => (this.#hazardProblem === null ? this.#store.metaAt(x, y, z) : undefined),
       blockName: (id) => registry.blocks.get(id),
       hazardCode: (id) => codes[id] ?? BLOCK_CODE.unknown,
     };
@@ -1788,6 +1794,11 @@ export class WorldModel {
   /** Block id at a position (diagnostics/tests); undefined if its chunk is not loaded. */
   blockAt(x: number, y: number, z: number): number | undefined {
     return this.#store.blockAt(x, y, z);
+  }
+
+  /** Block metadata at a position (diagnostics/tests); undefined while not known. */
+  metaAt(x: number, y: number, z: number): number | undefined {
+    return this.#store.metaAt(x, y, z);
   }
 
   /** One loaded column with its biomes, for world surveys; undefined while unknown. */

@@ -9,12 +9,8 @@ import type { UnderFeet } from '../../domain/game-state.ts';
 import { isDigDownBlock } from '../../domain/night-shelter.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
-import {
-  FLOAT_CHECK_HALF_WIDTH,
-  PASSABLE_BLOCKS,
-  standProblem,
-  type ReachedFeet,
-} from './terrain.ts';
+import { passProblem, variantName } from './passable.ts';
+import { FLOAT_CHECK_HALF_WIDTH, standProblem, type ReachedFeet } from './terrain.ts';
 import {
   sweptColumns,
   WALKABLE_SURFACES,
@@ -285,15 +281,15 @@ export function standSpotFor(
 // Digging down: the block under the player's own feet (DIG_DOWN, the night pit only)
 
 /**
- * What the cells around a dig-down may hold (the dug block, the landing, and the player's
- * body before and after the drop): air, plants, plain full blocks and the dig allowlist.
- * Never a fluid (water would pour into the hole), a hazard, a modded, unnamed or unloaded
- * block.
+ * Whether a cell around a dig-down (the dug block, the landing, and the player's body before
+ * and after the drop) may hold its block `name`: air, a plain full block, the dig allowlist,
+ * or a plant the body passes (passable.ts, which tells plant variants apart by metadata).
+ * Never a fluid (water would pour into the hole), a hazard, another modded block, an unnamed
+ * or unloaded one.
  */
-export const DIG_DOWN_SURROUNDINGS: ReadonlySet<string> = new Set<string>([
-  ...DIG_NEIGHBOURS,
-  ...PASSABLE_BLOCKS,
-]);
+function digDownSurroundingOk(world: WalkWorld, n: BlockPos, name: string): boolean {
+  return DIG_NEIGHBOURS.has(name) || passProblem(world, n.x, n.y, n.z) === null;
+}
 
 const nameAt = (world: WalkWorld, x: number, y: number, z: number): string | undefined => {
   const id = world.blockAt(x, y, z);
@@ -357,8 +353,8 @@ export function landingProblem(world: WalkWorld, x: number, y: number, z: number
  *  - in every cell around the dug block, the landing and the body before and after the
  *    drop (3 x 3 columns, from the landing's level to the head's): anything not loaded or
  *    not named, a hazard (lava, fire, harmful fluids, damaging blocks), a fluid such as
- *    water, or any other block but air, plants and plain blocks; and hazards one level
- *    lower still.
+ *    water, or any other block but air, plants the walker passes and plain blocks; and
+ *    hazards one level lower still.
  * Checked before the dig starts and again every tick while digging.
  */
 export function checkDigDown(
@@ -448,9 +444,11 @@ export function checkDigDown(
         }
         if (dy === -2) continue; // below the landing: only hazards matter
         const nname = nid === 0 ? 'minecraft:air' : world.blockName(nid);
-        if (nname === undefined || !DIG_DOWN_SURROUNDINGS.has(nname)) {
+        if (nname === undefined || !digDownSurroundingOk(world, n, nname)) {
+          const what =
+            nname === undefined ? `block id ${nid}` : variantName(world, n.x, n.y, n.z, nname);
           return refuse(
-            `${nname ?? `block id ${nid}`} at ${fmt(n)} is near it (only air, plants and plain blocks may be around a dig down: no fluid)`,
+            `${what} at ${fmt(n)} is near it (only air, plants the walker passes and plain blocks may be around a dig down: no fluid)`,
           );
         }
       }

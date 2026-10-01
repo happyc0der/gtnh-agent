@@ -526,12 +526,12 @@ export type PlayPacket =
       compressed: Buffer;
     }
   | { type: 'chunk-bulk'; columns: ColumnHeader[]; skyLight: boolean; compressed: Buffer }
-  | { type: 'block-change'; x: number; y: number; z: number; blockId: number }
+  | { type: 'block-change'; x: number; y: number; z: number; blockId: number; blockMeta: number }
   | {
       type: 'multi-block-change';
       chunkX: number;
       chunkZ: number;
-      records: Array<{ x: number; y: number; z: number; blockId: number }>;
+      records: Array<{ x: number; y: number; z: number; blockId: number; blockMeta: number }>;
     }
   | { type: 'unhandled'; id: number };
 
@@ -940,10 +940,10 @@ export function decodePlay(
       const y = r.u8();
       const z = r.i32();
       const blockId = r.varInt();
-      if (options.neid)
-        r.i16(); // metadata (short with NEID)
-      else r.u8(); // metadata (byte in vanilla)
-      return { type: 'block-change', x, y, z, blockId };
+      // Metadata: a byte in vanilla; a short with NEID (MixinS23PacketBlockChange), which its
+      // block storage keeps as meta & 0xFFFF, so it is read unsigned.
+      const blockMeta = options.neid ? r.u16() : r.u8();
+      return { type: 'block-change', x, y, z, blockId, blockMeta };
     }
     case 0x22: {
       const chunkX = r.i32();
@@ -956,21 +956,31 @@ export function decodePlay(
           `multi block change: ${dataSize} bytes for ${count} records of ${recordSize}`,
         );
       }
-      const records: Array<{ x: number; y: number; z: number; blockId: number }> = [];
+      const records: Array<{
+        x: number;
+        y: number;
+        z: number;
+        blockId: number;
+        blockMeta: number;
+      }> = [];
       for (let i = 0; i < count; i++) {
         const pos = r.u16(); // x<<12 | z<<8 | y
         let blockId: number;
+        let blockMeta: number;
         if (options.neid) {
           blockId = r.u16();
-          r.u16(); // metadata
+          blockMeta = r.u16();
         } else {
-          blockId = r.u16() >> 4; // id<<4 | meta
+          const packed = r.u16(); // id<<4 | meta
+          blockId = packed >> 4;
+          blockMeta = packed & 15;
         }
         records.push({
           x: chunkX * 16 + (pos >> 12),
           y: pos & 0xff,
           z: chunkZ * 16 + ((pos >> 8) & 15),
           blockId,
+          blockMeta,
         });
       }
       return { type: 'multi-block-change', chunkX, chunkZ, records };

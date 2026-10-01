@@ -15,8 +15,9 @@ import {
   type BlockPos,
   type DigArea,
 } from './digging.ts';
+import { passProblem } from './passable.ts';
 import { checkPlace } from './placing.ts';
-import { passProblem, planTerrainWalk, standProblem } from './terrain.ts';
+import { planTerrainWalk, standProblem } from './terrain.ts';
 import { WALKABLE_SURFACES, type Vec3, type WalkWorld } from './walking.ts';
 
 /**
@@ -97,6 +98,13 @@ export class PlannedWorld implements WalkWorld {
     return o !== undefined ? o : this.#base.blockAt(x, y, z);
   }
 
+  /** A dug cell is air (metadata 0); a placed block's metadata is not modelled (unknown). */
+  metaAt(x: number, y: number, z: number): number | undefined {
+    const o = this.#cells.get(key(x, y, z));
+    if (o !== undefined) return o === 0 ? 0 : undefined;
+    return this.#base.metaAt?.(x, y, z);
+  }
+
   blockName(id: number): string | undefined {
     return this.#names.get(id) ?? this.#base.blockName(id);
   }
@@ -129,7 +137,10 @@ const nameAt = (world: WalkWorld, p: BlockPos): string | undefined => {
 
 const falls = (name: string): boolean => FALLING_DIGGABLE_BLOCKS.has(name as DiggableBlock);
 
-/** A cell the body cannot pass (loaded and not air or a plant); null when not loaded. */
+/**
+ * A cell the body cannot pass (loaded and not air or a plant the walker passes:
+ * passable.ts); null when not loaded.
+ */
 function solidAt(world: WalkWorld, p: BlockPos): boolean | null {
   const problem = passProblem(world, p.x, p.y, p.z);
   return problem === 'chunk not loaded' ? null : problem !== null;

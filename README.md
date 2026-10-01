@@ -557,6 +557,12 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and
 - Every hop is an ordinary walk: planned on the server's blocks, every 0.2-block step re-checked
   just before it is sent, never into water, lava, unloaded chunks or next to a hazard, drops of at
   most 2 blocks; a hostile or unidentified entity within 10 blocks stops it.
+- The body passes only through air and plants checked in the code the server runs (2026-10-01):
+  vanilla grass, flowers, sugar cane, vines and a single snow layer; Biomes O' Plenty's
+  foliage, flowers, plants, mushrooms and vines; Natura's wild crops; HarvestCraft's gardens.
+  Harmful variants (poison ivy, deadbloom, burning blossom, thorns, BOP's small cactus) are told
+  apart by block metadata and never entered; anything else, or a plant whose metadata is not
+  known, is a wall ([evidence](docs/gtnh-compatibility.md#walking-through-plants-2026-10-01)).
 - At most 96 blocks walked per EXPLORE, 12 hops and 3 minutes; it stops when stuck, at the
   boundary, at water or cliffs it cannot route around, and when it gets dark. It is refused in the
   evening, at night and when the time is unknown.
