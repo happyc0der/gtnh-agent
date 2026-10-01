@@ -19,6 +19,15 @@ output pauses), and every plan step is validated and executed by code like any o
 scenarios, qwen3:14b agrees with the rule router on every decision and its plans pass validation;
 qwen2.5:0.5b does not. See [docs/local-llm-integration.md](docs/local-llm-integration.md).
 
+**System 1 at decision points (2026-10-01):** the System 1 model (about 2 s a decision) decides
+only where something changed: a session's first cycle, after a failed action, when a plan ended
+or none is open, or on a new condition (the router's reasons, a mob or hazard, low health or
+food, the task, the time of day, a nearly full inventory). In between, the router's decision
+continues the open plan at once: a 54-sand GATHER (61 cycles) asks the model once.
+`AGENT_DECISION_CADENCE=every-cycle` asks it every cycle. Each cycle's System 1 line shows who
+decided, and each session ends with a count. See
+[docs/architecture.md](docs/architecture.md#system-1-who-decides-each-cycle).
+
 **Live connection (2026-09-30):** the agent's own 1.7.10 + Forge client (`src/bot/gtnh1710/`) joins
 the test server and observes position, dimension, health, food, a named inventory, nearby
 entities (vanilla and modded mobs; unidentified modded types count as hostile) and lava, fire,
@@ -176,7 +185,8 @@ Example output (abridged):
 A `MinecraftClient` (mock today) produces a Zod-validated `GameState` in which anything unobservable
 is explicitly `unknown`. A pure-code **safety policy** decides whether the state is trustworthy
 (unknown/stale/inconsistent → pause). A deterministic **System 1 router** picks one of nine bounded
-decisions, which becomes exactly **one** allowlisted action (or a planner request answered by a
+decisions (opt-in, a local model picks at decision points, and the router's safety decisions
+still win), which becomes exactly **one** allowlisted action (or a planner request answered by a
 fixture-driven mock planner). The single **ActionExecutor** validates the action (schema, safety,
 preconditions), persists it, executes it with a token only it can mint, re-observes, verifies the
 code-derived postcondition, and persists the outcome to SQLite. See [docs/architecture.md](docs/architecture.md)
@@ -625,6 +635,11 @@ start another cycle. It stops:
 - at `--max-cycles` (default 20, at most 200) or `--max-minutes` (default 10, at most 60);
 - at the stop file (`pnpm cli halt`, also from another terminal or over SSH) or Ctrl+C, checked
   before every cycle. A walk in progress halts at its next step.
+
+Each cycle prints its System 1 line, whose provider says who decided (with
+`AGENT_DECISIONS=ollama`: the model's name at a decision point, `continuing(deterministic-router)`
+when the plan simply went on), then its summary. A run with a model ends with a count of model
+decisions (and their median time), continued cycles and binding router decisions.
 
 Verified live on 2026-09-30:
 

@@ -30,7 +30,7 @@ import { mergeProtectedItems } from '../safety/protected-items.ts';
 import { assessStateReliability, type SafetyContext } from '../safety/safety-policy.ts';
 import { proposeAction } from '../system1/action-proposer.ts';
 import type { DecisionProvider } from '../system1/decision-provider.ts';
-import type { RouterContext } from '../system1/state-queries.ts';
+import type { PlanFacts, RouterContext } from '../system1/state-queries.ts';
 import type { Clock } from '../util/clock.ts';
 import type { IdGenerator } from '../util/ids.ts';
 import { errorMessage } from '../util/json.ts';
@@ -349,6 +349,25 @@ export function explorationFor(
 }
 
 /**
+ * The current task's latest plan, for System 1: a model asked at decision points
+ * (src/system1/model-cadence.ts) lets the router's decision continue an open plan, and
+ * decides when it ended or there is none.
+ */
+export function taskPlanFacts(repos: Repositories, state: GameState): PlanFacts | null {
+  const taskId = state.currentTask?.taskId ?? null;
+  const plan = taskId === null ? null : repos.plans.latestForTask(taskId);
+  if (plan === null) return null;
+  const steps = plan.plan.steps.length;
+  return {
+    planId: plan.id,
+    status: plan.status,
+    step: Math.min(plan.nextStep + 1, steps),
+    steps,
+    stepType: plan.plan.steps[plan.nextStep]?.action.type ?? null,
+  };
+}
+
+/**
  * The state and safety context the executor validates against. Deciding usually takes
  * microseconds, and then this is the cycle's own observation. When a decision provider or
  * the planner took long enough for the observation to go stale, the client is observed
@@ -430,6 +449,7 @@ export async function runSingleCycle(
     safety: ctx,
     routing: config.routing,
     combatEnabled: config.minecraft.combat.enabled,
+    plan: taskPlanFacts(repos, state),
   };
   let decision: DecisionResult;
   if (stateViolations.length > 0) {

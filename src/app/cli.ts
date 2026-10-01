@@ -9,6 +9,12 @@ import { TaskStatusSchema } from '../domain/tasks.ts';
 import { IN_MEMORY, openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
 import { plannerResponseJsonSchema } from '../planner/plan-schema.ts';
+import type { DecisionResult } from '../domain/decisions.ts';
+import {
+  describeSystem1Stats,
+  mergeSystem1Stats,
+  NO_SYSTEM1_STATS,
+} from '../system1/model-cadence.ts';
 import { systemClock } from '../util/clock.ts';
 import { errorMessage } from '../util/json.ts';
 import { syncConfigToDatabase, type CycleResult } from './agent-loop.ts';
@@ -160,6 +166,11 @@ function parseNeeds(text: string): Record<string, number> {
     out[item] = (out[item] ?? 0) + n;
   }
   return out;
+}
+
+/** A cycle's System 1 line, as play prints it: the provider shows whether the model decided. */
+function system1Line(d: DecisionResult): string {
+  return `SYSTEM 1 (${d.provider}): ${d.decision} [${d.reasonCodes.join(', ')}] confidence ${d.confidence}`;
 }
 
 function compact(scenario: string, dbPath: string, r: CycleResult): Record<string, unknown> {
@@ -447,10 +458,18 @@ async function main(argv: string[]): Promise<number> {
               requirements: needs,
             };
       const providers = createProviders(config);
+      const asked =
+        config.decisions.provider !== 'ollama'
+          ? ''
+          : config.decisions.modelCadence === 'every-cycle'
+            ? ' every cycle'
+            : ' at decision points';
       process.stderr.write(
-        `playing: decisions by ${providers.decisionProvider.name}, plans by ` +
+        `playing: decisions by ${providers.decisionProvider.name}${asked}, plans by ` +
           `${providers.planner?.name ?? 'nobody'}; stop with pnpm cli halt or Ctrl+C\n`,
       );
+      /** How System 1 decided, over every session of this play. */
+      let system1 = NO_SYSTEM1_STATS;
       // Through the nights: play stops before the dark (no shelter yet), the agent is offline
       // until sunrise, then plays on, all within the time limit. Ctrl+C or the stop file end it.
       const started = Date.now();
@@ -472,16 +491,23 @@ async function main(argv: string[]): Promise<number> {
               ...providers,
               abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
               ...(freeGoal === null ? {} : { goal: freeGoal }),
-              onEvent: (e) => process.stderr.write(`${describePlayEvent(e)}\n`),
+              onEvent: (e) => {
+                if (e.kind === 'session-end' && e.system1 !== undefined) {
+                  system1 = mergeSystem1Stats(system1, e.system1);
+                }
+                process.stderr.write(`${describePlayEvent(e)}\n`);
+              },
             },
             log,
           );
+          const decided = describeSystem1Stats(system1);
           const summary = {
             stopReason: out.stopReason,
             sessions: out.sessions,
             questsCompleted: out.questsCompleted,
             progress: out.progress,
             minutes: Number(((Date.now() - started) / 60_000).toFixed(1)),
+            ...(decided === null ? {} : { system1: decided }),
           };
           mobWaits = out.mobNearby === null ? 0 : mobWaits + 1;
           const sleepMs =
@@ -541,14 +567,21 @@ async function main(argv: string[]): Promise<number> {
         config,
         dbPath,
         limits,
-        (r, i) => process.stderr.write(`[cycle ${i}] ${r.summary}\n`),
+        (r, i) => {
+          if (r.decision !== null)
+            process.stderr.write(`[cycle ${i}] ${system1Line(r.decision)}\n`);
+          process.stderr.write(`[cycle ${i}] ${r.summary}\n`);
+        },
         log,
       );
+      const decided = out.system1 === undefined ? null : describeSystem1Stats(out.system1);
+      if (decided !== null) process.stderr.write(`${decided}\n`);
       print({
         stopReason: out.stopReason,
         task: { taskId: out.taskId, status: out.taskStatus },
         cycles: out.cycles.map((c) => c.summary),
         seconds: Number((out.elapsedMs / 1000).toFixed(1)),
+        ...(decided === null ? {} : { system1: decided }),
       });
       return out.taskStatus === 'completed' ? 0 : 1;
     }

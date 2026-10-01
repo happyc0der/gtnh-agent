@@ -6,9 +6,9 @@ import { MockPlannerProvider, type PlannerFixture } from '../planner/mock-planne
 import type { PlannerProvider } from '../planner/planner-provider.ts';
 import {
   DeterministicDecisionProvider,
-  SafetyFirstDecisionProvider,
   type DecisionProvider,
 } from '../system1/decision-provider.ts';
+import { ModelCadenceProvider } from '../system1/model-cadence.ts';
 
 export interface Providers {
   decisionProvider: DecisionProvider;
@@ -26,8 +26,10 @@ export interface ProviderOptions {
  * The one place that turns configuration into System 1 and System 2 providers. Defaults
  * (`decisions.provider: deterministic`, `planner.provider: mock`) keep the rule router and
  * the fixture planner. A model decision provider is ALWAYS wrapped in
- * SafetyFirstDecisionProvider, so the router's safety decisions and pauses win and invalid
- * model output pauses. Nothing here contacts a model: requests start only when a cycle asks.
+ * SafetyFirstDecisionProvider (ModelCadenceProvider is one), so the router's safety
+ * decisions and pauses win and invalid model output pauses; it is asked at its cadence
+ * (`decisions.modelCadence`: at decision points by default). Nothing here contacts a model:
+ * requests start only when a cycle asks.
  */
 export function createProviders(config: AgentConfig, options: ProviderOptions = {}): Providers {
   let client: OllamaClient | null = null;
@@ -35,7 +37,10 @@ export function createProviders(config: AgentConfig, options: ProviderOptions = 
 
   const decisionProvider: DecisionProvider =
     config.decisions.provider === 'ollama'
-      ? new SafetyFirstDecisionProvider(new OllamaDecisionProvider(llm(), config.llm.decisionModel))
+      ? new ModelCadenceProvider(
+          new OllamaDecisionProvider(llm(), config.llm.decisionModel),
+          config.decisions.modelCadence,
+        )
       : new DeterministicDecisionProvider();
 
   let planner: PlannerProvider | null;

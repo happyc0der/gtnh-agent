@@ -6,6 +6,21 @@ import type { NamedLocation } from '../domain/safety.ts';
 import { isProtected } from '../safety/protected-items.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 
+/**
+ * The current task's latest plan, from agent memory: what a model's cadence
+ * (src/system1/model-cadence.ts) needs to tell whether the open plan goes on or has ended.
+ */
+export interface PlanFacts {
+  planId: number;
+  /** The plan's status: `active` while it goes on (completed, failed... once it ended). */
+  status: string;
+  /** The step that runs next (1-based), and how many the plan has. */
+  step: number;
+  steps: number;
+  /** That step's type (GATHER: a gather in progress); null once there is none. */
+  stepType: string | null;
+}
+
 /** Inputs shared by the router and the decision-to-action proposer. Pure data. */
 export interface RouterContext {
   safety: SafetyContext;
@@ -15,6 +30,11 @@ export interface RouterContext {
    * never decides DEFEND: it retreats or pauses as before.
    */
   combatEnabled?: boolean;
+  /**
+   * The current task's latest plan (null: it has none). The rules ignore it; a model's
+   * cadence uses it. Left out, a model at decision points treats every plan request as one.
+   */
+  plan?: PlanFacts | null;
 }
 
 /** Deterministic ordering for item names so ties never depend on object key order. */

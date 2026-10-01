@@ -64,7 +64,8 @@
     "recentHistoryLimit": 10
   },
   "decisions": {
-    "provider": "deterministic"
+    "provider": "deterministic",
+    "modelCadence": "decision-points"
   },
   "llm": {
     "baseUrl": "http://127.0.0.1:11434",

@@ -13,6 +13,11 @@ import type { RouterContext } from './state-queries.ts';
 export interface DecisionProvider {
   readonly name: string;
   decide(state: GameState, ctx: RouterContext): Promise<DecisionResult>;
+  /**
+   * A bounded session (live-session.ts) starts: a provider that keeps state between cycles
+   * (a model's cadence, src/system1/model-cadence.ts) starts afresh.
+   */
+  startSession?(): void;
 }
 
 export class DeterministicDecisionProvider implements DecisionProvider {

@@ -246,6 +246,16 @@ export const PlannerConfigSchema = z.strictObject({
 });
 export type PlannerConfig = z.infer<typeof PlannerConfigSchema>;
 
+/**
+ * When a model decision provider is asked (src/system1/model-cadence.ts). `decision-points`:
+ * only when something changed (a session's first cycle, a failed action, a plan that ended or
+ * none to continue, new router reasons, dangers, task, time of day or a nearly full
+ * inventory); otherwise the router's decision continues the open plan. `every-cycle`: every
+ * cycle the router's decision is not binding.
+ */
+export const MODEL_CADENCES = ['decision-points', 'every-cycle'] as const;
+export type ModelCadence = (typeof MODEL_CADENCES)[number];
+
 export const DecisionsConfigSchema = z.strictObject({
   /**
    * System 1. `deterministic`: the rule router. `ollama`: a local model (llm.decisionModel)
@@ -253,6 +263,8 @@ export const DecisionsConfigSchema = z.strictObject({
    * pauses win; invalid model output pauses).
    */
   provider: z.enum(['deterministic', 'ollama']).default('deterministic'),
+  /** With `provider: ollama`: when the model is asked (MODEL_CADENCES). */
+  modelCadence: z.enum(MODEL_CADENCES).default('decision-points'),
 });
 export type DecisionsConfig = z.infer<typeof DecisionsConfigSchema>;
 
@@ -422,6 +434,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
     set(['safety', 'hazardAvoidanceRadius'], num('SAFETY_HAZARD_RADIUS', v));
   if ((v = e('AGENT_PLANNER'))) set(['planner', 'provider'], v);
   if ((v = e('AGENT_DECISIONS'))) set(['decisions', 'provider'], v);
+  if ((v = e('AGENT_DECISION_CADENCE'))) set(['decisions', 'modelCadence'], v);
   if ((v = e('OLLAMA_URL'))) set(['llm', 'baseUrl'], v);
   if ((v = e('OLLAMA_ALLOWED_HOSTNAMES'))) set(['llm', 'allowedHostnames'], list(v));
   if ((v = e('OLLAMA_PLANNER_MODEL'))) set(['llm', 'plannerModel'], v);
