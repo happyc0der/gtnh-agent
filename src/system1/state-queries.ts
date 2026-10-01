@@ -1,5 +1,6 @@
 import type { RoutingConfig } from '../config/env.ts';
 import type { Position } from '../domain/common.ts';
+import { bestMeal, carriedFoodPoints } from '../domain/food.ts';
 import type { GameState, Generator, StorageContainer } from '../domain/game-state.ts';
 import { distance } from '../domain/geometry.ts';
 import type { NamedLocation } from '../domain/safety.ts';
@@ -45,6 +46,11 @@ export interface RouterContext {
    * threatens the player (the trail: src/app/trail.ts); left out, home.
    */
   retreatTo?: string;
+  /**
+   * The foods the agent ate lately, newest first (its EAT_FOODs that succeeded): Spice of Life
+   * makes a food eaten often worth less (src/domain/food.ts mealPoints). Left out, none.
+   */
+  recentMeals?: readonly string[];
 }
 
 /** Deterministic ordering for item names so ties never depend on object key order. */
@@ -83,14 +89,36 @@ export function inventoryFillFraction(state: GameState): number | null {
   return usedSlots / capacitySlots;
 }
 
-/** First approved, unprotected food the player is carrying, in config order. */
+/**
+ * The approved, unprotected food the player carries that restores the most now (food.ts
+ * bestMeal: HungerOverhaul's value, scaled by Spice of Life for how often it was eaten lately;
+ * ties in config order), or null. A food that would restore nothing now counts as none:
+ * eating it would only waste it (seen in the installed formula: a 1-point food eaten 5 times
+ * among the last 20 meals restores 0).
+ */
 export function availableApprovedFood(state: GameState, ctx: RouterContext): string | null {
   if (ctx.eatingEnabled === false) return null;
-  const items = inventoryItems(state);
-  for (const food of ctx.safety.config.approvedFoods) {
-    if ((items[food] ?? 0) > 0 && !isProtected(food, ctx.safety.protectedItems)) return food;
-  }
-  return null;
+  return (
+    bestMeal(inventoryItems(state), ctx.safety.config.approvedFoods, ctx.recentMeals ?? [], (f) =>
+      isProtected(f, ctx.safety.protectedItems),
+    )?.item ?? null
+  );
+}
+
+/**
+ * Hunger points the approved, unprotected food the player carries would restore, eaten meal
+ * by meal (food.ts carriedFoodPoints, Spice of Life included), up to `cap`; 0 when eating is
+ * off.
+ */
+export function carriedFood(state: GameState, ctx: RouterContext, cap = 40): number {
+  if (ctx.eatingEnabled === false) return 0;
+  return carriedFoodPoints(
+    inventoryItems(state),
+    ctx.safety.config.approvedFoods,
+    ctx.recentMeals ?? [],
+    (f) => isProtected(f, ctx.safety.protectedItems),
+    cap,
+  );
 }
 
 export function findStorage(state: GameState, id: string | null): StorageContainer | null {

@@ -53,10 +53,14 @@ export interface ToolRequirement {
   level: number;
 }
 
-/** A way to gather an item from the world: dig one of `blocks`, `perAction` items each. */
+/**
+ * A way to gather an item from the world: dig one of `blocks` (via 'dig'), or kill one of the
+ * creatures named in `blocks` (via 'kill': a mob's drops), `perAction` items each.
+ */
 export interface RouteSource {
   item: string;
-  via: 'dig';
+  via: 'dig' | 'kill';
+  /** The blocks to dig, or (via 'kill') the creatures to kill, e.g. minecraft:Cow. */
   blocks: readonly string[];
   /** Items one action yields on average (e.g. 4 clay balls per clay block, 0.1 flint per gravel). */
   perAction: number;
@@ -123,7 +127,9 @@ export type RouteLeg =
       kind: 'gather';
       item: string;
       quantity: number;
-      /** Blocks to dig, and about how many digs. */
+      /** Dig blocks, or kill creatures (a mob's drops). */
+      via: 'dig' | 'kill';
+      /** Blocks to dig (or creatures to kill), and about how many digs (or kills). */
       blocks: readonly string[];
       actions: number;
       places: KnownPlace[];
@@ -1103,6 +1109,7 @@ export function planRoute(
       kind: 'gather',
       item,
       quantity: rest,
+      via: source.via,
       blocks: source.blocks,
       actions,
       places: known.slice(0, MAX_PLACES),
@@ -1279,9 +1286,11 @@ export function describeRoute(route: Route): string[] {
               : '');
       const tool = leg.tool === null ? '' : `; needs a ${reqText(leg.tool)}`;
       const gen = leg.where === null ? '' : `; generates: ${leg.where}`;
+      const verb = leg.via === 'kill' ? 'kill' : 'dig';
       lines.push(
-        `${i + 1}. gather ${leg.quantity} ${leg.item}: dig ${leg.blocks.join(' or ')} ` +
-          `(~${leg.actions} digs${leg.minutes === null ? '' : `, ~${leg.minutes} min`}${tool}); ` +
+        `${i + 1}. gather ${leg.quantity} ${leg.item}: ${verb} ${leg.blocks.join(' or ')} ` +
+          `(~${leg.actions} ${verb === 'kill' ? 'kills' : 'digs'}` +
+          `${leg.minutes === null ? '' : `, ~${leg.minutes} min`}${tool}); ` +
           `${where}${gen}${forTool}`,
       );
     } else {

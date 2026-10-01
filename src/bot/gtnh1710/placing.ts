@@ -1,5 +1,5 @@
 import {
-  DIGGABLE_BLOCKS,
+  SOLID_DIGGABLE_BLOCKS,
   fallsWhenPlaced,
   placedBlockOf,
   type PlaceableBlock,
@@ -70,13 +70,14 @@ export const PLACE_TARGETS: ReadonlySet<string> = new Set([
 
 /**
  * Blocks the agent clicks to place against: plain full vanilla blocks (the walker's known
- * surfaces and the dig allowlist). Verified: none of their classes overrides
+ * surfaces and the dig allowlist's solid blocks). Verified: none of their classes overrides
  * onBlockActivated or isReplaceable, and none has a tile entity. Never a chest, crafting
- * table, machine or modded block: clicking those opens them instead.
+ * table, machine or modded block: clicking those opens them instead. Never a HarvestCraft
+ * garden either: its onBlockActivated picks the garden up (BlockGarden, javap).
  */
 export const CLICKABLE_SUPPORTS: ReadonlySet<string> = new Set<string>([
   ...WALKABLE_SURFACES,
-  ...DIGGABLE_BLOCKS,
+  ...SOLID_DIGGABLE_BLOCKS,
 ]);
 
 /** Blocks that hold sand or gravel up: the walker's full blocks (not leaves, not plants). */

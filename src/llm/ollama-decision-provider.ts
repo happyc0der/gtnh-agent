@@ -13,6 +13,7 @@ import { distance } from '../domain/geometry.ts';
 import { assessDangers, assessStateReliability } from '../safety/safety-policy.ts';
 import type { DecisionProvider } from '../system1/decision-provider.ts';
 import { assessDefense } from '../system1/defend.ts';
+import { gettingFood } from '../system1/deterministic-router.ts';
 import {
   availableApprovedFood,
   canRetreat,
@@ -54,6 +55,11 @@ export interface DecisionSummary {
   hungry: boolean;
   starving: boolean;
   approvedFoodCarried: boolean;
+  /**
+   * The task is the play loop's food task, by day (deterministic-router.ts gettingFood): too
+   * little food is the task then, not a reason to retreat or pause.
+   */
+  gettingFood: boolean;
   inventoryFill: number | null;
   inventoryNearlyFull: boolean;
   dumpContainerKnown: boolean;
@@ -95,6 +101,7 @@ export function summarizeForDecision(state: GameState, ctx: RouterContext): Deci
     hungry: hunger !== null && hunger < config.hungerEatThreshold,
     starving: hunger !== null && hunger < config.minHunger,
     approvedFoodCarried: availableApprovedFood(state, ctx) !== null,
+    gettingFood: gettingFood(state),
     inventoryFill: fill === null ? null : Number(fill.toFixed(2)),
     inventoryNearlyFull: fill !== null && fill >= config.inventoryNearlyFullFraction,
     dumpContainerKnown: dump !== null && dump.position.known,
@@ -125,7 +132,7 @@ The rules, in order. The FIRST rule whose check is true decides; all later rules
 3. danger: dangers contains HAZARD_PROXIMITY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY. If defend is true, decide DEFEND (reasons HOSTILES_NEARBY, HOSTILE_IN_REACH; add ALREADY_AT_SAFE_LOCATION when home is "here", NO_SAFE_LOCATION when it is "unknown"). Otherwise, if home is "away", decide RETREAT_HOME (reason HAZARD_NEARBY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY); otherwise PAUSE_AND_ASK_USER (add ALREADY_AT_SAFE_LOCATION or NO_SAFE_LOCATION).
 4. lowHealth: lowHealth is true. If canHeal is true, decide REST (reason LOW_HEALTH); otherwise, if home is "away", RETREAT_HOME (reason LOW_HEALTH); otherwise PAUSE_AND_ASK_USER.
 5. hungryWithFood: hungry is true AND approvedFoodCarried is true. Decide EAT (reason HUNGRY).
-6. starvingWithoutFood: starving is true AND approvedFoodCarried is false. If home is "away", decide RETREAT_HOME, otherwise PAUSE_AND_ASK_USER (reasons HUNGRY, NO_APPROVED_FOOD).
+6. starvingWithoutFood: starving is true AND approvedFoodCarried is false AND gettingFood is false. If home is "away", decide RETREAT_HOME, otherwise PAUSE_AND_ASK_USER (reasons HUNGRY, NO_APPROVED_FOOD).
 7. inventoryNearlyFull: inventoryNearlyFull is true. If dumpContainerKnown and somethingToDeposit are both true, decide EMPTY_INVENTORY (reason INVENTORY_NEARLY_FULL); otherwise PAUSE_AND_ASK_USER (add NO_DUMP_CONTAINER or NOTHING_DEPOSITABLE).
 8. generatorNeedsFuel: generatorNeedsFuel is true. Decide REFUEL_GENERATOR (reasons GENERATOR_OUT_OF_FUEL, APPROVED_FUEL_AVAILABLE).
 9. taskNotActive: task is not "active". Decide PAUSE_AND_ASK_USER (reason NO_ACTIVE_TASK).

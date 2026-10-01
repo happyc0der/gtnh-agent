@@ -2,13 +2,23 @@ import { ACTION_TYPES, isAllowlistedActionType, isCodeOnlyActionType } from '../
 import { isQuestBookActionType } from '../domain/quest-book.ts';
 import { DIGGABLE_BLOCKS, nearestOfEachKind, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import { attackRefusal, calmRefusal } from '../domain/combat.ts';
+import type { GardenBlock } from '../domain/blocks.ts';
+import {
+  ANIMAL_DROPS,
+  carriedFoodPoints,
+  FOOD_ANIMALS,
+  FOOD_GARDENS,
+  FOOD_TASK_ID,
+  FOOD_TRIP_POINTS,
+  GARDEN_DROPS,
+} from '../domain/food.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
 import { SafetyConfigSchema, type SafetyConfig } from '../domain/safety.ts';
 import { gtnhChangesFor } from '../goals/gtnh-changes.ts';
 import { ROUTE_BOOK } from '../goals/route-book.ts';
-import { describeRoute, planRoute, type PlaceLookup } from '../goals/route.ts';
+import { describeRoute, planRoute, type KnownPlace, type PlaceLookup } from '../goals/route.ts';
 import { parseToolName, usesLeft } from '../domain/tools.ts';
 import type { ExplorationSummary, PlaceKind } from '../domain/world-memory.ts';
 import { candidateOf, fightProblems } from '../safety/combat-checks.ts';
@@ -240,6 +250,7 @@ const PLACE_BLOCKS: Readonly<Record<PlaceKind, readonly string[]>> = {
   water: [],
   stone: ['minecraft:stone', 'minecraft:cobblestone'],
   ore: [],
+  garden: FOOD_GARDENS,
 };
 
 /**
@@ -259,6 +270,13 @@ const LIKELY_BIOMES: ReadonlyArray<{ blocks: readonly string[]; biomes: RegExp }
   { blocks: ['minecraft:sand'], biomes: /desert|beach|river/i },
   { blocks: ['minecraft:gravel'], biomes: /river|beach|ocean|gravel|extreme/i },
   { blocks: ['minecraft:clay'], biomes: /river|swamp|beach|lake/i },
+  // HarvestCraft's gardens (food.ts GARDEN_BIOMES): plains, forests, savannas, hills, jungles
+  // and wet biomes; the test world's Hot Forest and Hot Plains are plains and savannas.
+  {
+    blocks: FOOD_GARDENS,
+    biomes:
+      /forest|plains|savanna|jungle|swamp|hills|mountain|mesa|meadow|grove|woods|birch|roofed|marsh|bayou|wetland|shrubland|thicket/i,
+  },
 ];
 
 /**
@@ -386,8 +404,156 @@ function placesInView(state: GameState): PlaceLookup {
 export function routeForPlanner(
   state: GameState,
   exploration?: ExplorationSummary,
+  food?: FoodContext,
 ): PlannerRequest['route'] {
-  return routeAndChangesForPlanner(state, exploration).route;
+  return routeAndChangesForPlanner(state, exploration, food).route;
+}
+
+/** What the food task's route needs to count the food carried (approved foods, meals). */
+export interface FoodContext {
+  safety: SafetyContext;
+  /** Foods eaten lately, newest first (Spice of Life). */
+  recentMeals: readonly string[];
+  /** The client may fight (MC_ENABLE_COMBAT): without it no animal is offered to hunt. */
+  combatEnabled: boolean;
+}
+
+/** "in view (3, 64, 1) 4 m away, ~2 seen": a known place, as route lines show one. */
+function placeText(p: KnownPlace): string {
+  return (
+    `${p.label === undefined ? '' : `${p.label} `}(${p.where.x}, ${p.where.y}, ${p.where.z}) ` +
+    `${p.distance.toFixed(0)} m away, ~${p.amount} seen`
+  );
+}
+
+/**
+ * The food task's route (FOOD_TASK_ID: src/app/food.ts), calculated in code like any route:
+ * the food carried against what the trip brings back (hunger points, approved foods only, with
+ * Spice of Life's diminishing returns: food.ts carriedFoodPoints), then the food sources, each
+ * with the GATHER step that gets it:
+ *  - HarvestCraft gardens with food among their drops, in view with a stand spot (nearest
+ *    first), then remembered from exploring (EXPLORE toward them first);
+ *  - grown, unowned cows, pigs and sheep in view, whose raw meat is approved: only with combat
+ *    enabled and while the moment allows a fight (fightProblems: food 8 and health 14 at
+ *    least, no hostile near), so the planner is never offered a hunt that would be refused;
+ *  - with none of those, where to look: the nearest seen biome where gardens grow, else a
+ *    direction with little seen ("no known place yet: explore", which the agent loop's
+ *    escalation check knows).
+ * The count of a GATHER counts all its source's drops, so it is the food still missing over
+ * the share of food among them.
+ */
+function foodRouteForPlanner(
+  state: GameState,
+  food: FoodContext | undefined,
+  exploration?: ExplorationSummary,
+): PlannerRequest['route'] {
+  const config = food?.safety.config ?? SafetyConfigSchema.parse({});
+  const approved = new Set(config.approvedFoods);
+  const isProtectedFood = (item: string): boolean =>
+    food !== undefined && isProtected(item, food.safety.protectedItems);
+  const items = state.inventory.known ? state.inventory.value.items : {};
+  const have = carriedFoodPoints(
+    items,
+    config.approvedFoods,
+    food?.recentMeals ?? [],
+    isProtectedFood,
+    FOOD_TRIP_POINTS,
+  );
+  const missing = Math.max(0, FOOD_TRIP_POINTS - have);
+  const stock = [
+    {
+      item: 'food (hunger points of approved food carried)',
+      have,
+      stored: 0,
+      need: FOOD_TRIP_POINTS,
+      missing,
+    },
+  ];
+  const hunger = state.player.hunger.known ? state.player.hunger.value : null;
+  const steps: string[] = [
+    `food ${hunger ?? 'unknown'}/20 and too little food carried: get ${missing} more hunger ` +
+      `points of food, then the quest goes on. Most foods restore 1 here (HungerOverhaul), and ` +
+      `the same food eaten 5 times among the last 20 meals restores nothing (Spice of Life): ` +
+      'mixed garden produce is the best food.',
+  ];
+  if (missing === 0) {
+    return { stock, steps: [...steps, 'enough food is carried already'] };
+  }
+  const places = knownPlaces(state, exploration);
+  const lines: string[] = [];
+  const share = (drops: readonly string[]): number =>
+    drops.filter((d) => approved.has(d)).length / Math.max(1, drops.length);
+  // Gardens in view first (a dig is instant and gives three), then remembered ones.
+  const gardens = FOOD_GARDENS.filter((g) => share(GARDEN_DROPS[g]) > 0);
+  const inView = gardens
+    .map((g) => ({ g, place: placesInView(state)([g])[0] }))
+    .filter((x): x is { g: GardenBlock; place: KnownPlace } => x.place !== undefined)
+    .sort((a, b) => a.place.distance - b.place.distance);
+  for (const { g, place } of inView) {
+    const count = Math.min(64, Math.ceil(missing / share(GARDEN_DROPS[g])));
+    lines.push(
+      `gather food: dig ${g} (3 a dig, any of ${GARDEN_DROPS[g].join(', ')}); best: ` +
+        `${placeText(place)}: GATHER {"block":"${g}","count":${count}}`,
+    );
+  }
+  // Animals: only when the moment allows a hunt at all (the safety policy's own rule).
+  const hunt = fightProblems(state, config).map((p) => p.code);
+  const animals = new Map<string, { nearest: number; count: number }>();
+  if (state.nearbyEntities.known && food?.combatEnabled === true) {
+    for (const e of state.nearbyEntities.value.entities) {
+      const meat = ANIMAL_DROPS[e.type]?.[0]?.item;
+      if (!FOOD_ANIMALS.has(e.type) || meat === undefined || !approved.has(meat)) continue;
+      if (attackRefusal(candidateOf(e)) !== null || calmRefusal(e) !== null) continue;
+      const a = animals.get(e.type);
+      if (a === undefined) animals.set(e.type, { nearest: e.distance, count: 1 });
+      else a.count += 1;
+    }
+  }
+  if (animals.size > 0 && hunt.length > 0) {
+    lines.push(
+      `animals are in view, but hunting is not allowed now (${hunt.join(', ')}): gardens only`,
+    );
+  } else {
+    for (const [type, a] of [...animals].sort((x, y) => x[1].nearest - y[1].nearest)) {
+      const drops = ANIMAL_DROPS[type] ?? [];
+      const avg = (d: { min: number; max: number }): number => (d.min + d.max) / 2;
+      const all = drops.reduce((n, d) => n + avg(d), 0);
+      const meat = drops[0];
+      const meatShare = meat === undefined || all === 0 ? 1 : avg(meat) / all;
+      const count = Math.min(64, Math.ceil(missing / meatShare));
+      lines.push(
+        `gather food: kill ${type} (${meat?.min ?? 1}-${meat?.max ?? 3} ${meat?.item ?? 'meat'} ` +
+          `each; a bare hand needs about 10 hits, a walk after each); in view: ${a.count}, ` +
+          `nearest ${a.nearest.toFixed(0)} m away: GATHER {"animal":"${type}","count":${count}}`,
+      );
+    }
+  }
+  if (lines.length === 0) {
+    const remembered = places(gardens).filter((p) => p.label?.startsWith('remembered') === true);
+    const best = remembered[0];
+    if (best !== undefined) {
+      lines.push(
+        `gather food: dig a HarvestCraft garden; best: ${placeText(best)}: EXPLORE toward its ` +
+          `x and z first (out of view), then GATHER it`,
+      );
+    } else {
+      const where =
+        (exploration === undefined
+          ? null
+          : (likelyBiome(gardens, exploration) ?? unexploredDirection(exploration))) ??
+        'plains, forests, savannas, hills, jungles and swamps: HarvestCraft gardens grow there, and cows, pigs and sheep graze on grass';
+      lines.push(
+        'gather food: a HarvestCraft garden, or a cow, pig or sheep; no known place yet: ' +
+          `explore (look in ${where})`,
+      );
+    }
+  }
+  return {
+    stock,
+    steps: [...steps, ...lines.map((l, i) => `${i + 1}. ${l}`)].map((l) =>
+      l.length > 480 ? `${l.slice(0, 477)}...` : l,
+    ),
+  };
 }
 
 /**
@@ -397,6 +563,7 @@ export function routeForPlanner(
 export function routeAndChangesForPlanner(
   state: GameState,
   exploration?: ExplorationSummary,
+  food?: FoodContext,
 ): {
   route: PlannerRequest['route'];
   gtnhChanges: string[];
@@ -405,6 +572,14 @@ export function routeAndChangesForPlanner(
   const blueprint = state.currentTask?.blueprint;
   if (blueprint !== undefined && blueprint.length > 0) {
     return { route: { stock: [], steps: blueprint }, gtnhChanges: [] };
+  }
+  // The food task: its own route, food sources rather than items (foodRouteForPlanner).
+  if (state.currentTask?.taskId === FOOD_TASK_ID) {
+    const held = state.inventory.known ? Object.keys(state.inventory.value.items) : [];
+    return {
+      route: foodRouteForPlanner(state, food, exploration),
+      gtnhChanges: gtnhChangesFor(null, held),
+    };
   }
   const inventory = state.inventory.known ? state.inventory.value.items : {};
   const held = Object.keys(inventory);
@@ -502,6 +677,10 @@ export function buildPlannerRequest(input: {
   journal?: readonly string[];
   /** World memory's summary, only when the agent can explore; EXPLORE is offered only then. */
   exploration?: ExplorationSummary;
+  /** Foods eaten lately, newest first (the food task's route counts food with them). */
+  recentMeals?: readonly string[];
+  /** The client may fight: the food task's route offers animals to hunt only then. */
+  combatEnabled?: boolean;
 }): PlannerRequest {
   const { config } = input.safety;
   // World memory's places the current scan covers are in view already or out of reach: the
@@ -521,7 +700,11 @@ export function buildPlannerRequest(input: {
           // x 24, z 40", the Hot Forest's nearest chunk, 0.7 blocks away, again and again).
           biomes: input.exploration.biomes.filter((b) => b.distance > BIOME_HERE),
         };
-  const { route, gtnhChanges } = routeAndChangesForPlanner(input.state, exploration);
+  const { route, gtnhChanges } = routeAndChangesForPlanner(input.state, exploration, {
+    safety: input.safety,
+    recentMeals: input.recentMeals ?? [],
+    combatEnabled: input.combatEnabled ?? false,
+  });
   return PlannerRequestSchema.parse({
     state: sanitizeStateForPlanner(input.state, input.safety.protectedItems, config),
     task: input.state.currentTask,

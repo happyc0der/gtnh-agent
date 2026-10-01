@@ -1,5 +1,6 @@
 import type { Decision, DecisionResult, FactValue, ReasonCode } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
+import { FOOD_TASK_ID } from '../domain/food.ts';
 import { distance } from '../domain/geometry.ts';
 import { NIGHT_SHELTER_TASK_ID } from '../domain/night-shelter.ts';
 import { assessDangers, assessStateReliability } from '../safety/safety-policy.ts';
@@ -60,7 +61,9 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  *                                                         or nowhere to retreat to)
  *      lava/void/hostiles nearby                       -> RETREAT_HOME (or PAUSE if already home / no home)
  *   2. low health                                      -> REST (food enough to heal), else RETREAT_HOME (or PAUSE)
- *      hungry                                          -> EAT (or RETREAT_HOME/PAUSE with no approved food)
+ *      hungry                                          -> EAT (or RETREAT_HOME/PAUSE with no approved food
+ *                                                         below minHunger, except while the food task
+ *                                                         gets food by day: it goes on)
  *   3. inventory nearly full                           -> EMPTY_INVENTORY (or PAUSE without a dump container)
  *   4. known generator out of fuel + approved fuel     -> REFUEL_GENERATOR
  *   5. no active task                                  -> PAUSE_AND_ASK_USER
@@ -180,7 +183,15 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     facts['approvedFood'] = food;
     if (food !== null) return decide('EAT', CONFIDENCE.vitals, ['HUNGRY']);
     if (hunger < ctx.safety.config.minHunger) {
-      return retreatOrPause(['HUNGRY', 'NO_APPROVED_FOOD'], CONFIDENCE.vitals);
+      // Getting food is the cure: in daylight, the play loop's food task (src/app/food.ts)
+      // goes on with its steps instead of retreating to a home that has no food, or pausing
+      // for a person (nothing heals offline, and a pause only starves). Health below
+      // minHealth still retreats or pauses above (rule 2's health part).
+      if (gettingFood(state)) {
+        facts['gettingFood'] = true;
+      } else {
+        return retreatOrPause(['HUNGRY', 'NO_APPROVED_FOOD'], CONFIDENCE.vitals);
+      }
     }
     // Mildly hungry with no food: not yet dangerous; continue with lower-priority rules.
   }
@@ -256,4 +267,17 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
 
   // 7. Nothing deterministic applies.
   return decide('REQUEST_PLANNER', CONFIDENCE.planner, ['NO_KNOWN_STEP']);
+}
+
+/**
+ * The current task is the play loop's food task (FOOD_TASK_ID), and it is day: the agent is
+ * out getting food, so too little food is the task, not a reason to stop.
+ */
+export function gettingFood(state: GameState): boolean {
+  return (
+    state.currentTask?.taskId === FOOD_TASK_ID &&
+    state.currentTask.status === 'active' &&
+    state.time.known &&
+    state.time.value.phase === 'day'
+  );
 }

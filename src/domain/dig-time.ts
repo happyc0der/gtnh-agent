@@ -1,4 +1,4 @@
-import type { DiggableBlock } from './blocks.ts';
+import { GARDEN_BLOCKS, type DiggableBlock } from './blocks.ts';
 
 /**
  * How long digging one allowlisted block takes, from the server's own rules (verified in the
@@ -13,6 +13,10 @@ import type { DiggableBlock } from './blocks.ts';
  *  - The agent waits the vanilla client's time x 1.25 + 2 ticks: about twice what the server
  *    needs, so a slow server still accepts it, and waiting longer is always safe (the server
  *    only checks a minimum).
+ *  - Hardness 0 (HarvestCraft's gardens) breaks at once: ItemInWorldManager.onBlockClicked
+ *    harvests a block whose relative hardness is at least 1 on the dig's start (C07 status 0),
+ *    and a vanilla client then sends no finish (PlayerControllerMP.clickBlock destroys it
+ *    itself). The client does the same for such a block (instantDig).
  */
 
 /** Facts about an allowlisted block, from minecraft_server.1.7.10.jar (verified). */
@@ -43,6 +47,12 @@ export const DIGGABLE: ReadonlyMap<DiggableBlock, DiggableBlockInfo> = new Map<
   ['minecraft:sand', { hardness: 0.5, bareHandHarvests: true, falls: true }],
   ['minecraft:gravel', { hardness: 0.6, bareHandHarvests: true, falls: true }],
   ['minecraft:clay', { hardness: 0.6, bareHandHarvests: true, falls: false }],
+  // HarvestCraft's land gardens: BlockGarden (BlockFlower, Material.plants) with no hardness
+  // set in BlockRegistry (javap of harvestcraft-1.3.2-GTNH), so Block's default 0.
+  ...GARDEN_BLOCKS.map((b): [DiggableBlock, DiggableBlockInfo] => [
+    b,
+    { hardness: 0, bareHandHarvests: true, falls: false },
+  ]),
 ]);
 
 export const TICK_MS = 50;
@@ -60,6 +70,11 @@ export function diggableInfo(block: DiggableBlock): DiggableBlockInfo {
   return i;
 }
 
+/** A block the server breaks on the dig's start (hardness 0): no finish is sent. */
+export function instantDig(block: DiggableBlock): boolean {
+  return diggableInfo(block).hardness === 0;
+}
+
 function checkSpeed(speed: number): void {
   if (!Number.isFinite(speed) || speed <= 0) throw new Error(`internal: bad dig speed ${speed}`);
 }
@@ -71,10 +86,14 @@ function fullTicks(block: DiggableBlock, speed: number): number {
   return (i.hardness * (i.bareHandHarvests ? 30 : 100)) / speed;
 }
 
-/** Progress per server tick at `speed` (1 = an empty hand), on the ground, out of water, no potions. */
+/**
+ * Progress per server tick at `speed` (1 = an empty hand), on the ground, out of water, no
+ * potions. Infinity for an instant block (hardness 0), as the server's float division gives.
+ */
 export function digProgressPerTick(block: DiggableBlock, speed: number = BARE_HAND_SPEED): number {
   checkSpeed(speed);
   const i = diggableInfo(block);
+  if (i.hardness === 0) return Infinity;
   return speed / i.hardness / (i.bareHandHarvests ? 30 : 100);
 }
 

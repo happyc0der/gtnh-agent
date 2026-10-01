@@ -44,6 +44,15 @@ import {
   scoutingDue,
   type Scouting,
 } from './scouting.ts';
+import {
+  adoptFoodTask,
+  finishFoodTask,
+  foodDue,
+  foodTripDone,
+  foodTripOngoing,
+  type FoodStatus,
+} from './food.ts';
+import { FOOD_TASK_ID, FOOD_TRIP_POINTS } from '../domain/food.ts';
 
 /**
  * Autonomous play: the agent works through the Age 0 quest book by itself. Each round it
@@ -54,6 +63,9 @@ import {
  * bounded session on it. In the session the configured decision maker and planner choose
  * what to do; every action is still validated, executed and verified exactly like any
  * other. Between sessions it checks progress. Quests count only as the server records them.
+ *
+ * Hungry with nothing to eat, by day, it first goes and gets food (src/app/food.ts), as it
+ * turns to a shelter at dusk; the quest goes on once about a day of food is carried.
  *
  * It stops, and says why, when:
  *  - no quest it can do is left, or its inventory or the server's quest book cannot be read;
@@ -154,6 +166,14 @@ export interface PlayDeps {
    * memory has seen little (src/app/scouting.ts).
    */
   scouting?: Scouting;
+  /**
+   * The food situation (hunger, food carried), now or in an observation a cycle made. Given
+   * when the agent may eat: play then gets food when hungry with none carried (food.ts).
+   */
+  food?: {
+    now: () => Promise<FoodStatus | null>;
+    of: (state: GameState) => FoodStatus | null;
+  };
 }
 
 export interface FreeGoal {
@@ -193,6 +213,8 @@ export type PlayEvent =
       detail: string | null;
     }
   | { kind: 'night'; message: string }
+  /** A food trip: why it began or ended. */
+  | { kind: 'food'; message: string }
   | {
       /** A quest-book click play made itself (claim, checkbox, submit), and its outcome. */
       kind: 'quest-book';
@@ -411,6 +433,10 @@ async function waitForMorning(
   }
 }
 
+function hungerReason(s: FoodStatus): string {
+  return `hungry (food ${s.hunger}/20) with nothing to eat: getting food first`;
+}
+
 function nightReason(t: WorldTime): string {
   return (
     `it is ${t.phase} (${t.minutesUntilDay} min until sunrise): without a shelter the agent ` +
@@ -485,6 +511,8 @@ export async function runPlay(
   const failedClicks = new Map<string, number>();
   /** Waits in a row for the server's quest loop, with nothing else to do. */
   let loopWaits = 0;
+  /** Food sessions in a row that got no food and saw no new ground. */
+  let foodStuck = 0;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const emit = (e: PlayEvent): void => hooks.onEvent?.(e);
   /**
@@ -728,6 +756,92 @@ export async function runPlay(
     }
     exitTries = 0;
 
+    // Hungry with nothing to eat, by day: food first (food.ts), as the shelter comes first at
+    // dusk. A trip goes on, session after session (eating ends one: it is no task step), until
+    // about a day of food is carried; then the quest goes on where it stopped.
+    const fed = deps.food === undefined ? null : await deps.food.now();
+    if (fed !== null && foodTripOngoing(deps.repos) && foodTripDone(fed)) {
+      finishFoodTask(deps.repos, `${fed.carried} hunger points of food carried`);
+      emit({ kind: 'food', message: `trip over: ${fed.carried} hunger points of food carried` });
+      foodStuck = 0;
+    } else if (fed !== null && (foodTripOngoing(deps.repos) || foodDue(fed))) {
+      const food = deps.food as NonNullable<PlayDeps['food']>;
+      if (foodStuck >= limits.maxStuckSessions) {
+        return done(
+          `hungry (food ${fed.hunger}/20) with nothing to eat, and ${foodStuck} food sessions in ` +
+            `a row found no food and no new ground (last: ${lastStop})`,
+        );
+      }
+      if (!foodTripOngoing(deps.repos)) {
+        emit({
+          kind: 'food',
+          message: `food ${fed.hunger}/20 and nothing to eat: getting food first`,
+        });
+      }
+      const adopted = adoptFoodTask(deps.repos, fed);
+      emit({
+        kind: 'goal',
+        quest: 'food',
+        goal: `get ${FOOD_TRIP_POINTS} hunger points of food`,
+        missing: {},
+        taskId: adopted.taskId,
+        created: adopted.created,
+      });
+      let got = fed.carried;
+      let enough = false;
+      let foodDark: WorldTime | null = null;
+      const session = sessions + 1;
+      const seenBefore = deps.scouting?.chunksSeen() ?? null;
+      const result = await deps.session(limits.session, {
+        stopRequested: () =>
+          enough
+            ? 'enough food is carried'
+            : foodDark !== null
+              ? nightReason(foodDark)
+              : hooks.stopRequested(),
+        onCycle: (r, index) => {
+          lastDecision = r.decision ?? null;
+          emit(cycleEvent(deps.repos, session, r, index));
+          const after = r.outcome?.stateAfter;
+          if (after === undefined || after === null) return;
+          const now = food.of(after);
+          if (now !== null) {
+            got = Math.max(got, now.carried);
+            if (foodTripDone(now)) enough = true;
+          }
+          // Shelter time (or dark, without shelters) ends a food session as it ends a quest's.
+          if (
+            after.time.known &&
+            (deps.shelter === undefined ? isDark(after.time.value) : nightSoon(after.time.value))
+          ) {
+            foodDark = after.time.value;
+          }
+        },
+      });
+      sessions = session;
+      lastStop = result.stopReason;
+      const sawMore = seenBefore !== null && (deps.scouting?.chunksSeen() ?? 0) > seenBefore;
+      foodStuck = got > fed.carried || sawMore ? 0 : foodStuck + 1;
+      emit({
+        kind: 'session-end',
+        session,
+        stopKind: result.stopKind,
+        stopReason: result.stopReason,
+        cycles: result.cycles.length,
+        system1: result.system1,
+      });
+      if (foodDark !== null) {
+        deps.repos.memory.appendJournal(FOOD_TASK_ID, `interrupted: ${nightReason(foodDark)}`);
+        if (deps.shelter === undefined) return done(nightReason(foodDark), foodDark);
+        continue; // the next round builds the shelter
+      }
+      if (result.stopKind === 'stop-requested' && !enough) return done(result.stopReason);
+      const mob = mobPause(result.stopKind, lastDecision);
+      if (mob !== null) return waitOutMob(FOOD_TASK_ID, mob);
+      if (!CONTINUE_AFTER.has(result.stopKind)) return done(result.stopReason);
+      continue; // the next round ends the trip, or goes on with it
+    }
+
     // What to work on this round: the player's own goal, or the next quest.
     let current: {
       id: string;
@@ -887,9 +1001,11 @@ export async function runPlay(
     }
 
     // One session on this quest. It also ends as soon as an observation shows the quest's
-    // items are all held, so the planner is never asked to do what is already done.
+    // items are all held, so the planner is never asked to do what is already done; or that
+    // the agent is hungry with nothing to eat (the next round gets food).
     let met = false;
     let dark: WorldTime | null = null;
+    let hungry: FoodStatus | null = null;
     const session = sessions + 1;
     const seenBefore = deps.scouting?.chunksSeen() ?? null;
     const result = await deps.session(limits.session, {
@@ -898,7 +1014,9 @@ export async function runPlay(
           ? `"${current.name}" is satisfied`
           : dark !== null
             ? nightReason(dark)
-            : hooks.stopRequested(),
+            : hungry !== null
+              ? hungerReason(hungry)
+              : hooks.stopRequested(),
       onCycle: (r, index) => {
         lastDecision = r.decision ?? null;
         emit({
@@ -929,6 +1047,10 @@ export async function runPlay(
         ) {
           dark = after.time.value;
         }
+        // So does food time (by day: at dusk the shelter comes first).
+        const fedNow =
+          after === undefined || after === null ? null : (deps.food?.of(after) ?? null);
+        if (fedNow !== null && dark === null && foodDue(fedNow)) hungry = fedNow;
       },
     });
     sessions = session;
@@ -956,6 +1078,7 @@ export async function runPlay(
       if (deps.shelter === undefined) return done(nightReason(dark), dark);
       continue; // the next round builds the shelter
     }
+    if (hungry !== null && result.stopKind === 'stop-requested') continue; // the next round gets food
     if (result.stopKind === 'stop-requested' && !met) return done(result.stopReason);
     const mob = mobPause(result.stopKind, lastDecision);
     if (mob !== null) return waitOutMob(adopted.taskId, mob);
@@ -1002,6 +1125,8 @@ export function describePlayEvent(e: PlayEvent): string {
     }
     case 'night':
       return `night: ${e.message}`;
+    case 'food':
+      return `food: ${e.message}`;
     case 'quest-book':
       return `QUEST BOOK ${e.action} "${e.quest}": ${e.ok ? 'done' : 'FAILED'} (${e.detail})`;
   }

@@ -1,12 +1,15 @@
 import type { ActionType, ExploreToward } from '../domain/actions.ts';
 import {
   fallsWhenPlaced,
+  GARDEN_BLOCKS,
   isDiggableBlock,
   placedBlockOf,
   type DiggableBlock,
+  type GardenBlock,
   type PlaceableBlock,
   type PlaceableItem,
 } from '../domain/blocks.ts';
+import { GARDEN_DROPS, GARDEN_FOODS } from '../domain/food.ts';
 import { COMPASS } from '../domain/world-memory.ts';
 import {
   BARE_HAND,
@@ -74,7 +77,10 @@ const ACTION_OVERHEAD_MS = 250;
 /** Simulated time for one dig (the live client takes 0.5-3.9 s per block). */
 const MOCK_DIG_MS = 1_000;
 
-/** What a mock dig adds to the inventory (a simplified vanilla drop table). */
+/**
+ * What a mock dig adds to the inventory (a simplified vanilla drop table). A garden drops 3 of
+ * the first food on its list (the server: 3 random ones of the list; food.ts GARDEN_DROPS).
+ */
 const MOCK_DROPS: Readonly<Record<DiggableBlock, { item: string; count: number } | null>> = {
   'minecraft:log': { item: 'minecraft:log', count: 1 },
   'minecraft:log2': { item: 'minecraft:log2', count: 1 },
@@ -85,6 +91,15 @@ const MOCK_DROPS: Readonly<Record<DiggableBlock, { item: string; count: number }
   'minecraft:sand': { item: 'minecraft:sand', count: 1 },
   'minecraft:gravel': { item: 'minecraft:gravel', count: 1 },
   'minecraft:clay': { item: 'minecraft:clay_ball', count: 4 },
+  ...(Object.fromEntries(
+    GARDEN_BLOCKS.map((g) => [
+      g,
+      {
+        item: GARDEN_DROPS[g].find((i) => GARDEN_FOODS.includes(i)) ?? GARDEN_DROPS[g][0],
+        count: 3,
+      },
+    ]),
+  ) as Record<GardenBlock, { item: string; count: number }>),
 };
 
 export interface MockResourceBlock {
@@ -182,6 +197,11 @@ export interface MockMob {
    * bite makes it count again, as live.
    */
   calm?: boolean;
+  /**
+   * What it drops when killed (item -> count), picked up at once, as the live client walks
+   * to a farm animal's drops after the kill.
+   */
+  drops?: Record<string, number>;
 }
 
 /** Legacy `hostiles` / `unclassified` positions are listed with these ids (index added). */
@@ -550,14 +570,18 @@ export class MockMinecraftClient implements MinecraftClient {
     // never counts one it saw hurt as calm again).
     mob.calm = false;
     const killed = health <= 0;
+    const drops = killed ? Object.entries(mob.drops ?? {}).filter(([, n]) => n > 0) : [];
     if (killed) {
       w.mobs = mobs.filter((m) => m !== mob);
       w.deaths = [{ id: mob.id, type: mob.type, at }, ...(w.deaths ?? [])];
+      for (const [item, n] of drops) w.inventory.items[item] = (w.inventory.items[item] ?? 0) + n;
     } else {
       mob.health = health;
     }
+    const picked = drops.map(([item, n]) => `${n} x ${item}`).join(', ');
     return ok(
-      `${killed ? 'killed' : 'hit'} ${mob.type} ${entityId}: ${hits} hit(s) with ${weapon.item ?? 'a bare hand'}`,
+      `${killed ? 'killed' : 'hit'} ${mob.type} ${entityId}: ${hits} hit(s) with ${weapon.item ?? 'a bare hand'}` +
+        (picked === '' ? '' : `; picked up ${picked}`),
       {
         entityId,
         target: mob.type,
@@ -568,6 +592,7 @@ export class MockMinecraftClient implements MinecraftClient {
         targetHealthBefore: healthBefore,
         targetHealthAfter: killed ? 0 : health,
         damageTaken: 0,
+        ...(killed ? { dropsCollected: drops.length > 0, drops: picked } : {}),
       },
     );
   }

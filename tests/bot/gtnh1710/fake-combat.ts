@@ -26,7 +26,10 @@ import type { FakeChestSim } from './fake-chests.ts';
  *  - `kamikaze`: AngerMod's kill explosion (power 1.5) on every kill, hurting the player as
  *    1.7.10's Explosion does on Hard (deterministic here; the real chance is 10%);
  *  - mobs with `chase` walk at the player and hit it within 1.4 blocks once a second; a
- *    creeper that gets within 3 blocks explodes 1.5 s later (power 3).
+ *    creeper that gets within 3 blocks explodes 1.5 s later (power 3);
+ *  - a mob with `drops` drops them where it died (dropFewItems: EntityItems at its position);
+ *    after their 10-tick pickup delay, a player tick (C03, C06) with them inside the player's
+ *    box grown by 1 sideways and 0.5 up and down picks them up into the inventory.
  */
 
 export interface FakeMob {
@@ -48,6 +51,8 @@ export interface FakeMob {
   chase?: { speed: number; damage: number };
   /** Sent with no DataWatcher at all (as if its metadata did not decode). */
   noMetadata?: boolean;
+  /** What it drops when killed (a farm animal's meat, leather...). */
+  drops?: Array<{ item: string; count: number }>;
 }
 
 export interface FakeCombatOptions {
@@ -93,6 +98,8 @@ const TICK_MS = 50;
 const RESISTANCE_MS = 10 * TICK_MS;
 const DESPAWN_MS = 20 * TICK_MS;
 const MOB_REACH = 1.4;
+/** EntityItem's pickup delay for a mob's drops (Entity.entityDropItem: 10 ticks). */
+const PICKUP_DELAY_MS = 10 * TICK_MS;
 
 type MetaValue =
   | { index: number; type: 'byte' | 'short' | 'int' | 'float'; value: number }
@@ -139,6 +146,18 @@ export class FakeCombatSim {
     [];
   /** Why the server kicked the player, if it did. */
   kicked: string | null = null;
+  /** Drops the player picked up (a killed mob's). */
+  readonly pickedUp: Array<{ item: string; count: number }> = [];
+  /** Drops lying where a mob died, from when they may be picked up. */
+  readonly #ground: Array<{
+    x: number;
+    y: number;
+    z: number;
+    item: string;
+    count: number;
+    from: number;
+  }> = [];
+  readonly #itemId: (name: string) => number | undefined;
   playerHealth: number;
   readonly #opts: FakeCombatOptions;
   readonly #chests: FakeChestSim;
@@ -157,11 +176,14 @@ export class FakeCombatSim {
       feet: () => { x: number; y: number; z: number } | null;
       health: number;
       food: number;
+      /** Item ids by name, for drops. */
+      itemId?: (name: string) => number | undefined;
     },
   ) {
     this.#opts = options;
     this.#chests = chests;
     this.#playerFeet = player.feet;
+    this.#itemId = player.itemId ?? (() => undefined);
     this.playerHealth = player.health;
     this.#food = player.food;
     for (const m of options.mobs ?? []) {
@@ -310,6 +332,31 @@ export class FakeCombatSim {
     m.diedAt = Date.now();
     this.kills.push(m.entityId);
     this.#broadcast(statusFrame(m.entityId, 3));
+    for (const d of m.drops ?? []) {
+      this.#ground.push({ x: m.x, y: m.y, z: m.z, ...d, from: m.diedAt + PICKUP_DELAY_MS });
+    }
+  }
+
+  /** A player packet (idle or move): drops in reach whose pickup delay is over are picked up. */
+  onPlayerTick(): void {
+    const feet = this.#playerFeet();
+    if (feet === null) return;
+    const now = Date.now();
+    for (let i = this.#ground.length - 1; i >= 0; i--) {
+      const d = this.#ground[i];
+      if (d === undefined || now < d.from) continue;
+      const half = 0.125;
+      const inRange =
+        Math.abs(d.x - feet.x) < 0.3 + 1 + half &&
+        Math.abs(d.z - feet.z) < 0.3 + 1 + half &&
+        d.y + 0.25 > feet.y - 0.5 &&
+        d.y < feet.y + 1.8 + 0.5;
+      const id = this.#itemId(d.item);
+      if (!inRange || id === undefined) continue;
+      this.#chests.pickUp({ id, count: d.count, damage: 0 });
+      this.pickedUp.push({ item: d.item, count: d.count });
+      this.#ground.splice(i, 1);
+    }
   }
 
   #tick(): void {

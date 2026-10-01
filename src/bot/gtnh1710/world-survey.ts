@@ -1,4 +1,5 @@
 import type { BlockPosition } from '../../domain/common.ts';
+import { FOOD_GARDENS } from '../../domain/food.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import {
   MAX_EXAMPLES,
@@ -61,6 +62,8 @@ const BY_NAME: ReadonlyMap<string, SurveyKind> = new Map<string, SurveyKind>([
   ['minecraft:stone', 'stone'],
   ['minecraft:cobblestone', 'stone'],
   ['minecraft:mossy_cobblestone', 'stone'],
+  // Gardens that give food (seen: a plant with a face to the air), for the food trips.
+  ...FOOD_GARDENS.map((g): [string, SurveyKind] => [g, 'garden']),
 ]);
 
 /** How a block treats a line of sight. */

@@ -69,7 +69,9 @@ describe('GATHER chooses each action in code, from the observation', () => {
       spec: { type: 'DIG_BLOCK', args: { position: { x: 3, y: 64, z: 1 } } },
       target: { x: 3, y: 64, z: 1 },
       walk: false,
+      entity: null,
       skip: [],
+      skipEntities: [],
     });
   });
 
@@ -136,6 +138,7 @@ describe('GATHER chooses each action in code, from the observation', () => {
       end: 'no-target',
       why: 'no minecraft:sand left in view to dig',
       skip: [],
+      skipEntities: [],
     });
   });
 
@@ -149,6 +152,7 @@ describe('GATHER chooses each action in code, from the observation', () => {
         '2 minecraft:sand in view, but no walk from here reaches a spot to dig one from ' +
         '(walled in by leaves, plants or water, too high, or something would fall)',
       skip: [],
+      skipEntities: [],
     });
   });
 
@@ -157,19 +161,21 @@ describe('GATHER chooses each action in code, from the observation', () => {
     const { state, progress } = setup([block]);
     const walked: GatherProgress = {
       ...progress,
-      last: { position: { x: 8, y: 64, z: 1 }, walk: true },
+      last: { position: { x: 8, y: 64, z: 1 }, walk: true, entity: null, walks: 0 },
     };
     expect(chooseGatherAction(gather(), walked, state, opts())).toEqual({
       kind: 'end',
       end: 'no-target',
       why: 'no minecraft:sand left in view to dig',
       skip: [{ x: 8, y: 64, z: 1 }],
+      skipEntities: [],
     });
     // Standing on its stand spot already and still out of reach: the same.
     const there = setup([sand(8, 64, 1, { x: 1.2, y: 64, z: 1 })]);
     expect(chooseGatherAction(gather(), there.progress, there.state, opts())).toMatchObject({
       kind: 'end',
       skip: [{ x: 8, y: 64, z: 1 }],
+      skipEntities: [],
     });
   });
 
@@ -187,6 +193,7 @@ describe('GATHER chooses each action in code, from the observation', () => {
       end: 'no-target',
       why: 'none of the 1 minecraft:sand in view can be dug now (nearest (3, 64, 1): UNSAFE_DIG)',
       skip: [],
+      skipEntities: [],
     });
     const none = setup([{ block: 'minecraft:dirt', position: { x: 2, y: 64, z: 1 } }]);
     expect(chooseGatherAction(gather(), none.progress, none.state, opts())).toMatchObject({
@@ -267,13 +274,15 @@ describe('GATHER ends', () => {
   it('counts every action; a block whose action did not succeed is not tried again', () => {
     const { progress } = setup([]);
     const at = { x: 3, y: 64, z: 1 };
-    const walked = recordGatherAction(progress, { target: at, walk: true }, true);
+    const walked = recordGatherAction(progress, { target: at, walk: true, entity: null }, true);
     expect(walked).toMatchObject({ actions: 1, dug: 0, skipped: [], last: { walk: true } });
-    const dug = recordGatherAction(walked, { target: at, walk: false }, true);
+    const dug = recordGatherAction(walked, { target: at, walk: false, entity: null }, true);
     expect(dug).toMatchObject({ actions: 2, dug: 1, skipped: [] });
-    const failed = recordGatherAction(dug, { target: at, walk: false }, false);
+    const failed = recordGatherAction(dug, { target: at, walk: false, entity: null }, false);
     expect(failed).toMatchObject({ actions: 3, dug: 1, skipped: [at] });
-    expect(recordGatherAction(failed, { target: at, walk: false }, false).skipped).toEqual([at]);
+    expect(
+      recordGatherAction(failed, { target: at, walk: false, entity: null }, false).skipped,
+    ).toEqual([at]);
   });
 });
 

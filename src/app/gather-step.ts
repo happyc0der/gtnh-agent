@@ -15,9 +15,13 @@ import {
   GatherProgressSchema,
   GATHER_MAX_ACTIONS,
   GATHER_REPORT_EVERY,
+  progressSource,
   recordGatherAction,
+  sourceName,
   startGather,
   withSkipped,
+  withSkippedEntities,
+  type GatherAct,
   type GatherEnd,
   type GatherProgress,
   type GatherStep,
@@ -40,9 +44,19 @@ export interface GatherRef {
   gather: GatherStep;
 }
 
-/** The action a GATHER step takes this cycle, or how it ended before taking one. */
+/**
+ * The action a GATHER step takes this cycle (`entity`: the animal it is for, or null for a
+ * block), or how it ended before taking one.
+ */
 export type GatherTurn =
-  | { kind: 'act'; spec: ActionSpec; target: BlockPosition; walk: boolean; reason: string }
+  | {
+      kind: 'act';
+      spec: ActionSpec;
+      target: BlockPosition;
+      walk: boolean;
+      entity: number | null;
+      reason: string;
+    }
   | { kind: 'end'; end: GatherEnd; why: string };
 
 /**
@@ -109,13 +123,14 @@ function saveProgress(repos: Repositories, taskId: string, p: GatherProgress | n
   repos.memory.setValue(progressKey(taskId), p === null ? null : JSON.stringify(p));
 }
 
-/** "GATHER 54 minecraft:sand": how every journal line of a step starts. */
-const head = (p: GatherProgress): string => `GATHER ${p.count} ${p.block}`;
+/** "GATHER 54 minecraft:sand" (or "GATHER 3 minecraft:Cow"): how its journal lines start. */
+const head = (p: GatherProgress): string => `GATHER ${p.count} ${sourceName(progressSource(p))}`;
 
-/** "16 dug, 16/54 gathered, 19 action(s), 0.8 min" */
+/** "16 dug, 16/54 gathered, 19 action(s), 0.8 min" ("2 attack(s)" when hunting) */
 function tally(p: GatherProgress, gathered: number, now: Date): string {
+  const did = p.animal === undefined ? `${p.dug} dug` : `${p.dug} attack(s)`;
   return (
-    `${p.dug} dug, ${gathered}/${p.count} gathered, ${p.actions} action(s), ` +
+    `${did}, ${gathered}/${p.count} gathered, ${p.actions} action(s), ` +
     `${gatherMinutes(p, now).toFixed(1)} min`
   );
 }
@@ -150,7 +165,11 @@ export function gatherTurn(
     now: ctx.now,
     check: previewCheck(repos.actions, ref.taskId, state, ctx),
   });
-  const p = { ...started, skipped: withSkipped(started.skipped, choice.skip) };
+  const p = {
+    ...started,
+    skipped: withSkipped(started.skipped, choice.skip),
+    skippedEntities: withSkippedEntities(started.skippedEntities, choice.skipEntities),
+  };
   const gathered = gatheredSoFar(p, state);
   const where = `plan #${ref.planId} step ${ref.stepIndex + 1}`;
   if (choice.kind === 'end') {
@@ -164,25 +183,37 @@ export function gatherTurn(
     return { kind: 'end', end: choice.end, why: choice.why };
   }
   if (saved === null) {
-    const listed = state.nearbyBlocks.known
-      ? state.nearbyBlocks.value.resources.filter((r) => r.block === p.block).length
-      : 0;
+    const source = progressSource(p);
+    const name = sourceName(source);
+    const listed =
+      'block' in source
+        ? state.nearbyBlocks.known
+          ? state.nearbyBlocks.value.resources.filter((r) => r.block === source.block).length
+          : 0
+        : state.nearbyEntities.known
+          ? state.nearbyEntities.value.entities.filter((e) => e.type === source.animal).length
+          : 0;
     repos.memory.appendJournal(
       ref.taskId,
-      `${head(p)} (${where}) started: counts ${gatherDrops(p.block).join(' or ')}, ` +
-        `${p.startHeld} held; ${listed} ${p.block} listed in view`,
+      `${head(p)} (${where}) started: counts ${gatherDrops(source).join(' or ')}, ` +
+        `${p.startHeld} held; ${listed} ${name} listed in view`,
     );
   }
   saveProgress(repos, ref.taskId, p);
   const what =
-    choice.spec.type === 'MOVE_TO'
-      ? `walk to ${formatPosition(choice.spec.args.target)} to dig ${formatPosition(choice.target)}`
-      : `dig ${formatPosition(choice.target)}`;
+    choice.entity !== null
+      ? choice.spec.type === 'MOVE_TO'
+        ? `walk to ${formatPosition(choice.spec.args.target)} next to ${sourceName(progressSource(p))} ${choice.entity}`
+        : `strike ${sourceName(progressSource(p))} ${choice.entity}`
+      : choice.spec.type === 'MOVE_TO'
+        ? `walk to ${formatPosition(choice.spec.args.target)} to dig ${formatPosition(choice.target)}`
+        : `dig ${formatPosition(choice.target)}`;
   return {
     kind: 'act',
     spec: choice.spec,
     target: choice.target,
     walk: choice.walk,
+    entity: choice.entity,
     reason:
       `${head(p)}: ${what} (${gathered}/${p.count} gathered, ` +
       `action ${p.actions + 1} of at most ${GATHER_MAX_ACTIONS})`,
@@ -200,7 +231,7 @@ export function gatherTurn(
 export function gatherAfterAction(
   repos: Repositories,
   ref: GatherRef,
-  act: { target: BlockPosition; walk: boolean },
+  act: GatherAct,
   outcome: ExecutionOutcome,
   now: Date,
 ): { next: 'done' | 'bound' | 'more' | 'failed'; why: string } {

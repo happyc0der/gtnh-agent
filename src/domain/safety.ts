@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DimensionSchema, ItemNameSchema, PositionSchema, TimestampSchema } from './common.ts';
+import { GARDEN_FOODS } from './food.ts';
 
 export const DEFAULT_BOUNDARY = {
   min: { x: -256, y: 0, z: -256 },
@@ -70,24 +71,44 @@ export const SafetyConfigSchema = z.strictObject({
   minHunger: z.number().min(0).max(20).default(6),
   /** Items that must never be consumed, deposited, withdrawn or used as fuel. */
   protectedItems: z.array(ItemNameSchema).max(1000).default([]),
-  /** Foods the agent may eat. Anything else is never eaten. */
-  approvedFoods: z.array(ItemNameSchema).max(100).default([
-    'minecraft:bread',
-    'minecraft:cooked_beef',
-    // Vanilla foods with no harmful effect, best first: what a first day turns up (an apple
-    // from a leaf, a carrot). Not raw chicken or rotten flesh (hunger), spider eyes or
-    // pufferfish (poison), nor golden apples (worth keeping).
-    'minecraft:cooked_porkchop',
-    'minecraft:cooked_chicken',
-    'minecraft:cooked_fished',
-    'minecraft:baked_potato',
-    'minecraft:pumpkin_pie',
-    'minecraft:mushroom_stew',
-    'minecraft:apple',
-    'minecraft:carrot',
-    'minecraft:melon',
-    'minecraft:cookie',
-  ]),
+  /**
+   * Foods the agent may eat. Anything else is never eaten. A reviewed allowlist (2026-10-01,
+   * every entry read in the server's jars: src/domain/food.ts, docs/gtnh-compatibility.md
+   * "Food"), best first by what HungerOverhaul makes each worth here. Never raw chicken or
+   * rotten flesh (Hunger), spider eyes, poisonous potatoes or pufferfish (Poison), nor golden
+   * apples (worth keeping): UNSAFE_FOODS.
+   */
+  approvedFoods: z
+    .array(ItemNameSchema)
+    .max(100)
+    .default([
+      'minecraft:bread',
+      'minecraft:pumpkin_pie',
+      'minecraft:cooked_beef',
+      'minecraft:cooked_porkchop',
+      'minecraft:cooked_chicken',
+      'minecraft:cooked_fished',
+      'minecraft:baked_potato',
+      'minecraft:mushroom_stew',
+      // What a first day turns up: an apple from a leaf, a carrot or potato from a garden.
+      'minecraft:apple',
+      'minecraft:carrot',
+      'minecraft:potato',
+      'minecraft:melon',
+      'minecraft:cookie',
+      // Raw meat with no effect at all (ItemFood without a potion effect): a cow's beef, a
+      // pig's porkchop, a sheep's HarvestCraft mutton (food.ts ANIMAL_DROPS).
+      'minecraft:beef',
+      'minecraft:porkchop',
+      'harvestcraft:muttonrawItem',
+      // Biomes O' Plenty's berries (BiomesOPlenty:food at meta 0, from its berry bushes): an
+      // ItemBOPFood whose eating code adds nothing for that meta.
+      'BiomesOPlenty:food',
+      // The produce of HarvestCraft's land gardens: ItemPamSeedFood crops, plain food.
+      ...GARDEN_FOODS.filter(
+        (f) => !['minecraft:carrot', 'minecraft:potato', 'minecraft:melon'].includes(f),
+      ),
+    ]),
   /** Fuels the agent may put into known generators. */
   approvedFuels: z
     .array(ItemNameSchema)

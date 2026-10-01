@@ -10,6 +10,7 @@ import {
 import type { BlockPosition } from '../domain/common.ts';
 import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.ts';
 import { GameStateSchema, LastActionSchema, type GameState } from '../domain/game-state.ts';
+import { MEAL_HISTORY_LENGTH } from '../domain/food.ts';
 import { distance } from '../domain/geometry.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 import { summarizeExploration, type ExplorationSummary } from '../domain/world-memory.ts';
@@ -22,7 +23,13 @@ import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
-import { chooseGatherAction, GATHER, startGather } from '../planner/gather.ts';
+import {
+  chooseGatherAction,
+  GATHER,
+  gatherSourceOf,
+  sourceName,
+  startGather,
+} from '../planner/gather.ts';
 import {
   MAX_JOURNAL_LINE,
   PlannerResponseSchema,
@@ -521,6 +528,7 @@ export async function runSingleCycle(
     routing: config.routing,
     combatEnabled: config.minecraft.combat.enabled,
     eatingEnabled: config.minecraft.eating.enabled,
+    recentMeals: repos.actions.recentMeals(MEAL_HISTORY_LENGTH),
     plan: taskPlanFacts(repos, state),
     ...(nearer ? { retreatTo: TRAIL_LOCATION } : {}),
   };
@@ -766,9 +774,9 @@ interface PlanStepRef {
   planner: string;
   /**
    * The step is a GATHER (gather-step.ts), which runs many actions: this one is for the
-   * block at `target` (`walk`: the walk to its stand spot).
+   * block at `target` (`walk`: the walk to its stand spot), or for the animal `entity`.
    */
-  gather?: { ref: GatherRef; target: BlockPosition; walk: boolean };
+  gather?: { ref: GatherRef; target: BlockPosition; walk: boolean; entity: number | null };
 }
 
 const reviewHint = (taskId: string, planId: number): string =>
@@ -827,7 +835,10 @@ function stepOf(
         origin: 'planner',
       },
       outcome,
-      planStep: { ...planStep, gather: { ref, target: turn.target, walk: turn.walk } },
+      planStep: {
+        ...planStep,
+        gather: { ref, target: turn.target, walk: turn.walk, entity: turn.entity },
+      },
     };
   }
   return {
@@ -1095,7 +1106,9 @@ function refusedFirstStep(
       },
     );
     if (choice.kind === 'act') return null;
-    if (choice.end === 'no-target') idle.push(`GATHER ${s.action.args.block}: ${choice.why}`);
+    if (choice.end === 'no-target') {
+      idle.push(`GATHER ${sourceName(gatherSourceOf(s.action))}: ${choice.why}`);
+    }
   }
   if (first === undefined) {
     if (idle.length === 0) return null;
@@ -1288,6 +1301,8 @@ async function consultPlanner(
       safety: ctx,
       maxPlanSteps: config.planner.maxPlanSteps,
       ...(exploration === undefined ? {} : { exploration }),
+      recentMeals: repos.actions.recentMeals(MEAL_HISTORY_LENGTH),
+      combatEnabled: config.minecraft.combat.enabled,
       recentActions: repos.actions
         .recent(limit, taskId)
         .flatMap((a) =>

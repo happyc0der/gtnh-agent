@@ -26,28 +26,37 @@ import { encodeString, encodeVarInt, ProtocolError } from '../../../src/bot/gtnh
 import {
   DIGGABLE_BLOCKS,
   FALLING_DIGGABLE_BLOCKS,
+  GARDEN_BLOCKS,
+  isGardenBlock,
+  SOLID_DIGGABLE_BLOCKS,
   type DiggableBlock,
 } from '../../../src/domain/blocks.ts';
 import {
   bareHandProgressPerTick,
   DIGGABLE,
   digWaitTicks,
+  instantDig,
   serverMinimumTicks,
   vanillaDigTicks,
 } from '../../../src/domain/dig-time.ts';
 import { BLOCK, DIG_TEST_BLOCK_REGISTRY, flatWorld, neidColumn } from './chunk-fixtures.ts';
 
 describe('the dig allowlist', () => {
-  it('is exactly the domain allowlist: vanilla natural blocks a bare hand harvests', () => {
+  it('is exactly the domain allowlist: vanilla natural blocks a bare hand harvests, and gardens', () => {
     expect([...DIGGABLE.keys()].sort()).toEqual([...DIGGABLE_BLOCKS].sort());
+    expect([...DIGGABLE_BLOCKS].sort()).toEqual(
+      [...SOLID_DIGGABLE_BLOCKS, ...GARDEN_BLOCKS].sort(),
+    );
     for (const [name, info] of DIGGABLE) {
-      expect(name.startsWith('minecraft:'), name).toBe(true);
+      expect(name.startsWith('minecraft:') || isGardenBlock(name), name).toBe(true);
       expect(info.bareHandHarvests, name).toBe(true);
       expect(info.falls, name).toBe(FALLING_DIGGABLE_BLOCKS.has(name));
     }
+    // Never the water garden: it floats on water, where its drop would land.
+    expect(DIGGABLE_BLOCKS).not.toContain('harvestcraft:watergarden');
   });
 
-  it('uses the verified 1.7.10 hardness values', () => {
+  it('uses the verified 1.7.10 hardness values (HarvestCraft sets none for its gardens: 0)', () => {
     const hardness = Object.fromEntries([...DIGGABLE].map(([n, i]) => [n, i.hardness]));
     expect(hardness).toEqual({
       'minecraft:log': 2,
@@ -59,7 +68,21 @@ describe('the dig allowlist', () => {
       'minecraft:sand': 0.5,
       'minecraft:gravel': 0.6,
       'minecraft:clay': 0.6,
+      ...Object.fromEntries(GARDEN_BLOCKS.map((g) => [g, 0])),
     });
+  });
+
+  it('breaks a garden on the dig start: no wait, no finish', () => {
+    for (const g of GARDEN_BLOCKS) {
+      expect(instantDig(g), g).toBe(true);
+      expect(bareHandProgressPerTick(g), g).toBe(Infinity);
+      expect(serverMinimumTicks(g), g).toBe(0);
+    }
+    for (const b of SOLID_DIGGABLE_BLOCKS) expect(instantDig(b), b).toBe(false);
+  });
+
+  it('never lets a garden count as a block that may touch a dug block (it would drop)', () => {
+    for (const g of GARDEN_BLOCKS) expect(DIG_NEIGHBOURS.has(g), g).toBe(false);
   });
 });
 
