@@ -9,7 +9,7 @@ import {
 } from '../domain/actions.ts';
 import { parseObservedStorageId, profileForBlock } from '../domain/interactions.ts';
 import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
-import type { BlockPosition } from '../domain/common.ts';
+import type { BlockPosition, Position } from '../domain/common.ts';
 import { MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
 import {
   blockCentre,
@@ -55,8 +55,23 @@ export interface SafetyEvaluation {
 const ALWAYS_PERMITTED: ReadonlySet<ActionType> = new Set(['PAUSE_AND_ASK_USER', 'OBSERVE_STATE']);
 
 /** Identity of an action for repeated-failure counting: type + canonical args. */
-export function actionFingerprint(spec: ActionSpec): string {
-  return `${spec.type}:${stableStringify(spec.args)}`;
+/** Walks whose outcome depends on where they start: a failure from one spot says little about another. */
+const WALK_TYPES: ReadonlySet<ActionType> = new Set<ActionType>([
+  'MOVE_TO',
+  'EXPLORE',
+  'RETURN_TO_SAFE_LOCATION',
+]);
+
+/**
+ * What makes two actions "the same" for the repeated-failure rule: the type and arguments,
+ * and for a walk also the block it starts from (`from`, the player's position when it was
+ * proposed). Seen live: an EXPLORE that failed twice from inside the night shelter's walls
+ * was refused the next morning from outside them.
+ */
+export function actionFingerprint(spec: ActionSpec, from: Position | null = null): string {
+  const base = `${spec.type}:${stableStringify(spec.args)}`;
+  if (!WALK_TYPES.has(spec.type) || from === null) return base;
+  return `${base}@${Math.floor(from.x)},${Math.floor(from.y + 1e-6)},${Math.floor(from.z)}`;
 }
 
 function result(violations: SafetyViolation[]): SafetyEvaluation {
@@ -1021,8 +1036,11 @@ export function evaluateAction(
   // The rule stops the AGENT from retrying its own failing choices. An action a human
   // requested directly (origin 'user') is that human's decision each time; every other
   // rule above still applies to it.
+  const from = state.player.position.known ? state.player.position.value : null;
   const failures =
-    action.origin === 'user' ? 0 : history.countFailures(action.taskId, actionFingerprint(spec));
+    action.origin === 'user'
+      ? 0
+      : history.countFailures(action.taskId, actionFingerprint(spec, from));
   if (failures >= ctx.config.maxFailuresPerActionPerTask) {
     violations.push({
       code: 'REPEATED_FAILURE',

@@ -216,6 +216,9 @@ export const ExplorationSummarySchema = z.strictObject({
       z.strictObject({
         biome: z.string(),
         chunks: z.int().min(1),
+        /** The centre of its nearest seen chunk (EXPLORE toward this x and z). */
+        x: z.int(),
+        z: z.int(),
         distance: z.int().min(0),
         direction: DirectionOrHereSchema,
       }),
@@ -323,6 +326,8 @@ export function summarizeExploration(input: {
       .map(([biome, b]) => ({
         biome,
         chunks: b.chunks,
+        x: centreOf(b.nearest).x,
+        z: centreOf(b.nearest).z,
         distance: Math.round(b.distance),
         direction: compassDirection(from, centreOf(b.nearest)),
       })),

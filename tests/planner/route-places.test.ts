@@ -47,8 +47,8 @@ const WORLD: ExplorationSummary = {
     },
   ],
   biomes: [
-    { biome: 'Hot Desert', chunks: 24, distance: 11, direction: 'south_west' },
-    { biome: 'Hot Forest', chunks: 16, distance: 40, direction: 'south' },
+    { biome: 'Hot Desert', chunks: 24, x: -8, z: -8, distance: 11, direction: 'south_west' },
+    { biome: 'Hot Forest', chunks: 16, x: -8, z: 40, distance: 40, direction: 'south' },
   ],
 };
 
@@ -71,7 +71,7 @@ describe('the route uses what exploring found', () => {
     const route = routeForPlanner(needing({ 'minecraft:dirt': 8 }), WORLD);
     const gather = route?.steps.find((s) => s.includes('gather 8 minecraft:dirt'));
     expect(gather).toContain(
-      'no known place yet: explore (look in the Hot Forest 40 m south (seen, 16 chunk(s)): it is common there',
+      'no known place yet: explore (look in the Hot Forest at x -8, z 40, 40 m south (seen, 16 chunk(s)): it is common there; EXPLORE toward that x and z',
     );
     // The desert is nearer, but dirt is not common there.
     expect(gather).not.toContain('Hot Desert');

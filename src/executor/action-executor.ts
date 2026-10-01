@@ -113,7 +113,12 @@ export class ActionExecutor {
       taskId: action?.taskId ?? null,
       actionType,
       origin: action?.origin ?? 'unknown',
-      fingerprint: action ? actionFingerprint(toSpec(action)) : 'invalid',
+      fingerprint: action
+        ? actionFingerprint(
+            toSpec(action),
+            stateBefore.player.position.known ? stateBefore.player.position.value : null,
+          )
+        : 'invalid',
       reason: action?.reason ?? '(invalid action)',
       action: candidate,
       validation: report,

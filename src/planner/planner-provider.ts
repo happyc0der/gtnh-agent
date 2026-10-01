@@ -266,7 +266,10 @@ function likelyBiome(blocks: readonly string[], exploration: ExplorationSummary)
   if (biome === undefined) return null;
   const where =
     biome.direction === 'here' ? 'around here' : `${biome.distance} m ${biome.direction}`;
-  return `the ${biome.biome} ${where} (seen, ${biome.chunks} chunk(s)): it is common there`;
+  return (
+    `the ${biome.biome} at x ${biome.x}, z ${biome.z}, ${where} ` +
+    `(seen, ${biome.chunks} chunk(s)): it is common there; EXPLORE toward that x and z`
+  );
 }
 
 /**

@@ -654,6 +654,25 @@ describe('rule 6: repeated failures', () => {
     ).toContain('OUT_OF_BOUNDS');
   });
 
+  it('counts a walk as a repeat only from the same block it started from', () => {
+    const walk: ActionSpec = {
+      type: 'MOVE_TO',
+      args: { target: { x: 3, y: 64, z: 3 }, tolerance: 1 },
+    };
+    const here = { x: 0.5, y: 64, z: 0.5 };
+    expect(actionFingerprint(walk, here)).toBe(`${actionFingerprint(walk)}@0,64,0`);
+    // Two failures recorded from (0, 64, 0): refused there, allowed from elsewhere.
+    const history: FailureHistory = {
+      countFailures: (_task, fp) => (fp === actionFingerprint(walk, here) ? 2 : 0),
+    };
+    const at = (x: number, z: number) =>
+      makeState((w) => void (w.player.position = { x, y: 64, z }));
+    expect(codes(walk, at(0.5, 0.5), history)).toContain('REPEATED_FAILURE');
+    expect(codes(walk, at(1.5, 0.5), history)).not.toContain('REPEATED_FAILURE');
+    // Other actions keep the plain fingerprint.
+    expect(actionFingerprint(spec, here)).toBe(actionFingerprint(spec));
+  });
+
   it('fingerprints are independent of argument key order', () => {
     const a = actionFingerprint({
       type: 'DEPOSIT_ITEM',
