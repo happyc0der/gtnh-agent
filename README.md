@@ -76,6 +76,7 @@ cp agent.config.example.json agent.config.json
 | Stop all walking and chest use / allow again | `pnpm cli halt` / `pnpm cli unhalt`                                                       |
 | Add a live task with your plan / list tasks  | `pnpm cli task-add --task <id> --goal <text> --plan <file>` / `pnpm cli task-list`        |
 | Bounded auto-run of the current task         | `pnpm cli run --live [--max-cycles 20] [--max-minutes 10]`                                |
+| The agent's Age 0 quest book and next goal   | `pnpm cli quests [--live]`                                                                |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |

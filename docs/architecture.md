@@ -117,6 +117,43 @@ Anything else stops it: a finished task, a safety retreat, eating, upkeep, a pau
 the cycle or time cap, the stop file, Ctrl+C or a lost connection. There is still no open-ended
 loop: every run is started by a human and bounded.
 
+## Quest goals and autonomous play
+
+The agent's goals come from GTNH's own quest book, like a new player's. The benchmark is
+"Finish Age 0": the 92 quests of the "Tier 0 Stone Age" chapter (37 of them main quests).
+
+- `scripts/extract-quests.ts` reads the test server's Better Questing files into
+  `src/goals/age0-quests.ts`: each quest's exact 64-bit id, name, prerequisites (AND/OR), main flag
+  and tasks with their items (registry name and damage, the agent's inventory naming).
+- `src/goals/quest-goals.ts` decides, purely from data:
+  - **done:** a quest completes when its prerequisites are done and every required task is
+    satisfied. A checkbox is satisfied at once, items when they are held, and a crafting task when
+    the crafted items are held (the quest book counts crafts; the agent keeps what it crafts).
+    Optional retrieval never blocks a quest. Prerequisites in other chapters count as met.
+  - **doable:** the agent's abilities (items it can gather or craft) cover every required task.
+    Hunting, locations, fluids and the like are not doable yet, so those quests are never picked.
+  - **next:** the shallowest doable, unlocked quest (fewest prerequisites below it), main quests
+    first, then quest-book order.
+- The agent keeps its own completions in agent memory (`quests.age0.completed`). It never touches
+  the server's quest book; claiming there is a GUI action for the player.
+
+`src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the inventory, records the
+quests that are now satisfied, makes the next quest the current task (`quest-<id>`, its subgoal
+saying what is still missing) and runs one bounded session on it (`runSession`). In the session
+the configured decision maker and planner choose what to do, and every action is still
+validated, executed and verified like any other. Play stops, and says why, when:
+
+- no doable quest is left, or the inventory cannot be read;
+- a session asks for a human (an approval, a safety stop), or the quest's task was paused,
+  blocked or closed (play never resumes those);
+- the same quest shows no fewer missing items for `maxStuckSessions` sessions in a row, measured
+  from the inventory, not from what a session claims;
+- the time or session limit, the stop file or Ctrl+C.
+
+A failed action or a safe detour (retreating, eating) does not stop play by itself: that is part
+of playing, and the planner sees it in its recent history. Play is still started by a human and
+bounded in time (at most 8 hours).
+
 ## Plans across cycles
 
 A validated plan is stored in the `plans` table with its progress, so a multi-step plan advances one
@@ -226,5 +263,6 @@ src/planner      plan schema, validator, planner interface, mock planner
 src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk in a fence), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
-src/app          agent loop, mock scenarios, CLI
+src/goals        the Age 0 quest book (generated) and goal selection
+src/app          agent loop, sessions, play loop, quest book, mock scenarios, CLI
 ```
