@@ -92,7 +92,38 @@ const NAMES_THE_VIEW: ReadonlySet<string> = new Set([
  * when nothing was), e.g. "dropped steps 2-3 after the EXPLORE at step 1"; the plan's
  * explanation says it too.
  */
-export function trimStaleSteps(plan: Plan): { plan: Plan; note: string | null } {
+export function trimStaleSteps(original: Plan): { plan: Plan; note: string | null } {
+  // A walk right before a GATHER is redundant (GATHER walks to its blocks by itself) and
+  // often wrong: seen live, MOVE_TO the dirt block's own position, which is not walkable.
+  const walks = original.steps.filter(
+    (s, i) => s.action.type === 'MOVE_TO' && original.steps[i + 1]?.action.type === GATHER,
+  );
+  const plan =
+    walks.length === 0
+      ? original
+      : {
+          ...original,
+          steps: original.steps
+            .filter((s) => !walks.includes(s))
+            .map((s, i) => ({ ...s, step: i + 1 })),
+        };
+  const walkNote =
+    walks.length === 0
+      ? null
+      : `dropped the MOVE_TO at step${walks.length === 1 ? '' : 's'} ${walks.map((s) => s.step).join(', ')} before a GATHER (it walks to its blocks by itself)`;
+  const trimmed = trimAfter(plan);
+  const notes = [walkNote, trimmed.note].filter((n): n is string => n !== null);
+  if (notes.length === 0) return { plan, note: null };
+  if (trimmed.note !== null) return { plan: trimmed.plan, note: notes.join('; ') };
+  const why = `(Code ${walkNote ?? ''}.)`;
+  return {
+    plan: { ...plan, explanation: `${plan.explanation.slice(0, 1000 - why.length - 1)} ${why}` },
+    note: notes.join('; '),
+  };
+}
+
+/** Drops the steps after a plan's first EXPLORE, or after a GATHER from the first step that names the view. */
+function trimAfter(plan: Plan): { plan: Plan; note: string | null } {
   let keep = plan.steps.length;
   let after = '';
   let gatherStep: number | null = null;

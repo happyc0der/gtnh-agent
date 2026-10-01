@@ -455,8 +455,24 @@ describe('trimStaleSteps: no step runs on a view its own plan replaced', () => {
     const r = trimStaleSteps(planOf(gather, planks, dig, planks));
     expect(r.plan.steps.map((s) => s.action.type)).toEqual(['GATHER', 'CRAFT_ITEM']);
     expect(r.note).toBe('dropped steps 3-4 after the GATHER at step 1');
-    expect(trimStaleSteps(planOf(walk, gather, walk)).note).toBe(
+    expect(trimStaleSteps(planOf(dig, gather, walk)).note).toBe(
       'dropped step 3 after the GATHER at step 2',
+    );
+  });
+
+  it('drops a walk right before a GATHER (it walks to its blocks by itself)', () => {
+    // Seen live: MOVE_TO the dirt block's own position (not walkable), then GATHER dirt.
+    const r = trimStaleSteps(planOf(walk, gather));
+    expect(r.plan.steps).toEqual([{ step: 1, action: gather, rationale: 'x' }]);
+    expect(r.note).toBe(
+      'dropped the MOVE_TO at step 1 before a GATHER (it walks to its blocks by itself)',
+    );
+    expect(r.plan.explanation).toMatch(/dropped the MOVE_TO at step 1 before a GATHER/);
+    expect(PlanSchema.safeParse(r.plan).success).toBe(true);
+    // With a step after the GATHER that names the view, both happen.
+    expect(trimStaleSteps(planOf(walk, gather, walk)).note).toBe(
+      'dropped the MOVE_TO at step 1 before a GATHER (it walks to its blocks by itself); ' +
+        'dropped step 2 after the GATHER at step 1',
     );
   });
 
