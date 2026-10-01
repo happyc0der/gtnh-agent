@@ -3,6 +3,11 @@
  * player stands, four walls at feet level and four at head level, and a roof above the
  * head. Pure: what the box needs, given what is solid around the player and what it carries.
  *
+ * A block is placed by clicking a face of a block next to its cell, and the roof cell
+ * touches no wall (the head walls are diagonally below it). So, as a player does, a support
+ * block goes on top of one head wall first, and the roof is placed against its side (seen
+ * live on 2026-10-01: without it the roof cell was never placeable).
+ *
  * Walls are blocks a bare hand can dig again (sand, dirt, logs...), so the agent can dig its
  * way out in the morning (head level first, so nothing falls). The roof is never sand or
  * gravel: they would fall onto the player (and placing refuses them there).
@@ -15,7 +20,7 @@ export interface SolidLookup {
 
 export interface ShelterCell {
   position: { x: number; y: number; z: number };
-  role: 'feet wall' | 'head wall' | 'roof';
+  role: 'feet wall' | 'head wall' | 'roof support' | 'roof';
 }
 
 /** Wall blocks a bare hand digs again, in order of preference (sand first: plentiful). */
@@ -39,7 +44,10 @@ export const SHELTER_ROOF_ITEMS = [
 
 const FALLING: ReadonlySet<string> = new Set(['minecraft:sand', 'minecraft:gravel']);
 
-/** The nine cells of the box around feet block (fx, fy, fz), in building order. */
+/**
+ * The cells of the box around feet block (fx, fy, fz), in building order: four feet walls,
+ * four head walls, the roof support (on top of the east head wall), then the roof.
+ */
 export function shelterCells(feet: { x: number; y: number; z: number }): ShelterCell[] {
   const fx = Math.floor(feet.x);
   const fy = Math.floor(feet.y + 1e-6);
@@ -59,7 +67,18 @@ export function shelterCells(feet: { x: number; y: number; z: number }): Shelter
       position: { x: fx + dx, y: fy + 1, z: fz + dz },
       role: 'head wall' as const,
     })),
+    { position: { x: fx + 1, y: fy + 2, z: fz }, role: 'roof support' as const },
     { position: { x: fx, y: fy + 2, z: fz }, role: 'roof' as const },
+  ];
+}
+
+/** The four cells beside the roof: one of them must be solid for the roof to be placed. */
+function besideRoof(roof: { x: number; y: number; z: number }): Array<[number, number, number]> {
+  return [
+    [roof.x + 1, roof.y, roof.z],
+    [roof.x - 1, roof.y, roof.z],
+    [roof.x, roof.y, roof.z + 1],
+    [roof.x, roof.y, roof.z - 1],
   ];
 }
 
@@ -85,10 +104,9 @@ export function shelterStatus(
   inventory: Readonly<Record<string, number>>,
 ): ShelterStatus {
   const cells = shelterCells(feet);
-  const open = cells.filter(
-    (c) => world.solidAt(c.position.x, c.position.y, c.position.z) !== true,
-  );
-  if (cells.some((c) => world.solidAt(c.position.x, c.position.y, c.position.z) === undefined)) {
+  const solid = (c: ShelterCell): boolean | undefined =>
+    world.solidAt(c.position.x, c.position.y, c.position.z);
+  if (cells.some((c) => solid(c) === undefined)) {
     return {
       sheltered: false,
       todo: [],
@@ -96,7 +114,18 @@ export function shelterStatus(
       problem: 'the blocks around the player are not loaded',
     };
   }
-  if (open.length === 0) return { sheltered: true, todo: [], needs: {}, problem: null };
+  // The box: walls and roof. The support only matters while the roof is still open and
+  // nothing beside the roof cell is solid already.
+  const box = cells.filter((c) => c.role !== 'roof support');
+  if (box.every((c) => solid(c) === true)) {
+    return { sheltered: true, todo: [], needs: {}, problem: null };
+  }
+  const roof = cells.find((c) => c.role === 'roof');
+  const supported =
+    roof === undefined ||
+    solid(roof) === true ||
+    besideRoof(roof.position).some(([x, y, z]) => world.solidAt(x, y, z) === true);
+  const open = cells.filter((c) => solid(c) !== true && (c.role !== 'roof support' || !supported));
 
   const left = new Map(Object.entries(inventory));
   const take = (choices: readonly string[]): string | null => {
@@ -118,10 +147,14 @@ export function shelterStatus(
     const p = cell.position;
     const below =
       world.solidAt(p.x, p.y - 1, p.z) === true || willBeSolid.has(key({ ...p, y: p.y - 1 }));
+    const walls = SHELTER_WALL_ITEMS.filter((i) => below || !FALLING.has(i));
+    // The support sits outside the box: any wall block that stays put, or any roof block.
     const choices =
       cell.role === 'roof'
         ? SHELTER_ROOF_ITEMS
-        : SHELTER_WALL_ITEMS.filter((i) => below || !FALLING.has(i));
+        : cell.role === 'roof support'
+          ? [...walls, ...SHELTER_ROOF_ITEMS.filter((i) => !walls.some((w) => w === i))]
+          : walls;
     const item = take(choices);
     if (item === null) {
       return {
