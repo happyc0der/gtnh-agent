@@ -47,6 +47,9 @@ export const EntityIdSchema = z
   .string()
   .regex(/^[A-Za-z0-9_.:-]{1,64}$/, 'expected 1-64 chars of [A-Za-z0-9_.:-]');
 
+/** An entity's id on the server (a Java int), e.g. the target of ATTACK_ENTITY. */
+export const EntityNumberSchema = z.int().min(-2_147_483_648).max(2_147_483_647);
+
 export const LocationNameSchema = z
   .string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,47}$/, 'expected lowercase name, 1-48 chars');

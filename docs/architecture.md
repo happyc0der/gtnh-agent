@@ -13,7 +13,7 @@ flowchart TD
         MC["MinecraftClient interface"]
         MOCK["MockMinecraftClient<br/>(full simulation)"]
         MF["MineflayerClient<br/>(skeleton; cannot join GTNH)"]
-        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes; walks, explores, uses chests,<br/>crafts, digs and places inside a fence or a moving play area)"]
+        G17["Gtnh1710Client<br/>(1.7.10 + Forge: observes; walks, explores, uses chests,<br/>crafts, digs, places, uses block windows and fights<br/>inside a fence or a moving play area)"]
         MC --- G17
         MC --- MOCK
         MC --- MF
@@ -40,7 +40,7 @@ flowchart TD
     LOOP -- "state reliability" --> SAFE
     LOOP -- "GameState" --> S1
     S1M -. "wrapped by SafetyFirstDecisionProvider" .-> S1
-    S1 -- "Decision (8 values)" --> PROP
+    S1 -- "Decision (9 values)" --> PROP
     PROP -- "REQUEST_PLANNER" --> PLAN
     LLM -. "same PlannerProvider contract" .-> PLAN
     PLAN -- "Plan | Escalation (Zod-validated)" --> PROP
@@ -57,8 +57,8 @@ flowchart TD
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **MinecraftClient** (`src/bot`)                                  | The only boundary to the game. `observe()` returns a normalized `GameState`; `perform()` takes a `ValidatedAction` token.                                                                                                               | Performs actions, but only ones minted by the executor (runtime-checked).                                                                                   |
 | **Safety policy** (`src/safety`)                                 | Pure functions: state reliability, dangers, per-action rules, protected items, boundaries, forbidden-modification denylist, repeated-failure cap.                                                                                       | **Veto over everything.** No model can override it.                                                                                                         |
-| **Deterministic router** (`src/system1/deterministic-router.ts`) | System 1: prioritized, transparent rules that map a state to one of 8 bounded decisions, with confidence, reason codes and facts.                                                                                                       | Chooses _what kind_ of step; cannot execute.                                                                                                                |
-| **System-1 model** (`src/llm/ollama-decision-provider.ts`)       | Opt-in (`decisions.provider: ollama`): a local model picks one of the 8 decisions from facts computed by code.                                                                                                                          | Always wrapped in `SafetyFirstDecisionProvider`: the router's safety decisions and every pause win, invalid output becomes PAUSE.                           |
+| **Deterministic router** (`src/system1/deterministic-router.ts`) | System 1: prioritized, transparent rules that map a state to one of 9 bounded decisions, with confidence, reason codes and facts.                                                                                                       | Chooses _what kind_ of step; cannot execute.                                                                                                                |
+| **System-1 model** (`src/llm/ollama-decision-provider.ts`)       | Opt-in (`decisions.provider: ollama`): a local model picks one of the 9 decisions from facts computed by code.                                                                                                                          | Always wrapped in `SafetyFirstDecisionProvider`: the router's safety decisions and every pause win, invalid output becomes PAUSE.                           |
 | **Action proposer** (`src/system1/action-proposer.ts`)           | Turns one decision into exactly one allowlisted action (approaching a target first if it is out of reach).                                                                                                                              | Proposes only.                                                                                                                                              |
 | **LLM planner** (`src/llm/ollama-planner-provider.ts`)           | Opt-in (`planner.provider: ollama`): returns a strict `Plan` or an `Escalation`. Called only for `REQUEST_PLANNER`, and only when the task has no open plan.                                                                            | **None.** Plans are validated and stored; one step per cycle goes through the executor like any other action. Plans that ask for approval wait for a human. |
 | **ActionExecutor** (`src/executor`)                              | The single controlled path: schema → safety → preconditions → persist → execute → observe → verify → persist.                                                                                                                           | Sole minter of `ValidatedAction` (lint-enforced).                                                                                                           |
@@ -125,23 +125,49 @@ loop: every run is started by a human and bounded.
 
 ## Quest goals and autonomous play
 
-The agent's goals come from GTNH's own quest book, like a new player's. The benchmark is
-"Finish Age 0": the 92 quests of the "Tier 0 Stone Age" chapter (37 of them main quests).
+The agent's goals come from GTNH's own quest book, like a new player's, and **progress is what
+the server's quest book records**, never the agent's own judgement. The benchmark is "Finish
+Age 0": every quest of the 92-quest "Tier 0 - Stone Age" chapter (37 main quests) completed in
+the server's Better Questing records for the agent's player.
 
-- `scripts/extract-quests.ts` reads the test server's Better Questing files into
-  `src/goals/age0-quests.ts`: each quest's exact 64-bit id, name, prerequisites (AND/OR), main flag
-  and tasks with their items (registry name and damage, the agent's inventory naming).
-- `src/goals/quest-goals.ts` decides, purely from data:
-  - **done:** a quest completes when its prerequisites are done and every required task is
-    satisfied. A checkbox is satisfied at once, items when they are held, and a crafting task when
-    the crafted items are held (the quest book counts crafts; the agent keeps what it crafts).
-    Optional retrieval never blocks a quest. Prerequisites in other chapters count as met.
-  - **doable:** the agent's abilities (items it can gather or craft) cover every required task.
-    Hunting, locations, fluids and the like are not doable yet, so those quests are never picked.
-  - **next:** the shallowest doable, unlocked quest (fewest prerequisites below it), main quests
-    first, then quest-book order.
-- The agent keeps its own completions in agent memory (`quests.age0.completed`). It never touches
-  the server's quest book; claiming there is a GUI action for the player.
+### Quest goals
+
+- **The data.** `scripts/extract-quests.ts` reads the world's own quest database
+  (`<world>/betterquesting/QuestDatabase.json`, what the server runs) into
+  `src/goals/age0-quests.ts`: the chapter's 92 quests and the 14 quests it needs from other
+  chapters (its prerequisites, recursively: the closure, 106 in all). Per quest: the exact 64-bit
+  id, prerequisites with their logic (AND/OR/XOR...), task logic (AND/OR), main flag, chapter,
+  lockedProgress, tasks (index, type, consume, items with ore dictionary names, whether crafts
+  from the player's statistics count) and rewards (which one is a choice).
+- **The server's records.** The live client reads the quest book over Better Questing's own
+  channel (`src/bot/gtnh1710/better-questing.ts`; see gtnh-compatibility.md, "Quest book") into
+  `GameState.questBook`: for each closure quest, completed, claimed, active and unlocked, each
+  task's completion and the server's count, and the rewards still to claim. It is unknown until
+  the server's sync after login has arrived.
+- **The logic** (`src/goals/quest-goals.ts`, pure) follows Better Questing:
+  - a quest unlocks by its prerequisite logic over completed quests (XOR: the two smeltery
+    quests exclude each other, and the next one accepts either, OR);
+  - it completes in the server's quest loop once its tasks satisfy the task logic: AND, or OR
+    (one task is enough); optional retrieval counts as done;
+  - retrieval tasks count what is held (a met count stays); consume tasks count what a submit
+    handed in; crafting tasks count only the server's count of crafts made while the quest was
+    active (holding the item never counts); checkboxes are ticked in the quest book.
+- **The next goal** is the shallowest quest the server lists as active and unlocked, that the
+  agent's abilities can finish (hunting, locations and unknown crafts cannot), and that clicks
+  alone do not finish; main quests first, then quest-book layout. Its task's subgoal lists the
+  quest's remaining tasks by the server's count. Its requirements (the planner's route) name
+  exactly what to have: held ore-dictionary items under their own names (birch logs for
+  `logWood`), and for a crafting task what is held plus the crafts still to make.
+- **Quest-book clicks** (`questBookSteps`), decided in code, never by a model: claims of
+  completed quests' rewards (only with room in the inventory; a choice reward takes the first
+  item an unfinished quest asks for), checkbox ticks (when the tick, plus a submit, completes
+  the quest), and submits (items to hand in, or items held from before the quest was active,
+  which the server has not counted). A quest whose tasks are all done is left to the server's
+  quest loop; play waits a few seconds for it when nothing else is left.
+- The last observation of the server's records is kept in agent memory
+  (`quests.age0.server`), so `cli quests` shows it without a connection.
+
+### Routes, nights and the play loop
 
 **Routes: the planner takes stock before it plans.** A task can name the items its goal
 needs (quests do; `cli task-add --needs item=count,...` for any goal). For those,
@@ -175,6 +201,13 @@ the next goal's journal tells the planner how to get out (dig a wall, head level
 If no shelter is possible (no blocks to build it), play stops before dark and `cli play`
 waits offline until sunrise.
 
+**A mob near home.** When System 1 pauses only because a mob is near (`HOSTILES_NEARBY` or
+`UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand
+the pause to a person: it sets the task active again, notes it in the journal, and `cli play`
+waits offline for 30 s (an offline player cannot be hurt) and plays on, at most 6 times in a
+row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play.ts`). Every new session re-checks the
+state from scratch, so a mob that is still there pauses it again.
+
 **Checkpoints and compaction.** Long work is done in chunks. The planner plans only the next
 one or two route steps; when they are done the agent checkpoints and asks again with fresh
 stock. Each task keeps a journal written by code at every checkpoint: a plan made, done or
@@ -185,17 +218,24 @@ journal instead of a raw log, continues where the task stopped and avoids repeat
 Interruptions (mobs, hunger, lava, night) are still handled first by System 1's reflexes;
 a step that no longer fits the world is refused and replanned.
 
-`src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the inventory, records the
-quests that are now satisfied, makes the next quest the current task (`quest-<id>`, its subgoal
-saying what is still missing) and runs one bounded session on it (`runSession`). In the session
-the configured decision maker and planner choose what to do, and every action is still
-validated, executed and verified like any other. Play stops, and says why, when:
+`src/app/play.ts` (`runPlay`) is the play loop. Each round it reads the server's quest book and
+the inventory, records the quests the server now lists as completed (closing their tasks), and
+makes the quest-book clicks that are due, one per round. Each click is an ordinary action run by
+the executor (`runQuestBookAction`: schema, safety policy, preconditions, execution, and
+verification against the server's next sync), and only when `MC_ENABLE_QUEST_BOOK` is on; a
+click that fails or is refused twice in a row waits until a session has run (the danger that
+refused it may be gone). Then it makes the next quest the current
+task (`quest-<id>`) and runs one bounded session on it (`runSession`), which ends as soon as an
+observation shows the quest completed or ready for a click. In the session the configured
+decision maker and planner choose what to do, and every action is still validated, executed and
+verified like any other. Play stops, and says why, when:
 
-- no doable quest is left, or the inventory cannot be read;
+- no doable quest is left (the reason names clicks that are due but off or failing), or the
+  inventory or the server's quest book cannot be read;
 - a session asks for a human (an approval, a safety stop), or the quest's task was paused,
   blocked or closed (play never resumes those);
 - the same quest shows no fewer missing items for `maxStuckSessions` sessions in a row, measured
-  from the inventory, not from what a session claims;
+  from the server's count and the inventory, not from what a session claims;
 - the time or session limit, the stop file or Ctrl+C.
 
 A failed action or a safe detour (retreating, eating) does not stop play by itself: that is part
@@ -205,22 +245,25 @@ bounded in time (at most 8 hours).
 ## Knowledge base
 
 Routes can only plan what the book knows. The book is built from a **generated GTNH 2.8.4
-knowledge base**: `src/goals/knowledge/gtnh-2.8.4.json.gz` (about 700 KiB, 6.3 MiB of JSON),
+knowledge base**: `src/goals/knowledge/gtnh-2.8.4.json.gz` (about 730 KiB, 6.8 MiB of JSON),
 loaded once on first use by `src/goals/knowledge.ts`. Item names follow the inventory's naming
 (registry name, `@damage` when not 0). What it holds, and where each part comes from (details
 and evidence in [GTNH compatibility: knowledge base](gtnh-compatibility.md#knowledge-base-2026-09-30)):
 
-| Part                      | Count    | Source on the test server                                                                                                                                         |
-| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Crafting recipes          | 53,821   | CraftTweaker's `/minetweaker recipes` dump: shaped and shapeless, ore-dictionary ingredients, 2x2 or 3x3, crafting tools marked                                   |
-| Output counts             | 3,237    | Not in the dump: read from GTNewHorizonsCoreMod's recipe scripts (its jar) and matched to the dumped recipes. Other counts are unknown (`0`; the route assumes 1) |
-| Furnace recipes           | 6,128    | `/minetweaker recipes furnace` (output counts not dumped: 1 assumed)                                                                                              |
-| Ore dictionary            | 22,006   | `/minetweaker oredict` (`:*` wildcards expanded to every damage value seen)                                                                                       |
-| Item names                | 27,050   | Every name is checked against `/minetweaker names` (the item registry) and the agent's `ItemName` format                                                          |
-| GT ore veins / small ores | 79 / 55  | GregTech's jar (`OreMixes`, `SmallOres`): heights, weights, density, size, dimensions, the four ores of each vein                                                 |
-| GT materials              | 801      | GregTech's jar (`MaterialsInit1`): id and tool quality, which set an ore's harvest level                                                                          |
-| Ore drops                 |          | GT's code: a vein ore drops its raw ore (`FortuneItem` in `GregTech.cfg`); a small ore drops a weighted mix of gems, crushed ore and impure dust                  |
-| Harvest levels, tools     | 60 / 199 | `config/IguanaTinkerTweaks` (block levels, tool levels, Tinkers' material levels, level names); GT ores use GT's own rule                                         |
+| Part                      | Count    | Source on the test server                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Crafting recipes          | 53,821   | CraftTweaker's `/minetweaker recipes` dump: shaped and shapeless, ore-dictionary ingredients, 2x2 or 3x3, crafting tools marked                                                                                                                                                                                                                                                                          |
+| Output counts             | 3,312    | Not in the dump. Each row says where its count comes from (`countFrom`): GTNewHorizonsCoreMod's recipe scripts (its jar, matched to the dumped recipes: 3,237), the hand-verified table (14), GregTech's saw recipes for planks and sticks (7, read with `javap`), or vanilla's count where GTNH kept vanilla's exact recipe (54, marked `vanilla`). Other counts are unknown (`0`; the route assumes 1) |
+| Furnace recipes           | 6,128    | `/minetweaker recipes furnace` (output counts not dumped: 1 assumed)                                                                                                                                                                                                                                                                                                                                     |
+| Ore dictionary            | 22,006   | `/minetweaker oredict` (`:*` wildcards expanded to every damage value seen)                                                                                                                                                                                                                                                                                                                              |
+| Item names                | 27,050   | Every name is checked against `/minetweaker names` (the item registry) and the agent's `ItemName` format                                                                                                                                                                                                                                                                                                 |
+| GT ore veins / small ores | 79 / 55  | GregTech's jar (`OreMixes`, `SmallOres`): heights, weights, density, size, dimensions, the four ores of each vein                                                                                                                                                                                                                                                                                        |
+| GT materials              | 801      | GregTech's jar (`MaterialsInit1`): id and tool quality, which set an ore's harvest level                                                                                                                                                                                                                                                                                                                 |
+| Ore drops                 |          | GT's code: a vein ore drops its raw ore (`FortuneItem` in `GregTech.cfg`); a small ore drops a weighted mix of gems, crushed ore and impure dust                                                                                                                                                                                                                                                         |
+| Harvest levels, tools     | 60 / 199 | `config/IguanaTinkerTweaks` (block levels, tool levels, Tinkers' material levels, level names); GT ores use GT's own rule                                                                                                                                                                                                                                                                                |
+| Disabled tools / swords   | 48 / 12  | IguanaTweaks' `disableRegularTools` / `disableRegularSwords` with its blacklist (`main.cfg`): the listed (or listed mods') pickaxes, shovels and axes mine nothing, the listed swords do no damage. Only `ItemTool`s and `ItemSword`s are affected (`javap`), so GregTech's listed tool item is not disabled, and no vanilla sword is listed                                                             |
+| Vanilla 1.7.10 layer      | 312 / 21 | The base layer under GTNH's data: the 1.7.10 server jar (crafting recipes with counts, furnace recipes, tool materials and tools, ore generation, block drops) and minecraft-data 3.117.0 (PrismarineJS, MIT: items, blocks, foods, tool speeds, mobs, biomes, enchantments, effects)                                                                                                                    |
+| Changes from vanilla      | 255      | The vanilla layer compared with GTNH's: recipes, smelting, drops, tools, ores and hunger, each side with its source; generated as [GTNH 2.8.4 vs vanilla](gtnh-vs-vanilla.md)                                                                                                                                                                                                                            |
 
 **Regenerating it** (the server must be running; the dump commands are read-only lists):
 
@@ -235,11 +278,39 @@ node scripts/build-knowledge.ts            # needs TEST_SERVER_DIR (or --server,
 
 Each dump appends to the server's `minetweaker.log`; the build reads the last of each. A full
 recipe dump pauses the server for a few seconds. `scripts/build-knowledge.ts` reads only files in
-the server folder: the log, `config/GregTech/*.cfg`, `config/IguanaTinkerTweaks/*.cfg` and two
-jars, which it parses itself (`scripts/knowledge/jvm.ts`: a zip reader, a class-file parser and
-a symbolic interpreter for the straight-line code of GT's data tables; the lint forbids
-spawning `javap`). The data records each source file's size and SHA-256 (`sources`) and the
-caveats (`notes`). `tests/goals/knowledge.test.ts` checks its integrity and known facts.
+the server folder: the log, `config/GregTech/*.cfg`, `config/IguanaTinkerTweaks/*.cfg`,
+`config/HungerOverhaul/HungerOverhaul.cfg`, two mod jars and the vanilla server jar
+(`minecraft_server.1.7.10.jar`), which it parses itself (`scripts/knowledge/jvm.ts`: a zip
+reader, a class-file parser, a symbolic interpreter for straight-line code such as GT's data
+tables, and a small executor for the vanilla recipe classes' loops; the lint forbids spawning
+`javap`), plus minecraft-data from `node_modules`. The vanilla jar is obfuscated, so its classes
+are found by what they contain (e.g. `CraftingManager` by its recipe registrations), not by
+name. The data records each source file's size and SHA-256 (`sources`) and the caveats
+(`notes`). The build also writes [docs/gtnh-vs-vanilla.md](gtnh-vs-vanilla.md); run
+`corepack pnpm exec prettier --write docs/gtnh-vs-vanilla.md` afterwards.
+`tests/goals/knowledge.test.ts` checks its integrity and known facts.
+
+**Two layers.** Vanilla 1.7.10 is the base layer (`vanilla`: what the game does before any mod)
+and everything else is GTNH's, which wins wherever it says something: GTNH's recipes are the
+dump's, GT's veins replace vanilla ore generation, IguanaTweaks' rules decide which tools work,
+Hunger Overhaul's config decides healing. The vanilla layer fills in where GTNH's data is silent
+(a recipe GTNH kept exactly takes vanilla's count, marked `vanilla`; dig yields not changed by
+GTNH, `VANILLA_DIG_YIELDS` in `route-book.ts`, apply as they are). Every fact says its layer and
+source. minecraft-data's 1.7 recipes are 1.8's, so recipes come from the jar; minecraft-data
+gives the item, block, food, mob, biome, enchantment and effect tables (credited in
+`scripts/knowledge/vanilla.ts`).
+
+**What GTNH changes.** `changes` compares the layers, one entry per difference: the vanilla
+value and the GTNH value, each with its source, the items it concerns (`keys`), and one plain
+line of what changed (e.g. "Gravel never drops flint; craft flint from 3 gravel (shapeless,
+2x2)", "Wooden Planks: the same ingredients make 2, not 4 (4 with a saw in the grid)"). A
+vanilla recipe counts as changed when no GTNH recipe has its exact ingredients (replaced or
+removed), when one does but needs a crafting tool too, or when its known count differs.
+`src/goals/gtnh-changes.ts` picks the entries that concern the current route and sends them to
+the planner as `request.gtnhChanges` (at most 8 lines): a recipe change for an item the route
+makes (the goal first), drops, tools and ores for what it digs or the tool kinds it needs,
+smelting for what it smelts, then what the player holds (food: Hunger Overhaul). The planner
+prompt tells the model to trust these and the route over its memory of vanilla.
 
 **How routes use it.** `src/goals/route-book.ts` builds the book once (`ROUTE_BOOK` is lazy;
 `HAND_BOOK` is the hand-verified book alone):
@@ -253,7 +324,8 @@ caveats (`notes`). `tests/goals/knowledge.test.ts` checks its integrity and know
   the IguanaTweaks level), and GT ores that generate in the Overworld: a vein ore gives its raw
   ore (pickaxe level from GT's rule, where: the vein and its height range), a small ore gives
   its average drops.
-- Tools (item, kind, level) and the item that provides each station.
+- Tools (item, kind, level) and the item that provides each station. Tools IguanaTweaks
+  disables are left out: a vanilla iron pickaxe is no pickaxe here, held or to make.
 
 `src/goals/route.ts` stays general (nothing in it is GTNH-specific):
 
@@ -282,10 +354,14 @@ caveats (`notes`). `tests/goals/knowledge.test.ts` checks its integrity and know
 
 Not in the knowledge base (open gaps): GT machine recipes (no read-only dump exists; recipes
 whose station is a machine would simply be skipped), Tinkers' Construct tool building (Part
-Builder and Tool Station are not crafting-table recipes, yet they make GTNH's early pickaxes),
-the output counts of recipes not registered by the coremod scripts, mob drops, and where GT ores
-are in the world (the agent's chunk scan sees `gregtech:gt.blockores` with the harvest level as
-metadata; the ore's material lives in its tile entity).
+Builder and Tool Station are not crafting-table recipes, yet they make GTNH's only early
+pickaxes above level 0: the vanilla iron pickaxe mines nothing here, so a route to iron or
+diamonds says it cannot make the pickaxe), the output counts of recipes not registered by the
+coremod scripts, mob stats and drops (minecraft-data's 1.7 mobs carry names and categories only;
+the jar's entity classes are not read), Hunger Overhaul's per-food values (only its switches
+are read), and where GT ores are in the world (the agent's chunk scan sees
+`gregtech:gt.blockores` with the harvest level as metadata; the ore's material lives in its
+tile entity).
 
 ## Plans across cycles
 
@@ -327,6 +403,13 @@ blocks at the player's feet level, all on one level (a fence with a height range
    `threatRadius` (not for a retreat, which is how the agent escapes one), the stop file, `halt()`
    (Ctrl+C) or a lost connection. After the last step it waits 5 ticks for a server correction
    before reporting success, and the executor then verifies the position.
+
+**Gravity.** The client does not otherwise simulate physics, and the server kicks a player that
+floats for 4 seconds ("Flying is not enabled on this server"; seen live when a walk stopped in the
+middle of a step up). So while nothing else runs, twice a second, it checks what the server checks
+(`checkSupport` in `terrain.ts`: any block that is not air in the player's box, reaching 0.55
+below the feet); in the air, it falls onto the block below with vanilla gravity, only when walking
+is allowed, within the fence, at most 3 blocks (no damage) and with no hazard next to the landing.
 
 The `move` command runs one such action for a human (origin `user`). The repeated-failure rule does
 not apply to it (it is the human's decision each time), and its failures do not count against the
@@ -804,6 +887,76 @@ integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
   directions..."), before the quests. It ends once 100 chunks are seen, at the session's limits,
   or when anything needs a human, and it is done once: a completed scouting task is never redone.
 
+## Combat
+
+`ATTACK_ENTITY` (one bounded burst against one entity) and System 1's `DEFEND` decision, both
+off unless `MC_ENABLE_COMBAT=true`. The knowledge (whom, with what, how far, how often) is in
+`src/domain/combat.ts`; the rules about the moment (`fightProblems`) and the target
+(`attackChecks`) are in `src/safety/combat-checks.ts`, shared by the safety policy and System 1
+(`src/system1/defend.ts`), so both refuse alike. `src/bot/gtnh1710/combat.ts` holds the live
+client's helpers (entity metadata, line of sight, aim, weapon choice). The server rules it relies
+on are in [GTNH compatibility: combat](gtnh-compatibility.md#combat-2026-09-30). In layers:
+
+1. **Observation.** `nearbyEntities` lists every entity within the entity scan (16 blocks),
+   nearest first, at most 32: id, type, category (hostile, passive, unclassified, player), kind
+   (mob, player, object), distance, health (the server's DataWatcher), whether it is owned (a
+   name tag, a saddle) or a baby, and when the server last showed it hurt. It also lists the
+   deaths seen since joining. It is unknown in older snapshots and whenever the threats are, and
+   the safety policy checks it against `nearbyThreats` (same radius, same counts).
+   `player.weapon` is the best allowlisted weapon in the hotbar, or a bare hand (unknown when
+   the hotbar is, or holds neither). The planner sees the creatures with `attackable`, the
+   weapon and the current `fightProblems`.
+2. **System 1** considers fighting only when hostiles are the only danger. `assessDefense`
+   decides:
+   - **flee** (retreat or pause, adding `CREEPER_NEARBY` or `TOO_MANY_HOSTILES` to the reasons)
+     when anything that explodes, or might (an unidentified entity), is within
+     `creeperFleeRadius`, or more than `maxHostilesToFight` hostiles are near;
+   - **nothing** (retreat or pause, as without combat) when the moment is otherwise unsafe
+     (low health or food, an unidentified entity near, entities unknown) or no hostile near may
+     be attacked;
+   - **DEFEND** the nearest hostile that may be attacked when retreating is impossible or worse:
+     with a home to go to, only when it is within striking distance (2.9 blocks) and dies in at
+     most 3 full hits (its health is known), since turning away would only take its blows; with
+     no home, or already home, when it is within striking distance or a melee mob is within 8
+     blocks. A skeleton at range is not chased.
+
+   DEFEND carries `HOSTILES_NEARBY`, so `SafetyFirstDecisionProvider` keeps it over a model's
+   choice. A model's prompt says to pick DEFEND only when the summary's `defend` fact (the same
+   function) is true. The proposer turns DEFEND into `ATTACK_ENTITY` on the target, or into a
+   pause when there is no hostile it may fight.
+
+3. **The executor validates as usual** (`attackChecks`): the target is listed (`TARGET_GONE` is
+   stale, so a planner's plan is re-made), may be attacked at all (`NOT_ATTACKABLE`), is inside
+   the boundary, the moment is safe (`UNSAFE_ATTACK`), farm animals only for a task and never
+   with hostiles near, no protected weapon is carried; preconditions: within 8 blocks. The
+   danger gate allows `ATTACK_ENTITY` only when hostiles are the only danger.
+4. **The client re-checks it all** on its own entity picture: combat enabled, a fence, presence
+   ticks, no walk, chest, crafting, dig or other fight; the target tracked, attackable, inside
+   the fence and within 8 blocks; nothing that may explode within 16 blocks and nothing
+   unidentified within `threatRadius`.
+5. **The burst.** It selects the best allowlisted weapon in the hotbar (vanilla axes, never a
+   stack with NBT data) or an empty slot, never anything else: a held item's own left-click
+   code could do anything. Then, every tick, while the target is within reach (a bare hand
+   2.2 blocks, a weapon 2.9, or 4.5 with a clear line of sight), it strikes as a player does:
+   C05 look, C0A swing, C02 attack, one full hit per 12 ticks, at most 8 swings or 5 s. The
+   player never moves. A blow that may kill waits while GTNH's kill explosion would leave the
+   player under 4 health. Every tick it stops for the stop file, `halt()`, a server correction
+   or a lost connection (failure), and for the target dying or leaving, any damage taken (so
+   System 1 decides again), or something dangerous appearing.
+6. **Verification:** `ENTITY_ATTACKED` passes when the target is seen dying (a death status
+   after the action started), its health fell, or (health unknown) the server showed it hurt.
+   A target that vanished without a death status fails.
+
+`cli attack --live --entity <id>` runs one burst for a person (origin `user`); `observe` and
+`watch` print the entity ids. Walking, chests, crafting, digging and fighting exclude each
+other. The decision rules' ordering follows the priority chains of open-source bots such as
+AltoClef's `MobDefenseChain` and mineflayer-pvp (both MIT): ideas only, no code was copied.
+
+**Not covered yet:** blocking with a sword (GTNH's swords deal no damage), bows, armour,
+potions, Infernal Mobs elites (indistinguishable without the mod's own channel; see the
+compatibility notes), and moving while fighting (chasing, side-stepping, backing off from a
+creeper: System 1 retreats home instead).
+
 ## Why code, not AI, enforces safety
 
 - **Determinism and auditability.** A rule like "never deposit a protected item" must hold every
@@ -823,11 +976,15 @@ integers, so chunk-grid rules (GregTech's ore-vein grid) can be applied later.
 | No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; placing: C08 with the held block item, faces 0-5 only (never "use the item in the air"), an NBT-free stack, clicking only a block `placing.ts` checked; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured or found crafting tables); digging needs `MC_ENABLE_DIGGING=true` and the fence; placing needs `MC_ENABLE_PLACING=true` and the fence; block windows (`INTERACT_BLOCK`, `SMELT`, `TAKE_OUTPUT`) need `MC_ENABLE_INTERACT=true` and a block with an interaction profile, or one on the observe-only list, which is only looked at; every other world-changing action returns `NOT_IMPLEMENTED`. EXPLORE walks in hops with the same walking steps. |
+| Quest-book messages                | On Better Questing's channel the client can send only four typed messages: the empty main_sync answer (reading the quest book) and, with `MC_ENABLE_QUEST_BOOK=true`, quest_action (submit or claim), task_checkbox and choice_reward, for the Age 0 quests only. The forced claim (random choice) and every editing message cannot be expressed; plans never contain these clicks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+Fighting adds one packet to the live client's list: C02 Use Entity with the "attack" action
+(never "interact"), only with `MC_ENABLE_COMBAT=true` and the fence.
 
 ## Directory map
 
@@ -838,9 +995,9 @@ src/safety       safety policy, boundaries, protected items, forbidden-action cl
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner (opt-in)
-src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, explore, chests, crafting, dig and place in a fence or a moving play area; block windows; world surveys), Mineflayer skeleton
+src/bot          MinecraftClient interface, mock client, gtnh1710/ live client (observe; walk, explore, chests, crafting, dig and place in a fence or a moving play area; block windows; fighting; world surveys), Mineflayer skeleton
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
-src/goals        the Age 0 quest book (generated) and goal selection; routes and the GTNH knowledge base (generated)
+src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
 src/app          agent loop, sessions, play loop (with scouting), quest book, provider factory, mock scenarios, CLI
 ```

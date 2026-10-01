@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { BLOCK_CODE } from '../../../src/bot/gtnh1710/block-hazards.ts';
 import {
   bodyProblem,
+  checkSupport,
+  fallDistances,
+  landingHazard,
   MAX_DROP,
   planTerrainWalk,
   terrainSteps,
@@ -140,5 +143,48 @@ describe('terrain steps', () => {
       expect(Math.hypot(s.pos.x - prev.x, s.pos.z - prev.z)).toBeLessThanOrEqual(0.2 + 1e-9);
       prev = s.pos;
     }
+  });
+});
+
+describe('gravity: what holds the player up', () => {
+  const flat = terrain(() => 63); // grass at y 63: feet stand at 64
+
+  it("a player on the ground, or within the server's 0.55 margin above it, is held up", () => {
+    expect(checkSupport(flat, at(0.5, 64, 0.5))).toEqual({ kind: 'supported' });
+    expect(checkSupport(flat, at(0.5, 64.5, 0.5))).toEqual({ kind: 'supported' });
+    // A block one level up beside the player: hanging next to it is not held up by it, but
+    // standing over its edge (the box reaches into its column) is.
+    const step = terrain(() => 63, { '1,64,0': ID.stone });
+    expect(checkSupport(step, at(0.5, 65, 0.5))).toEqual({ kind: 'floating', landY: 64 });
+    expect(checkSupport(step, at(0.9, 65, 0.5))).toEqual({ kind: 'supported' });
+  });
+
+  it('a player left in the air by a stopped jump falls to the block below', () => {
+    expect(checkSupport(flat, at(0.5, 64.83, 0.5))).toEqual({ kind: 'floating', landY: 64 });
+    expect(checkSupport(flat, at(0.5, 66.5, 0.5))).toEqual({ kind: 'floating', landY: 64 });
+    // Tall grass does not stop a fall, but it holds the player up for the server (not air).
+    const grassy = terrain(() => 63, { '0,64,0': ID.tallgrass });
+    expect(checkSupport(grassy, at(0.5, 64.83, 0.5))).toEqual({ kind: 'supported' });
+  });
+
+  it('finds no floor when it is deeper than a safe fall, and nothing when chunks are missing', () => {
+    expect(checkSupport(flat, at(0.5, 70, 0.5))).toEqual({ kind: 'floating', landY: null });
+    const unloaded: WalkWorld = { ...flat, blockAt: () => undefined };
+    expect(checkSupport(unloaded, at(0.5, 64.83, 0.5))).toEqual({ kind: 'unknown' });
+  });
+
+  it('falls with vanilla gravity and flags lava next to the landing', () => {
+    const d = fallDistances(0.83);
+    expect(d.at(-1)).toBeCloseTo(0.83, 9);
+    expect(d.every((x, i) => i === 0 || x > (d[i - 1] ?? 0))).toBe(true);
+    expect(landingHazard(flat, 0, 64, 0)).toBeNull();
+    expect(
+      landingHazard(
+        terrain(() => 63, { '1,64,0': ID.lava }),
+        0,
+        64,
+        0,
+      ),
+    ).toMatch(/lava/);
   });
 });

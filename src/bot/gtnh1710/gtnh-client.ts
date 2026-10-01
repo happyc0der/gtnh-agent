@@ -57,6 +57,40 @@ import {
   type CraftingLayout,
   type PlacedRecipe,
 } from './crafting.ts';
+import {
+  attackRefusal,
+  BARE_HAND,
+  ENGAGE_RADIUS,
+  killStrikeAllowed,
+  MAX_BURST_MS,
+  MAX_SWINGS_PER_BURST,
+  mayExplode,
+  mayKill,
+  strikeReach,
+  SWING_INTERVAL_TICKS,
+  type Weapon,
+} from '../../domain/combat.ts';
+import {
+  chooseWeapon,
+  eyeHeightOf,
+  insideFence,
+  lineOfSightClear,
+  lookAtPoint,
+  playerEyes,
+} from './combat.ts';
+import {
+  BQ_CHANNEL,
+  BqAssembler,
+  choiceRewardOf,
+  claimRewardItems,
+  decodeBqMessage,
+  describeQuestTasks,
+  plainText,
+  questBookRequestProblem,
+  type BqOutbound,
+  type QuestBookRequest,
+} from './better-questing.ts';
+import { rewardSlotsNeeded } from '../../domain/quest-items.ts';
 import { checkDig, eyesOf, faceTowards, reachTo, standSpotFor, type DigArea } from './digging.ts';
 import { ARRIVED, chooseHop, exploreGoal } from './explore.ts';
 import { FmlClientHandshake, MultipartAssembler } from './fml-handshake.ts';
@@ -118,13 +152,22 @@ import {
 } from './walking.ts';
 import {
   bodyProblem,
+  checkSupport,
+  fallDistances,
+  landingHazard,
+  MAX_SAFE_FALL,
   planTerrainWalk,
   standProblem,
   terrainSteps,
   type TerrainStep,
 } from './terrain.ts';
 import { FrameDecoder, ProtocolError, type Frame } from './wire.ts';
-import { WORKBENCH_WINDOW_TYPE, WorldModel, type BlockWatch } from './world-model.ts';
+import {
+  ENTITY_SCAN_RADIUS,
+  WORKBENCH_WINDOW_TYPE,
+  WorldModel,
+  type BlockWatch,
+} from './world-model.ts';
 import { describeSightings, SurveyTracker } from './world-survey.ts';
 
 /** Vanilla clients send one "player" packet per tick (20 per second). */
@@ -133,6 +176,8 @@ const IDLE_TICK_MS = 50;
 const WALK_TICK_MS = 50;
 /** After the last step, ticks to wait for a server correction before calling a walk done. */
 const SETTLE_TICKS = 5;
+/** Idle ticks between two checks that something still holds the player up (gravity). */
+const SUPPORT_CHECK_TICKS = 10;
 /** How long to wait for a chest or crafting table window, and for the server's verdict on one click. */
 const WINDOW_OPEN_TIMEOUT_MS = 3_000;
 const CLICK_TIMEOUT_MS = 3_000;
@@ -180,6 +225,18 @@ interface Hand {
   /** Tools for the block that were passed over, and why (or null). */
   note: string | null;
 }
+
+/**
+ * Better Questing completes quests in its quest loop, every 60 of the player's ticks (3 s at 20
+ * per second), and syncs changed quests every 20 ticks: a submit is judged after 8 s.
+ */
+const QUEST_SUBMIT_TIMEOUT_MS = 8_000;
+/** A ticked box or a claim is synced back within 20 player ticks (1 s); 5 s is generous. */
+const QUEST_SYNC_TIMEOUT_MS = 5_000;
+/** The server echoes a reward choice at once. */
+const QUEST_CHOICE_TIMEOUT_MS = 3_000;
+/** Reward items arrive as slot updates on the server's next tick. */
+const QUEST_REWARD_ITEMS_TIMEOUT_MS = 2_000;
 
 /** "2 x minecraft:sand, 1 x minecraft:flint" (at most 200 characters). */
 function describeGain(gained: ReadonlyArray<[string, number]>): string {
@@ -232,6 +289,13 @@ export interface Gtnh1710ClientOptions {
    * play area never leaves it. Without it, 'follow' refuses all movement.
    */
   explorationBoundary?: PointBox | null;
+  /**
+   * The quests GameState.questBook reports (the agent's Age 0 closure, in order). Quest-book
+   * actions are possible only for these. None when absent.
+   */
+  questScope?: readonly string[];
+  /** Overrides how long a quest-book click waits for the server's verdict (tests). */
+  questBookTimeoutMs?: number;
 }
 
 /** EXPLORE's own limits, on top of maxDistance: hops, time, and the wait for chunks per hop. */
@@ -274,8 +338,9 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
 /**
  * Client for a private GTNH (Minecraft 1.7.10 + Forge) server: read-only, except that it
  * can WALK (and EXPLORE) inside a fence or a moving play area, use configured vanilla
- * CHESTS, CRAFT, DIG and PLACE allowlisted blocks, and use BLOCK WINDOWS (furnaces and other
- * blocks with an interaction profile), each only when explicitly enabled.
+ * CHESTS, CRAFT, DIG and PLACE allowlisted blocks, use BLOCK WINDOWS (furnaces and other
+ * blocks with an interaction profile) and FIGHT one checked entity, each only when explicitly
+ * enabled.
  *
  * Guarantees, enforced here and in packets.ts:
  *  - never connects unless live connections are enabled, an identity marker is set, the
@@ -284,16 +349,18 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    channel registration, idle ticks, confirmations of server-assigned positions, walking
  *    steps, the window packets chests and crafting need (empty-hand block activation,
  *    hotbar selection, predictable clicks, confirmations, closing a window), digging
- *    start/cancel/finish, a block placement with the held block item, and the cosmetic head
- *    look and arm swing;
+ *    start/cancel/finish, a block placement with the held block item, attacks on one checked
+ *    entity (C02, attack only), the cosmetic head look and arm swing, and Better Questing's
+ *    four typed quest-book messages (the main_sync answer that reading the quest book needs,
+ *    and submit, checkbox, choice and claim when the quest book is enabled);
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
  *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
  *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
  *    DEPOSIT_ITEM / WITHDRAW_ITEM when containers are enabled, CRAFT_ITEM when crafting is
- *    enabled, DIG_BLOCK when digging is enabled, PLACE_BLOCK when placing is enabled and
- *    INTERACT_BLOCK / SMELT / TAKE_OUTPUT when interacting is enabled (NOT_IMPLEMENTED
- *    otherwise); every other world-changing action returns NOT_IMPLEMENTED without sending
- *    anything;
+ *    enabled, DIG_BLOCK when digging is enabled, PLACE_BLOCK when placing is enabled,
+ *    INTERACT_BLOCK / SMELT / TAKE_OUTPUT when interacting is enabled and ATTACK_ENTITY when
+ *    combat is enabled (NOT_IMPLEMENTED otherwise); every other world-changing action returns
+ *    NOT_IMPLEMENTED without sending anything;
  *  - a walk stays inside the fence (one level, or terrain when the fence has a height
  *    range; in mode 'follow' the play area around the player, inside the exploration
  *    boundary: #fence()), and every step is re-checked just before it is sent; it stops on
@@ -307,13 +374,17 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    hand;
  *  - a placement puts one allowlisted block into a cell placing.ts has checked, clicking
  *    only a plain full block, never a chest, machine or modded block;
- *  - walking, window work, digging and placing never run at the same time.
+ *  - a fight strikes one entity src/domain/combat.ts allows, with an allowlisted weapon or an
+ *    empty hand, never moving, and re-checks the target and the moment every tick;
+ *  - walking, window work, digging, placing and fighting never run at the same time.
  */
 export class Gtnh1710Client implements MinecraftClient {
   readonly kind = 'gtnh1710';
   readonly #opts: Gtnh1710ClientOptions;
   readonly #world = new WorldModel();
   readonly #multipart = new MultipartAssembler();
+  /** Better Questing's sliced messages from the server, reassembled. */
+  readonly #questBookSlices = new BqAssembler();
   readonly #outboundCounts = new Map<OutboundKind, number>();
   #socket: Socket | null = null;
   #phase: Phase = 'idle';
@@ -321,6 +392,10 @@ export class Gtnh1710Client implements MinecraftClient {
   #identity: ServerIdentity | null = null;
   #decoding: PlayDecodeOptions = VANILLA_DECODING;
   #idleTimer: NodeJS.Timeout | null = null;
+  /** Idle ticks sent (for the support check every SUPPORT_CHECK_TICKS). */
+  #idleTicks = 0;
+  /** The last "in the air" problem logged, so it is logged once, not every check. */
+  #floatingNote: string | null = null;
   #closedReason: string | null = null;
   #connectedAt: Date | null = null;
   #confirmedPositions = 0;
@@ -334,6 +409,8 @@ export class Gtnh1710Client implements MinecraftClient {
   /** A chest or crafting operation is running (they, and walking, exclude each other). */
   #usingContainer = false;
   #digging = false;
+  /** An ATTACK_ENTITY burst is running (it excludes walking, window work, digging and placing). */
+  #fighting = false;
   #placing = false;
   /** Sync clicks sent while crafting (diagnostics). */
   #craftSyncs = 0;
@@ -341,6 +418,8 @@ export class Gtnh1710Client implements MinecraftClient {
   #exploring = false;
   /** What the player has seen around it, for world memory (world-survey.ts). */
   readonly #surveys = new SurveyTracker();
+  /** A quest-book click is waiting for the server's verdict. */
+  #questBookBusy = false;
 
   constructor(opts: Gtnh1710ClientOptions) {
     this.#opts = opts;
@@ -395,6 +474,7 @@ export class Gtnh1710Client implements MinecraftClient {
     };
     this.#world.setChunkFormat({ neid: this.#decoding.neid });
     this.#world.setServerMods(this.#identity.mods);
+    this.#world.setQuestScope(this.#opts.questScope ?? []);
     this.#world.setContainers(
       Object.entries(cfg.containers.chests).map(([id, c]) => ({
         id,
@@ -607,12 +687,28 @@ export class Gtnh1710Client implements MinecraftClient {
         return this.#smelt(action.args);
       case 'TAKE_OUTPUT':
         return this.#takeOutput(action.args);
+      case 'ATTACK_ENTITY':
+        return this.#attack(action.args.entityId);
+      case 'SUBMIT_QUEST':
+        return this.#questBookAction({ kind: 'submit', questId: action.args.questId });
+      case 'CHECK_QUEST_BOX':
+        return this.#questBookAction({
+          kind: 'check',
+          questId: action.args.questId,
+          taskIndex: action.args.taskIndex,
+        });
+      case 'CLAIM_QUEST_REWARD':
+        return this.#questBookAction({
+          kind: 'claim',
+          questId: action.args.questId,
+          choice: action.args.choice,
+        });
       case 'EAT_FOOD':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
         return Promise.resolve(
           failed(
-            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft, dig, place and use block windows`,
+            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft, dig, place, use block windows and fight`,
             'NOT_IMPLEMENTED',
           ),
         );
@@ -633,6 +729,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#fighting) return 'the player is fighting';
     return null;
   }
 
@@ -976,6 +1073,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
+    if (this.#fighting) return 'the player is fighting';
     return null;
   }
 
@@ -1401,6 +1499,8 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
+    if (this.#placing) return 'the player is placing a block';
+    if (this.#fighting) return 'the player is fighting';
     return null;
   }
 
@@ -1869,6 +1969,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#usingContainer) return refused('a chest or crafting operation is running');
     if (this.#digging) return refused('a dig is already in progress');
     if (this.#placing) return refused('the player is placing a block');
+    if (this.#fighting) return refused('the player is fighting');
     return null;
   }
 
@@ -2391,6 +2492,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#usingContainer) return refused('a chest or crafting operation is running');
     if (this.#digging) return refused('the player is digging');
     if (this.#placing) return refused('a placement is already in progress');
+    if (this.#fighting) return refused('the player is fighting');
     return null;
   }
 
@@ -2725,6 +2827,458 @@ export class Gtnh1710Client implements MinecraftClient {
     return { ok: true };
   }
 
+  // -------------------------------------------------------------------------
+  // Fighting: one ATTACK_ENTITY burst (combat.ts, src/domain/combat.ts)
+
+  /** Why fighting cannot start now, or null. */
+  #combatBlocker(): { reason: string; code: 'NOT_IMPLEMENTED' | 'REFUSED' } | null {
+    const cfg = this.#opts.config;
+    if (!cfg.combat.enabled) {
+      return { reason: 'combat is disabled (MC_ENABLE_COMBAT)', code: 'NOT_IMPLEMENTED' };
+    }
+    const refused = (reason: string) => ({ reason, code: 'REFUSED' as const });
+    const area = this.#fence();
+    if (area.fence === null) {
+      return refused(`${area.problem}: the player and its target stay inside the fence`);
+    }
+    if (!cfg.presenceTicks) return refused('fighting needs presence ticks (MC_PRESENCE_TICKS)');
+    if (this.#haltReason !== null) return refused(`halted: ${this.#haltReason}`);
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return refused(`the stop file ${cfg.movement.stopFile} exists`);
+    }
+    if (this.#walking) return refused('the player is walking');
+    if (this.#usingContainer) return refused('a chest or crafting operation is running');
+    if (this.#digging) return refused('the player is digging');
+    if (this.#placing) return refused('the player is placing a block');
+    if (this.#exploring) return refused('the player is exploring');
+    if (this.#questBookBusy) return refused('a quest-book action is running');
+    if (this.#fighting) return refused('a fight is already in progress');
+    return null;
+  }
+
+  /** Why this target cannot be engaged (never, or not from here), or null. */
+  #targetProblem(entityId: number, fence: Fence): string | null {
+    const t = this.#world.combatEntity(entityId);
+    if (t === null) return `entity ${entityId} is not tracked near the player`;
+    const refusal = attackRefusal(t);
+    if (refusal !== null) return refusal;
+    if (!insideFence(t.position, fence)) return `the ${t.type} is outside the fence`;
+    if (t.distance > ENGAGE_RADIUS) {
+      return `the ${t.type} is ${t.distance.toFixed(1)} blocks away (engages within ${ENGAGE_RADIUS})`;
+    }
+    return null;
+  }
+
+  /**
+   * Why the moment is unsafe for fighting, or null: the entity picture is incomplete, an
+   * unidentified entity is within the threat radius, or something that explodes (or might:
+   * anything unidentified) is within the scan. Checked before the burst and every tick of it.
+   */
+  #fightMomentProblem(): string | null {
+    if (!this.#world.entitiesReady(this.#opts.clock.now())) {
+      return 'the entities around the player are not fully known';
+    }
+    const unidentified = this.#world
+      .nearbyEntities(this.#opts.config.movement.threatRadius)
+      .find((e) => e.category === 'unclassified');
+    if (unidentified !== undefined) {
+      return `unidentified entity ${unidentified.name} ${unidentified.distance.toFixed(1)} blocks away`;
+    }
+    const explosive = this.#world
+      .nearbyEntities(ENTITY_SCAN_RADIUS)
+      .find(
+        (e) =>
+          (e.category === 'hostile' || e.category === 'unclassified') &&
+          mayExplode(e.name, e.category),
+      );
+    if (explosive !== undefined) {
+      return `${explosive.name} ${explosive.distance.toFixed(1)} blocks away may explode: back off`;
+    }
+    return null;
+  }
+
+  /**
+   * ATTACK_ENTITY: engage ONE entity for a bounded burst. The player does not move. It holds
+   * the best allowlisted weapon in the hotbar (else an empty hand), and strikes as a player
+   * does (C05 look, C0A arm swing, C02 attack) whenever the target is within reach, one full
+   * hit per SWING_INTERVAL_TICKS (a mob takes full damage again only 10 ticks after one),
+   * until the target dies, MAX_SWINGS_PER_BURST swings, or MAX_BURST_MS. Every tick it stops
+   * for: the halt, the stop file, a server correction, a lost connection, ANY damage taken (so
+   * System 1 decides again), an unidentified entity or something that may explode nearby, and
+   * a target that is gone, out of the fence or out of range. A blow that may kill is held
+   * back while the player would not survive GTNH's kill explosion from where it stands.
+   */
+  async #attack(entityId: number): Promise<ClientActionResult> {
+    const blocker = this.#combatBlocker();
+    const fence = this.#fence().fence;
+    if (blocker !== null || fence === null) {
+      return failed(`not attacking: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED');
+    }
+    const me = this.#world.ownPosition;
+    if (me === null) return failed('not attacking: player position unknown', 'REFUSED');
+    if (!insideFence(me, fence))
+      return failed('not attacking: the player is outside the fence', 'REFUSED');
+    const notTarget = this.#targetProblem(entityId, fence);
+    if (notTarget !== null) return failed(`not attacking: ${notTarget}`, 'REFUSED');
+    const unsafe = this.#fightMomentProblem();
+    if (unsafe !== null) return failed(`not attacking: ${unsafe}`, 'REFUSED');
+
+    this.#fighting = true;
+    try {
+      // A window left open by an earlier action is closed first (never with a full cursor).
+      if (this.#world.openWindow !== null) {
+        const closed = this.#closeOpenWindow();
+        if (closed !== null) return failed(`not attacking: ${closed.message}`, 'REFUSED');
+      }
+      const hotbar = this.#world.hotbar();
+      if (hotbar === null) return failed('not attacking: the inventory is not known', 'REFUSED');
+      // The best allowlisted weapon in the hotbar, else an empty hand: never anything else
+      // (a held item's own left-click code could do anything).
+      const choice = chooseWeapon(hotbar, this.#world.heldSlot);
+      let slot: number;
+      let weapon: Weapon;
+      if (choice !== null) {
+        slot = choice.slot;
+        weapon = choice.weapon;
+      } else {
+        const hand = this.#emptyHotbarSlot();
+        if (hand === null) {
+          return failed(
+            'not attacking: no allowlisted weapon and no empty hotbar slot to strike with',
+            'REFUSED',
+          );
+        }
+        slot = hand;
+        weapon = BARE_HAND;
+      }
+      if (slot !== this.#world.heldSlot) {
+        this.#send(outbound.selectHotbarSlot(slot));
+        this.#world.setHeldSlot(slot);
+      }
+      return await this.#strikeBurst(entityId, fence, weapon);
+    } finally {
+      this.#fighting = false;
+    }
+  }
+
+  async #strikeBurst(entityId: number, fence: Fence, weapon: Weapon): Promise<ClientActionResult> {
+    const clock = this.#opts.clock;
+    const first = this.#world.combatEntity(entityId);
+    if (first === null) return failed('not attacking: the target is gone', 'REFUSED');
+    const what = `${first.type} ${entityId}`;
+    const startedAt = clock.now().getTime();
+    const deadline = startedAt + MAX_BURST_MS;
+    // The held item's damage counts only after the server's next player tick (idle ticks run
+    // every 50 ms), so the first swing waits two ticks.
+    let nextSwingAt = startedAt + 2 * TICK_MS;
+    const healthAtStart = this.#world.health;
+    const placementsAtStart = this.#confirmedPositions;
+    let hurt = first.hurtCount;
+    let lastHealth = first.health;
+    let swings = 0;
+    let heldBack = 0;
+    let stop: { reason: string; hard: boolean } | null = null;
+    this.#log(`engaging ${what} with ${weapon.item ?? 'a bare hand'} (${weapon.damage} per hit)`);
+
+    while (stop === null) {
+      await delay(TICK_MS);
+      const now = clock.now().getTime();
+      // Hard stops: the operator, the connection, the server moving the player.
+      if (this.#phase !== 'play') stop = { reason: 'the connection closed', hard: true };
+      else if (this.#haltReason !== null)
+        stop = { reason: `halted: ${this.#haltReason}`, hard: true };
+      else if (existsSync(resolvePath(this.#opts.config.movement.stopFile))) {
+        stop = {
+          reason: `the stop file ${this.#opts.config.movement.stopFile} exists`,
+          hard: true,
+        };
+      } else if (this.#confirmedPositions !== placementsAtStart) {
+        stop = { reason: 'the server corrected the position', hard: true };
+      }
+      if (stop !== null) break;
+      const t = this.#world.combatEntity(entityId);
+      if (t !== null) {
+        hurt = Math.max(hurt, t.hurtCount);
+        lastHealth = t.health ?? lastHealth;
+      }
+      const health = this.#world.health;
+      if (this.#world.hasDied(entityId) || t?.dead === true) {
+        stop = { reason: 'the target died', hard: false };
+      } else if (t === null) {
+        stop = { reason: 'the target is gone', hard: false };
+      } else if (healthAtStart !== null && health !== null && health < healthAtStart) {
+        stop = { reason: `the player took ${healthAtStart - health} damage`, hard: false };
+      } else {
+        const moment = this.#fightMomentProblem();
+        const target = moment ?? this.#targetProblem(entityId, fence);
+        if (target !== null) stop = { reason: target, hard: false };
+        else if (swings >= MAX_SWINGS_PER_BURST && now >= nextSwingAt) {
+          stop = { reason: `${swings} swings`, hard: false };
+        } else if (now >= deadline) {
+          stop = { reason: 'the burst is over', hard: false };
+        }
+      }
+      if (stop !== null || t === null || swings >= MAX_SWINGS_PER_BURST || now < nextSwingAt) {
+        continue;
+      }
+      const feet = this.#world.ownPosition;
+      if (feet === null) {
+        stop = { reason: 'player position unknown', hard: true };
+        continue;
+      }
+      const eyes = playerEyes(feet);
+      const aim = { x: t.position.x, y: t.position.y + eyeHeightOf(t.type), z: t.position.z };
+      const world = this.#world.walkWorld();
+      const sight = world !== null && lineOfSightClear(world, eyes, aim);
+      if (t.distance > strikeReach(weapon, sight)) continue; // wait for it to come within reach
+      if (mayKill(t.health, weapon) && !killStrikeAllowed(health ?? 0, t.distance)) {
+        // GTNH's AngerMod may blow up what a player kills: not from this close, at this health.
+        if (heldBack === 0) {
+          this.#log(
+            `holding a blow that may kill the ${t.type} ${t.distance.toFixed(1)} blocks away`,
+          );
+        }
+        heldBack += 1;
+        continue;
+      }
+      const look = lookAtPoint(eyes, aim);
+      this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
+      this.#lastYaw = look.yaw;
+      const self = this.#world.selfEntityId;
+      if (self !== null) this.#send(outbound.swingArm(self));
+      this.#send(outbound.attackEntity(entityId));
+      swings += 1;
+      nextSwingAt = now + SWING_INTERVAL_TICKS * TICK_MS;
+    }
+
+    // The answers to the last swing (hurt and death statuses, the new health) take a tick.
+    if (swings > 0 && this.#phase === 'play') {
+      await this.#waitFor(() => this.#world.hasDied(entityId), 4 * TICK_MS);
+      const t = this.#world.combatEntity(entityId);
+      if (t !== null) {
+        hurt = Math.max(hurt, t.hurtCount);
+        lastHealth = t.health ?? lastHealth;
+      }
+    }
+    const killed = this.#world.hasDied(entityId);
+    const hits = hurt - first.hurtCount;
+    const healthNow = this.#world.health;
+    const damageTaken =
+      healthAtStart !== null && healthNow !== null ? Math.max(0, healthAtStart - healthNow) : null;
+    const reason = stop?.reason ?? 'the burst is over';
+    const data = {
+      entityId,
+      target: first.type,
+      weapon: weapon.item,
+      swings,
+      hits,
+      kills: killed ? 1 : 0,
+      targetHealthBefore: first.health,
+      targetHealthAfter: killed ? 0 : lastHealth,
+      damageTaken,
+      heldBack,
+      stopReason: reason.slice(0, 200),
+    };
+    this.#log(
+      `fight with ${what}: ${swings} swing(s), ${hits} hit(s)${killed ? ', killed' : ''}; ${reason}`,
+    );
+    const summary =
+      `${killed ? 'killed' : 'struck'} ${what}: ${swings} swing(s), ${hits} hit(s) seen` +
+      `${first.health !== null ? `, health ${first.health} -> ${killed ? 0 : (lastHealth ?? '?')}` : ''}` +
+      `${damageTaken !== null && damageTaken > 0 ? `, took ${damageTaken} damage` : ''}; stopped: ${reason}`;
+    if (stop?.hard === true) return craftFailed(`fight stopped: ${summary}`, 'FAILED', data);
+    if (hits > 0 || killed) return ok(summary.slice(0, 500), data);
+    return craftFailed(`no hit landed on ${what}: ${summary}`, 'FAILED', data);
+  }
+
+  // -------------------------------------------------------------------------
+  // The quest book (Better Questing; see better-questing.ts)
+
+  /** Why a quest-book click cannot be made now, or null. */
+  #questBookBlocker(): { reason: string; code: 'NOT_IMPLEMENTED' | 'REFUSED' } | null {
+    const cfg = this.#opts.config;
+    if (!cfg.questBook.enabled) {
+      return {
+        reason: 'quest-book actions are disabled (MC_ENABLE_QUEST_BOOK)',
+        code: 'NOT_IMPLEMENTED',
+      };
+    }
+    const refused = (reason: string) => ({ reason, code: 'REFUSED' as const });
+    // The server's quest loop runs on the player's own ticks: without them nothing completes.
+    if (!cfg.presenceTicks) {
+      return refused('quest-book actions need presence ticks (MC_PRESENCE_TICKS)');
+    }
+    if (this.#haltReason !== null) return refused(`halted: ${this.#haltReason}`);
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return refused(`the stop file ${cfg.movement.stopFile} exists`);
+    }
+    if (this.#walking || this.#exploring) return refused('the player is walking');
+    if (this.#digging) return refused('the player is digging');
+    if (this.#placing) return refused('the player is placing a block');
+    if (this.#usingContainer) return refused('a chest or crafting operation is running');
+    if (this.#fighting) return refused('the player is fighting');
+    if (this.#questBookBusy) return refused('a quest-book action is already running');
+    return null;
+  }
+
+  #sendQuestBook(message: BqOutbound): void {
+    for (const p of outbound.questBook(message)) this.#send(p);
+  }
+
+  /**
+   * SUBMIT_QUEST, CHECK_QUEST_BOX and CLAIM_QUEST_REWARD: the quest book's own clicks, sent
+   * only after re-checking the server's quest book as it is now, and judged by the server's
+   * next sync (the quest completed, the box ticked, the rewards claimed and in the inventory).
+   */
+  async #questBookAction(req: QuestBookRequest): Promise<ClientActionResult> {
+    const blocker = this.#questBookBlocker();
+    if (blocker !== null)
+      return failed(`not using the quest book: ${blocker.reason}`, blocker.code);
+    const book = this.#world.questBook;
+    const problem = questBookRequestProblem(book, this.#opts.questScope ?? [], req);
+    if (problem !== null) return failed(`not using the quest book: ${problem}`, 'REFUSED');
+    this.#questBookBusy = true;
+    try {
+      switch (req.kind) {
+        case 'submit':
+          return await this.#submitQuest(req.questId);
+        case 'check':
+          return await this.#checkQuestBox(req.questId, req.taskIndex);
+        case 'claim':
+          return await this.#claimQuest(req.questId, req.choice);
+      }
+    } finally {
+      this.#questBookBusy = false;
+    }
+  }
+
+  #questTimeout(ms: number): number {
+    return this.#opts.questBookTimeoutMs ?? ms;
+  }
+
+  #questName(id: string): string {
+    return `"${plainText(this.#world.questBook.config(id)?.name ?? id)}"`;
+  }
+
+  /** Inventory decreases since `before`, as "2 x minecraft:log". */
+  #handedIn(before: Readonly<Record<string, number>> | null): string {
+    const now = this.#world.inventoryItems();
+    if (before === null || now === null) return '';
+    return describeGain(
+      Object.entries(before)
+        .map(([item, n]): [string, number] => [item, n - (now[item] ?? 0)])
+        .filter(([, d]) => d > 0),
+    );
+  }
+
+  async #submitQuest(id: string): Promise<ClientActionResult> {
+    const book = this.#world.questBook;
+    const before = this.#world.inventoryItems();
+    this.#sendQuestBook({ kind: 'quest-action', action: 'detect', questIds: [id] });
+    await this.#waitFor(() => book.completed(id), this.#questTimeout(QUEST_SUBMIT_TIMEOUT_MS));
+    const handedIn = this.#handedIn(before);
+    if (!book.completed(id)) {
+      return failed(
+        `the server did not record ${this.#questName(id)} as completed within ` +
+          `${this.#questTimeout(QUEST_SUBMIT_TIMEOUT_MS) / 1000} s of the submit (tasks: ${describeQuestTasks(book, id)})` +
+          (handedIn === '' ? '' : `; handed in: ${handedIn}`),
+        'FAILED',
+        { questId: id, handedIn },
+      );
+    }
+    this.#log(`quest book: ${this.#questName(id)} completed after a submit`);
+    return ok(
+      `submitted ${this.#questName(id)}: the server records it as completed` +
+        (handedIn === '' ? '' : ` (handed in ${handedIn})`),
+      { questId: id, handedIn },
+    );
+  }
+
+  async #checkQuestBox(id: string, taskIndex: number): Promise<ClientActionResult> {
+    const book = this.#world.questBook;
+    this.#sendQuestBook({ kind: 'task-checkbox', questId: id, taskIndex });
+    const done = (): boolean => book.taskComplete(id, taskIndex) || book.completed(id);
+    await this.#waitFor(done, this.#questTimeout(QUEST_SYNC_TIMEOUT_MS));
+    if (!done()) {
+      return failed(
+        `the server did not record checkbox ${taskIndex} of ${this.#questName(id)} as ticked`,
+        'FAILED',
+        { questId: id, taskIndex },
+      );
+    }
+    return ok(`ticked checkbox ${taskIndex} of ${this.#questName(id)}`, { questId: id, taskIndex });
+  }
+
+  async #claimQuest(id: string, choice: number | null): Promise<ClientActionResult> {
+    const book = this.#world.questBook;
+    const config = book.config(id);
+    const expected = config === null ? 'unknown quest' : claimRewardItems(config, choice);
+    if (typeof expected === 'string') {
+      return failed(`not claiming ${this.#questName(id)}: ${expected}`, 'REFUSED');
+    }
+    if (config === null) return failed(`not claiming: unknown quest ${id}`, 'REFUSED');
+    // Rewards that do not fit are dropped into the world: refuse without room for them.
+    const storage = this.#world.playerStorage();
+    if (storage === null) return failed('not claiming: the inventory is not known', 'REFUSED');
+    const free = storage.filter((s) => s === null).length;
+    const needed = rewardSlotsNeeded([...expected.values()].map((count) => ({ count })));
+    if (free < needed) {
+      return failed(
+        `not claiming ${this.#questName(id)}: its rewards need ${needed} free slots, ${free} are free`,
+        'REFUSED',
+      );
+    }
+    const choiceReward = choiceRewardOf(config);
+    if (choice !== null && choiceReward !== null && typeof choiceReward !== 'string') {
+      const r = choiceReward.index;
+      if (book.selection(id, r) !== choice) {
+        this.#sendQuestBook({
+          kind: 'choice-reward',
+          questId: id,
+          rewardIndex: r,
+          selection: choice,
+        });
+        await this.#waitFor(
+          () => book.selection(id, r) === choice,
+          this.#questTimeout(QUEST_CHOICE_TIMEOUT_MS),
+        );
+        if (book.selection(id, r) !== choice) {
+          return failed(
+            `the server did not acknowledge choice ${choice} for ${this.#questName(id)}`,
+            'FAILED',
+            { questId: id },
+          );
+        }
+      }
+    }
+    const before = this.#world.inventoryItems() ?? {};
+    this.#sendQuestBook({ kind: 'quest-action', action: 'claim', questIds: [id] });
+    await this.#waitFor(() => book.claimed(id), this.#questTimeout(QUEST_SYNC_TIMEOUT_MS));
+    if (!book.claimed(id)) {
+      return failed(
+        `the server did not record the rewards of ${this.#questName(id)} as claimed`,
+        'FAILED',
+        { questId: id },
+      );
+    }
+    // The items arrive as slot updates (usually before the sync): wait for all of them.
+    const gains = (): Array<[string, number]> => {
+      const now = this.#world.inventoryItems() ?? {};
+      return [...new Set([...Object.keys(now), ...expected.keys()])]
+        .map((item): [string, number] => [item, (now[item] ?? 0) - (before[item] ?? 0)])
+        .filter(([, d]) => d !== 0);
+    };
+    const complete = (): boolean =>
+      [...expected].every(([item, n]) => gains().some(([g, d]) => g === item && d >= n));
+    await this.#waitFor(complete, this.#questTimeout(QUEST_REWARD_ITEMS_TIMEOUT_MS));
+    const gained = describeGain(gains());
+    this.#log(`quest book: claimed ${this.#questName(id)}: ${gained || 'no items'}`);
+    return ok(`claimed the rewards of ${this.#questName(id)}: ${gained || 'no items'}`, {
+      questId: id,
+      gained,
+    });
+  }
+
   /**
    * WAIT's postcondition is "observed time advanced by at least `ms`", and a live state is
    * timestamped with the arrival of the last server packet (the honest "as of"). So wait
@@ -2805,6 +3359,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
     if (existsSync(resolvePath(m.stopFile))) return `the stop file ${m.stopFile} exists`;
     if (this.#usingContainer) return 'a chest or crafting operation is running';
+    if (this.#fighting) return 'the player is fighting';
     if (this.#digging) return 'the player is digging';
     if (this.#placing) return 'the player is placing a block';
     // Walking away closes an open window server-side, which drops the cursor and a table's grid.
@@ -3210,7 +3765,79 @@ export class Gtnh1710Client implements MinecraftClient {
 
   #startIdle(): void {
     if (this.#idleTimer !== null || this.#walking) return;
-    this.#idleTimer = setInterval(() => this.#send(outbound.playerIdle(ON_GROUND)), IDLE_TICK_MS);
+    this.#idleTimer = setInterval(() => {
+      this.#send(outbound.playerIdle(ON_GROUND));
+      this.#idleTicks += 1;
+      if (this.#idleTicks % SUPPORT_CHECK_TICKS === 0) void this.#keepSupported();
+    }, IDLE_TICK_MS);
+  }
+
+  /**
+   * Gravity, which this client does not otherwise simulate. When nothing holds the player up
+   * (a walk stopped between a jump's or a drop's steps, the ground fell away, or the server
+   * put it in the air at login), it falls onto the block below as a game client would: the
+   * server kicks a player that floats for 4 seconds ("Flying is not enabled on this server").
+   * Only when walking is allowed and nothing else runs, only within the fence, and only a fall
+   * of at most MAX_SAFE_FALL blocks (no damage) onto a spot with no hazard next to it;
+   * otherwise it logs why and stays (a kick is harmless, a bad fall is not).
+   */
+  async #keepSupported(): Promise<void> {
+    if (this.#phase !== 'play' || this.#walking || this.#exploring) return;
+    if (this.#digging || this.#placing || this.#fighting || this.#questBookBusy) return;
+    if (this.#movementBlocker() !== null) return;
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    const fence = this.#fence().fence;
+    if (world === null || feet === null || fence === null) return;
+    const support = checkSupport(world, feet);
+    if (support.kind !== 'floating') {
+      this.#floatingNote = null;
+      return;
+    }
+    const note = (why: string): void => {
+      if (this.#floatingNote === why) return;
+      this.#floatingNote = why;
+      this.#log(
+        `in the air at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}) and not falling: ${why}`,
+      );
+    };
+    const landY = support.landY;
+    if (landY === null || feet.y - landY > MAX_SAFE_FALL) {
+      note(`no floor within ${MAX_SAFE_FALL} blocks below`);
+      return;
+    }
+    const landing = { x: feet.x, y: landY, z: feet.z };
+    if (!fenceHolds(fence, landing)) {
+      note('the floor below is outside the fence');
+      return;
+    }
+    const hazard = landingHazard(world, Math.floor(feet.x), landY, Math.floor(feet.z));
+    if (hazard !== null) {
+      note(`the floor below is ${hazard}`);
+      return;
+    }
+    // Falling is a walk of its own: nothing else may start meanwhile.
+    this.#walking = true;
+    this.#stopIdle();
+    try {
+      const fallen = fallDistances(feet.y - landY);
+      for (const [i, d] of fallen.entries()) {
+        const pos = { x: feet.x, y: i === fallen.length - 1 ? landY : feet.y - d, z: feet.z };
+        this.#send(
+          outbound.playerMove(
+            { x: pos.x, feetY: pos.y, z: pos.z, yaw: this.#lastYaw, pitch: 0 },
+            i === fallen.length - 1,
+          ),
+        );
+        this.#world.setOwnPosition(pos);
+        await delay(WALK_TICK_MS);
+      }
+      this.#floatingNote = null;
+      this.#log(`fell ${(feet.y - landY).toFixed(2)} blocks onto the ground at y=${landY}`);
+    } finally {
+      this.#walking = false;
+      if (this.#phase === 'play') this.#startIdle();
+    }
   }
 
   #stopIdle(): void {
@@ -3347,6 +3974,8 @@ export class Gtnh1710Client implements MinecraftClient {
           if (this.#identity === null) throw new Error('internal: identity missing at login');
           this.#phase = 'play';
           this.#handshake = new FmlClientHandshake(this.#identity.mods);
+          // Better Questing keys this player's progress by this UUID (GameProfile id).
+          this.#world.questBook.setPlayer(packet.uuid);
           this.#log(`logged in as ${packet.username}`);
           return;
         case 'unhandled':
@@ -3405,6 +4034,8 @@ export class Gtnh1710Client implements MinecraftClient {
       case 'spawn-player':
       case 'spawn-object':
       case 'spawn-mob':
+      case 'entity-status':
+      case 'entity-metadata':
       case 'destroy-entities':
       case 'entity-move':
       case 'entity-teleport':
@@ -3435,10 +4066,14 @@ export class Gtnh1710Client implements MinecraftClient {
       }
       return;
     }
+    if (channel === BQ_CHANNEL) {
+      this.#onQuestBookMessage(data);
+      return;
+    }
     if (channel === 'FML') {
       // Forge runtime messages: this is how GTNH's modded mobs are spawned and moved.
       try {
-        this.#world.applyFml(decodeFmlRuntimeMessage(data), this.#opts.clock.now());
+        this.#world.applyFml(decodeFmlRuntimeMessage(data, this.#decoding), this.#opts.clock.now());
       } catch (error) {
         if (!(error instanceof ProtocolError)) throw error;
         this.#log(`could not decode FML message: ${error.message}`);
@@ -3453,6 +4088,32 @@ export class Gtnh1710Client implements MinecraftClient {
       this.#send(outbound.pluginMessage(message.channel, message.data));
     if (this.#handshake.registry !== null && this.#world.registry === null) {
       this.#world.setRegistry(this.#handshake.registry);
+    }
+  }
+
+  /**
+   * Better Questing (BQ_NET_CHAN): reassemble the server's sliced message, fold it into the
+   * quest book, and answer main_sync {respond} exactly as the stock client does (an empty
+   * main_sync), which is what makes the server send the quest database. A message that
+   * cannot be decoded makes the quest book unknown for this connection.
+   */
+  #onQuestBookMessage(data: Buffer): void {
+    try {
+      const payload = this.#questBookSlices.push(data);
+      if (payload === null) return;
+      const message = decodeBqMessage(payload);
+      this.#world.applyQuestBook(message, this.#opts.clock.now());
+      if (message.type === 'main-sync' && message.respond) {
+        for (const p of outbound.questBook({ kind: 'main-sync-reply' })) this.#send(p);
+        this.#log('quest book: answered main_sync; waiting for the quest database');
+      }
+      if (message.type === 'quest-sync' && !message.merge) {
+        this.#log(`quest book: ${message.entries.length} quests from the server`);
+      }
+    } catch (error) {
+      if (!(error instanceof ProtocolError)) throw error;
+      this.#log(`could not decode a Better Questing message: ${error.message}`);
+      this.#world.markQuestBookProblem(`undecodable Better Questing message: ${error.message}`);
     }
   }
 

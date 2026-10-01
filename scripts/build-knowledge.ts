@@ -20,7 +20,14 @@
  *  - mods/GTNewHorizonsCoreMod-*.jar: output counts of the recipes its scripts register
  *    (the dump has no output counts)
  *  - config/GregTech/*.cfg: vanilla ore generation, ore drop behaviour, harvest-level switch
- *  - config/IguanaTinkerTweaks/*.cfg: block harvest levels, tool levels, level names
+ *  - config/IguanaTinkerTweaks/*.cfg: block harvest levels, tool levels, level names, which
+ *    tools mine nothing, gravel's flint
+ *  - config/HungerOverhaul/HungerOverhaul.cfg: healing and food values (for the changes table)
+ *  - the vanilla 1.7.10 base layer: minecraft-data 3.117.0 (PrismarineJS, MIT licence;
+ *    node_modules/minecraft-data, data/pc/1.7) and the server's minecraft_server.1.7.10.jar
+ *    (recipes with counts, smelting, tool materials, ore generation, block drops)
+ *  - from both layers: the "changes from vanilla" table (also written to
+ *    docs/gtnh-vs-vanilla.md; run prettier on it after regenerating)
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -29,18 +36,26 @@ import { parseArgs } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import dotenv from 'dotenv';
 import { ItemNameSchema } from '../src/domain/common.ts';
+import { ingredientRequirements, RECIPE_IDS, RECIPES } from '../src/domain/recipes.ts';
 import {
   CraftFlag,
   KNOWLEDGE_FILE,
   KNOWLEDGE_FORMAT,
+  type CountFrom,
   type CraftingRow,
   type IngredientRef,
   type KnowledgeData,
   type KnowledgeSource,
   type OreBlockInfo,
   type SmallOre,
+  type VanillaLayer,
   type Vein,
 } from '../src/goals/knowledge.ts';
+import {
+  buildChanges,
+  sameIngredients as sameAsVanilla,
+  type GtnhRecipeView,
+} from './knowledge/changes.ts';
 import { categoryAt, parseForgeConfig, type ConfigCategory } from './knowledge/forge-config.ts';
 import {
   gtOreHarvestLevel,
@@ -57,6 +72,7 @@ import {
   type ItemRef,
 } from './knowledge/minetweaker.ts';
 import { readScriptRecipes } from './knowledge/nhcore.ts';
+import { readMinecraftData, readServerJar } from './knowledge/vanilla.ts';
 
 dotenv.config({ quiet: true });
 const { values } = parseArgs({
@@ -70,12 +86,12 @@ const serverDir = (values.server ?? process.env['TEST_SERVER_DIR'] ?? '').trim()
 if (serverDir === '') throw new Error('Set TEST_SERVER_DIR (.env) or pass --server <dir>');
 
 const sources: KnowledgeSource[] = [];
-function readSource(path: string, detail: string): Buffer {
+function readSource(path: string, detail: string, name?: string): Buffer {
   const buf = readFileSync(path);
   const rel = relative(serverDir, path).replace(/\\/g, '/');
   sources.push({
     // Inside the server folder: its path there; elsewhere (e.g. --log): the file name.
-    name: rel.startsWith('..') || /^[A-Za-z]:/.test(rel) ? basename(path) : rel,
+    name: name ?? (rel.startsWith('..') || /^[A-Za-z]:/.test(rel) ? basename(path) : rel),
     detail,
     bytes: buf.length,
     sha256: createHash('sha256').update(buf).digest('hex'),
@@ -195,6 +211,7 @@ interface BuiltRecipe {
   /** Per filled cell, for matching script recipes: "ore:X", "item:ID@D" or "item:ID@*". */
   cells: string[];
   count: number;
+  countFrom: CountFrom;
 }
 
 const deadRecipes = { output: 0, ingredient: 0 };
@@ -282,6 +299,7 @@ function buildRecipe(r: DumpedRecipe): BuiltRecipe | null {
     label,
     cells,
     count: 0,
+    countFrom: '',
   };
 }
 
@@ -361,18 +379,66 @@ let counted = 0;
 for (const [b, votes] of countVotes) {
   if (votes.size === 1) {
     b.count = [...votes][0] ?? 0;
+    b.countFrom = 'script';
     counted++;
   }
 }
 
-const crafting: CraftingRow[] = built.map((b) => [
-  indexOf(b.output),
-  b.count,
-  b.flags,
-  b.pattern,
-  b.inputs.flatMap((i) => [i.ref, i.count]),
-  b.label,
-]);
+/** A built recipe's ingredients as item names (ore names expanded). */
+const namesOfRef = (ref: IngredientRef): string[] =>
+  typeof ref === 'number'
+    ? [items[ref] ?? '?']
+    : typeof ref === 'string'
+      ? (oreNames.get(ref) ?? [])
+      : ref.map((i) => items[i] ?? '?');
+const views = new Map<BuiltRecipe, GtnhRecipeView>();
+const viewOf = (b: BuiltRecipe): GtnhRecipeView => {
+  let v = views.get(b);
+  if (v === undefined) {
+    v = {
+      output: b.output,
+      count: b.count,
+      countFrom: b.countFrom,
+      shapeless: (b.flags & CraftFlag.SHAPELESS) !== 0,
+      fits2x2: (b.flags & CraftFlag.FITS_2X2) !== 0,
+      nbtInput: (b.flags & CraftFlag.NBT_INPUT) !== 0,
+      inputs: b.inputs.map((i) => ({
+        names: namesOfRef(i.ref),
+        label: typeof i.ref === 'string' ? `ore:${i.ref}` : '',
+        count: i.count,
+        tool: typeof i.ref === 'string' && i.ref.startsWith('craftingTool'),
+      })),
+    };
+    views.set(b, v);
+  }
+  return v;
+};
+
+// Counts the agent verified by hand (src/domain/recipes.ts) win over every other source.
+// Those recipes use no crafting tool, so a dumped recipe that needs one (GT's saw variants
+// of the plank and stick recipes) is a different recipe with its own count.
+let handCounted = 0;
+for (const id of RECIPE_IDS) {
+  const h = RECIPES[id];
+  const want = ingredientRequirements(h);
+  for (const b of byOutput.get(h.result.item) ?? []) {
+    const v = viewOf(b);
+    const fits =
+      v.inputs.length === want.length &&
+      want.every((w) =>
+        v.inputs.some(
+          (c) => !c.tool && c.count === w.perCraft && w.anyOf.every((n) => c.names.includes(n)),
+        ),
+      );
+    if (fits) {
+      b.count = h.result.count;
+      b.countFrom = 'hand';
+      v.count = b.count;
+      v.countFrom = 'hand';
+      handCounted++;
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 5. Furnace recipes
@@ -435,6 +501,87 @@ const toolOverride = iguana('ToolOverride.cfg', 'tool level overrides');
 const levelNamesCfg = iguana('HarvestLevelNamesDefaults.cfg', 'names of the harvest levels');
 const materialDefaults = iguana('MaterialDefaults.cfg', "Tinkers' tool material levels");
 const materialOverride = iguana('MaterialOverride.cfg', "Tinkers' material overrides");
+const iguanaMain = iguana(
+  'main.cfg',
+  'which tools and swords are disabled (disableRegularTools), gravel and flint',
+);
+const iguanaTweaks = categoryAt(iguanaMain, 'tweaks')?.values ?? new Map<string, string>();
+const allowedTools = categoryAt(iguanaMain, 'allowedtools');
+const iguanaFlags = {
+  removeFlintDrop: iguanaTweaks.get('removeFlintDrop') === 'true',
+  addFlintRecipe: iguanaTweaks.get('addFlintRecipe') !== 'false',
+  gravelPerFlint: Number(iguanaTweaks.get('gravelPerFlint') ?? '3'),
+  disableRegularTools: iguanaTweaks.get('disableRegularTools') === 'true',
+  disableRegularSwords: iguanaTweaks.get('disableRegularSwords') === 'true',
+};
+/**
+ * With disableRegularTools and the blacklist mode, the listed tools (and every tool of a
+ * listed mod) mine nothing. IguanaTweaks 2.6.6 (javap, 2026-09-30): findToolsFromConfig
+ * whitelists every ItemTool/ItemHoe/ItemSword/ItemBow that is neither listed nor of a listed
+ * mod, and VanillaToolNerfHandler.isUselessTool is "an ItemTool that is not whitelisted"
+ * (its break speed becomes 0). So only ItemTool subclasses (pickaxes, shovels, axes) can be
+ * useless: a listed item that is not one keeps working. A listed mod's tools are found by
+ * name (pick, shovel, spade, axe, hatchet): the build cannot see an item's class.
+ */
+const NOT_ITEM_TOOL: Readonly<Record<string, string>> = {
+  'gregtech:gt.metatool.01':
+    "listed, but GregTech's MetaGeneratedTool extends MetaBaseItem -> GTGenericItem -> Item, " +
+    'not ItemTool (javap, gregtech 5.09.51.482), so IguanaTweaks never disables it',
+};
+const disabledTools: Record<string, string> = {};
+if (iguanaFlags.disableRegularTools && allowedTools?.values.get('exclusionType') === 'blacklist') {
+  for (const t of allowedTools.lists.get('tools') ?? []) {
+    if (registered.has(t) && NOT_ITEM_TOOL[t] === undefined) {
+      disabledTools[t] = 'IguanaTweaks disableRegularTools: on the tools blacklist (main.cfg)';
+    }
+  }
+  const mods = new Set(allowedTools.lists.get('mods') ?? []);
+  for (const name of registered) {
+    const mod = name.split(':')[0] ?? '';
+    if (mods.has(mod) && /pick|shovel|spade|axe|hatchet/i.test(name)) {
+      disabledTools[name] =
+        `IguanaTweaks disableRegularTools: mod ${mod} is blacklisted (main.cfg)`;
+    }
+  }
+  for (const [t, why] of Object.entries(NOT_ITEM_TOOL)) {
+    if (allowedTools.lists.get('tools')?.includes(t) === true) notes.push(`${t}: ${why}`);
+  }
+}
+/**
+ * With disableRegularSwords, VanillaSwordNerfHandler cancels the hit (LivingHurtEvent) of a
+ * player holding an ItemSword that is not whitelisted (isUselessWeapon, javap): in blacklist
+ * mode, a sword on any of the lists (tools, swords, bows, hoes) or of a listed mod. Vanilla
+ * swords are disabled only if listed (or "minecraft" is a listed mod).
+ */
+const disabledSwords: Record<string, string> = {};
+if (iguanaFlags.disableRegularSwords && allowedTools?.values.get('exclusionType') === 'blacklist') {
+  const listed = new Set(
+    ['tools', 'swords', 'bows', 'hoes'].flatMap((k) => allowedTools.lists.get(k) ?? []),
+  );
+  const mods = new Set(allowedTools.lists.get('mods') ?? []);
+  for (const t of allowedTools.lists.get('swords') ?? []) {
+    if (registered.has(t))
+      disabledSwords[t] = 'IguanaTweaks disableRegularSwords: on the swords list';
+  }
+  for (const name of registered) {
+    const mod = name.split(':')[0] ?? '';
+    if (!/sword/i.test(name)) continue;
+    if (listed.has(name)) disabledSwords[name] = 'IguanaTweaks disableRegularSwords: listed';
+    else if (mods.has(mod)) {
+      disabledSwords[name] = `IguanaTweaks disableRegularSwords: mod ${mod} is blacklisted`;
+    }
+  }
+}
+const hungerCfg = config(
+  'HungerOverhaul/HungerOverhaul.cfg',
+  'Hunger Overhaul: healing threshold, regeneration, food value dividers',
+);
+const hunger = new Map<string, string>();
+const collect = (cat: ConfigCategory): void => {
+  for (const [k, v] of cat.values) hunger.set(k, v);
+  for (const child of cat.children.values()) collect(child);
+};
+collect(hungerCfg);
 
 /** "mod:block:meta" -> [tool, level], overrides applied. */
 const blockLevels = new Map<string, [string, number]>();
@@ -623,7 +770,129 @@ for (const v of veins) {
 for (const s of smallOres) for (const [i] of s.drops) indexOf(i);
 
 // ---------------------------------------------------------------------------
-// 8. Write
+// 8. The vanilla 1.7.10 base layer, vanilla counts, and the changes table
+// ---------------------------------------------------------------------------
+
+const mcDataDir = join('node_modules', 'minecraft-data', 'minecraft-data', 'data', 'pc', '1.7');
+const mcDataVersion = (
+  JSON.parse(readFileSync(join('node_modules', 'minecraft-data', 'package.json'), 'utf8')) as {
+    version: string;
+  }
+).version;
+const mcJson = <T>(file: string): T =>
+  JSON.parse(
+    readSource(
+      join(mcDataDir, file),
+      `minecraft-data ${mcDataVersion} (PrismarineJS, MIT): pc/1.7/${file}`,
+      `node_modules/minecraft-data/minecraft-data/data/pc/1.7/${file}`,
+    ).toString('utf8'),
+  ) as T;
+type Json = Record<string, unknown>;
+const mcData = readMinecraftData({
+  items: mcJson<Json[]>('items.json'),
+  blocks: mcJson<Json[]>('blocks.json'),
+  foods: mcJson<Json[]>('foods.json'),
+  materials: mcJson<Record<string, Record<string, number>>>('materials.json'),
+  entities: mcJson<Json[]>('entities.json'),
+  biomes: mcJson<Json[]>('biomes.json'),
+  enchantments: mcJson<Json[]>('enchantments.json'),
+  effects: mcJson<Json[]>('effects.json'),
+});
+const serverJarPath = join(serverDir, 'minecraft_server.1.7.10.jar');
+readSource(
+  serverJarPath,
+  'vanilla 1.7.10: crafting and furnace recipes, tool materials, ore generation, block drops',
+);
+const fromJar = readServerJar(openJar(serverJarPath));
+const vanilla: VanillaLayer = {
+  ...mcData,
+  toolMaterials: fromJar.toolMaterials,
+  tools: fromJar.tools,
+  crafting: fromJar.crafting,
+  smelting: fromJar.smelting,
+  oreGen: fromJar.oreGen,
+};
+// Every vanilla name is a registered item on this server.
+const unknownVanilla = [
+  ...vanilla.crafting.flatMap((r) => [r.output, ...r.inputs.map((i) => i.item)]),
+  ...vanilla.smelting.flatMap((s) => [s.input, s.output]),
+].filter((n) => !registered.has(n.replace(/@\d+$/, '')));
+if (unknownVanilla.length > 0)
+  notes.push(`vanilla names not registered: ${unknownVanilla.join(', ')}`);
+
+// GregTech's saw recipes for planks and sticks (read with javap from GregTech 5.09.51.482,
+// 2026-09-30). Both take the count of the vanilla recipe they replace, n:
+//  - ProcessingLog: "s / L" (a saw above a log) makes n planks while nerfedWoodPlank is on,
+//    else n * 5 / 4; the shapeless log alone makes n / 2 (on) or n (off).
+//  - CraftingRecipeLoader: "s / P / P" (a saw above two plankWood) makes n sticks (on), else
+//    n * 5 / 4; "P / P" alone makes n / 2 (on) or n (off).
+let gtCounted = 0;
+for (const v of vanilla.crafting) {
+  if (!/^minecraft:(planks(@\d+)?|stick)$/.test(v.output)) continue;
+  for (const b of byOutput.get(v.output) ?? []) {
+    if (b.countFrom !== '') continue;
+    const view = viewOf(b);
+    const tools = view.inputs.filter((i) => i.tool);
+    if (tools.length !== 1 || tools[0]?.label !== 'ore:craftingToolSaw') continue;
+    if (!sameAsVanilla(v, view)) continue;
+    b.count = nerfedWoodPlank ? v.count : Math.floor((v.count * 5) / 4);
+    b.countFrom = 'gt';
+    view.count = b.count;
+    view.countFrom = 'gt';
+    gtCounted++;
+  }
+}
+
+// A dumped recipe with vanilla's exact grid (the same ingredients, no crafting tool) and no
+// count of its own takes vanilla's count (labelled: GTNH may have changed it).
+let vanillaCounted = 0;
+for (const v of vanilla.crafting) {
+  for (const b of byOutput.get(v.output) ?? []) {
+    if (b.countFrom !== '') continue;
+    const view = viewOf(b);
+    if (view.inputs.some((i) => i.tool) || !sameAsVanilla(v, view)) continue;
+    b.count = v.count;
+    b.countFrom = 'vanilla';
+    view.count = v.count;
+    view.countFrom = 'vanilla';
+    vanillaCounted++;
+  }
+}
+
+const changes = buildChanges({
+  vanilla,
+  drops: fromJar.drops,
+  recipes: built.map(viewOf),
+  furnace: furnace.map(([i, o]) => [items[i] ?? '?', items[o] ?? '?']),
+  iguana: {
+    ...iguanaFlags,
+    disabledTools: Object.keys(disabledTools),
+    disabledSwords: Object.keys(disabledSwords),
+  },
+  gt: {
+    disableVanillaOres,
+    changedWoodenVanillaTools: findValue(gtConfig, 'changedWoodenVanillaTools') === 'true',
+    oreDropBehavior,
+  },
+  hunger,
+  veins,
+  smallOres,
+  harvest,
+  levelNames,
+});
+
+const crafting: CraftingRow[] = built.map((b) => [
+  indexOf(b.output),
+  b.count,
+  b.flags,
+  b.pattern,
+  b.inputs.flatMap((i) => [i.ref, i.count]),
+  b.label,
+  b.countFrom,
+]);
+
+// ---------------------------------------------------------------------------
+// 9. Write
 // ---------------------------------------------------------------------------
 
 // Stable item indices: sort the table and renumber everything.
@@ -657,13 +926,14 @@ const data: KnowledgeData = {
   notes,
   items: order.map((o) => o.name),
   ores,
-  crafting: crafting.map(([out, count, flags, pattern, inputs, label]) => [
+  crafting: crafting.map(([out, count, flags, pattern, inputs, label, from]) => [
     re(out),
     count,
     flags,
     pattern,
     inputs.map((x, k) => (k % 2 === 0 ? reRef(x) : x)),
     label,
+    from,
   ]),
   furnace: furnace.map(([i, o]) => [re(i), re(o)]),
   materials: materialTable,
@@ -673,17 +943,81 @@ const data: KnowledgeData = {
   tools,
   ticLevels,
   levelNames,
+  disabledTools,
+  disabledSwords,
   config: {
     disableVanillaOres,
     oreDropBehavior,
     activateHarvestLevelChange: harvestLevelChange,
     nerfedWoodPlank,
+    ...iguanaFlags,
   },
+  vanilla,
+  changes,
 };
 const json = JSON.stringify(data);
 const gz = gzipSync(json, { level: 9 });
 mkdirSync(dirname(values.out), { recursive: true });
 writeFileSync(values.out, gz);
+
+// The changes table as a document (prettier formats it: run it on the file afterwards).
+const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+const section = (title: string, kinds: readonly string[], intro: string): string[] => {
+  const rows = changes.filter((c) => kinds.includes(c.kind));
+  if (rows.length === 0) return [];
+  return [
+    `## ${title}`,
+    '',
+    intro,
+    '',
+    '| What | Vanilla 1.7.10 | GTNH 2.8.4 | What changed | Sources |',
+    '| --- | --- | --- | --- | --- |',
+    ...rows.map(
+      (c) =>
+        `| ${cell(c.subject)} | ${cell(c.vanilla.value)} | ${cell(c.gtnh.value)} | ${cell(c.change)} | ` +
+        `vanilla: ${cell(c.vanilla.source)}; GTNH: ${cell(c.gtnh.source)} |`,
+    ),
+    '',
+  ];
+};
+const doc = [
+  '# GTNH 2.8.4 vs vanilla Minecraft 1.7.10',
+  '',
+  'Every way GTNH 2.8.4 (the test server) differs from vanilla 1.7.10 that the knowledge base can ' +
+    'show, each side with its source. Generated by `scripts/build-knowledge.ts` from ' +
+    '`src/goals/knowledge/gtnh-2.8.4.json.gz` (`changes`); do not edit by hand. The planner gets the ' +
+    'entries that concern its current route as `gtnhChanges` ' +
+    '([architecture: knowledge base](architecture.md#knowledge-base)).',
+  '',
+  '- **Vanilla side:** the 1.7.10 server jar (recipes with counts, smelting, tool materials, ore ' +
+    `generation, block drops), read by the build script, and minecraft-data ${mcDataVersion} ` +
+    '(PrismarineJS, MIT; items, blocks, foods, harvest tools).',
+  "- **GTNH side:** the test server's CraftTweaker dump (recipes, smelting), GregTech's and " +
+    "GTNewHorizonsCoreMod's jars (ore veins, output counts), the agent's hand-verified recipe table, " +
+    'and the configs (IguanaTweaks, GregTech, Hunger Overhaul).',
+  "- A recipe counts as unchanged when GTNH has one with exactly vanilla's ingredients; when its " +
+    'count is not known it is not listed (the knowledge base then uses the vanilla count, marked as ' +
+    'such).',
+  '',
+  ...section(
+    'Mechanics',
+    ['drop', 'tool', 'food', 'mechanic'],
+    'Drops, tools and hunger: values read from the configs and jars.',
+  ),
+  ...section(
+    'Ores',
+    ['ores'],
+    'Vanilla ore generation is off (`disableVanillaOres=true`); GregTech ore veins replace it.',
+  ),
+  ...section('Smelting', ['smelting'], 'Vanilla furnace recipes that GTNH removes or changes.'),
+  ...section(
+    'Crafting recipes',
+    ['recipe'],
+    'Vanilla crafting recipes that GTNH changes: other counts, other ingredients, or no recipe. ' +
+      '`ore:` names are ore-dictionary entries (any of their items); tools are used, not consumed.',
+  ),
+].join('\n');
+writeFileSync(join('docs', 'gtnh-vs-vanilla.md'), `${doc}\n`);
 
 say(
   `wrote ${values.out}: ${(gz.length / 1024).toFixed(0)} KiB gzipped (${(json.length / 1024 / 1024).toFixed(1)} MiB JSON)`,
@@ -698,7 +1032,33 @@ say(
       craftingUnknownType: dump.unknownRecipes.length,
       craftingDropped: deadRecipes,
       unparsedLines: dump.unparsed.length,
-      countsFromScripts: { scriptRecipes: scriptRecipes.length, matched: scriptMatched, counted },
+      counts: {
+        scriptRecipes: scriptRecipes.length,
+        matched: scriptMatched,
+        fromScripts: counted,
+        fromHand: handCounted,
+        fromGt: gtCounted,
+        fromVanilla: vanillaCounted,
+      },
+      vanilla: {
+        crafting: vanilla.crafting.length,
+        smelting: vanilla.smelting.length,
+        tools: vanilla.tools.length,
+        oreGen: vanilla.oreGen.length,
+        items: Object.keys(vanilla.items).length,
+        blocks: Object.keys(vanilla.blocks).length,
+        foods: Object.keys(vanilla.foods).length,
+        jarClasses: fromJar.classes,
+      },
+      changes: changes.length,
+      changesByKind: Object.fromEntries(
+        [...new Set(changes.map((c) => c.kind))].map((k) => [
+          k,
+          changes.filter((c) => c.kind === k).length,
+        ]),
+      ),
+      disabledTools: Object.keys(disabledTools).length,
+      disabledSwords: Object.keys(disabledSwords),
       furnace: furnace.length,
       furnaceDumped: dump.furnace.length,
       materials: materials.size,

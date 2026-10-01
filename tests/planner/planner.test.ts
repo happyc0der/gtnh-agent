@@ -231,22 +231,29 @@ describe('planner request and mock planner', () => {
 
   it('the request carries the allowlist and constraints', () => {
     const r = request();
-    expect(r.allowedActions).toHaveLength(17);
+    expect(r.allowedActions).toHaveLength(18);
     expect(r.allowedActions).toContain('DIG_BLOCK');
     expect(r.allowedActions).toContain('PLACE_BLOCK');
     expect(r.allowedActions).toContain('CRAFT_ITEM');
     expect(r.allowedActions).toEqual(
       expect.arrayContaining(['INTERACT_BLOCK', 'SMELT', 'TAKE_OUTPUT']),
     );
+    expect(r.allowedActions).toContain('ATTACK_ENTITY');
     expect(r.safetyConstraints.protectedItems).toEqual([
       'minecraft:diamond',
       'minecraft:nether_star',
     ]);
     expect(r.safetyConstraints.safeLocations).toEqual(['home']);
-    // 'DIG' and 'PLACE' stay forbidden keywords; exactly DIG_BLOCK and PLACE_BLOCK are the
-    // operator's exceptions.
-    expect(r.safetyConstraints.forbidden).toEqual(expect.arrayContaining(['DIG', 'PLACE']));
-    expect(r.safetyConstraints.forbiddenExceptions).toEqual(['DIG_BLOCK', 'PLACE_BLOCK']);
+    // 'DIG', 'PLACE' and 'ATTACK' stay forbidden keywords; exactly DIG_BLOCK, PLACE_BLOCK and
+    // ATTACK_ENTITY are the operator's exceptions.
+    expect(r.safetyConstraints.forbidden).toEqual(
+      expect.arrayContaining(['DIG', 'PLACE', 'ATTACK']),
+    );
+    expect(r.safetyConstraints.forbiddenExceptions).toEqual([
+      'DIG_BLOCK',
+      'PLACE_BLOCK',
+      'ATTACK_ENTITY',
+    ]);
     expect(r.safetyConstraints.diggableBlocks).toContain('minecraft:log');
     expect(r.safetyConstraints.placeableItems).toEqual(
       expect.arrayContaining(['minecraft:dirt', 'minecraft:cobblestone', 'minecraft:planks@5']),
@@ -320,7 +327,7 @@ describe('planner request and mock planner', () => {
       exploration,
     });
     expect(r.allowedActions).toContain('EXPLORE');
-    expect(r.allowedActions).toHaveLength(18);
+    expect(r.allowedActions).toHaveLength(19);
     expect(r.exploration?.places).toEqual([
       {
         resource: 'log',

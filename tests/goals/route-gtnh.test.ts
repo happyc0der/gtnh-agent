@@ -16,9 +16,13 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     const book = gtnhRouteBook();
     expect(book.recipes.length).toBeGreaterThan(50_000);
     expect(book.sources.some((s) => s.blocks.includes('gregtech:gt.blockores@500'))).toBe(true);
-    expect(book.tools?.some((t) => t.item === 'minecraft:iron_pickaxe' && t.level === 3)).toBe(
-      true,
-    );
+    // Tools IguanaTweaks disables (a vanilla iron pickaxe mines nothing here) are no tools.
+    expect(book.tools?.some((t) => t.item === 'minecraft:iron_pickaxe')).toBe(false);
+    expect(book.tools).toContainEqual({
+      item: 'minecraft:wooden_pickaxe',
+      kind: 'pickaxe',
+      level: 0,
+    });
     // Hand-verified entries win: GTNH's 1 log -> 2 planks keeps its verified count and id.
     expect(book.recipes.find((r) => r.id === 'planks_oak')?.output).toEqual({
       item: 'minecraft:planks',
@@ -74,6 +78,26 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     expect(
       lines.some((l) => l.includes('smelt 5 minecraft:cobblestone -> >=5 minecraft:stone')),
     ).toBe(true);
+  });
+
+  it('a worn wooden pickaxe (its damage is its wear) still digs', () => {
+    const route = planRoute(
+      { 'gregtech:gt.metatool.01@24': 1 },
+      { 'minecraft:wooden_pickaxe@7': 1 },
+      ROUTE_BOOK,
+      () => [],
+      [],
+      [],
+    );
+    expect(steps(route)).not.toContain('craft minecraft:wooden_pickaxe');
+    expect(route.tools).toEqual([
+      {
+        for: 'dig minecraft:stone',
+        need: 'pickaxe level >= 0',
+        have: 'minecraft:wooden_pickaxe@7',
+        get: null,
+      },
+    ]);
   });
 
   it('a chest: the GTNH recipe, with flint made from gravel', () => {
@@ -179,12 +203,19 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     expect(why).toContain('furnace:gregtech:gt.metaitem.03@5500');
   });
 
-  it('100 diamonds with an iron pickaxe: small ores (level 3), not the vein (level 4)', () => {
+  it('100 diamonds holding a vanilla iron pickaxe: it mines nothing in GTNH', () => {
     const route = planRoute(
       { 'minecraft:diamond': 100 },
-      { 'minecraft:iron_pickaxe@12': 1 },
+      { 'minecraft:iron_pickaxe': 1 },
       ROUTE_BOOK,
     );
+    expect(route.unresolved).toEqual({ 'minecraft:diamond': 100 });
+    expect(route.tools.map((t) => t.have)).toEqual([null, null]);
+  });
+
+  it('100 diamonds with a level-3 pickaxe: small ores (level 3), not the vein (level 4)', () => {
+    // IC2's drill counts as a level-3 pickaxe (IguanaTweaks ToolDefaults).
+    const route = planRoute({ 'minecraft:diamond': 100 }, { 'IC2:itemToolDrill': 1 }, ROUTE_BOOK);
     expect(route.legs).toMatchObject([
       {
         kind: 'gather',
@@ -195,21 +226,20 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
         tool: { kind: 'pickaxe', level: 3 },
       },
     ]);
-    // A worn vanilla pickaxe (damage = wear) still counts.
     expect(route.tools).toEqual([
       {
         for: 'dig gregtech:gt.blockores@16500',
         need: 'pickaxe level >= 3',
-        have: 'minecraft:iron_pickaxe@12',
+        have: 'IC2:itemToolDrill',
         get: null,
       },
     ]);
   });
 
-  it('100 diamonds with a diamond pickaxe: the vein, raw ore smelted in a furnace', () => {
+  it('100 diamonds with a level-5 pickaxe: the vein, raw ore smelted in a furnace', () => {
     const route = planRoute(
       { 'minecraft:diamond': 100 },
-      { 'minecraft:diamond_pickaxe': 1 },
+      { 'Thaumcraft:ItemPickThaumium': 1 },
       ROUTE_BOOK,
       () => [],
       [],

@@ -9,10 +9,14 @@ it walks on one level inside a fence (see "Walking"). GregTech machines are obse
 GregTech's own channel: type, position, enabled and running (see "Machines"); stored energy and
 held-item durability are not observable (except for the agent's allowlisted tools, see "Tools").
 Digging one allowlisted block (see "Digging"), with an empty hand or a verified tool (see
-"Tools"), and placing one (see "Placing") are built on the server's own code, checked in its
-jars, and tested against the fake server; neither has been run live yet. Mineflayer cannot connect
-at all. Every claim below is labelled as _verified_ (observed or checked in installed code) or
-_assumption_ (to be tested).
+"Tools"), placing one (see "Placing") and fighting one mob (see "Combat") are built on the
+server's own code, checked in its jars, and tested against the fake server. Digging sand has
+run live (2026-09-30, the play runs); placing and fighting have not yet. The quest book is read
+from Better Questing's own channel, and its submit, checkbox and claim clicks are typed actions
+(see "Quest book"); built from the mod's bytecode and the world's quest database, tested
+against the fake server, not run live yet. Mineflayer cannot connect at all. Every claim below
+is labelled as _verified_ (observed or checked in installed code) or _assumption_ (to be
+tested).
 
 ## Test server results (2026-09-30)
 
@@ -312,7 +316,19 @@ to the sender (RCON works: `RconPlayer`).
 such recipes; 3,096 match a dumped recipe (same output, same ingredients as multisets), which
 gives 3,237 dumped recipes their count. Examples: crafting table 1, furnace 1 (6 cobblestone,
 3 flint, 3x3), chest 1, torches 3 (coal), 2 (charcoal), 1 (lignite), 5 (coke), ladders 2/4/8
-(by screw), Natura sticks 2 (4 with a saw). Other recipes' counts are unknown.
+(by screw), Natura sticks 2 (4 with a saw). Three more sources, each marked in the data:
+
+- The agent's hand-verified table (`src/domain/recipes.ts`): 14 recipes, only tool-free ones (a
+  hand recipe never gives its count to a recipe that also needs a saw).
+- GregTech's own code, read with `javap` (5.09.51.482): `ProcessingLog` adds "a saw above a log"
+  making the vanilla planks count (4) while `nerfedWoodPlank=true` (5/4 of it when off), and the
+  log alone half of it (2); `CraftingRecipeLoader` adds "a saw above two plankWood" making 4
+  sticks (2 without the saw). 7 recipes.
+- Vanilla's count, for 54 recipes whose grid is exactly vanilla's (no tool) and that no script
+  counts: stairs, walls, dyes and the like. Marked `vanilla`: GTNH may differ, but these look like
+  vanilla's own registrations left in place.
+
+Other recipes' counts are unknown.
 
 **GT ore generation** (`gregtech-5.09.51.482.jar`: `OreMixes` and `SmallOres`, builder chains
 read from their static initializers; `config/GregTech/WorldGeneration.cfg` holds only the
@@ -358,13 +374,67 @@ general switches, so the code's values generate):
 pickaxe (level 0) digs stone, lignite (vein ore) and the small ores of copper (y 60-180), zinc
 (y 80-210), coal (y 120-250) and lapis (y 10-50): enough for brass tools (a hammer, a file) by way
 of the flint mortar. Iron ores need level 1 or 2 (small iron, gold, silver, nickel and redstone
-ores level 1), and the craftable pickaxes above level 0 (vanilla iron 3, AE2 quartz 3) need iron
-or quartz; the diamond pickaxe needs a diamond plate, which no crafting recipe makes. GTNH's
-early pickaxes are Tinkers' Construct tools (Part Builder and Tool Station), which are not in the
-data.
+ores level 1). The craftable pickaxes above level 0 that the data lists, vanilla iron (3) and
+AE2's quartz pickaxes (3), **mine nothing** here (IguanaTweaks, see "Tools"), so the route book
+leaves them out; the diamond pickaxe is disabled too (and needs a diamond plate). GTNH's early
+pickaxes are Tinkers' Construct tools (Part Builder and Tool Station), which are not in the
+data, so a route to iron or diamonds ends at "needs a pickaxe level >= N: none known to make".
 
 _Assumptions:_ furnace outputs are 1 item; crafting counts the scripts do not give are at least 1;
 stone drops cobblestone (vanilla; no GTNH drop handler checked); dig-time estimates.
+
+### Vanilla 1.7.10, and what GTNH changes (2026-09-30)
+
+The knowledge base also holds vanilla Minecraft 1.7.10 as its base layer, and a table of every
+difference it can show: **[GTNH 2.8.4 vs vanilla 1.7.10](gtnh-vs-vanilla.md)** (generated, 255
+entries: 239 recipes, 5 smelting recipes, gravel, 2 tool rules, 6 ores, hunger). The planner gets
+the entries that concern its route ([architecture: knowledge base](architecture.md#knowledge-base)).
+
+**Vanilla sources** (_verified_ in the files):
+
+- The server's `minecraft_server.1.7.10.jar`, read by the build script (obfuscated: classes are
+  found by what they contain). `CraftingManager` and the recipe classes it calls (tools, weapons,
+  armour, food, dyes, ingots, crafting blocks): 312 crafting recipes with their counts.
+  `FurnaceRecipes`: 21 smelting recipes. `Item.ToolMaterial` and `Item.registerItems`: 5 materials
+  and 25 tools. `BiomeDecorator`: ore generation. The drop methods of gravel and a few other
+  blocks.
+- minecraft-data 3.117.0 (PrismarineJS, MIT), `data/pc/1.7`: 303 items (names, stack sizes,
+  durability), 176 blocks (hardness, material, harvest tools), 27 foods, tool speeds by material,
+  50 mobs (names and categories), 40 biomes, enchantments and effects. Its 1.7 recipes are 1.8's
+  and its 1.7 block drops are empty, so those come from the jar.
+
+**How a change is decided** (`scripts/knowledge/changes.ts`):
+
+- A vanilla recipe is unchanged when the dump has a GTNH recipe with exactly its ingredients, no
+  crafting tool, and the same or an unknown count. Otherwise the entry says that the same
+  ingredients make another count (and what a saw in the grid makes), that the same ingredients
+  need a crafting tool, that vanilla's recipe is gone and what GTNH's is (the one sharing most of
+  vanilla's ingredients), or that no crafting recipe makes the item. "No crafting recipe" means
+  none in the dump: among the 2,781 recipes of unknown type the only vanilla outputs are iron
+  ingots and diamonds, and the 151 with no fixed output are dynamic ones (dyeing armour, copying
+  maps).
+- A vanilla smelting recipe is changed when its input no longer gives that output in the dump.
+
+**Verified changes that matter early:**
+
+| Change                | Vanilla 1.7.10                                     | GTNH 2.8.4                                                                                                                                         | Verified in                                                                                          |
+| --------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Gravel                | flint 1 time in 10 (1 in 7, 4, 1 with Fortune)     | never flint; 3 gravel craft 1 flint (shapeless, 2x2)                                                                                               | the jar's `BlockGravel`; IguanaTweaks `FlintHandler`, `flintTweaks` and `main.cfg`; the dump         |
+| Vanilla pickaxes      | dig by material                                    | stone, iron, golden and diamond pickaxes and shovels mine nothing; wooden ones and every axe work; GregTech and Tinkers' tools are not `ItemTool`s | `main.cfg`; `javap` of `IguanaTweaks.findToolsFromConfig` and `VanillaToolNerfHandler.isUselessTool` |
+| Vanilla swords        | 4 + material damage                                | **unchanged**: `disableRegularSwords=true` cancels hits only of listed swords (BOP, Natura, ProjectRed, AE2), and no vanilla sword is listed       | `main.cfg`; `javap` of `VanillaSwordNerfHandler.isUselessWeapon`                                     |
+| Wooden tools          | 59 uses                                            | 64 uses                                                                                                                                            | `GregTech.cfg` `changedWoodenVanillaTools` (see "Tools")                                             |
+| Ores                  | vanilla ore veins by height                        | no vanilla ores; GT veins and small ores                                                                                                           | `WorldGeneration.cfg`; GregTech's jar                                                                |
+| Healing               | while food >= 18                                   | while food >= 8, slower at low health; foods fill less                                                                                             | `HungerOverhaul.cfg`                                                                                 |
+| Smelting              | sand, clay balls, logs, netherrack                 | none of these in a furnace (no glass, brick, charcoal or nether brick)                                                                             | the dump's 6,132 furnace recipes                                                                     |
+| Planks, sticks        | 1 log -> 4 planks; 2 planks -> 4 sticks            | 2 and 2; 4 and 4 with a saw in the grid                                                                                                            | the dump; GregTech's `ProcessingLog` and `CraftingRecipeLoader` (`javap`); the hand-verified table   |
+| Torches               | 4                                                  | 3 from coal, 2 from charcoal                                                                                                                       | the dump; GTNewHorizonsCoreMod's `ScriptMinecraft`                                                   |
+| Table, chest, furnace | 4 planks; 8 planks; 8 cobblestone                  | 2 flint over 2 logs (2x2); 4 logs, 4 planks, 1 flint; 6 cobblestone, 3 flint                                                                       | the dump; `ScriptMinecraft`                                                                          |
+| Storage blocks, tools | 9 ingots <-> a block; tools and armour from ingots | no block crafting either way; GTNH's tools and armour need plates and GT crafting tools; no stone tools                                            | the dump                                                                                             |
+
+_Not verified, or not covered:_ Hunger Overhaul's per-food values (only its switches are read);
+recipe counts marked `vanilla` (54) and unknown counts; disabled tools of a listed mod are found
+by name, not by class; block drops other than gravel's are not compared (stone still assumed to
+drop cobblestone); mob stats and drops are not read.
 
 ## Digging (2026-09-30)
 
@@ -987,6 +1057,125 @@ one. Two runs (150 s + 600 s): 4,750 saved entities read, 206 matches, **no conf
 version they were verified with; an entry applies only when the server runs that exact version.
 A `passive` entry needs at least 10 votes, all agreeing (enforced by a test).
 
+## Combat (2026-09-30)
+
+`ATTACK_ENTITY` and System 1's `DEFEND` (see [architecture: combat](architecture.md#combat)) are
+built on the server's own code, checked with `javap` in the test server's jars the same way as
+digging: vanilla `minecraft_server.1.7.10.jar` with Forge 10.13.4.1614's binary patches applied,
+and the mod jars below. They are tested against the fake server's combat simulation
+(`tests/bot/gtnh1710/fake-combat.ts`); **they have not been run live yet.** Classes: `nh`
+(NetHandlerPlayServer), `ja`/`jb` (C02 and its action), `yz` (EntityPlayer), `mw`
+(EntityPlayerMP), `sv` (EntityLivingBase), `te` (DataWatcher), `gt` (S19), `hw` (S1C), `fz`
+(S0F), `mn`/`my` (EntityTracker and its entries), `agw` (Explosion), `aeh` (ItemSword), `acg`
+(ItemTool), `abf` (ItemAxe), `adc` (ToolMaterial), `ro`/`rp` (DamageSource).
+
+**The packet** (_verified_). C02 Use Entity (serverbound 0x02): i32 entity id, then a byte read
+as `values()[b % 2]`: 0 interact, 1 attack. The agent only ever sends 1 (`outbound.attackEntity`).
+
+**What the server checks** (`processUseEntity`, _verified_):
+
+- The target must be in the player's world and closer than **6 blocks (distance² < 36) if the
+  player can see it**, otherwise **3 (< 9)**. Both distances are feet to feet. "Can see" is a
+  block ray trace from the player's eyes to the target's eyes.
+- No rate limit, and no check of where the player looks. The agent still looks first (C05) and
+  swings its arm (C0A), as a player's client does.
+- Attacking a dropped item, an experience orb, an arrow or the player itself **kicks the
+  player** ("Attempting to attack an invalid entity"). The agent never attacks objects.
+
+**The blow** (`EntityPlayer.attackTargetEntityWithCurrentItem`, _verified_):
+
+- Forge posts `AttackEntityEvent` (mods may cancel it), then the held item's `onLeftClickEntity`
+  (it may skip the attack). That is why the agent strikes only with an empty hand or an
+  allowlisted plain tool.
+- Damage is the player's attack damage attribute: **1.0 for a bare hand**. A held tool adds its
+  modifier: an axe 3 plus its material's bonus (wood 0, stone 1, iron 2, diamond 3, gold 0), so
+  4, 5, 6, 7 and 4 in all; a sword 4 plus the bonus. A critical hit needs falling, which the
+  agent never does.
+- The held item's modifiers take effect only after the server's next player tick (the next C03),
+  so the first swing waits two ticks after selecting a weapon.
+- A hit wears the weapon (a tool 2, a sword 1) and costs 0.3 exhaustion.
+
+**Damage and hurt resistance** (`EntityLivingBase.attackEntityFrom`, _verified_): a full hit sets
+the hurt-resistance timer to 20 ticks; while it is above 10, a new hit only deals what exceeds
+the last one. So one full hit per 10 ticks; the agent swings every 12. A full hit sends **S19
+Entity Status 2** (hurt) to everyone tracking the target and knocks it back (0.4). Death runs
+Forge's `LivingDeathEvent` first, then sends **S19 status 3**; the body is removed 20 ticks later
+(S13). The new health goes out in **S1C Entity Metadata**, DataWatcher index 6 (float), the same
+tick it changes.
+
+**DataWatcher** (_verified_, `te`): entries are a header byte (type << 5 | index), ending with
+0x7F; types 0 byte, 1 short, 2 int, 3 float, 4 string, 5 item stack, 6 three ints. The indices
+the agent reads: 6 health; 10 custom name (a name tag); 12 age (EntityAgeable, negative for a
+baby); 16 a pig's saddle. S0F Spawn Mob carries the full DataWatcher after the velocity, and
+FML's modded spawn message carries it after the three rotation bytes. A DataWatcher the client
+cannot read leaves health, owner and age unknown (never a crash), and an unknown owner or age
+makes a farm animal unattackable.
+
+**Knockback never moves the agent:** `processPlayer` re-applies the player's last position before
+the client's own move, so the server moves the player only with an explicit correction (S08),
+which stops the burst.
+
+**GTNH mods** (all mod jars were scanned for `AttackEntityEvent`, `LivingAttackEvent`,
+`LivingHurtEvent` and `LivingDeathEvent` handlers and for mixins on the attack code):
+
+- **Battlegear 2** (`battlegear2-1.5.9-backhand`): cancels a **bare-hand** attack beyond
+  4.5 − 2.2 = **2.3 blocks**. The agent strikes bare-handed only within 2.2.
+- **IguanaTweaks** (`IguanaTweaksTConstruct-2.6.6`, `disableRegularSwords=true` on the server):
+  cancels the damage of every vanilla sword (the hurt status is still sent, so a sword hit looks
+  like a hit and does nothing). **Swords are not weapons for the agent**: only vanilla axes are.
+  Its vanilla tool nerf only slows digging (`BreakSpeed`), not damage.
+- **AngerMod** (`AngerMod-0.9.0`, `KamikazeChance=10`): when a player (not a fake player) kills
+  any living entity, there is a **10% chance of an explosion of power 1.5** where it died
+  (no block damage), unless the held item is on the mod's blacklist (GregTech's knife and
+  butchery knife, `gt.metatool.01` 34 and 36, among others). Attacking also ends the mod's
+  90-second spawn protection. The agent holds back a blow that may kill while that explosion
+  could leave it under 4 health (see below). A GregTech knife would prevent the explosion, but
+  GregTech tools keep their stats in NBT data, and the agent never strikes with such a stack
+  (yet). The server's `angermod.cfg` also enables
+  `FriendlyMobRevenge`: eating a food whose name contains chicken, egg, beef, pork or mutton
+  makes that kind of animal within 16 blocks angry or flee (not examined further; the agent does
+  not track it).
+- **Explosion damage** (`agw`, Forge-patched, _verified_): the radius is doubled, and an entity
+  at distance `d` takes `floor(((1 − r)² + (1 − r)) / 2 × 16 × power + 1)` with `r = d / (2 ×
+power)` and full exposure, × 1.5 for a player on Hard (the test server's difficulty 3). Power
+  1.5: 37.5 at 0 blocks, 15 at 1.5, 9 at 2, 1.5 at 3, nothing beyond. A vanilla creeper (power 3)
+  reaches 6 blocks; **Special Mobs' Death and Gravity creepers explode with power 5** (10 when
+  charged: 20 blocks). The agent fights nothing that explodes, backs off within 16 blocks, and
+  treats every unidentified mob as a possible creeper.
+- **Special Mobs** (`SpecialMobs-3.6.3`): type numbers follow the mod's registration order
+  (12 kinds, each "Special<Mob>" then its variants, then two projectiles; 108 in all, creepers
+  16–30). The derived table (`src/bot/gtnh1710/special-mobs.ts`) matches all 13 types
+  identified live, and applies only to 3.6.3. Every creeper variant explodes; pigmen,
+  endermen, silverfish and ghasts are never attacked.
+- **Infernal Mobs** (`InfernalMobs-1.10.3-GTNH`, `eliteRarity=20`): about 1 mob in 20 is an elite
+  with modifiers (e.g. Vengeance reflects half the damage dealt). Nothing in the vanilla packets
+  shows it. The mod answers a client's question on its own channel `AS_IF` (`MobModsPacket`:
+  byte, short length + UTF-16 player name, i32 entity id), but **the agent does not ask**
+  (untested). Every fight stops at the first damage the agent takes, which also covers reflected
+  damage.
+- **Hunger Overhaul** (`minHungerToHeal=8`): no natural healing below food 8, so the agent does
+  not fight below food 8.
+- **Backhand** (`backhand-1.7.7`) only changes off-hand attacks. **ServerUtilities** checks chunk
+  claims (off on the test server). **Et Futurum** only adds sounds. **ArchaicFix** lets a click
+  on a block without a collision box (grass, flowers) hit the entity behind it; the agent sends
+  no block clicks while fighting.
+- **OpenBlocks graves** (from `config/OpenBlocks.cfg`, not checked in code): if the agent dies,
+  its items go into a grave block where it died (`storeContents=true`), and graves now and then
+  spawn skeletons around them (`spawnSkeletons=true`). The agent cannot recover a grave; a death
+  needs a human.
+- **Server settings:** `difficulty=3` (Hard), `pvp=true`.
+
+_Assumptions, to check live:_
+
+- that no other mod changes axe damage, reach or hurt resistance (the scan found none that applies
+  to a vanilla axe or a bare hand);
+- that FML's modded spawn message carries the DataWatcher where the code says (the vanilla
+  layout is covered by tests; a parse failure only leaves health unknown);
+- that the server keeps up with the 12-tick swing rhythm (at low TPS some hits are absorbed by
+  hurt resistance; they are then not counted as hits);
+- the line-of-sight check counts every non-air block as an obstacle, so behind glass or leaves the
+  agent uses the shorter 2.9-block reach.
+
 ## Lava, void and damaging blocks (2026-09-30)
 
 - **NotEnoughIDs (`neid` 2.1.10) changes the block data format.** Verified from its mixins
@@ -1042,6 +1231,90 @@ A `passive` entry needs at least 10 votes, all agreeing (enforced by a test).
   included), so dense BOP ground blocks EXPLORE until those blocks are checked and allowed.
   Ores count only when seen; GregTech keeps an ore's material in a tile entity the client does
   not read, so the memory says "ore", never which.
+
+## Quest book (Better Questing) (2026-09-30)
+
+The "Finish Age 0" benchmark is scored from the quest book's OWN records: the quests Better
+Questing records as completed for the agent's player, exactly as when a player completes them
+through the GUI. The agent reads those records over Better Questing's own channel and makes the
+GUI's clicks (submit, checkbox, reward choice, claim) as typed actions. Everything below is
+_verified_ with `javap` in the test server's `mods/BetterQuesting-3.7.15-GTNH.jar` (it holds
+`bq_standard` too) and in the test world's quest database. It is tested against the fake server
+(`tests/bot/gtnh1710/fake-better-questing.ts`) and has **not** been run live yet.
+
+| Fact                                                                                                                                                                                                                                                                                                                  | Evidence (class, method)                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One Forge channel, `BQ_NET_CHAN`, with one message type, `PacketQuesting`, discriminator 0 in both directions.                                                                                                                                                                                                        | `betterquesting.core.BetterQuesting.preInit`: `newSimpleChannel("BQ_NET_CHAN")`, `registerMessage(PacketQuesting$HandleClient, PacketQuesting, 0, CLIENT)` and `(PacketQuesting$HandleServer, PacketQuesting, 0, SERVER)`.                                                                                     |
+| The body is one NBT compound written with `ByteBufUtils.writeTag` (i16 length, gzip'd NBT).                                                                                                                                                                                                                           | `PacketQuesting.toBytes` / `fromBytes`.                                                                                                                                                                                                                                                                        |
+| Every message is sliced: the gzip'd payload goes out in slices of at most 20,480 bytes, each `{size: int, index: int, end: byte, data: byte[]}`; the payload's String `ID` names the handler.                                                                                                                         | `PacketAssembly.bufSize = 20480`, `splitPacket`, `assemblePacket` (keys `size`, `index`, `end`, `data`); `PacketSender.sendTo*` put `ID`.                                                                                                                                                                      |
+| At login the server sends `betterquesting:main_sync {reset: true, respond: true}`. A client answers with an EMPTY main_sync, and only that answer makes the server send the database: settings, `quest_sync` (configs and this player's progress), `chapter_sync`, names, parties, and `cache_sync` (the active set). | `handlers.EventHandler.onPlayerJoin` → `NetBulkSync.sendReset(player, true, true)`; `NetBulkSync.onClient` (`respond` → `sendToServer(new QuestingPacket(ID, new NBTTagCompound()))`); `NetBulkSync.onServer` → `sendSync` → `NetQuestSync.sendSync`, `NetChapterSync.sendSync`, ..., `NetCacheSync.sendSync`. |
+| `betterquesting:quest_action {action, questIDs}`: 0 claims (if `canClaim`), 1 detects (the GUI's submit button), 2 claims "forced". No reach, GUI-open or rate check.                                                                                                                                                 | `NetQuestAction.onServer` (`tableswitch` 0-2 → `claimQuest` / `detectQuest` → `IQuest.detect` / `forceClaimQuest`).                                                                                                                                                                                            |
+| `bq_standard:task_checkbox {questID, taskID}` completes a checkbox task, with no unlock or active check (a locked quest's box can be ticked; the agent never does).                                                                                                                                                   | `bq_standard.network.handlers.NetTaskCheckbox.onServer`: `instanceof TaskCheckbox` → `ITask.setComplete`, `QuestCache.markQuestDirty`.                                                                                                                                                                         |
+| `bq_standard:choice_reward {questID, rewardID, selection}` sets a choice reward's selection; the server echoes it to the client.                                                                                                                                                                                      | `NetRewardChoice` (server and client handlers).                                                                                                                                                                                                                                                                |
+| Quests complete in the quest loop: every 60 of the player's ticks (3 s; `ticksExisted`, which only advances while the client sends movement packets), each quest in the player's ACTIVE set that is unlocked and can be submitted is updated, and completes when its tasks satisfy its task logic.                    | `handlers.EventHandler.onLivingUpdate`: `ticksExisted % 60`, `QuestCache.getActiveQuests`, `IQuest.isUnlocked`, `canSubmit`, `update`.                                                                                                                                                                         |
+| Prerequisites (`questLogic`) and tasks (`taskLogic`) combine by `EnumLogic.getResult(n, total)`: AND n ≥ total, NAND n < total, OR n > 0, NOR n = 0, XOR n = 1, XNOR n = total − 1.                                                                                                                                   | `api.enums.EnumLogic$1` (`tableswitch`), called from `QuestInstance.isUnlocked`, `update` and `detect`.                                                                                                                                                                                                        |
+| Retrieval: a detect counts the whole inventory; consume tasks take the items (`decrStackSize`); an inventory change re-detects only `!consume \|\| autoConsume` tasks. Optional retrieval is `ignored` (counts as done).                                                                                              | `bq_standard.tasks.TaskRetrieval.detect` and `$Detector.run`, `TaskRetrieval.onInventoryChange`, `TaskOptionalRetrieval.ignored` (returns true).                                                                                                                                                               |
+| Crafts and inventory changes reach only the player's active quests: crafting counts only while the quest is active, unless `allowCraftedFromStatistics` (2 of the 44 Age 0 crafting tasks) lets a detect read the player's craft statistics.                                                                          | `bq_standard.handlers.EventHandler.onItemCrafted` and `onServerTick` → `ParticipantInfo.getSharedQuests` → `TaskCrafting.onItemCraft` / `ITaskInventory.onInventoryChange`; `TaskCrafting.detect` (`allowCraftedFromStatistics`).                                                                              |
+| Rewards wait for a claim; reward items go into the inventory and what does not fit is DROPPED on the ground.                                                                                                                                                                                                          | `QuestInstance.claimReward`; `bq_standard.rewards.RewardItem.claimReward`: `InventoryPlayer.func_70441_a` (addItemStackToInventory), else `EntityPlayer.func_71019_a` (drop).                                                                                                                                  |
+| The world's `betterquesting/QuestDatabase.json` is what the server runs; `DefaultQuests` only seed a world that has none.                                                                                                                                                                                             | `handlers.SaveLoadHandler.loadConfig`.                                                                                                                                                                                                                                                                         |
+
+**What the agent reads** (`src/bot/gtnh1710/better-questing.ts`, `QuestBookModel`). When the
+server lists `betterquesting`, the client adds `BQ_NET_CHAN` to its REGISTER, reassembles the
+slices, decodes main_sync, quest_sync, cache_sync, chapter_sync and the choice echo, and answers
+main_sync exactly as the stock client does (an empty main_sync; the only quest-book message sent
+without `MC_ENABLE_QUEST_BOOK`). `GameState.questBook` lists the agent's Age 0 closure (106
+quests): completed, claimed, active and unlocked, each task with the server's completion and
+counts (while the quest is active), and the rewards still to claim. It is unknown until the full
+sync and the active set have arrived (live play waits up to 30 s after login), and for the rest
+of the connection once any message cannot be decoded.
+
+**What the agent may click** (`MC_ENABLE_QUEST_BOOK=true`, off by default): `SUBMIT_QUEST`
+(quest_action 1), `CHECK_QUEST_BOX` (task_checkbox) and `CLAIM_QUEST_REWARD` (choice_reward
+when the quest has a choice, then quest_action 0). The forced claim (quest_action 2, which
+picks a random choice) and every editing message cannot be expressed. The rules (code, not a
+model; see docs/action-contract.md):
+
+- only quests of the Age 0 closure that the server's quest book has;
+- submit and checkbox only while the server lists the quest as active and unlocked
+  (`QUEST_NOT_ACTIVE`); never while the player is walking, digging, placing or using a chest,
+  never without presence ticks (the quest loop runs on the player's ticks), never in danger;
+- a submit hands in items only for consume tasks, and is refused while a protected item could
+  be one of them: the same registry name, or ANY protected item when the task names an ore
+  dictionary entry, whose members the agent cannot list (`PROTECTED_ITEM`);
+- a claim only for a completed, unclaimed quest, with a valid choice, and only with room for
+  every reward (Σ⌈count/16⌉ + 2 free slots), because Better Questing drops what does not fit;
+- verified against the server's next sync: the quest completed (within 8 s: the loop runs every
+  3 s) and only consume items left the inventory; the box (or the quest) done; the rewards
+  claimed and exactly the reward items (the chosen one) in the inventory.
+
+The play loop makes these clicks itself, decided in code from the server's records
+(`questBookSteps`; see docs/architecture.md, "Quest goals"). Plans never contain them: the
+planner is not offered them and `validatePlan` refuses them.
+
+**The Age 0 chapter is not self-contained.** In the world's database, the 92 quests of
+"Tier 0 - Stone Age" need 14 quests from other chapters, all now in
+`src/goals/age0-quests.ts` (never assumed done):
+
+- the 10-quest "And So, It Begins" chain, from the very first quest, "Your First Night" (8 dirt):
+  "Sticks 'n Stones" (gravel and logs, then 2 logs handed in: a consume task), "Where's the
+  Flint?" (craft 3 flint), "Crafting Time" (craft a crafting table), "Main Quests and Secondary
+  Quests" (a checkbox), "Tools", "Monster Hunter", "Soft Mallet Adventure", "Fluffy and Red" (6
+  wool) and "SO...TIRED...MUST...SLEEP..." (a bed), which "Ready, Set, Go!" needs;
+- the smeltery, in "Multiblock Goals": "You Are Not Prepared!!!" (build it) and "You Are Not
+  Prepared... But They Are" (have its parts, and tick) are XOR with each other (completing one
+  locks the other), and "You Are Now Prepared, Hopefully!" accepts either (OR);
+- "Trigger: Loot Game", a hidden quest (no chapter) for LootGames dungeon blocks.
+
+Of the 44 crafting tasks in the closure, only 2 accept crafts from the player's statistics
+("Where's the Flint?", "Crafting Time"); 19 quests have `lockedProgress` (their tasks progress
+while locked). GTNH's gravel never drops flint (IguanaTweaks `removeFlintDrop`; see "Crafting"):
+flint comes from the 3-gravel recipe, which the agent does not have yet, so "Where's the
+Flint?" is the first quest it cannot do.
+
+**Not verified yet:** everything live (the sync's real size and timing, the server's answers to
+the clicks); parties (the agent assumes it plays alone, so `getSharedQuests` is its own active
+set); and that reward items arrive before the sync that records the claim (the client waits
+for both).
 
 ## What was verified (from installed packages, 2026-09-26)
 
@@ -1127,15 +1400,22 @@ with backups, never on a public server.
    player, then against a wall block, then over the player's head. Check the block appears,
    the stack shrinks by one, and nothing opens. Then the refusals: next to the chest, inside
    the player, sand over the head, an entity in the cell. Watch the server log for warnings.
-9. **Soak test.** Run single cycles repeatedly (still human-triggered) and review `agent_events`
-   and `safety_violations` for false positives/negatives before any continuous loop is considered.
+9. **Combat. BUILT 2026-09-30, live test pending** (see "Combat"): in the pen, with
+   `MC_ENABLE_COMBAT=true`, summon one zombie, then a cow (over RCON, by an operator), and run
+   `pnpm cli attack --live --entity <id>` with the ids `observe` prints, first bare-handed, then
+   with a wooden axe. Check the hits, the death, that the FML DataWatcher of a Special Mobs zombie
+   decodes (health known), and the refusals: a villager, a creeper in the pen, low health, the
+   stop file. Watch the server log for kicks.
+10. **Soak test.** Run single cycles repeatedly (still human-triggered) and review `agent_events`
+    and `safety_violations` for false positives/negatives before any continuous loop is considered.
 
 ## What is mocked today
 
 Everything in-game. `MockMinecraftClient` simulates the player, inventory, one chest, one
 generator with fuel, one machine, one crafting table (and server recipes that differ from the
-agent's table), a few diggable blocks, the blocks it places, hazards, hostiles and a clock,
-with injectable failures and "reports success but changes nothing" behaviour. Furnaces in the
-mock cook on the clock (200 ticks per item, vanilla fuel times) from a placeholder smelting
-table, and observe-only blocks open a fixed window. All item and machine names in the mock are
+agent's table), a few diggable blocks, the blocks it places, hazards, hostiles, mobs with health
+that can be fought, and a clock, with injectable failures and "reports success but changes
+nothing" behaviour. Furnaces in the mock cook on the clock (200 ticks per item, vanilla fuel
+times) from a placeholder smelting table, and observe-only blocks open a fixed window. All item
+and machine names in the mock are
 placeholders, not verified GTNH identifiers.

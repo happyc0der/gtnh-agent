@@ -116,14 +116,17 @@ export class MineflayerClient implements MinecraftClient {
         hunger: known(bot.food),
         armor: unknown('TODO: armor mapping not implemented'),
         heldTool: unknown('TODO: held tool mapping not implemented'),
+        weapon: unknown('the Mineflayer adapter does not fight'),
       },
       inventory: unnamed
         ? unknown('inventory contains items without a known registry name (modded?)')
         : known({ items: counts, usedSlots: items.length, capacitySlots: 36 }),
       nearbyThreats: unknown('TODO: entity scan not implemented or verified for GTNH'),
+      nearbyEntities: unknown('TODO: entity scan not implemented or verified for GTNH'),
       environmentHazards: unknown('TODO: lava/void scan not implemented or verified for GTNH'),
       time: unknown('the Mineflayer adapter does not read the world clock'),
       nearbyBlocks: unknown('block scan not implemented for Mineflayer'),
+      questBook: unknown('the Mineflayer adapter does not read the quest book'),
       power: {
         availableEUt: unknown('GTNH EU is not observable via the vanilla protocol'),
         generators: [],
@@ -177,6 +180,10 @@ export class MineflayerClient implements MinecraftClient {
       case 'INTERACT_BLOCK':
       case 'SMELT':
       case 'TAKE_OUTPUT':
+      case 'ATTACK_ENTITY':
+      case 'SUBMIT_QUEST':
+      case 'CHECK_QUEST_BOX':
+      case 'CLAIM_QUEST_REWARD':
         return Promise.resolve(
           failed(`${action.type} is not implemented for Mineflayer yet`, 'NOT_IMPLEMENTED'),
         );

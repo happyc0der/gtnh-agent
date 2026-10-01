@@ -429,8 +429,15 @@ function oreSources(data: KnowledgeData): RouteSource[] {
   return out;
 }
 
+/**
+ * Items that work as tools on this server. Tools IguanaTweaks disables (vanilla stone, iron,
+ * gold and diamond pickaxes and shovels, and a few mods' tools) mine nothing, so they are
+ * not tools here: a route never makes one to dig, and one in the inventory does not count.
+ */
 function toolsOf(data: KnowledgeData): RouteTool[] {
-  return data.tools.map(([item, kind, level]) => ({ item, kind, level }));
+  return data.tools
+    .filter(([item]) => data.disabledTools[item] === undefined)
+    .map(([item, kind, level]) => ({ item, kind, level }));
 }
 
 let full: RouteBook | null = null;

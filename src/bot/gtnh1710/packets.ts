@@ -1,4 +1,5 @@
 import { gunzipSync } from 'node:zlib';
+import { BQ_CHANNEL, encodeBqOutbound, type BqOutbound } from './better-questing.ts';
 import type { ColumnHeader } from './chunk-data.ts';
 import {
   bool,
@@ -26,10 +27,14 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // checked), vanilla chests, crafting and block windows ('activate-block', 'select-slot',
 // 'click-window', 'confirm-transaction', 'close-window', only as container.ts, crafting.ts
 // and interact.ts plan them), digging one block ('dig-block' with status start/cancel/finish
-// only, for targets digging.ts has checked) and placing one block ('place-block': C08 with
-// the held block item, against a neighbour placing.ts has checked); see Gtnh1710Client.
-// 'player-look' and 'swing-arm' only change what other players see: where the head points,
-// and the arm swinging while digging or placing.
+// only, for targets digging.ts has checked), placing one block ('place-block': C08 with
+// the held block item, against a neighbour placing.ts has checked) and striking one entity
+// ('attack-entity': C02 with the ATTACK action only, for targets combat.ts has checked); see
+// Gtnh1710Client. 'player-look' and 'swing-arm' only change what other players see: where
+// the head points, and the arm swinging while digging, placing or striking.
+// 'quest-book' is Better Questing's own channel (BQ_NET_CHAN), and only its four typed
+// client messages (better-questing.ts BqOutbound): the answer to the server's main_sync,
+// quest_action claim/detect, task_checkbox and choice_reward.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -49,7 +54,16 @@ export type OutboundKind =
   | 'dig-block'
   | 'place-block'
   | 'player-look'
-  | 'swing-arm';
+  | 'swing-arm'
+  | 'attack-entity'
+  | 'quest-book';
+
+/**
+ * C02 Use Entity actions (C02PacketUseEntity.Action, read as values()[byte % 2]). Only ATTACK
+ * is ever sent: INTERACT (a right click on an entity: trading, feeding, mounting, shearing)
+ * is deliberately not representable.
+ */
+export const USE_ENTITY_ATTACK = 1;
 
 /**
  * C07 Player Digging statuses the client may send. 1.7.10 also uses this packet for 3 (drop
@@ -344,8 +358,25 @@ export const outbound = {
   },
 
   /**
-   * C0A Animation (i32 own entity id, i8 1 = swing the arm), as a client does while digging
-   * and after placing a block.
+   * C02 Use Entity (i32 entity id, i8 action; verified against the 1.7.10 server's packet
+   * class), always with the ATTACK action: strike one entity with the held item. The caller
+   * names an entity combat.ts has checked; the server ignores a target out of its reach and
+   * KICKS for an item, XP orb, arrow or the player itself, which the client never tracks as a
+   * target.
+   */
+  attackEntity(entityId: number): OutboundPacket {
+    if (!Number.isInteger(entityId) || entityId < -2_147_483_648 || entityId > 2_147_483_647) {
+      throw new ProtocolError('bad entity id');
+    }
+    return {
+      kind: 'attack-entity',
+      frame: encodeFrame(0x02, Buffer.concat([i32(entityId), Buffer.from([USE_ENTITY_ATTACK])])),
+    };
+  },
+
+  /**
+   * C0A Animation (i32 own entity id, i8 1 = swing the arm), as a client does while digging,
+   * after placing a block and when striking.
    */
   swingArm(entityId: number): OutboundPacket {
     if (!Number.isInteger(entityId)) throw new ProtocolError('bad entity id');
@@ -353,6 +384,21 @@ export const outbound = {
       kind: 'swing-arm',
       frame: encodeFrame(0x0a, Buffer.concat([i32(entityId), Buffer.from([1])])),
     };
+  },
+
+  /**
+   * C17 plugin messages on Better Questing's channel for ONE typed quest-book message (one
+   * frame per 20,480-byte slice; the agent's messages are a single slice). Nothing else can
+   * be written to BQ_NET_CHAN: the payload is built from the typed message, never raw NBT.
+   */
+  questBook(message: BqOutbound): OutboundPacket[] {
+    return encodeBqOutbound(message).map((data) => {
+      if (data.length > 32767) throw new ProtocolError('client plugin message too large');
+      return {
+        kind: 'quest-book',
+        frame: encodeFrame(0x17, Buffer.concat([encodeString(BQ_CHANNEL), u16(data.length), data])),
+      };
+    });
   },
 
   /**
@@ -398,6 +444,16 @@ export interface ItemStackData {
   damage: number;
   hasNbt: boolean;
 }
+
+/**
+ * One DataWatcher entry: index 0-31 and its value. Item stacks and block coordinates (types
+ * 5 and 6) are read past but kept as null: nothing the agent uses is stored in them.
+ */
+export interface MetadataEntry {
+  index: number;
+  value: number | string | null;
+}
+export type EntityMetadata = readonly MetadataEntry[];
 
 export type LoginPacket =
   | { type: 'login-disconnect'; reason: string }
@@ -447,7 +503,17 @@ export type PlayPacket =
   | { type: 'disconnect'; reason: string }
   | ({ type: 'spawn-player'; entityId: number; name: string } & EntityPosition)
   | ({ type: 'spawn-object'; entityId: number; objectType: number } & EntityPosition)
-  | ({ type: 'spawn-mob'; entityId: number; mobType: number } & EntityPosition)
+  | ({
+      type: 'spawn-mob';
+      entityId: number;
+      mobType: number;
+      /** Its full DataWatcher, when it decoded (health, name tag, age...). */
+      metadata?: EntityMetadata;
+    } & EntityPosition)
+  /** S19 Entity Status: 2 = hurt (a full hit), 3 = died; others are animations. */
+  | { type: 'entity-status'; entityId: number; status: number }
+  /** S1C Entity Metadata: the changed DataWatcher entries; null when they did not decode. */
+  | { type: 'entity-metadata'; entityId: number; metadata: EntityMetadata | null }
   | { type: 'destroy-entities'; entityIds: number[] }
   | { type: 'entity-move'; entityId: number; dx: number; dy: number; dz: number }
   | ({ type: 'entity-teleport'; entityId: number } & EntityPosition)
@@ -482,7 +548,14 @@ function fixedPointPosition(r: Reader): EntityPosition {
 
 /** Forge "FML" channel runtime messages the agent uses (FMLRuntimeCodec discriminators). */
 export type FmlRuntimeMessage =
-  | ({ type: 'fml-entity-spawn'; entityId: number; modId: string; typeId: number } & EntityPosition)
+  | ({
+      type: 'fml-entity-spawn';
+      entityId: number;
+      modId: string;
+      typeId: number;
+      /** Its full DataWatcher, when it decoded. */
+      metadata?: EntityMetadata;
+    } & EntityPosition)
   | ({ type: 'fml-entity-adjust'; entityId: number } & EntityPosition)
   /** A mod's GUI opened (FMLNetworkHandler.openGui): its window, mod, GUI id and block. */
   | {
@@ -497,16 +570,20 @@ export type FmlRuntimeMessage =
   | { type: 'fml-other'; discriminator: number };
 
 /**
- * Decodes the start of a Forge 1.7.10 "FML" channel message. Only the leading fields are
- * read (the spawn message continues with rotation, DataWatcher and spawn data, which the
- * agent does not need). Layout verified against live GTNH traffic on 2026-09-30.
- *   2 EntitySpawnMessage:  int entityId, string modId, int modEntityTypeId, int x/y/z (1/32)
+ * Decodes the start of a Forge 1.7.10 "FML" channel message. Layout verified against live
+ * GTNH traffic on 2026-09-30:
+ *   2 EntitySpawnMessage:  int entityId, string modId, int modEntityTypeId, int x/y/z (1/32),
+ *                          then yaw, pitch, head yaw (bytes) and the DataWatcher (read when
+ *                          it decodes: health and the like), then spawn data (not read)
  *   3 EntityAdjustMessage: int entityId, int x/y/z (1/32)
  *   1 OpenGui:             int windowId, string modId, int modGuiId, int x, int y, int z
  *     (FMLMessage$OpenGui.toBytes and FMLRuntimeCodec in the Forge 10.13.4.1614 jar; the
  *     server then sends the window's slots as S30 with that window id)
  */
-export function decodeFmlRuntimeMessage(data: Buffer): FmlRuntimeMessage {
+export function decodeFmlRuntimeMessage(
+  data: Buffer,
+  options: PlayDecodeOptions = VANILLA_DECODING,
+): FmlRuntimeMessage {
   const r = new Reader(data);
   const discriminator = r.u8();
   switch (discriminator) {
@@ -524,7 +601,16 @@ export function decodeFmlRuntimeMessage(data: Buffer): FmlRuntimeMessage {
       const entityId = r.i32();
       const modId = r.string(256);
       const typeId = r.i32();
-      return { type: 'fml-entity-spawn', entityId, modId, typeId, ...fixedPointPosition(r) };
+      const position = fixedPointPosition(r);
+      const metadata = tryMetadata(r, 3, options);
+      return {
+        type: 'fml-entity-spawn',
+        entityId,
+        modId,
+        typeId,
+        ...position,
+        ...(metadata === null ? {} : { metadata }),
+      };
     }
     case 3:
       return { type: 'fml-entity-adjust', entityId: r.i32(), ...fixedPointPosition(r) };
@@ -586,6 +672,74 @@ function i16(n: number): Buffer {
   const b = Buffer.alloc(2);
   b.writeInt16BE(n);
   return b;
+}
+
+/**
+ * A 1.7.10 DataWatcher list (DataWatcher.readWatchedListFromPacketBuffer, verified with
+ * javap): entries of a header byte (type << 5 | index), then the value by type: 0 byte,
+ * 1 short, 2 int, 3 float, 4 string (VarInt length, UTF-8), 5 item stack (the same format as
+ * inventory packets, ModularUI's VarInt included), 6 three ints; byte 127 ends the list.
+ * Throws ProtocolError on anything else.
+ */
+export function readEntityMetadata(
+  r: Reader,
+  options: PlayDecodeOptions = VANILLA_DECODING,
+): MetadataEntry[] {
+  const entries: MetadataEntry[] = [];
+  // A watcher holds at most 32 indices; anything longer is not a DataWatcher list.
+  for (let n = 0; n <= 32; n++) {
+    const header = r.u8();
+    if (header === 0x7f) return entries;
+    const index = header & 0x1f;
+    const type = header >> 5;
+    let value: number | string | null;
+    switch (type) {
+      case 0:
+        value = r.i8();
+        break;
+      case 1:
+        value = r.i16();
+        break;
+      case 2:
+        value = r.i32();
+        break;
+      case 3:
+        value = r.f32();
+        break;
+      case 4:
+        value = r.string(32767 * 4);
+        break;
+      case 5:
+        readItemStack(r, options);
+        value = null;
+        break;
+      case 6:
+        r.i32();
+        r.i32();
+        r.i32();
+        value = null;
+        break;
+      default:
+        throw new ProtocolError(`unknown entity metadata type ${type}`);
+    }
+    entries.push({ index, value });
+  }
+  throw new ProtocolError('entity metadata without an end marker');
+}
+
+/**
+ * Skips `skip` bytes, then reads a DataWatcher list; null when it does not decode, for any
+ * reason (a truncated list, an unknown type, a bad NBT stream in an item stack): the fields
+ * before it stay valid, and metadata is optional for the agent (unknown health, unknown
+ * owner: such an entity is simply not attacked).
+ */
+function tryMetadata(r: Reader, skip: number, options: PlayDecodeOptions): MetadataEntry[] | null {
+  try {
+    r.bytes(skip);
+    return readEntityMetadata(r, options);
+  } catch {
+    return null;
+  }
 }
 
 export function readItemStack(
@@ -713,7 +867,23 @@ export function decodePlay(
     case 0x0f: {
       const entityId = r.varInt();
       const mobType = r.u8();
-      return { type: 'spawn-mob', entityId, mobType, ...fixedPointPosition(r) };
+      const position = fixedPointPosition(r);
+      // yaw, pitch, head pitch (bytes) and velocity (3 shorts), then the full DataWatcher.
+      const metadata = tryMetadata(r, 9, options);
+      return {
+        type: 'spawn-mob',
+        entityId,
+        mobType,
+        ...position,
+        ...(metadata === null ? {} : { metadata }),
+      };
+    }
+    case 0x1a:
+      return { type: 'entity-status', entityId: r.i32(), status: r.i8() };
+    case 0x1c: {
+      const entityId = r.i32();
+      // Undecodable entries make this entity's health and the like unknown (world-model.ts).
+      return { type: 'entity-metadata', entityId, metadata: tryMetadata(r, 0, options) };
     }
     case 0x13: {
       const count = r.u8();

@@ -1,4 +1,5 @@
 import type { Action } from '../domain/actions.ts';
+import { ENGAGE_RADIUS } from '../domain/combat.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
@@ -9,6 +10,7 @@ import {
   RECIPES,
 } from '../domain/recipes.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
+import { questBookPreconditions } from './quest-book-checks.ts';
 
 export interface PreconditionResult {
   ok: boolean;
@@ -219,6 +221,25 @@ export function checkPreconditions(
       break;
     }
 
+    case 'ATTACK_ENTITY': {
+      // The player does not move: the target must be close enough to come within strike
+      // reach during the burst (a hostile walks up; an animal must already be near).
+      requirePosition();
+      if (!state.nearbyEntities.known) {
+        failures.push('nearby entities are unknown');
+        break;
+      }
+      const target = state.nearbyEntities.value.entities.find((e) => e.id === action.args.entityId);
+      if (target === undefined) {
+        failures.push(`entity ${action.args.entityId} is not near the player`);
+      } else if (target.distance > ENGAGE_RADIUS) {
+        failures.push(
+          `${target.type} ${target.id} is ${target.distance.toFixed(1)} blocks away (engages within ${ENGAGE_RADIUS})`,
+        );
+      }
+      break;
+    }
+
     case 'DIG_BLOCK': {
       // Reach is measured like the game does: from the eyes to the block.
       const p = requirePosition();
@@ -251,6 +272,12 @@ export function checkPreconditions(
       }
       break;
     }
+
+    case 'SUBMIT_QUEST':
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
+      failures.push(...questBookPreconditions(action, state));
+      break;
   }
   return { ok: failures.length === 0, failures, resolvedTarget };
 }

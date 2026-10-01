@@ -11,7 +11,7 @@ import { gunzipSync } from 'node:zlib';
  * damage value is not 0 (e.g. "minecraft:log@2", "gregtech:gt.metaitem.01@11035").
  */
 
-export const KNOWLEDGE_FORMAT = 1;
+export const KNOWLEDGE_FORMAT = 2;
 export const KNOWLEDGE_FILE = 'gtnh-2.8.4.json.gz';
 
 /** An ingredient in the data: an item (index), an ore-dictionary name, or alternatives. */
@@ -39,9 +39,29 @@ export const CraftFlag = {
  * [output item, output count (0 = not known: the dump has no counts), flags, pattern
  *  (shaped: rows of input letters a, b, ... and "." for empty cells, joined by "/"; "" when
  *  shapeless), inputs (flat pairs: ingredient, count per craft), label (e.g. a GT tool's
- *  material) or "" ]
+ *  material) or "", where the count comes from ]
  */
-export type CraftingRow = [number, number, number, string, Array<IngredientRef | number>, string];
+export type CraftingRow = [
+  number,
+  number,
+  number,
+  string,
+  Array<IngredientRef | number>,
+  string,
+  CountFrom,
+];
+
+/**
+ * Where a crafting count comes from: "hand" (the agent's hand-verified table), "script"
+ * (GTNewHorizonsCoreMod's recipe scripts), "gt" (GregTech's own code, checked against its jar:
+ * the saw recipes for planks and sticks), "vanilla" (the same recipe in vanilla 1.7.10: GTNH
+ * keeps its ingredients; its count is not confirmed), or "" (unknown).
+ */
+export type CountFrom = '' | 'hand' | 'script' | 'gt' | 'vanilla';
+
+/** True when a crafting count was confirmed for GTNH (not unknown, not vanilla's). */
+export const countVerified = (from: CountFrom): boolean =>
+  from === 'hand' || from === 'script' || from === 'gt';
 
 export interface OreBlockInfo {
   /** GT material key (e.g. "Diamond"). */
@@ -95,6 +115,90 @@ export interface KnowledgeSource {
   sha256: string;
 }
 
+/** A vanilla 1.7.10 crafting recipe, as the server jar registers it. */
+export interface VanillaRecipe {
+  /** Agent item name (with "@damage" when not 0). */
+  output: string;
+  count: number;
+  shaped: boolean;
+  /** Pattern rows of a shaped recipe (null when shapeless). */
+  rows: string[] | null;
+  /** Per craft: item (registry name), damage (null: any) and count. */
+  inputs: Array<{ item: string; damage: number | null; count: number }>;
+  /** Which part of the jar registers it (CraftingManager or a recipe class). */
+  from: string;
+}
+
+/**
+ * The vanilla Minecraft 1.7.10 base layer: what the game does before GTNH changes it.
+ * From minecraft-data 3.117.0 (PrismarineJS, MIT; data/pc/1.7) and the 1.7.10 server jar.
+ */
+export interface VanillaLayer {
+  version: string;
+  /** minecraft-data: display name, stack size, durability. */
+  items: Record<string, { name: string; stack: number; durability?: number }>;
+  /** minecraft-data: hardness, material, the tools that harvest it (none: any hand). */
+  blocks: Record<
+    string,
+    {
+      name: string;
+      hardness: number | null;
+      material: string | null;
+      tools: string[];
+      diggable: boolean;
+    }
+  >;
+  /** minecraft-data: food points and saturation. */
+  foods: Record<string, { food: number; saturation: number }>;
+  /** minecraft-data: dig speed of each tool per block material. */
+  toolSpeeds: Record<string, Record<string, number>>;
+  entities: Array<{ name: string; displayName: string; type: string; category: string | null }>;
+  biomes: Array<{ name: string; category: string; temperature: number; rainfall: number }>;
+  enchantments: Array<{ name: string; maxLevel: number }>;
+  effects: Array<{ name: string; type: string }>;
+  /** Server jar, Item.ToolMaterial: harvest level, uses, efficiency, damage, enchantability. */
+  toolMaterials: Record<
+    string,
+    { level: number; uses: number; efficiency: number; damage: number; enchantability: number }
+  >;
+  /** Server jar, Item.registerItems: each vanilla tool's kind and material. */
+  tools: Array<{ item: string; kind: string; material: string }>;
+  /** Server jar: CraftingManager and its recipe classes, with output counts. */
+  crafting: VanillaRecipe[];
+  /** Server jar, FurnaceRecipes (`inputAnyDamage`: any damage of the input). */
+  smelting: Array<{
+    input: string;
+    inputAnyDamage: boolean;
+    output: string;
+    count: number;
+    xp: number;
+  }>;
+  /** Server jar, BiomeDecorator: ore veins per chunk, vein size and height. */
+  oreGen: Array<{
+    block: string;
+    veinSize: number;
+    perChunk: number;
+    minY: number;
+    maxY: number;
+    how: 'uniform' | 'centred';
+  }>;
+}
+
+/** One way GTNH 2.8.4 differs from vanilla 1.7.10, each side with its source. */
+export interface GtnhChange {
+  /** Stable id, e.g. "recipe:minecraft:torch" or "drop:minecraft:gravel". */
+  id: string;
+  kind: 'recipe' | 'smelting' | 'drop' | 'tool' | 'ores' | 'food' | 'mechanic';
+  /** What it is about, in words ("Torch", "Gravel", "Vanilla pickaxes"). */
+  subject: string;
+  /** Items and blocks it concerns (to find the changes that matter for a route). */
+  keys: string[];
+  vanilla: { value: string; source: string };
+  gtnh: { value: string; source: string };
+  /** One plain line: what changed. */
+  change: string;
+}
+
 export interface KnowledgeData {
   format: number;
   pack: string;
@@ -118,7 +222,18 @@ export interface KnowledgeData {
   ticLevels: Record<string, number>;
   /** IguanaTweaks' names of the harvest levels (index = level). */
   levelNames: string[];
+  /**
+   * Tools that mine nothing on this server (IguanaTweaks disableRegularTools: the listed
+   * pickaxes, shovels and axes, which are ItemTools): item -> why.
+   */
+  disabledTools: Record<string, string>;
+  /** Swords whose hits do no damage (IguanaTweaks disableRegularSwords): item -> why. */
+  disabledSwords: Record<string, string>;
   config: Record<string, string | number | boolean>;
+  /** The vanilla 1.7.10 base layer (the rest of this data is GTNH's, overriding it). */
+  vanilla: VanillaLayer;
+  /** Where GTNH differs from vanilla, each side with its source. */
+  changes: GtnhChange[];
 }
 
 let cached: KnowledgeData | null = null;

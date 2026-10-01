@@ -10,7 +10,7 @@ import {
 import { parseObservedStorageId, profileForBlock } from '../domain/interactions.ts';
 import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition } from '../domain/common.ts';
-import type { GameState } from '../domain/game-state.ts';
+import { MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
 import {
   blockCentre,
   bodyColumns,
@@ -21,9 +21,11 @@ import {
 } from '../domain/geometry.ts';
 import type { NamedLocation, SafetyConfig, SafetyViolation } from '../domain/safety.ts';
 import { stableStringify } from '../util/json.ts';
+import { attackChecks } from './combat-checks.ts';
 import { checkHazardClearance, checkWithinBoundary } from './coordinate-boundaries.ts';
 import { classifyActionType } from './forbidden-actions.ts';
 import { checkProtectedItems } from './protected-items.ts';
+import { questBookViolations } from './quest-book-rules.ts';
 
 /** Everything the policy needs besides the action and state. Pure data; no I/O. */
 export interface SafetyContext {
@@ -181,6 +183,7 @@ function findInconsistencies(state: GameState): string[] {
       problems.push('void hazard listed but voidNearby is false');
     }
   }
+  problems.push(...entityInconsistencies(state));
   if (state.nearbyBlocks.known) {
     const { resources, removed } = state.nearbyBlocks.value;
     const key = (p: BlockPosition): string => `${p.x},${p.y},${p.z}`;
@@ -207,6 +210,44 @@ function findInconsistencies(state: GameState): string[] {
     Date.parse(state.lastAction.timestamp) > Date.parse(state.timestamp)
   ) {
     problems.push('lastAction is newer than the observation');
+  }
+  return problems;
+}
+
+/**
+ * The entity details must agree with the threat counts they explain: same scan, unique ids,
+ * nothing listed beyond the scan, and (when the list is complete) the same numbers of
+ * hostile and unidentified entities.
+ */
+function entityInconsistencies(state: GameState): string[] {
+  if (!state.nearbyEntities.known) return [];
+  const problems: string[] = [];
+  const { scanRadius, entities } = state.nearbyEntities.value;
+  if (!state.nearbyThreats.known) {
+    return ['nearbyEntities is reported but nearbyThreats is not'];
+  }
+  const t = state.nearbyThreats.value;
+  if (scanRadius !== t.scanRadius) {
+    problems.push('nearbyEntities and nearbyThreats cover different scan radii');
+  }
+  if (new Set(entities.map((e) => e.id)).size !== entities.length) {
+    problems.push('nearbyEntities lists an entity twice');
+  }
+  if (entities.some((e) => e.distance > scanRadius)) {
+    problems.push('nearbyEntities lists an entity beyond its scan radius');
+  }
+  const hostile = entities.filter((e) => e.category === 'hostile').length;
+  const unclassified = entities.filter((e) => e.category === 'unclassified').length;
+  const complete = entities.length < MAX_REPORTED_ENTITIES;
+  if (complete ? hostile !== t.hostileCount : hostile > t.hostileCount) {
+    problems.push(
+      `nearbyEntities lists ${hostile} hostile(s), nearbyThreats counts ${t.hostileCount}`,
+    );
+  }
+  if (complete ? unclassified !== t.unclassifiedCount : unclassified > t.unclassifiedCount) {
+    problems.push(
+      `nearbyEntities lists ${unclassified} unidentified, nearbyThreats counts ${t.unclassifiedCount}`,
+    );
   }
   return problems;
 }
@@ -407,7 +448,11 @@ export function evaluateStaticSpec(spec: ActionSpec, ctx: SafetyContext): Safety
     case 'WITHDRAW_ITEM':
     case 'INSPECT_MACHINE':
     case 'CRAFT_ITEM': // its ingredients are checked as protected items above
+    case 'ATTACK_ENTITY': // its target exists only in a live state (dynamicChecks)
     case 'PAUSE_AND_ASK_USER':
+    case 'SUBMIT_QUEST': // what a submit takes depends on the quest book: see dynamicChecks
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
       break;
   }
   return v;
@@ -504,10 +549,16 @@ function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolati
   const codes = new Set(dangers.map((d) => d.code));
   const outsideWorkArea = codes.has('OUT_OF_BOUNDS') || codes.has('DIMENSION_NOT_ALLOWED');
   const onlyVitals = [...codes].every((c) => c === 'LOW_HEALTH' || c === 'LOW_HUNGER');
+  // Fighting back is how the agent survives a hostile it cannot retreat from; any other
+  // danger (lava, an unidentified entity, low health or food) forbids it.
+  const onlyHostiles = [...codes].every((c) => c === 'HOSTILES_NEARBY');
 
   let permitted = false;
   if (!outsideWorkArea) {
-    permitted = type === 'RETURN_TO_SAFE_LOCATION' || (type === 'EAT_FOOD' && onlyVitals);
+    permitted =
+      type === 'RETURN_TO_SAFE_LOCATION' ||
+      (type === 'EAT_FOOD' && onlyVitals) ||
+      (type === 'ATTACK_ENTITY' && onlyHostiles);
   }
   if (permitted) return [];
   return [
@@ -639,6 +690,9 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
     case 'TAKE_OUTPUT':
       v.push(...interactChecks(action.type, action.args.position, state));
       break;
+    case 'ATTACK_ENTITY':
+      v.push(...attackChecks(action, state, config, ctx.protectedItems));
+      break;
     case 'REFUEL_KNOWN_GENERATOR': {
       const generator = state.power.generators.find((g) => g.id === action.args.generatorId);
       if (generator === undefined) {
@@ -653,6 +707,11 @@ function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): Sa
       }
       break;
     }
+    case 'SUBMIT_QUEST':
+    case 'CHECK_QUEST_BOX':
+    case 'CLAIM_QUEST_REWARD':
+      v.push(...questBookViolations(action, state, ctx.protectedItems));
+      break;
     case 'OBSERVE_STATE':
     case 'WAIT':
     case 'EAT_FOOD':

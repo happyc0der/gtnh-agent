@@ -236,6 +236,12 @@ export class FakeChestSim {
   onClick: ((n: number) => void) | null = null;
   /** While true, clicks are ignored: no verdict, no change (a server that stopped answering). */
   ignoreClicks = false;
+  /**
+   * Called after the player's inventory changed (a pickup, an accepted click, a removal), like
+   * Better Questing's PlayerContainerListener, which hears every slot change of the player's
+   * container.
+   */
+  onInventoryChange: (() => void) | null = null;
   readonly #chests = new Map<string, Array<FakeStack | null>>();
   readonly #tables: ReadonlySet<string>;
   readonly #recipes: readonly FakeRecipe[];
@@ -515,6 +521,7 @@ export class FakeChestSim {
       );
     }
     this.#lastSentPlayer = this.#player.map((s) => (s === null ? null : { ...s }));
+    if (changed.size > 0) this.onInventoryChange?.();
     return left;
   }
 
@@ -591,6 +598,19 @@ export class FakeChestSim {
     this.#lastSentPlayer[36 + this.heldSlot] = this.heldStack;
   }
 
+  /**
+   * InventoryPlayer.decrStackSize on a player slot (window-0 numbering): removes up to `n`
+   * items and sends the slot (S2F). Returns how many were removed.
+   */
+  take(slot: number, n: number): number {
+    const s = this.#player[slot];
+    if (s == null || n <= 0) return 0;
+    const removed = Math.min(n, s.count);
+    this.setPlayerSlot(slot, s.count - removed > 0 ? { ...s, count: s.count - removed } : null);
+    this.onInventoryChange?.();
+    return removed;
+  }
+
   /** Handles a play-state packet if it is a container packet; returns whether it was. */
   handle(packetId: number, r: Reader): boolean {
     switch (packetId) {
@@ -643,6 +663,7 @@ export class FakeChestSim {
           this.#sendWindow();
         }
         this.onClick?.(this.#clickCount);
+        this.onInventoryChange?.();
         return true;
       }
       case 0x0f: {

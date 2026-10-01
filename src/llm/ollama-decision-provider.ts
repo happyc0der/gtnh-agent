@@ -12,8 +12,10 @@ import type { TaskStatus } from '../domain/tasks.ts';
 import { distance } from '../domain/geometry.ts';
 import { assessDangers, assessStateReliability } from '../safety/safety-policy.ts';
 import type { DecisionProvider } from '../system1/decision-provider.ts';
+import { assessDefense } from '../system1/defend.ts';
 import {
   availableApprovedFood,
+  canRetreat,
   findStorage,
   generatorNeedingFuel,
   homeLocation,
@@ -38,6 +40,11 @@ export interface DecisionSummary {
   stateProblems: string[];
   /** Dangers the safety policy sees (empty when there are none). */
   dangers: string[];
+  /**
+   * Hostiles are the only danger and fighting back is the answer (src/system1/defend.ts:
+   * combat enabled, a safe moment, and either cornered by a quick kill or nowhere to retreat).
+   */
+  defend: boolean;
   home: 'unknown' | 'here' | 'away';
   health: number | null;
   lowHealth: boolean;
@@ -65,9 +72,14 @@ export function summarizeForDecision(state: GameState, ctx: RouterContext): Deci
   const health = state.player.health.known ? state.player.health.value : null;
   const hunger = state.player.hunger.known ? state.player.hunger.value : null;
   const recipe = state.knownRecipeState;
+  const dangers = unique(assessDangers(state, ctx.safety).map((v) => v.code));
+  const onlyHostiles = dangers.length > 0 && dangers.every((c) => c === 'HOSTILES_NEARBY');
   return {
     stateProblems: unique(assessStateReliability(state, ctx.safety).map((v) => v.code)),
-    dangers: unique(assessDangers(state, ctx.safety).map((v) => v.code)),
+    dangers,
+    defend:
+      onlyHostiles &&
+      assessDefense(state, ctx, { possible: canRetreat(state, ctx) }).kind === 'defend',
     home:
       home === null || position === null
         ? 'unknown'
@@ -107,7 +119,7 @@ export const DECISION_SYSTEM_PROMPT = `You are System 1 of a safety-first agent 
 The rules, in order. The FIRST rule whose check is true decides; all later rules are ignored.
 1. stateProblems: the stateProblems list is not empty. Decide PAUSE_AND_ASK_USER (reason STATE_UNRELIABLE).
 2. outOfBounds: dangers contains OUT_OF_BOUNDS or DIMENSION_NOT_ALLOWED. Decide PAUSE_AND_ASK_USER (that code as reason).
-3. danger: dangers contains HAZARD_PROXIMITY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY. If home is "away", decide RETREAT_HOME (reason HAZARD_NEARBY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY); otherwise PAUSE_AND_ASK_USER (add ALREADY_AT_SAFE_LOCATION or NO_SAFE_LOCATION).
+3. danger: dangers contains HAZARD_PROXIMITY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY. If defend is true, decide DEFEND (reasons HOSTILES_NEARBY, HOSTILE_IN_REACH; add ALREADY_AT_SAFE_LOCATION when home is "here", NO_SAFE_LOCATION when it is "unknown"). Otherwise, if home is "away", decide RETREAT_HOME (reason HAZARD_NEARBY, HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY); otherwise PAUSE_AND_ASK_USER (add ALREADY_AT_SAFE_LOCATION or NO_SAFE_LOCATION).
 4. lowHealth: lowHealth is true. If home is "away", decide RETREAT_HOME (reason LOW_HEALTH); otherwise PAUSE_AND_ASK_USER.
 5. hungryWithFood: hungry is true AND approvedFoodCarried is true. Decide EAT (reason HUNGRY).
 6. starvingWithoutFood: starving is true AND approvedFoodCarried is false. If home is "away", decide RETREAT_HOME, otherwise PAUSE_AND_ASK_USER (reasons HUNGRY, NO_APPROVED_FOOD).

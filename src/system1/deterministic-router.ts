@@ -2,6 +2,7 @@ import type { Decision, DecisionResult, FactValue, ReasonCode } from '../domain/
 import type { GameState } from '../domain/game-state.ts';
 import { distance } from '../domain/geometry.ts';
 import { assessDangers, assessStateReliability } from '../safety/safety-policy.ts';
+import { assessDefense } from './defend.ts';
 import {
   availableApprovedFood,
   findStorage,
@@ -38,6 +39,9 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
   'HAZARD_NEARBY',
   'HOSTILES_NEARBY',
   'UNCLASSIFIED_ENTITY_NEARBY',
+  'HOSTILE_IN_REACH',
+  'CREEPER_NEARBY',
+  'TOO_MANY_HOSTILES',
   'LOW_HEALTH',
   'HUNGRY',
   'NO_APPROVED_FOOD',
@@ -50,6 +54,9 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  * Priority:
  *   0. unreliable state (unknown/stale/inconsistent)  -> PAUSE_AND_ASK_USER
  *   1. outside work area                               -> PAUSE_AND_ASK_USER
+ *      hostiles nearby and fighting back is the answer -> DEFEND (only with combat enabled; see
+ *                                                         defend.ts: cornered by a quick kill,
+ *                                                         or nowhere to retreat to)
  *      lava/void/hostiles nearby                       -> RETREAT_HOME (or PAUSE if already home / no home)
  *   2. low health                                      -> RETREAT_HOME (or PAUSE)
  *      hungry                                          -> EAT (or RETREAT_HOME/PAUSE with no approved food)
@@ -127,6 +134,24 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     if (dangerCodes.has('HAZARD_PROXIMITY')) codes.push('HAZARD_NEARBY');
     if (dangerCodes.has('HOSTILES_NEARBY')) codes.push('HOSTILES_NEARBY');
     if (dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) codes.push('UNCLASSIFIED_ENTITY_NEARBY');
+    // Fighting back is considered only when hostiles are the sole danger: never near lava or
+    // void, never with an unidentified entity near, never with low health or food.
+    if ([...dangerCodes].every((c) => c === 'HOSTILES_NEARBY')) {
+      const defense = assessDefense(state, ctx, { possible: home !== null && !atHome });
+      facts['defense'] = defense.kind;
+      if (defense.kind === 'defend') {
+        const t = defense.target;
+        facts['defendTarget'] = t.id;
+        facts['defendTargetType'] = t.type;
+        facts['defendTargetDistance'] = t.distance;
+        facts['defendTargetHealth'] = t.health;
+        const why = new Set<ReasonCode>([...codes, ...defense.reasons]);
+        if (home === null) why.add('NO_SAFE_LOCATION');
+        else if (atHome) why.add('ALREADY_AT_SAFE_LOCATION');
+        return decide('DEFEND', CONFIDENCE.safety, [...why]);
+      }
+      if (defense.kind === 'flee') codes.push(...defense.reasons);
+    }
     return retreatOrPause(codes, CONFIDENCE.safety);
   }
 

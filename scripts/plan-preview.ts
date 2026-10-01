@@ -11,11 +11,13 @@
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import { buildSafetyContext, overlayAgentMemory } from '../src/app/agent-loop.ts';
+import { observeWithQuestBook } from '../src/app/live-play.ts';
 import { liveAbilities } from '../src/app/play.ts';
 import { createProviders } from '../src/app/providers.ts';
-import { adoptGoal, updateQuests } from '../src/app/quest-commands.ts';
+import { adoptGoal, freeSlotsOf, updateQuests } from '../src/app/quest-commands.ts';
 import { Gtnh1710Client } from '../src/bot/gtnh1710/gtnh-client.ts';
 import { loadConfig } from '../src/config/env.ts';
+import { AGE0_QUESTS } from '../src/goals/age0-quests.ts';
 import { openDatabase } from '../src/persistence/database.ts';
 import { createRepositories } from '../src/persistence/repositories.ts';
 import { buildPlannerRequest } from '../src/planner/planner-provider.ts';
@@ -27,7 +29,7 @@ const { values } = parseArgs({
   options: {
     db: { type: 'string' },
     seconds: { type: 'string', default: '3' },
-    // Record satisfied quests and make the next quest the current task first, as play does.
+    // Read the server's quest book and make the next quest the current task first, as play does.
     quest: { type: 'boolean', default: false },
   },
 });
@@ -36,17 +38,33 @@ const { planner } = createProviders(config);
 if (planner === null) throw new Error('no planner is configured (AGENT_PLANNER)');
 const db = openDatabase(values.db ?? config.database.path);
 const repos = createRepositories(db, systemClock);
-const client = new Gtnh1710Client({ config: config.minecraft, clock: systemClock });
+const client = new Gtnh1710Client({
+  config: config.minecraft,
+  clock: systemClock,
+  questScope: AGE0_QUESTS.map((q) => q.id),
+});
 const out = (v: unknown): void => void process.stdout.write(`${JSON.stringify(v, null, 2)}\n`);
 try {
   await client.connect();
   await new Promise((r) => setTimeout(r, Math.max(0, Number(values.seconds) || 0) * 1000));
-  const observed = await client.observe();
-  if (values.quest && observed.inventory.known) {
+  const observed = await observeWithQuestBook(client);
+  if (values.quest && observed.inventory.known && observed.questBook.known) {
     const tables = Object.keys(config.minecraft.crafting.tables).length > 0;
-    const update = updateQuests(repos, observed.inventory.value.items, liveAbilities(tables));
+    const update = updateQuests(
+      repos,
+      observed.questBook.value,
+      { items: observed.inventory.value.items, freeSlots: freeSlotsOf(observed) },
+      liveAbilities(tables),
+    );
     if (update.next !== null) adoptGoal(repos, update.next);
-    out({ questsCompleted: update.added.map((q) => q.name), next: update.next?.text ?? null });
+    out({
+      questsCompleted: update.added.map((q) => q.name),
+      dueClicks: update.clicks.map((c) => c.reason),
+      next: update.next?.text ?? null,
+      remaining: update.next?.subgoal ?? null,
+    });
+  } else if (values.quest) {
+    out({ quest: 'not adopted: the inventory or the server quest book is unknown' });
   }
   const state = overlayAgentMemory(observed, repos, config);
   const ctx = buildSafetyContext(config, repos, new Date());

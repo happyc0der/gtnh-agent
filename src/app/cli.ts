@@ -16,6 +16,7 @@ import {
   movementStatus,
   parseBlockPosition,
   parseExploreToward,
+  runLiveAttack,
   runLiveChest,
   runLiveCycle,
   runLiveDig,
@@ -33,21 +34,23 @@ import { describeKnownPlaces, parseMapPoint } from './world-memory-commands.ts';
 import { runMockScenario } from './mock-agent.ts';
 import { approvePlan, rejectPlan, showPlans } from './plan-commands.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from './live-session.ts';
-import { runLivePlay } from './live-play.ts';
+import { observeWithQuestBook, runLivePlay } from './live-play.ts';
 import {
   checkPlayLimits,
   DEFAULT_PLAY_LIMITS,
   describePlayEvent,
   liveAbilities,
   type PlayLimits,
+  MAX_MOB_WAITS,
+  MOB_WAIT_MS,
 } from './play.ts';
 import { createProviders } from './providers.ts';
-import { describeQuests, updateQuests } from './quest-commands.ts';
+import { describeQuests, freeSlotsOf, updateQuests } from './quest-commands.ts';
 import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
 const USAGE = `gtnh-agent (single cycle, no autonomy; the live client only observes unless walking,
-chests, crafting, digging or placing are explicitly enabled)
+chests, crafting, digging, placing, block windows or fighting are explicitly enabled)
 
 Usage:
   node src/app/cli.ts once [--scenario <name>] [--db <path> | --memory] [--full]
@@ -92,6 +95,11 @@ Usage:
   node src/app/cli.ts layouts [--db <path>]
       Window layouts learned from blocks the agent opened (per block): the material for a
       new interaction profile (docs/architecture.md, "Interacting with blocks").
+  node src/app/cli.ts attack --live --entity <id> [--db <path>]
+      STRIKE one creature inside the fence for a short burst (needs MC_ENABLE_COMBAT=true and
+      a fence): an identified hostile or an unowned farm animal (observe --live lists ids),
+      with an allowlisted axe from the hotbar or a bare hand, as a checked user action. The
+      player does not move. Ctrl+C stops it.
   node src/app/cli.ts run --live [--max-cycles N] [--max-minutes M] [--db <path>] [--verbose]
       BOUNDED auto-run of the current task on one connection: ordinary cycles back to back,
       stopping when the task is done or anything needs you (a pause, rejection, failure,
@@ -101,17 +109,21 @@ Usage:
       AUTONOMOUS PLAY through the Age 0 quest book: the agent picks its next quest, the
       configured decision maker and planner (AGENT_DECISIONS / AGENT_PLANNER, e.g. ollama)
       choose what to do, and every action is validated, executed and verified as always.
+      Quests count only as the server's quest book records them; with
+      MC_ENABLE_QUEST_BOOK=true play also claims rewards, ticks checkboxes and submits
+      finished quests itself (decided in code, never by a model).
       Stops when no doable quest is left, when anything needs you, after 3 sessions without
       progress on a quest, at the time limit, the stop file (pnpm cli halt) or Ctrl+C.
       --needs pursues your own goal instead (e.g. --needs minecraft:diamond=100): the planner
       gets its route the same way, and play ends when the items are held.
   node src/app/cli.ts quests [--live] [--db <path>]
-      The agent's Age 0 quest book (GTNH "Tier 0 Stone Age"): progress, completed quests
-      and the next goal. --live reads the inventory first and records the quests it now
-      satisfies (the agent's own bookkeeping; the server's quest book is not touched).
+      The Age 0 quest book (GTNH "Tier 0 - Stone Age") AS THE SERVER RECORDS IT (Better
+      Questing): chapter progress, completed and active quests, unclaimed rewards, due
+      quest-book clicks and the next goal. --live reads it from the server first (it clicks
+      nothing); without --live it shows the last observation.
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
-      Create / remove the stop file (nothing walks, uses chests, digs or places while it
-      exists) / show movement, digging and placing settings.
+      Create / remove the stop file (nothing walks, uses chests, digs, places or fights while it
+      exists) / show movement, digging, placing and combat settings.
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -209,6 +221,7 @@ async function main(argv: string[]): Promise<number> {
       item: { type: 'string' },
       toward: { type: 'string' },
       distance: { type: 'string', default: '64' },
+      entity: { type: 'string' },
       container: { type: 'string' },
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
@@ -446,6 +459,8 @@ async function main(argv: string[]): Promise<number> {
       let interrupted = false;
       const onInterrupt = (): void => void (interrupted = true);
       process.on('SIGINT', onInterrupt);
+      /** runLivePlay ends in a row that stopped for a mob near home (see mobPause). */
+      let mobWaits = 0;
       try {
         for (;;) {
           const minutesLeft = (deadline - Date.now()) / 60_000;
@@ -468,18 +483,36 @@ async function main(argv: string[]): Promise<number> {
             progress: out.progress,
             minutes: Number(((Date.now() - started) / 60_000).toFixed(1)),
           };
-          const sleepMs = out.night === null ? 0 : (out.night.minutesUntilDay + 0.25) * 60_000;
-          if (out.night === null || Date.now() + sleepMs >= deadline) {
-            print(summary);
+          mobWaits = out.mobNearby === null ? 0 : mobWaits + 1;
+          const sleepMs =
+            out.night !== null
+              ? (out.night.minutesUntilDay + 0.25) * 60_000
+              : out.mobNearby !== null && mobWaits <= MAX_MOB_WAITS
+                ? MOB_WAIT_MS
+                : 0;
+          if (sleepMs === 0 || Date.now() + sleepMs >= deadline) {
+            print(
+              out.mobNearby !== null && mobWaits > MAX_MOB_WAITS
+                ? {
+                    ...summary,
+                    stopReason: `${out.stopReason}; it stayed for ${MAX_MOB_WAITS} waits`,
+                  }
+                : summary,
+            );
             return 0;
           }
           process.stderr.write(
-            `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on\n`,
+            out.night !== null
+              ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on\n`
+              : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits}/${MAX_MOB_WAITS}), then playing on\n`,
           );
           const wakeAt = Date.now() + sleepMs;
           while (Date.now() < wakeAt) {
             if (interrupted || existsSync(stopFile)) {
-              print({ ...summary, stopReason: 'stopped while waiting for sunrise' });
+              print({
+                ...summary,
+                stopReason: `stopped while waiting ${out.night !== null ? 'for sunrise' : 'for the mob to leave'}`,
+              });
               return 0;
             }
             await new Promise((r) => setTimeout(r, 1000));
@@ -665,6 +698,30 @@ async function main(argv: string[]): Promise<number> {
         db.close();
       }
     }
+    case 'attack': {
+      if (!values.live) {
+        process.stderr.write(
+          'attack strikes a creature on the test server; pass --live to confirm.\n',
+        );
+        return 1;
+      }
+      const entityId = Number(values.entity);
+      if (values.entity === undefined || !Number.isInteger(entityId)) {
+        process.stderr.write(
+          'attack requires --entity <id> (an entity id from observe --live, e.g. --entity=1234)\n',
+        );
+        return 1;
+      }
+      const out = await runLiveAttack(config, dbPath, entityId, log);
+      print({
+        action: values.full
+          ? { result: out.result, connection: out.info }
+          : compact('live-attack', dbPath, out.result),
+        health: out.health,
+        combat: out.entities,
+      });
+      return out.result.status === 'succeeded' ? 0 : 1;
+    }
     case 'halt':
       print(setMovementHalted(config, true, values.reason));
       return 0;
@@ -722,22 +779,22 @@ async function main(argv: string[]): Promise<number> {
       try {
         const repos = createRepositories(db, systemClock);
         if (!values.live) {
-          const latest = repos.snapshots.latest('gtnh1710');
-          print(
-            describeQuests(repos, latest?.inventory.known ? latest.inventory.value.items : null),
-          );
+          print(describeQuests(repos, repos.snapshots.latest('gtnh1710')));
           return 0;
         }
-        const state = await withLiveClient(config, (client) => client.observe(), log);
-        if (!state.inventory.known) {
-          process.stderr.write(`the inventory is unknown: ${state.inventory.reason}
-`);
+        const state = await withLiveClient(config, (client) => observeWithQuestBook(client), log);
+        if (!state.questBook.known) {
+          process.stderr.write(`the server's quest book is unknown: ${state.questBook.reason}\n`);
+          print(describeQuests(repos, state));
           return 1;
         }
-        const inventory = state.inventory.value.items;
-        const update = updateQuests(repos, inventory);
+        // Records the server's completions (the CLI clicks nothing in the quest book).
+        const update = updateQuests(repos, state.questBook.value, {
+          items: state.inventory.known ? state.inventory.value.items : {},
+          freeSlots: freeSlotsOf(state),
+        });
         print({
-          ...describeQuests(repos, inventory),
+          ...describeQuests(repos, state),
           newlyCompleted: update.added.map((q) => q.name),
         });
         return 0;

@@ -54,12 +54,44 @@ Every action has `actionId`, `type`, bounded `args`, `reason`, `origin`
 | `INTERACT_BLOCK`          | block position                                                  | block within reach of the eyes                                   | an observed block with a profile that may be opened, or on the observe-only allowlist (`NOT_INTERACTABLE`); whole block inside boundary; not allowed during danger                                                                                                             | Its window was seen; profile matches; observe-only closed.                                   |
 | `SMELT`                   | furnace position, input, 1–64, fuel, 0–64                       | furnace within reach; enough input and fuel (counted together)   | a listed furnace (`NOT_INTERACTABLE`); fuel approved (`NOT_APPROVED_FUEL`), never lava; input and fuel not protected; inside boundary; not allowed during danger                                                                                                               | Inventory −input −fuel exactly; furnace open with the input.                                 |
 | `TAKE_OUTPUT`             | furnace position, item                                          | furnace within reach; an empty inventory slot                    | a listed furnace (`NOT_INTERACTABLE`); item not protected; inside boundary; not allowed during danger                                                                                                                                                                          | Inventory + the count taken, exactly; nothing else changed.                                  |
+| `ATTACK_ENTITY`           | entity id (a Java int)                                          | position known; the entity listed and within 8 blocks            | listed (`TARGET_GONE`) and attackable (`NOT_ATTACKABLE`); inside boundary; a safe moment (`UNSAFE_ATTACK`); farm animals only for a task, never near hostiles; no protected weapon carried; in danger only when hostiles are the only danger                                   | Seen dying, health lower, or seen hurt (`ENTITY_ATTACKED`).                                  |
 | `PAUSE_AND_ASK_USER`      | question ≤ 500 chars                                            | none                                                             | always permitted                                                                                                                                                                                                                                                               | Client acknowledged. The loop marks the task `paused`.                                       |
+| `SUBMIT_QUEST`            | quest id (two signed 64-bit halves)                             | listed in the quest book, not completed; inventory known         | a quest of the Age 0 closure the server has (`UNKNOWN_TARGET`), active and unlocked there (`QUEST_NOT_ACTIVE`); no protected item could be handed in to a consume task, and none at all for an ore-dictionary entry (`PROTECTED_ITEM`); not allowed during danger              | The server records it completed; only consume items left (`QUEST_COMPLETED`).                |
+| `CHECK_QUEST_BOX`         | quest id, task index 0–1023                                     | an unticked checkbox task of a quest not completed               | a listed quest (`UNKNOWN_TARGET`), active and unlocked on the server (`QUEST_NOT_ACTIVE`); not allowed during danger                                                                                                                                                           | The server records the task, or the quest, as complete (`QUEST_TASK_CHECKED`).               |
+| `CLAIM_QUEST_REWARD`      | quest id, choice index or null                                  | completed, unclaimed; a valid choice; room for every reward      | a listed quest (`UNKNOWN_TARGET`); not allowed during danger                                                                                                                                                                                                                   | Claimed on the server; exactly the reward items arrived (`QUEST_REWARD_CLAIMED`).            |
 
-**Not in the allowlist, by design:** lava interaction, dropping items, combat, breaking any
-block that is not on `DIG_BLOCK`'s allowlist, placing any block that is not on
-`PLACE_BLOCK`'s allowlist, wrenching, cable/energy-network changes, multiblock changes, and
-rare-item consumption.
+**Not in the allowlist, by design:** lava interaction, dropping items, breaking any block that
+is not on `DIG_BLOCK`'s allowlist, placing any block that is not on `PLACE_BLOCK`'s allowlist,
+attacking anything `ATTACK_ENTITY` does not allow, wrenching, cable/energy-network changes,
+multiblock changes, and rare-item consumption.
+
+**`ATTACK_ENTITY`** engages one entity of the observation's `nearbyEntities` for a short burst
+(`src/domain/combat.ts`, `src/safety/combat-checks.ts`):
+
+- **Whom:** an identified hostile that fights in melee or at range (zombies, spiders, skeletons,
+  witches, and their Special Mobs variants), or a cow, pig, sheep or chicken whose metadata says
+  it is grown and has no name tag (or saddle). Never a player, villager, golem, wolf, horse, any
+  other animal, anything unidentified, a creeper or anything else that explodes, an enderman,
+  zombie pigman, silverfish or boss (`NOT_ATTACKABLE`, pause). An entity no longer listed is a
+  stale step (`TARGET_GONE`): a planner's plan is re-made, not halted.
+- **When** (`UNSAFE_ATTACK`, block; the same rules System 1 uses for DEFEND): health at least
+  `safety.combat.minHealthToFight` (14) and food at least `minHungerToFight` (8, the server's
+  HungerOverhaul heals no lower); at most `maxHostilesToFight` (2) hostiles within the threat
+  radius; nothing that explodes, or might (an unidentified entity), within `creeperFleeRadius`
+  (16); no unidentified entity within the threat radius. Farm animals only for a task (or a
+  person's own request), and never while hostiles are near. Every allowlisted weapon the player
+  carries must be unprotected (the client picks one from the hotbar, and striking wears it).
+- **During danger** it is the one action besides retreating: allowed only when hostiles are the
+  only danger (not near lava, not with an unidentified entity, not with low health or food).
+
+**DEFEND** (a System 1 decision, `src/system1/defend.ts`) turns into `ATTACK_ENTITY` on the
+nearest hostile the agent may fight, only with `MC_ENABLE_COMBAT=true`, when hostiles are the
+only danger, the moment is safe (above), and retreating is impossible or worse: with a home to
+retreat to, only when that hostile is within striking distance and dies in at most 3 full hits
+(its health is known); with no home (or already home), when it is within striking distance or a
+melee mob is coming within 8 blocks. A creeper or a crowd is fled (`CREEPER_NEARBY`,
+`TOO_MANY_HOSTILES` join the retreat's reasons); a skeleton at range is not chased (pause).
+DEFEND carries `HOSTILES_NEARBY`, so a model's decision never overrules it.
 
 **`DIG_BLOCK`** breaks one of `minecraft:log`, `log2`, `leaves`, `leaves2`, `dirt`, `grass`,
 `sand`, `gravel` or `clay` (`src/domain/blocks.ts`); nothing else, nothing modded. The block must
@@ -214,18 +246,57 @@ dirt chest.
   block falling), or a window opens instead (it is closed again). A placed block whose stack
   did not shrink is reported (`stackUsed: false`) and fails verification.
 
+`ATTACK_ENTITY` needs `MC_ENABLE_COMBAT=true` (otherwise `NOT_IMPLEMENTED`), the movement
+fence and presence ticks. The player never moves.
+
+- **Refused** (`REFUSED`, nothing sent) when the target is not tracked, may never be attacked,
+  is outside the fence or more than 8 blocks away; when the player is outside the fence; when
+  something that may explode is within 16 blocks or an unidentified entity within the threat
+  radius; with no allowlisted weapon and no empty hotbar slot; or while a walk, chest, crafting
+  or dig operation runs, or another fight.
+- **The burst:** it holds the best allowlisted weapon in the hotbar (vanilla axes; never a
+  sword, which deals nothing on GTNH, never a stack with NBT data), else an empty hand. It
+  strikes whenever the target is within reach (a bare hand 2.2 blocks; a weapon 2.9, or 4.5
+  when no block can be in the way), one full hit per 12 ticks, for at most 8 swings or 5 s. A
+  blow that may kill is held back while GTNH's kill explosion (power 1.5) would leave the player
+  under 4 health.
+- **Stops** on the target dying or leaving (gone, out of the fence, beyond 8 blocks), ANY damage
+  taken (so System 1 decides again), something that may explode or an unidentified entity
+  appearing, and (`FAILED`) the stop file, `halt()`, a server correction or a lost connection.
+- **Reports** swings, hits seen, kills, the target's health before and after, the damage the
+  player took and the blows held back. With no hit landed it fails (`FAILED`).
+
+**The quest-book clicks** (`SUBMIT_QUEST`, `CHECK_QUEST_BOX`, `CLAIM_QUEST_REWARD`) are the
+GUI's own clicks in Better Questing's quest book (see
+[gtnh-compatibility: quest book](gtnh-compatibility.md#quest-book-better-questing-2026-09-30)).
+They need `MC_ENABLE_QUEST_BOOK=true` (otherwise `NOT_IMPLEMENTED`) and presence ticks, and
+are refused while a walk, chest operation, dig or placement runs, or under `halt()` or the stop
+file. Only the play loop chooses them, deterministically from the server's records (origin
+`deterministic-router`); the planner is not offered them and `validatePlan` refuses any plan
+step that is one. The client checks the server's quest book again just before it sends
+anything, and judges the click by the server's next sync:
+
+- **Refused** (`REFUSED`) when the quest is not one the agent tracks or the server has not
+  synced it, or (submit, checkbox) the server does not list it as active and unlocked, or
+  (claim) it is not completed or already claimed, the choice does not fit its rewards, or the
+  inventory has no room for them.
+- **Fails** (`FAILED`) when the server does not record the result in time: the quest completed
+  (8 s after a submit: its quest loop runs every 3 s of the player's ticks), the box ticked or
+  the rewards claimed (5 s), the choice acknowledged (3 s).
+
 The other world-changing actions return `NOT_IMPLEMENTED`. See
 [architecture: walking](architecture.md#walking), [digging](architecture.md#digging) and
-[placing](architecture.md#placing).
+[combat](architecture.md#combat).
 
 ## Global rules applied to every action
 
 1. **Unsupported/malformed** (not a schema-valid allowlisted action) → `UNSUPPORTED_ACTION`, pause.
    Types matching the destructive-keyword denylist (`PLACE`, `BREAK`, `DIG`, `MINE`, `WRENCH`,
-   `CABLE`, `MULTIBLOCK`, `LAVA`, `DROP`, `ATTACK`, `SHELL`, …) → `FORBIDDEN_MODIFICATION`, pause.
-   The operator allows exactly two exceptions, `DIG_BLOCK` and `PLACE_BLOCK` (approved
-   2026-09-30), matched character for character: `BREAK_BLOCK`, `MINE_ORE`, `DIG_AREA`,
-   `dig_block`, `PLACE_BLOCKS`, `PLACE_TNT` or `place_block` stay forbidden.
+   `CABLE`, `MULTIBLOCK`, `LAVA`, `DROP`, `ATTACK`, `KILL`, `FIGHT`, `HUNT`, `SHELL`, …) →
+   `FORBIDDEN_MODIFICATION`, pause. The operator allows exactly three exceptions, `DIG_BLOCK`,
+   `PLACE_BLOCK` and `ATTACK_ENTITY` (2026-09-30), matched character for character:
+   `BREAK_BLOCK`, `MINE_ORE`, `DIG_AREA`, `dig_block`, `PLACE_BLOCKS`, `PLACE_TNT`,
+   `place_block`, `ATTACK_PLAYER`, `KILL_ENTITY` or `attack_entity` stay forbidden.
 2. **Unreliable state** (critical field unknown, older than `maxStateAgeMs`, from the future, or
    internally inconsistent) → refused, pause. Only `PAUSE_AND_ASK_USER` and `OBSERVE_STATE` remain available.
 3. **Danger gate.** Outside the boundary/dimension, nothing but pause/observe. Near lava, fire,
@@ -233,13 +304,17 @@ The other world-changing actions return `NOT_IMPLEMENTED`. See
    contact (cactus, spikes, ...: within 1.5 blocks; walks never stand next to one),
    hostile mobs or **unidentified entities** (fail closed: an entity type the agent cannot classify
    counts as hostile), only `RETURN_TO_SAFE_LOCATION`. With low health/hunger only, also `EAT_FOOD`.
-   `PLACE_BLOCK` is deliberately not an escape (see above).
+   `PLACE_BLOCK` is deliberately not an escape (see above). With hostiles as the only danger,
+   also `ATTACK_ENTITY` (on a hostile).
 4. **Coverage.** Observations declare how far they looked (`nearbyThreats.scanRadius`,
    `environmentHazards.scanRadius`). If the entity scan is smaller than `hostileThreatRadius`, or
    the hazard scan smaller than `hazardAvoidanceRadius`, the state is treated as unknown (pause).
 5. **Protected items** can never be eaten, deposited, withdrawn, burned, smelted, taken from a
-   furnace, crafted with (every kind a recipe may use counts) or placed. `ns:item` also protects every `ns:item@meta` variant. Config
-   items are copied into the database and never silently removed.
+   furnace, crafted with (every kind a recipe may use counts), placed, handed in to a quest (a
+   submit is refused while any protected item could match a consume task) or worn out as a
+   weapon (no fight while a protected allowlisted weapon is carried). `ns:item` also protects
+   every `ns:item@meta` variant. Config items are copied into the database and never silently
+   removed.
 6. **Repeated failures.** Once an identical action (type + canonical args) chosen by the agent
    has failed `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is
    refused with `REPEATED_FAILURE` (pause) and the task is blocked until a human resumes it

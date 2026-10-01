@@ -1,4 +1,4 @@
-import { DecisionResultSchema, type DecisionResult } from '../domain/decisions.ts';
+import { DecisionResultSchema, type Decision, type DecisionResult } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { errorMessage } from '../util/json.ts';
 import { routeDecision, SAFETY_REASON_CODES } from './deterministic-router.ts';
@@ -7,8 +7,8 @@ import type { RouterContext } from './state-queries.ts';
 /**
  * Source of bounded System 1 decisions: the deterministic router, a mock, or (opt-in) a
  * local model (src/llm/ollama-decision-provider.ts), which is always wrapped in
- * SafetyFirstDecisionProvider. Every provider returns one of the eight Decision values and
- * nothing else; it never produces actions directly.
+ * SafetyFirstDecisionProvider. Every provider returns one of the Decision values and nothing
+ * else; it never produces actions directly.
  */
 export interface DecisionProvider {
   readonly name: string;
@@ -37,11 +37,27 @@ export function isBindingRouterDecision(decision: DecisionResult): boolean {
 }
 
 /**
+ * Decisions that claim a safety or pause situation (danger, low health or food, a paused
+ * task, a switched-off machine...). The router makes each of them, bindingly, whenever its
+ * code-computed facts show that situation; so when its own decision is not binding, the facts
+ * rule the situation out, and an inner provider choosing one misread them (seen live: a model
+ * pausing for "no approved food" at full hunger, which stopped play).
+ */
+const FACT_CHECKED_DECISIONS: ReadonlySet<Decision> = new Set<Decision>([
+  'PAUSE_AND_ASK_USER',
+  'RETREAT_HOME',
+  'EAT',
+  'DEFEND',
+]);
+
+/**
  * Wraps any provider (e.g. a local model) so that safety is decided by code:
  *  - if the deterministic router's decision is binding (safety-driven, or a pause), that
  *    decision wins and the inner provider is not asked;
  *  - the inner provider's output is schema-validated; invalid output or an exception
- *    becomes PAUSE_AND_ASK_USER.
+ *    becomes PAUSE_AND_ASK_USER;
+ *  - an inner pause, retreat, meal or fight the facts rule out (FACT_CHECKED_DECISIONS) is replaced
+ *    by the router's decision, and factsUsed.overruled says what the provider chose.
  */
 export class SafetyFirstDecisionProvider implements DecisionProvider {
   readonly name: string;
@@ -66,7 +82,19 @@ export class SafetyFirstDecisionProvider implements DecisionProvider {
     }
     const parsed = DecisionResultSchema.safeParse(raw);
     if (!parsed.success) return this.#pause('provider returned an invalid decision');
-    return parsed.data;
+    const inner = parsed.data;
+    if (FACT_CHECKED_DECISIONS.has(inner.decision) && inner.decision !== deterministic.decision) {
+      const chose = `${inner.provider} chose ${inner.decision} [${inner.reasonCodes.join(', ')}]`;
+      return {
+        ...deterministic,
+        factsUsed: {
+          ...deterministic.factsUsed,
+          overruled: `${chose}, which the observed facts rule out`.slice(0, 300),
+        },
+        provider: this.name,
+      };
+    }
+    return inner;
   }
 
   #pause(detail: string): DecisionResult {

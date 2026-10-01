@@ -156,6 +156,25 @@ export const InteractConfigSchema = z.strictObject({
 });
 export type InteractConfig = z.infer<typeof InteractConfigSchema>;
 
+/**
+ * Fighting (ATTACK_ENTITY, and System 1's DEFEND; the fifth world-changing ability). Off by
+ * default. It also needs the movement fence: the player and its target must be inside it.
+ * When and what the agent may fight is limited further by safety.combat.
+ */
+export const CombatConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+});
+export type CombatConfig = z.infer<typeof CombatConfigSchema>;
+
+/**
+ * Quest-book clicks (SUBMIT_QUEST, CHECK_QUEST_BOX, CLAIM_QUEST_REWARD on Better Questing's
+ * channel). Off by default: a submit can hand items in. Reading the quest book needs no switch.
+ */
+export const QuestBookConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+});
+export type QuestBookConfig = z.infer<typeof QuestBookConfigSchema>;
+
 export const MinecraftConfigSchema = z
   .strictObject({
     host: z.string().min(1).max(253).default('127.0.0.1'),
@@ -192,6 +211,8 @@ export const MinecraftConfigSchema = z
     placing: PlacingConfigSchema.prefault({}),
     crafting: CraftingConfigSchema.prefault({}),
     interact: InteractConfigSchema.prefault({}),
+    combat: CombatConfigSchema.prefault({}),
+    questBook: QuestBookConfigSchema.prefault({}),
   })
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
@@ -379,6 +400,8 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_ENABLE_CRAFTING'))) set(['minecraft', 'crafting', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_INTERACT'))) set(['minecraft', 'interact', 'enabled'], v === 'true');
   if ((v = e('MC_INTERACT_OBSERVE_ONLY'))) set(['minecraft', 'interact', 'observeOnly'], list(v));
+  if ((v = e('MC_ENABLE_COMBAT'))) set(['minecraft', 'combat', 'enabled'], v === 'true');
+  if ((v = e('MC_ENABLE_QUEST_BOOK'))) set(['minecraft', 'questBook', 'enabled'], v === 'true');
   if ((v = e('AGENT_DB_PATH'))) set(['database', 'path'], v);
   if ((v = e('SAFETY_BOUNDARY_MIN')))
     set(['safety', 'boundary', 'min'], xyz('SAFETY_BOUNDARY_MIN', v));

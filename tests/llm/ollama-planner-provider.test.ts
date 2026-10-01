@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACTION_TYPES } from '../../src/domain/actions.ts';
+import { isQuestBookActionType } from '../../src/domain/quest-book.ts';
 import { OllamaClient } from '../../src/llm/ollama-client.ts';
 import {
   OllamaPlannerProvider,
@@ -50,7 +51,11 @@ describe('OllamaPlannerProvider', () => {
   });
 
   it('the prompt names every action with its args, and the placing rule', () => {
-    for (const type of ACTION_TYPES) expect(PLANNER_SYSTEM_PROMPT, type).toContain(`- ${type} {`);
+    // Quest-book clicks are the play loop's, never a plan's: the prompt leaves them out.
+    for (const type of ACTION_TYPES.filter((t) => !isQuestBookActionType(t))) {
+      expect(PLANNER_SYSTEM_PROMPT, type).toContain(`- ${type} {`);
+    }
+    expect(PLANNER_SYSTEM_PROMPT).not.toContain('SUBMIT_QUEST');
     expect(PLANNER_SYSTEM_PROMPT).toContain(
       '- PLACE_BLOCK {"position":{"x":0,"y":64,"z":0},"item":"minecraft:dirt"}',
     );
