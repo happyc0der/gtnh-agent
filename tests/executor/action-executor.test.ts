@@ -213,6 +213,19 @@ describe('preconditions', () => {
     expect(full.failures).toEqual(['inventory is full (no room for the drop)']);
   });
 
+  it('a placement needs the cell within reach of the eyes and the item in the inventory', () => {
+    const place = (x: number, y: number, z: number): ActionSpec => ({
+      type: 'PLACE_BLOCK',
+      args: { position: { x, y, z }, item: 'minecraft:sand' },
+    });
+    const withSand = (w: MockWorld): void => void (w.inventory.items['minecraft:sand'] = 1);
+    expect(pre(place(2, 65, 1), withSand).ok).toBe(true);
+    expect(pre(place(-2, 66, 5), withSand).failures).toEqual([
+      'cell (-2, 66, 5) is 5.2 blocks from the eyes (reach 4.5)',
+    ]);
+    expect(pre(place(2, 65, 1)).failures).toEqual(['inventory holds no minecraft:sand to place']);
+  });
+
   it('crafting needs the ingredients, and a known crafting table within reach for 3x3', () => {
     const craft = (
       recipe: 'planks_oak' | 'chest',

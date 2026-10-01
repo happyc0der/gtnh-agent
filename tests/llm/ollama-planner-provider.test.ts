@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ACTION_TYPES } from '../../src/domain/actions.ts';
 import { OllamaClient } from '../../src/llm/ollama-client.ts';
 import {
   OllamaPlannerProvider,
@@ -45,7 +46,15 @@ describe('OllamaPlannerProvider', () => {
     expect(body?.options).toMatchObject({ temperature: 0, seed: 7, num_ctx: 16_384 });
     expect(body?.format).toEqual(plannerFormat(4));
     expect(JSON.stringify(body?.format)).toContain('"maxItems":4');
-    expect(JSON.stringify(body?.format)).not.toContain('PLACE_BLOCK');
+    expect(JSON.stringify(body?.format)).not.toContain('BREAK_BLOCK');
+  });
+
+  it('the prompt names every action with its args, and the placing rule', () => {
+    for (const type of ACTION_TYPES) expect(PLANNER_SYSTEM_PROMPT, type).toContain(`- ${type} {`);
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      '- PLACE_BLOCK {"position":{"x":0,"y":64,"z":0},"item":"minecraft:dirt"}',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/never sand or gravel above the player's own head/);
   });
 
   it('tells the model what a tool saves, from the verified tables, and the tool recipes', () => {
@@ -63,8 +72,10 @@ describe('OllamaPlannerProvider', () => {
     );
     expect(PLANNER_SYSTEM_PROMPT).toMatch(/sticks: 2 any of [^;]* -> 2 minecraft:stick \(2x2\)/);
     expect(PLANNER_SYSTEM_PROMPT).toMatch(/wooden_axe: 3 any of [^;]* \+ 2 minecraft:stick/);
-    // A crafted table is useless to an agent that cannot place blocks.
-    expect(PLANNER_SYSTEM_PROMPT).not.toMatch(/crafting_table:/);
+    // GTNH's own crafting table (2 flint above 2 logs, 2x2): the agent can place it.
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(
+      /crafting_table: 2 minecraft:flint \+ 2 any of [^;]* \(2x2\)/,
+    );
     // The request carries the tools the player has (none in this state).
     expect(request().state.tools).toEqual([]);
   });
@@ -118,7 +129,7 @@ describe('OllamaPlannerProvider', () => {
         kind: 'plan',
         plan: {
           goal: 'x',
-          steps: [{ step: 1, action: { type: 'PLACE_BLOCK', args: {} }, rationale: 'x' }],
+          steps: [{ step: 1, action: { type: 'BREAK_BLOCK', args: {} }, rationale: 'x' }],
           requiresUserApproval: false,
           explanation: 'x',
           failureHandling: {

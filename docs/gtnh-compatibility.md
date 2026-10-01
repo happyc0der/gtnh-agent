@@ -9,9 +9,10 @@ it walks on one level inside a fence (see "Walking"). GregTech machines are obse
 GregTech's own channel: type, position, enabled and running (see "Machines"); stored energy and
 held-item durability are not observable (except for the agent's allowlisted tools, see "Tools").
 Digging one allowlisted block (see "Digging"), with an empty hand or a verified tool (see
-"Tools"), is built on the server's own code, checked in its jars, and tested against the fake
-server; it has not been run live yet. Mineflayer cannot connect at all. Every claim below is labelled as _verified_
-(observed or checked in installed code) or _assumption_ (to be tested).
+"Tools"), and placing one (see "Placing") are built on the server's own code, checked in its
+jars, and tested against the fake server; neither has been run live yet. Mineflayer cannot connect
+at all. Every claim below is labelled as _verified_ (observed or checked in installed code) or
+_assumption_ (to be tested).
 
 ## Test server results (2026-09-30)
 
@@ -79,10 +80,10 @@ What the client can send is fixed in `packets.ts` (`outbound`): handshake, statu
 start, keep-alive, plugin messages on `REGISTER`/`FML|HS` only, idle ticks, echoes of
 server-assigned positions, walking steps, the window packets chests and crafting need
 (empty-hand block activation, hotbar selection, normal clicks, confirmations, and closing a
-window other than window 0), digging start/cancel/finish, and the cosmetic head look and arm
-swing. `perform()` supports `OBSERVE_STATE`, `WAIT` and `PAUSE_AND_ASK_USER`, plus walks,
-chests, crafting and digs when each is enabled; every other action returns
-`NOT_IMPLEMENTED` without sending anything (tested).
+window other than window 0), digging start/cancel/finish, a block placement with the held
+block, and the cosmetic head look and arm swing. `perform()` supports `OBSERVE_STATE`, `WAIT`
+and `PAUSE_AND_ASK_USER`, plus walks, chests, crafting, digs and placements when each is
+enabled; every other action returns `NOT_IMPLEMENTED` without sending anything (tested).
 
 ## Walking (2026-09-30)
 
@@ -534,6 +535,121 @@ with this server's verified numbers. No code from either is used (Baritone is LG
 _Not verified:_ a live run with a tool. It would show the faster dig accepted and the damage
 going up by one per block.
 
+## Placing (2026-09-30)
+
+`PLACE_BLOCK` places one block (approved by the owner on 2026-09-30: sealing a pit for the
+night now; crafting tables, furnaces and the coke oven later). Everything below is _verified_
+in the test server's own jars, the same way as digging: `javap` on `minecraft_server.1.7.10.jar`
+with Forge 10.13.4.1614's binpatches applied (every source checksum matched), `ForgeHooks` from
+the Forge universal jar, and all 211 mod jars. It has not been run live yet.
+
+**The packet.** C08 (id 0x08, `jo`): i32 x, u8 y, i32 z, u8 face, the held item stack (with
+ModularUI's trailing VarInt size, like every stack), then u8 cursor x, y, z (read as
+`byte / 16.0`). The position and face name the block that is CLICKED. Face 255 means "use the
+held item in the air"; `outbound.placeBlock` cannot send it.
+
+**What the server does with it** (`nh.a(jo)`, processPlayerBlockPlacement):
+
+1. A clicked y at or above the build limit − 1 (256 here) with face 1, or above the limit:
+   "build.tooHigh" in chat.
+2. Otherwise, only when the player has confirmed its position (`hasMoved`), the clicked block's
+   centre is closer than `getBlockReachDistance() + 1` = 6 to the player, and the spot is not
+   spawn-protected: `ItemInWorldManager.activateBlockOrUseItem`.
+   - GTNH moves the point the reach is measured from: ArchaicFix (`fixPlacementFlicker=true`,
+     a `ModifyArg`, y − 1.5) and Hodgepodge (`fixWrongBlockPlacementDistanceCheck=true`, a
+     `WrapOperation`, y − 0.5) both lower the y they pass to `getDistanceSq`, which is the same
+     as measuring from up to 2 above the feet. The agent keeps the clicked block within 5.5 of
+     both the feet and the point 2 above them.
+3. Then, whatever happened: S23 for the clicked block, then S23 for the cell next to its face,
+   each as the world holds it now.
+4. Then the held slot: emptied at size 0; `detectAndSendChanges` runs with
+   `isChangingQuantityOnly` set (so it sends nothing); then S2F for the held slot of the open
+   window if the held stack differs from the one the client claimed, or the placement failed.
+   So: placed → S2F with one item fewer; refused inside `activateBlockOrUseItem` → S2F with the
+   stack unchanged; out of reach or too high → no S2F (nothing changed, the claim matched).
+
+**`activateBlockOrUseItem`** (`mx`, Forge-patched):
+
+- Forge's `PlayerInteractEvent` (RIGHT_CLICK_BLOCK); cancelled → S23 for the clicked block,
+  nothing placed.
+- **The clicked block is activated first** unless the player sneaks with an item in hand:
+  `Block.onBlockActivated`. A chest, crafting table, furnace or GregTech machine opens its
+  window and nothing is placed. The default returns false. The agent never sneaks, and only
+  clicks blocks in `CLICKABLE_SUPPORTS` (the walker's full blocks and the dig allowlist): none
+  of their classes overrides `onBlockActivated` or `isReplaceable`, or has a tile entity
+  (`javap` on every class in each chain: `aji`, `anv`, `alh`, `akl`, `aom`, `amm`, `ami`,
+  `anh`, `ali`, `ani`, `alf`, `anq`, `anw`, `aka`, `ajy`, `all`, `amk`, `anm`, `any`, `aoo`,
+  `amx`, `aml`, `amh`, `amd`). The chest (`ajx`), crafting table (`ake`) and furnace (`ale`)
+  do.
+- Then `ItemStack.tryPlaceItemIntoWorld`, which on a server is
+  `ForgeHooks.onPlaceItemIntoWorld`: it captures block snapshots and calls `Item.onItemUse`.
+  On success it posts `BlockEvent.PlaceEvent` with the stack put back to its old size; if a
+  mod cancels it, every snapshot is restored and the placement fails. Otherwise the new size is
+  kept, `onBlockAdded` runs (where sand and gravel schedule their fall check) and
+  `markAndNotifyBlock` sends the change to everyone watching the chunk.
+
+**`ItemBlock.onItemUse`** (`abh`, Forge-patched):
+
+- Where the block goes: into the clicked cell if that is a thin snow layer, a vine, tall grass,
+  a dead bush or any replaceable block; otherwise into the cell next to the clicked face. The
+  agent always clicks a plain full block, so it is always the cell next to the face.
+- Refused with an empty stack, a player who may not edit (adventure mode), a solid block at
+  y 255, or when `World.canPlaceEntityOnSide` says no:
+  - The new block's box (a full cube) must not overlap any entity that is alive and has
+    `preventEntitySpawning`, **except the placing player**: the server passes the placer, and
+    `checkNoEntityCollision` skips it. Only a vanilla client's own pre-check
+    (`func_150936_a`, which passes null) refuses the player's own body. So the server would
+    put a block inside the agent; the agent checks its body itself.
+  - `preventEntitySpawning` is set by living entities, boats, minecarts, primed TNT, ender
+    crystals and falling blocks (their constructors); not by dropped items, XP orbs, arrows,
+    item frames or paintings.
+  - The cell must be replaceable: the material's flag. Air, water, lava, fire, `Material.vine`
+    (tall grass, dead bush, vine) and snow layers below 7 are; `Material.plants` (flowers,
+    saplings, double plants) and every solid block are not. So a flower stops a placement; the
+    agent places only into air, tall grass and dead bushes.
+- `placeBlockAt` (Forge): `setBlock(..., 3)`, then `onBlockPlacedBy` and `onPostBlockPlaced`;
+  one item is taken. A log's metadata is its wood type plus its axis from the clicked face
+  (`BlockRotatedPillar.onBlockPlaced`: faces 2 and 3 → 8, 4 and 5 → 4).
+- The server checks neither where the player looks nor the line of sight.
+
+**Sand and gravel** (`BlockFalling`): `onBlockAdded` schedules an update in 2 ticks; it falls
+when the block below is air, fire, water or lava. The agent places them only on a plain full
+block (not leaves, which decay), and never into a column the player's body stands in.
+
+**GTNH mods** (mixin targets read from each class's `@Mixin` annotation, not grepped):
+
+- Mixins on this path: ArchaicFix and Hodgepodge (the reach point, above); Backhand (only while
+  the off-hand is used: `getCurrentItem` returns the off-hand item only when the selected slot
+  is its off-hand slot, which a C09 of 0-8 never selects); ServerUtilities (vanished players
+  only); StructureLib (a notification after `markAndNotifyBlock`; it never cancels).
+- `PlaceEvent` handlers: ServerUtilities cancels in claimed chunks (`chunk_claiming=false` here)
+  and re-sends the inventory; BlockLimiter's block list is empty on the test server; Thaumcraft
+  cancels near an active boss; Et Futurum (trapdoors), GalaxySpace (the Moon), Gadomancy and
+  Botany (their own blocks) do not touch plain blocks.
+- `PlayerInteractEvent` handlers that look at RIGHT_CLICK_BLOCK together with held or vanilla
+  blocks: GregTech (flint and steel only), Witchery (vampires, werewolves, one potion), Hunger
+  Overhaul (crops and seeds), Battlegear (its off-hand mode and flags), Twilight Forest (its own
+  dimension). None acts on a plain block item clicked on a plain block.
+- No mod substitutes the vanilla blocks or items the agent places (`addSubstitutionAlias`: no
+  hits).
+
+**What the client does** (`src/bot/gtnh1710/placing.ts`, `Gtnh1710Client`): see
+[architecture: placing](architecture.md#placing). The verdict: the clicked block's S23 is the
+acknowledgement, cell updates before it are stale, and every cell update after it must be the
+placed block over a quiet 250 ms; then the S2F with one item fewer (reported as `stackUsed`).
+That acknowledgement and clicking the centre of the face follow mineflayer's `placeBlock` and
+`_genericPlace` (MIT, © 2015 Andrew Kelley; mineflayer 4.39.0 is a dependency).
+mineflayer-pathfinder (MIT, © 2020 Karang) sneaks when it must click an interactable block;
+the agent never clicks one instead. No code was copied, and no LGPL code (Baritone) was used.
+The fake server simulates all of the above (`tests/bot/gtnh1710/fake-placing.ts`).
+
+_Assumptions, to check live:_
+
+- the S23 and S2F order, and where the reach is measured from with both GTNH mixins applied;
+- that no other `PlayerInteractEvent` or `PlaceEvent` handler cancels a plain placement;
+- metadata is not compared: the block change carries it, but the client keeps only block ids
+  (a placed plank's wood type and a log's axis are not checked).
+
 ## Machines (2026-09-30)
 
 GregTech sends machine state to clients on its own plugin channel, `GregTech`. Each message is a
@@ -728,13 +844,19 @@ with backups, never on a public server.
    `pnpm cli dig --live --at=...`. Check that the block turns to air and the drop arrives. Then
    check the refusals: a block next to the chest or water, sand on top, outside the fence, and
    the stop file. Watch the server log for warnings.
-8. **Soak test.** Run single cycles repeatedly (still human-triggered) and review `agent_events`
+8. **Placing allowlisted blocks. BUILT 2026-09-30, live test pending** (see "Placing"): in the
+   pen, with cobblestone in the inventory, place it with
+   `pnpm cli place --live --at=... --item minecraft:cobblestone` on the floor next to the
+   player, then against a wall block, then over the player's head. Check the block appears,
+   the stack shrinks by one, and nothing opens. Then the refusals: next to the chest, inside
+   the player, sand over the head, an entity in the cell. Watch the server log for warnings.
+9. **Soak test.** Run single cycles repeatedly (still human-triggered) and review `agent_events`
    and `safety_violations` for false positives/negatives before any continuous loop is considered.
 
 ## What is mocked today
 
 Everything in-game. `MockMinecraftClient` simulates the player, inventory, one chest, one
 generator with fuel, one machine, one crafting table (and server recipes that differ from the
-agent's table), a few diggable blocks, hazards, hostiles and a clock, with injectable failures
-and "reports success but changes nothing" behaviour. All item and machine names in the mock are
+agent's table), a few diggable blocks, the blocks it places, hazards, hostiles and a clock,
+with injectable failures and "reports success but changes nothing" behaviour. All item and machine names in the mock are
 placeholders, not verified GTNH identifiers.

@@ -4,8 +4,9 @@ import { resolve as resolvePath } from 'node:path';
 import type { MinecraftConfig } from '../../config/env.ts';
 import { assertPrivateDestination } from '../../config/network.ts';
 import type { GameState } from '../../domain/game-state.ts';
-import type { DiggableBlock } from '../../domain/blocks.ts';
+import { placedBlockOf, type DiggableBlock, type PlaceableItem } from '../../domain/blocks.ts';
 import type { BlockPosition, Position } from '../../domain/common.ts';
+import { known } from '../../domain/known.ts';
 import { BARE_HAND_SPEED, digWaitTicks, TICK_MS } from '../../domain/dig-time.ts';
 import {
   needsCraftingTable,
@@ -71,7 +72,14 @@ import {
   type ServerPosition,
   VANILLA_DECODING,
 } from './packets.ts';
-import { nameItemStack, resolveItemName } from './registry.ts';
+import {
+  checkPlace,
+  placeAreaProblem,
+  type EntityPosition,
+  type PlaceArea,
+  type PlaceCheck,
+} from './placing.ts';
+import { nameItemStack, resolveItemName, type Registry } from './registry.ts';
 import { parseIdentity, statusPing, type ServerIdentity } from './status-ping.ts';
 import {
   planWalk,
@@ -124,6 +132,16 @@ const DIG_OUTCOME_TIMEOUT_MS = 2_000;
 const DIG_SETTLE_MS = 5 * TICK_MS;
 /** How long the drop may take to reach the inventory: a 10-tick pickup delay, plus falling. */
 const DROP_WAIT_MS = 2_000;
+/** After the click: how long to wait for the server's block change at the cell. */
+const PLACE_OUTCOME_TIMEOUT_MS = 2_000;
+/**
+ * After the first block change: a quiet period with no further update for the cell. A mod
+ * that cancels the placement restores the cell, and sand or gravel that found nothing under
+ * it would fall within these ticks.
+ */
+const PLACE_SETTLE_MS = 5 * TICK_MS;
+/** How long the server's re-send of the held slot (S2F, one item fewer) may take. */
+const PLACE_STACK_TIMEOUT_MS = 1_000;
 
 /** What a dig holds: hotbar slot `slot`, with `tool` (null: an empty hand) at `damage`. */
 interface Hand {
@@ -143,15 +161,24 @@ function describeGain(gained: ReadonlyArray<[string, number]>): string {
     .slice(0, 200);
 }
 
-/** Yaw and pitch (degrees, Minecraft's convention) from the eyes to a block's centre. */
-function lookAt(eyes: Vec3, block: BlockPosition): { yaw: number; pitch: number } {
-  const dx = block.x + 0.5 - eyes.x;
-  const dy = block.y + 0.5 - eyes.y;
-  const dz = block.z + 0.5 - eyes.z;
+/** Yaw and pitch (degrees, Minecraft's convention) from the eyes to a point. */
+function lookAt(eyes: Vec3, point: Vec3): { yaw: number; pitch: number } {
+  const dx = point.x - eyes.x;
+  const dy = point.y - eyes.y;
+  const dz = point.z - eyes.z;
   return {
     yaw: (Math.atan2(-dx, dz) * 180) / Math.PI,
     pitch: (-Math.atan2(dy, Math.hypot(dx, dz)) * 180) / Math.PI,
   };
+}
+
+const centreOf = (b: BlockPosition): Vec3 => ({ x: b.x + 0.5, y: b.y + 0.5, z: b.z + 0.5 });
+
+/** The registry id of a block, by name; null when this world's registry does not have it. */
+function blockIdOf(registry: Registry | null, name: string): number | null {
+  if (registry === null) return null;
+  for (const [id, n] of registry.blocks) if (n === name) return id;
+  return null;
 }
 /**
  * Reported with every presence and walking packet. The walker only ever stands or walks on
@@ -189,8 +216,8 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
 
 /**
  * Client for a private GTNH (Minecraft 1.7.10 + Forge) server: read-only, except that it
- * can WALK inside a fence, use configured vanilla CHESTS, CRAFT and DIG allowlisted blocks
- * inside the fence, each only when explicitly enabled.
+ * can WALK inside a fence, use configured vanilla CHESTS, CRAFT, DIG allowlisted blocks and
+ * PLACE allowlisted blocks inside the fence, each only when explicitly enabled.
  *
  * Guarantees, enforced here and in packets.ts:
  *  - never connects unless live connections are enabled, an identity marker is set, the
@@ -199,12 +226,14 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *    channel registration, idle ticks, confirmations of server-assigned positions, walking
  *    steps, the window packets chests and crafting need (empty-hand block activation,
  *    hotbar selection, predictable clicks, confirmations, closing a window), digging
- *    start/cancel/finish, and the cosmetic head look and arm swing;
+ *    start/cancel/finish, a block placement with the held block item, and the cosmetic head
+ *    look and arm swing;
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
  *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, OPEN_CONTAINER /
  *    DEPOSIT_ITEM / WITHDRAW_ITEM when containers are enabled, CRAFT_ITEM when crafting is
- *    enabled and DIG_BLOCK when digging is enabled (NOT_IMPLEMENTED otherwise); every other
- *    world-changing action returns NOT_IMPLEMENTED without sending anything;
+ *    enabled, DIG_BLOCK when digging is enabled and PLACE_BLOCK when placing is enabled
+ *    (NOT_IMPLEMENTED otherwise); every other world-changing action returns NOT_IMPLEMENTED
+ *    without sending anything;
  *  - a walk stays inside the fence (one level, or terrain when the fence has a height
  *    range), and every step is re-checked just before it is sent; it stops on a server
  *    correction, a health drop, a nearby threat (MOVE_TO), a blocked or dangerous way
@@ -214,7 +243,10 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  *  - a dig breaks one allowlisted block that digging.ts has checked, and re-checks it every
  *    tick; it holds an allowlisted tool made for that block (src/domain/tools.ts: never a
  *    protected one, one with NBT data, or one that one more use would break) or an empty
- *    hand; walking, window work and digging never run at the same time.
+ *    hand;
+ *  - a placement puts one allowlisted block into a cell placing.ts has checked, clicking
+ *    only a plain full block, never a chest, machine or modded block;
+ *  - walking, window work, digging and placing never run at the same time.
  */
 export class Gtnh1710Client implements MinecraftClient {
   readonly kind = 'gtnh1710';
@@ -241,6 +273,7 @@ export class Gtnh1710Client implements MinecraftClient {
   /** A chest or crafting operation is running (they, and walking, exclude each other). */
   #usingContainer = false;
   #digging = false;
+  #placing = false;
   /** Sync clicks sent while crafting (diagnostics). */
   #craftSyncs = 0;
 
@@ -349,39 +382,49 @@ export class Gtnh1710Client implements MinecraftClient {
     // While packets keep arriving the model is current; if the server goes quiet the
     // timestamp stops advancing, so the safety policy's staleness check fires.
     const asOf = last !== null && now.getTime() - last.getTime() > FRESHNESS_WINDOW_MS ? last : now;
-    return Promise.resolve(this.#withStandSpots(this.#world.toGameState(asOf)));
+    return Promise.resolve(this.#withWorkAreas(this.#world.toGameState(asOf)));
   }
 
   /**
-   * Adds, for the nearest listed diggable blocks, where the player can stand to dig each
-   * (digging.ts standSpotFor), so a planner can walk there and dig. Digging disabled or no
-   * fence: the blocks are left as they are.
+   * Fits the nearby blocks to the fence. Digging enabled: adds, for the listed diggable
+   * blocks, where the player can stand to dig each (digging.ts standSpotFor), so a planner
+   * can walk there and dig. Placing enabled: keeps only the placeable cells inside the area
+   * placing may change. Without the fence (or with both disabled) they are left as they are.
    */
-  #withStandSpots(state: GameState): GameState {
+  #withWorkAreas(state: GameState): GameState {
     const cfg = this.#opts.config;
     const fence = cfg.movement.fence;
     const world = this.#world.walkWorld();
     const feet = this.#world.ownPosition;
-    if (!cfg.digging.enabled || fence === null || world === null || feet === null) return state;
+    if (fence === null || world === null || feet === null) return state;
     if (!state.nearbyBlocks.known) return state;
-    const area: DigArea = {
-      fence: fenceOf(fence),
-      maxHeightAboveFence: cfg.digging.maxHeightAboveFence,
-    };
-    const blocks = state.nearbyBlocks.value;
-    return {
-      ...state,
-      nearbyBlocks: {
-        known: true,
-        value: {
-          ...blocks,
-          resources: blocks.resources.map((r) => ({
-            ...r,
-            standAt: standSpotFor(world, area, r.position, feet),
-          })),
-        },
-      },
-    };
+    let blocks = state.nearbyBlocks.value;
+    if (cfg.digging.enabled) {
+      const area: DigArea = {
+        fence: fenceOf(fence),
+        maxHeightAboveFence: cfg.digging.maxHeightAboveFence,
+      };
+      blocks = {
+        ...blocks,
+        resources: blocks.resources.map((r) => ({
+          ...r,
+          standAt: standSpotFor(world, area, r.position, feet),
+        })),
+      };
+    }
+    if (cfg.placing.enabled) {
+      const area: PlaceArea = {
+        fence: fenceOf(fence),
+        maxHeightAboveFence: cfg.placing.maxHeightAboveFence,
+      };
+      blocks = {
+        ...blocks,
+        placeable: blocks.placeable.filter(
+          (c) => placeAreaProblem(area, feet, c.position) === null,
+        ),
+      };
+    }
+    return { ...state, nearbyBlocks: known(blocks) };
   }
 
   perform(validated: ValidatedAction): Promise<ClientActionResult> {
@@ -419,12 +462,14 @@ export class Gtnh1710Client implements MinecraftClient {
         return this.#craft(action.args);
       case 'DIG_BLOCK':
         return this.#dig(action.args.position, new Set(validated.protectedItems));
+      case 'PLACE_BLOCK':
+        return this.#place(action.args);
       case 'EAT_FOOD':
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
         return Promise.resolve(
           failed(
-            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft and dig`,
+            `${action.type} is not available: the GTNH client can observe, walk, use chests, craft, dig and place`,
             'NOT_IMPLEMENTED',
           ),
         );
@@ -444,6 +489,7 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
+    if (this.#placing) return 'the player is placing a block';
     return null;
   }
 
@@ -743,6 +789,7 @@ export class Gtnh1710Client implements MinecraftClient {
     }
     if (this.#walking) return 'the player is walking';
     if (this.#digging) return 'the player is digging';
+    if (this.#placing) return 'the player is placing a block';
     return null;
   }
 
@@ -1143,6 +1190,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (this.#walking) return refused('the player is walking');
     if (this.#usingContainer) return refused('a chest or crafting operation is running');
     if (this.#digging) return refused('a dig is already in progress');
+    if (this.#placing) return refused('the player is placing a block');
     return null;
   }
 
@@ -1282,7 +1330,7 @@ export class Gtnh1710Client implements MinecraftClient {
       try {
         this.#log(`digging ${check.block} at ${where} with ${holding}: ${ticks} ticks`);
         // Face the block, as a player does (other players see where the head points).
-        const look = lookAt(eyesOf(feet), target);
+        const look = lookAt(eyesOf(feet), centreOf(target));
         this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
         this.#lastYaw = look.yaw;
         const self = this.#world.selfEntityId;
@@ -1523,24 +1571,14 @@ export class Gtnh1710Client implements MinecraftClient {
     };
   }
 
-  /** Why the dig in progress must stop now, or null. Checked every tick. */
-  #digProblem(
-    area: DigArea,
-    target: BlockPosition,
-    blockId: number,
-    watch: BlockWatch,
-    guard: { placementsAtStart: number; healthAtStart: number | null },
-    held: { slot: number; stack: Stack | null } | null,
-  ): string | null {
+  /**
+   * Why work on a block (a dig, a placement) must stop or not start now, or null: the
+   * connection, halt(), the stop file, a server correction or a health drop since `guard`
+   * was taken, an incomplete entity picture, or a hostile or unidentified entity within
+   * threatRadius.
+   */
+  #interruption(guard: { placementsAtStart: number; healthAtStart: number | null }): string | null {
     if (this.#phase !== 'play') return 'the connection closed';
-    // The server digs with whatever is in hand: with a tool, it must stay exactly as it was.
-    if (
-      held !== null &&
-      (this.#world.heldSlot !== held.slot ||
-        !sameStack(this.#hotbar(held.slot) ?? null, held.stack))
-    ) {
-      return 'the tool in hand changed';
-    }
     const cfg = this.#opts.config;
     if (this.#haltReason !== null) return `halted: ${this.#haltReason}`;
     if (existsSync(resolvePath(cfg.movement.stopFile))) {
@@ -1561,6 +1599,28 @@ export class Gtnh1710Client implements MinecraftClient {
       .find((e) => e.category === 'hostile' || e.category === 'unclassified');
     if (threat !== undefined) {
       return `${threat.category} entity ${threat.name} ${threat.distance.toFixed(1)} blocks away`;
+    }
+    return null;
+  }
+
+  /** Why the dig in progress must stop now, or null. Checked every tick. */
+  #digProblem(
+    area: DigArea,
+    target: BlockPosition,
+    blockId: number,
+    watch: BlockWatch,
+    guard: { placementsAtStart: number; healthAtStart: number | null },
+    held: { slot: number; stack: Stack | null } | null,
+  ): string | null {
+    const interrupted = this.#interruption(guard);
+    if (interrupted !== null) return interrupted;
+    // The server digs with whatever is in hand: with a tool, it must stay exactly as it was.
+    if (
+      held !== null &&
+      (this.#world.heldSlot !== held.slot ||
+        !sameStack(this.#hotbar(held.slot) ?? null, held.stack))
+    ) {
+      return 'the tool in hand changed';
     }
     // Any update for the block while digging: the server refused the dig (it re-sends the
     // block), or the block changed. Either way this dig is over.
@@ -1627,6 +1687,362 @@ export class Gtnh1710Client implements MinecraftClient {
         `the server re-sent the block at ${where} after the finish (updates ${after.slice(0, 4).join(', ')}): ` +
           'the dig was judged too early or the break was cancelled. A vanilla server still ' +
           'breaks a too-early dig on its own once its timer reaches 100%.',
+      );
+    }
+    return { ok: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Placing one block (see placing.ts)
+
+  /** Why placing cannot start now, or null. */
+  #placeBlocker(): { reason: string; code: 'NOT_IMPLEMENTED' | 'REFUSED' } | null {
+    const cfg = this.#opts.config;
+    if (!cfg.placing.enabled) {
+      return { reason: 'placing is disabled (MC_ENABLE_PLACING)', code: 'NOT_IMPLEMENTED' };
+    }
+    const refused = (reason: string) => ({ reason, code: 'REFUSED' as const });
+    if (cfg.movement.fence === null) {
+      return refused('no movement fence is configured (placing stays inside the fence)');
+    }
+    if (!cfg.presenceTicks) return refused('placing needs presence ticks (MC_PRESENCE_TICKS)');
+    if (this.#haltReason !== null) return refused(`halted: ${this.#haltReason}`);
+    if (existsSync(resolvePath(cfg.movement.stopFile))) {
+      return refused(`the stop file ${cfg.movement.stopFile} exists`);
+    }
+    if (this.#walking) return refused('the player is walking');
+    if (this.#usingContainer) return refused('a chest or crafting operation is running');
+    if (this.#digging) return refused('the player is digging');
+    if (this.#placing) return refused('a placement is already in progress');
+    return null;
+  }
+
+  /** checkPlace on the latest block data, position and entities, after #interruption. */
+  #placeCheck(
+    area: PlaceArea,
+    target: BlockPosition,
+    item: PlaceableItem,
+    guard: { placementsAtStart: number; healthAtStart: number | null },
+  ): PlaceCheck {
+    const interrupted = this.#interruption(guard);
+    if (interrupted !== null) return { ok: false, reason: interrupted };
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    if (world === null || feet === null) {
+      return { ok: false, reason: 'block data or position unknown' };
+    }
+    const entities: EntityPosition[] = this.#world
+      .trackedEntities()
+      .map(({ x, y, z }) => ({ x, y, z }));
+    return checkPlace(world, area, feet, target, item, entities);
+  }
+
+  /**
+   * PLACE_BLOCK: put ONE allowlisted block the player carries into an empty cell, like a
+   * player: hold it (a stack from the main inventory is moved into an empty hotbar slot first
+   * when none is in the hotbar), face the plain block placing.ts chose to place it against,
+   * click that block's face (C08 with the held stack) and swing the arm. Everything is
+   * checked again just before the click. Success needs the server's own change of the cell
+   * to the placed block, with nothing else after it; the result reports whether the held
+   * stack shrank by one.
+   */
+  async #place(args: {
+    position: BlockPosition;
+    item: PlaceableItem;
+  }): Promise<ClientActionResult> {
+    const blocker = this.#placeBlocker();
+    const fence = this.#opts.config.movement.fence;
+    if (blocker !== null || fence === null) {
+      return failed(`not placing: ${blocker?.reason ?? 'no fence'}`, blocker?.code ?? 'REFUSED');
+    }
+    const area: PlaceArea = {
+      fence: fenceOf(fence),
+      maxHeightAboveFence: this.#opts.config.placing.maxHeightAboveFence,
+    };
+    const target = args.position;
+    const { x, y, z } = target;
+    const where = `(${x}, ${y}, ${z})`;
+    const block = placedBlockOf(args.item);
+    this.#placing = true;
+    try {
+      // A chest left open by an earlier action is closed first (never with a full cursor):
+      // the hotbar is arranged with window-0 clicks.
+      if (this.#world.openWindow !== null) {
+        const closed = this.#closeOpenWindow();
+        if (closed !== null) return failed(`not placing: ${closed.message}`, 'REFUSED');
+      }
+      const registry = this.#world.registry;
+      const item = resolveItemName(registry, args.item);
+      const blockId = blockIdOf(registry, block);
+      if (item === null || blockId === null) {
+        return failed(`not placing: ${args.item} is not in this world's registry`, 'REFUSED');
+      }
+      const guard = {
+        placementsAtStart: this.#confirmedPositions,
+        healthAtStart: this.#world.health,
+      };
+      const check = this.#placeCheck(area, target, args.item, guard);
+      if (!check.ok) return failed(`not placing: ${check.reason}`, 'REFUSED');
+
+      const hand = await this.#holdForPlacing(item, args.item);
+      if (!hand.ok) return hand.result;
+      const moved = hand.moved === null ? '' : ` (${hand.moved})`;
+
+      // Everything again, just before the click: arranging the hotbar took time.
+      const final = this.#placeCheck(area, target, args.item, guard);
+      if (!final.ok) return failed(`not placing: ${final.reason}${moved}`, 'REFUSED');
+      const held = this.#world.playerStorage()?.[27 + hand.slot] ?? null;
+      const feet = this.#world.ownPosition;
+      if (
+        held === null ||
+        held.id !== item.id ||
+        held.damage !== item.damage ||
+        held.hasNbt ||
+        feet === null
+      ) {
+        return failed(`not placing: hotbar slot ${hand.slot} does not hold ${args.item}`, 'ERROR');
+      }
+      const { clicked, face, cursor } = final.support;
+      const clickedName =
+        registry?.blocks.get(this.#world.blockAt(clicked.x, clicked.y, clicked.z) ?? -1) ??
+        'a block';
+      const against = `${clickedName} at (${clicked.x}, ${clicked.y}, ${clicked.z}), face ${face}`;
+      const facts = { x, y, z, block, item: args.item, against };
+
+      const clickedWatch = this.#world.watchBlock(clicked.x, clicked.y, clicked.z);
+      const cellWatch = this.#world.watchBlock(x, y, z);
+      let verdict: { ok: true } | { ok: false; result: ClientActionResult };
+      try {
+        // Face the point that is clicked, as a player does (others see where the head points).
+        const point = {
+          x: clicked.x + cursor.x / 16,
+          y: clicked.y + cursor.y / 16,
+          z: clicked.z + cursor.z / 16,
+        };
+        const look = lookAt(eyesOf(feet), point);
+        this.#send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
+        this.#lastYaw = look.yaw;
+        this.#log(`placing ${args.item} at ${where} against ${against}`);
+        const sent = {
+          clicked: clickedWatch.updates.length,
+          cell: cellWatch.updates.length,
+          clickedId: this.#world.blockAt(clicked.x, clicked.y, clicked.z) ?? -1,
+        };
+        this.#send(
+          outbound.placeBlock(
+            clicked.x,
+            clicked.y,
+            clicked.z,
+            face,
+            held,
+            cursor,
+            this.#decoding.itemStackSizeVarInt,
+          ),
+        );
+        // A vanilla client swings the arm once the use went through.
+        const self = this.#world.selfEntityId;
+        if (self !== null) this.#send(outbound.swingArm(self));
+        verdict = await this.#placeVerdict(clickedWatch, cellWatch, sent, blockId, block, where);
+      } finally {
+        this.#world.unwatch(clickedWatch);
+        this.#world.unwatch(cellWatch);
+      }
+
+      // The click opened a window: the block was not plain after all. Close it again.
+      const opened = this.#world.openWindow;
+      if (opened !== null) {
+        const closed = this.#closeOpenWindow();
+        return failed(
+          `clicking ${against} opened a window (type ${opened.inventoryType}) instead of placing` +
+            `${closed === null ? '; it was closed again' : `; ${closed.message}`}`,
+          'FAILED',
+          facts,
+        );
+      }
+      if (!verdict.ok) return verdict.result;
+
+      // The server takes the item and re-sends the held slot (S2F) with one fewer.
+      const expected = held.count - 1;
+      const count = (): number => this.#world.playerStorage()?.[27 + hand.slot]?.count ?? 0;
+      await this.#waitFor(() => count() === expected, PLACE_STACK_TIMEOUT_MS);
+      const stackUsed = count() === expected;
+      this.#log(`placed ${block} at ${where}; held stack ${held.count} -> ${count()}`);
+      return ok(
+        `placed ${block} at ${where} against ${against}; ` +
+          (stackUsed
+            ? `the held ${args.item} went from ${held.count} to ${expected}`
+            : `the held ${args.item} did not shrink by one within ${PLACE_STACK_TIMEOUT_MS} ms (${held.count} -> ${count()})`) +
+          moved,
+        { ...facts, stackUsed, stackBefore: held.count, stackAfter: count() },
+      );
+    } finally {
+      this.#placing = false;
+    }
+  }
+
+  /**
+   * Holds `item` (registry id and damage; never a stack with NBT data) in the selected
+   * hotbar slot: the held slot if it holds it, else the first hotbar slot that does, else a
+   * stack from the main inventory is moved into the first empty hotbar slot with two
+   * confirmed window-0 clicks (pick it up, put it down). Refuses when none can be held.
+   */
+  async #holdForPlacing(
+    item: { id: number; damage: number },
+    name: string,
+  ): Promise<
+    { ok: true; slot: number; moved: string | null } | { ok: false; result: ClientActionResult }
+  > {
+    const refuse = (reason: string): { ok: false; result: ClientActionResult } => ({
+      ok: false,
+      result: failed(`not placing: ${reason}`, 'REFUSED'),
+    });
+    const storage = this.#world.playerStorage();
+    if (storage === null) return refuse('the inventory is not known');
+    const holds = (s: Stack | null | undefined): boolean =>
+      s != null && s.id === item.id && s.damage === item.damage && !s.hasNbt && s.count > 0;
+    const hotbar = (j: number): Stack | null => storage[27 + j] ?? null;
+    let slot: number | null = holds(hotbar(this.#world.heldSlot)) ? this.#world.heldSlot : null;
+    for (let j = 0; slot === null && j < 9; j++) if (holds(hotbar(j))) slot = j;
+    let moved: string | null = null;
+    if (slot === null) {
+      const from = storage.slice(0, 27).findIndex(holds);
+      if (from === -1) return refuse(`no ${name} without NBT data in the inventory`);
+      const to = [0, 1, 2, 3, 4, 5, 6, 7, 8].find((j) => hotbar(j) === null);
+      if (to === undefined) {
+        return refuse(`no ${name} in the hotbar, and no empty hotbar slot to move one into`);
+      }
+      const problem = await this.#moveStackToSlot(9 + from, 36 + to);
+      if (problem !== null) {
+        return {
+          ok: false,
+          result: failed(
+            `not placing: ${problem}`,
+            problem.includes('ITEMS MAY BE ON THE CURSOR') ? 'ERROR' : 'FAILED',
+          ),
+        };
+      }
+      slot = to;
+      moved = `moved ${name} from inventory slot ${9 + from} to hotbar slot ${to}`;
+    }
+    if (slot !== this.#world.heldSlot) {
+      this.#send(outbound.selectHotbarSlot(slot));
+      this.#world.setHeldSlot(slot);
+    }
+    return { ok: true, slot, moved };
+  }
+
+  /**
+   * Moves the whole stack in window-0 slot `from` into the EMPTY slot `to` with two confirmed
+   * clicks; null on success. A failed click puts the stack back (see #emptyInventoryCursor).
+   */
+  async #moveStackToSlot(from: number, to: number): Promise<string | null> {
+    if (this.#clickTarget()?.windowId !== 0) return 'the inventory cannot be clicked now';
+    const take = await this.#click({ slot: from, button: 0 });
+    if (take !== 'accepted') {
+      return `picking up the stack was ${take}${await this.#emptyInventoryCursor(from)}`;
+    }
+    const put = await this.#click({ slot: to, button: 0 });
+    if (put !== 'accepted') {
+      return `putting it into the hotbar was ${put}${await this.#emptyInventoryCursor(from)}`;
+    }
+    return null;
+  }
+
+  /** After a failed window-0 click: whatever is on the cursor goes into an empty player slot. */
+  async #emptyInventoryCursor(preferred: number): Promise<string> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const target = this.#clickTarget();
+      if (target === null || target.windowId !== 0 || target.window.cursor === null) break;
+      const slots = target.window.slots;
+      const empty = [preferred, ...Array.from({ length: 36 }, (_, i) => 9 + i)].find(
+        (i) => slots[i] === null,
+      );
+      if (empty === undefined) break;
+      await this.#click({ slot: empty, button: 0 });
+    }
+    const cursor = this.#clickTarget()?.window.cursor ?? null;
+    if (cursor !== null) {
+      return `; ITEMS MAY BE ON THE CURSOR (${cursor.count} of id ${cursor.id})`;
+    }
+    return '; nothing was left on the cursor';
+  }
+
+  /**
+   * After the click the server sends S23 for the clicked block, then for the cell (both as
+   * they are after its attempt), and the world's own change follows. As in mineflayer's
+   * placeBlock (MIT), the clicked block's update is the acknowledgement: updates for the
+   * cell before it are stale, and the first one after it is the server's answer. Waits for
+   * both and a quiet PLACE_SETTLE_MS; succeeds only if every cell update after the
+   * acknowledgement is the placed block.
+   */
+  async #placeVerdict(
+    clicked: BlockWatch,
+    cell: BlockWatch,
+    sent: { clicked: number; cell: number; clickedId: number },
+    blockId: number,
+    block: string,
+    where: string,
+  ): Promise<{ ok: true } | { ok: false; result: ClientActionResult }> {
+    const clock = this.#opts.clock;
+    const deadline = clock.now().getTime() + PLACE_OUTCOME_TIMEOUT_MS + PLACE_SETTLE_MS;
+    const answers = (): number[] => {
+      const ack = clicked.order[sent.clicked];
+      if (ack === undefined) return [];
+      return cell.updates.filter((_, i) => i >= sent.cell && (cell.order[i] ?? 0) > ack);
+    };
+    await this.#waitFor(() => answers().length > 0, PLACE_OUTCOME_TIMEOUT_MS);
+    let seen = cell.updates.length;
+    let quietSince = clock.now().getTime();
+    while (answers().length > 0 && clock.now().getTime() < deadline) {
+      if (clock.now().getTime() - quietSince >= PLACE_SETTLE_MS) break;
+      await delay(TICK_MS);
+      if (cell.updates.length !== seen) {
+        seen = cell.updates.length;
+        quietSince = clock.now().getTime();
+      }
+    }
+    const after = answers();
+    const fail = (message: string): { ok: false; result: ClientActionResult } => {
+      this.#log(message);
+      const now = this.#world.blockAt(cell.x, cell.y, cell.z);
+      return {
+        ok: false,
+        result: failed(message, 'FAILED', {
+          x: cell.x,
+          y: cell.y,
+          z: cell.z,
+          block,
+          placedNow: now === blockId,
+        }),
+      };
+    };
+    if (this.#phase !== 'play') return fail(`the connection closed after the click at ${where}`);
+    if (clicked.updates.length <= sent.clicked) {
+      return fail(
+        `the server did not answer the click within ${PLACE_OUTCOME_TIMEOUT_MS} ms (no update for the clicked block)`,
+      );
+    }
+    if (after.length === 0) {
+      return fail(`the server answered the click but sent nothing for ${where}`);
+    }
+    if (after.some((id) => id !== blockId)) {
+      const nameOf = (id: number): string =>
+        id === 0
+          ? 'minecraft:air'
+          : id === -1
+            ? 'an unloaded chunk'
+            : (this.#world.registry?.blocks.get(id) ?? `block id ${id}`);
+      // The server places into the clicked cell itself when that block has become
+      // replaceable: the agent's view of it was wrong.
+      const ack = clicked.updates[sent.clicked];
+      const changed =
+        ack !== undefined && ack !== sent.clickedId
+          ? `; the clicked block had become ${nameOf(ack)}`
+          : '';
+      return fail(
+        `the server did not place ${block} at ${where} (it sent ${after.slice(0, 4).map(nameOf).join(', ')}${changed}): ` +
+          'it refused (something in the way, out of reach, a protected spot, or a mod cancelled ' +
+          'it), or the block did not stay',
       );
     }
     return { ok: true };
@@ -1712,6 +2128,7 @@ export class Gtnh1710Client implements MinecraftClient {
     if (existsSync(resolvePath(m.stopFile))) return `the stop file ${m.stopFile} exists`;
     if (this.#usingContainer) return 'a chest or crafting operation is running';
     if (this.#digging) return 'the player is digging';
+    if (this.#placing) return 'the player is placing a block';
     // Walking away closes an open window server-side, which drops the cursor and a table's grid.
     if (this.#world.openWindow?.cursor != null || this.#leftovers() !== null) {
       return 'items are on the cursor or in a crafting grid';

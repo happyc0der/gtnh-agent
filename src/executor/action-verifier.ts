@@ -198,6 +198,39 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       break;
     }
 
+    case 'BLOCK_PLACED': {
+      const p = post.position;
+      const where = formatPosition(p);
+      if (!after.nearbyBlocks.known) {
+        check(
+          'block-placed',
+          false,
+          `nearby blocks unknown after placing: ${after.nearbyBlocks.reason}`,
+        );
+      } else {
+        const placed = after.nearbyBlocks.value.placed.find(
+          (q) => q.position.x === p.x && q.position.y === p.y && q.position.z === p.z,
+        );
+        check(
+          'block-placed',
+          placed?.block === post.block,
+          placed === undefined
+            ? `${where} was not observed turning into ${post.block}`
+            : `${where} was observed turning into ${placed.block}`,
+        );
+      }
+      // Exactly one item was used: none means the server did not take it, more means
+      // something else happened.
+      const b = inv(before, post.item);
+      const a = inv(after, post.item);
+      check(
+        'item-used',
+        b !== null && a !== null && b - a === 1,
+        `${post.item}: ${b} -> ${a}, expected -1`,
+      );
+      break;
+    }
+
     case 'ITEMS_CRAFTED': {
       if (!before.inventory.known || !after.inventory.known) {
         check('inventory-known', false, 'inventory unknown before or after crafting');

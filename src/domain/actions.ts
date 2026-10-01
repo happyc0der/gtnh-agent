@@ -8,15 +8,17 @@ import {
   PositionSchema,
   TimestampSchema,
 } from './common.ts';
+import { PlaceableBlockSchema, PlaceableItemSchema, placedBlockOf } from './blocks.ts';
 import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from './recipes.ts';
 
 /**
  * The complete allowlist of in-game actions. Anything not listed here is rejected
  * by schema validation before it reaches the safety policy or the executor.
  *
- * Deliberately absent: lava interaction, dropping items, combat, block placing,
- * electrical-network or multiblock changes, and rare-item consumption. Blocks are broken
- * only by DIG_BLOCK, and only blocks on its allowlist (src/domain/blocks.ts).
+ * Deliberately absent: lava interaction, dropping items, combat, electrical-network or
+ * multiblock changes, and rare-item consumption. Blocks are broken only by DIG_BLOCK and
+ * placed only by PLACE_BLOCK, each only with the blocks on its allowlist
+ * (src/domain/blocks.ts).
  */
 export const ACTION_TYPES = [
   'OBSERVE_STATE',
@@ -30,6 +32,7 @@ export const ACTION_TYPES = [
   'INSPECT_MACHINE',
   'REFUEL_KNOWN_GENERATOR',
   'DIG_BLOCK',
+  'PLACE_BLOCK',
   'CRAFT_ITEM',
   'PAUSE_AND_ASK_USER',
 ] as const;
@@ -107,6 +110,15 @@ export const DigBlockSpec = z.strictObject({
   args: z.strictObject({ position: BlockPositionSchema }),
 });
 /**
+ * Place ONE block the player carries (an allowlisted plain block: dirt, cobblestone, sand,
+ * gravel, sandstone, planks, logs) into the empty cell at `position`, which the observation
+ * lists as placeable. See docs/action-contract.md.
+ */
+export const PlaceBlockSpec = z.strictObject({
+  type: z.literal('PLACE_BLOCK'),
+  args: z.strictObject({ position: BlockPositionSchema, item: PlaceableItemSchema }),
+});
+/**
  * Craft `times` times with a recipe from the agent's table (src/domain/recipes.ts), in the
  * player's own 2x2 grid (craftingTableId null) or at a configured crafting table (3x3).
  */
@@ -135,6 +147,7 @@ export const ActionSpecSchema = z.discriminatedUnion('type', [
   InspectMachineSpec,
   RefuelKnownGeneratorSpec,
   DigBlockSpec,
+  PlaceBlockSpec,
   CraftItemSpec,
   PauseAndAskUserSpec,
 ]);
@@ -172,6 +185,16 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
   }),
   /** The observed block at the position is air (the observation saw the block removed). */
   z.strictObject({ kind: z.literal('BLOCK_REMOVED'), position: BlockPositionSchema }),
+  /**
+   * The observation saw the empty cell at the position become `block`, which is still there,
+   * and the inventory holds exactly one `item` fewer.
+   */
+  z.strictObject({
+    kind: z.literal('BLOCK_PLACED'),
+    position: BlockPositionSchema,
+    block: PlaceableBlockSchema,
+    item: PlaceableItemSchema,
+  }),
   z.strictObject({
     kind: z.literal('ITEMS_CRAFTED'),
     recipe: RecipeIdSchema,
@@ -245,6 +268,13 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
       };
     case 'DIG_BLOCK':
       return { kind: 'BLOCK_REMOVED', position: spec.args.position };
+    case 'PLACE_BLOCK':
+      return {
+        kind: 'BLOCK_PLACED',
+        position: spec.args.position,
+        block: placedBlockOf(spec.args.item),
+        item: spec.args.item,
+      };
     case 'CRAFT_ITEM': {
       const recipe = RECIPES[spec.args.recipe];
       const times = spec.args.times;
@@ -291,6 +321,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   InspectMachineSpec.extend(actionMetadata),
   RefuelKnownGeneratorSpec.extend(actionMetadata),
   DigBlockSpec.extend(actionMetadata),
+  PlaceBlockSpec.extend(actionMetadata),
   CraftItemSpec.extend(actionMetadata),
   PauseAndAskUserSpec.extend(actionMetadata),
 ]);

@@ -78,6 +78,30 @@ export type DigCheck =
   | { ok: true; block: DiggableBlock; blockId: number; face: number; reach: number }
   | { ok: false; reason: string };
 
+/**
+ * The block heights (inclusive) an area allows work at, for feet in block level
+ * `feetLevel` (see DigArea), and the rule in words for refusals. Placing uses the same.
+ */
+export function workHeights(
+  area: DigArea,
+  feetLevel: number,
+): { low: number; high: number; rule: string } {
+  const { fence, maxHeightAboveFence } = area;
+  if (fence.min.y !== fence.max.y) {
+    return {
+      low: Math.max(fence.min.y - 1, feetLevel - 1),
+      high: Math.min(fence.max.y, feetLevel) + maxHeightAboveFence,
+      rule: `from one below the feet up to ${maxHeightAboveFence} above them, inside the fence`,
+    };
+  }
+  const level = fence.min.y;
+  return {
+    low: level,
+    high: level + maxHeightAboveFence,
+    rule: 'never the floor below the fence level',
+  };
+}
+
 const FACES: ReadonlyArray<readonly [number, number, number]> = [
   [0, -1, 0],
   [0, 1, 0],
@@ -128,27 +152,16 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
     return refuse(`${fmt(target)} is not a block position`);
   }
 
-  const { fence, maxHeightAboveFence } = area;
+  const { fence } = area;
   if (x < fence.min.x || x > fence.max.x || z < fence.min.z || z > fence.max.z) {
     return refuse(`${fmt(target)} is outside the fence's columns`);
   }
-  const terrain = fence.min.y !== fence.max.y;
   const feetLevel = Math.floor(feet.y + 1e-6);
-  if (terrain) {
-    const low = Math.max(fence.min.y - 1, feetLevel - 1);
-    const high = Math.min(fence.max.y, feetLevel) + maxHeightAboveFence;
-    if (y < low || y > high) {
-      return refuse(
-        `${fmt(target)} is outside the dig heights y=${low}..${high} (from one below the feet up to ${maxHeightAboveFence} above them, inside the fence)`,
-      );
-    }
-  } else {
-    const level = fence.min.y;
-    if (y < level || y > level + maxHeightAboveFence) {
-      return refuse(
-        `${fmt(target)} is outside the dig heights y=${level}..${level + maxHeightAboveFence} (never the floor below the fence level)`,
-      );
-    }
+  const heights = workHeights(area, feetLevel);
+  if (y < heights.low || y > heights.high) {
+    return refuse(
+      `${fmt(target)} is outside the dig heights y=${heights.low}..${heights.high} (${heights.rule})`,
+    );
   }
 
   const id = world.blockAt(x, y, z);

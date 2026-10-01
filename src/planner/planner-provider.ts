@@ -1,5 +1,5 @@
 import { ACTION_TYPES, isAllowlistedActionType } from '../domain/actions.ts';
-import { DIGGABLE_BLOCKS } from '../domain/blocks.ts';
+import { DIGGABLE_BLOCKS, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
@@ -10,6 +10,7 @@ import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-ac
 import { isProtected } from '../safety/protected-items.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
+  MAX_COMPACT_PLACEABLE,
   MAX_COMPACT_RESOURCES,
   MAX_COMPACT_TOOLS,
   PlannerRequestSchema,
@@ -141,6 +142,11 @@ export function sanitizeStateForPlanner(
         standAt: r.standAt ?? null,
       })),
     tools: inventory ? plannerTools(inventory.items, protectedItems) : [],
+    placeableCells: (blocks?.placeable ?? []).slice(0, MAX_COMPACT_PLACEABLE).map((c) => ({
+      position: { ...c.position },
+      reach: position === null ? null : Number(eyeDistanceToBlock(position, c.position).toFixed(2)),
+      takesFalling: c.takesFalling,
+    })),
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
       name: m.name,
@@ -270,6 +276,7 @@ export function buildPlannerRequest(input: {
       forbidden: [...forbiddenKeywords()],
       forbiddenExceptions: operatorApprovedTypes().filter(isAllowlistedActionType),
       diggableBlocks: [...DIGGABLE_BLOCKS],
+      placeableItems: [...PLACEABLE_ITEMS],
     },
     recentActions: input.recentActions,
     recentFailures: input.recentFailures,

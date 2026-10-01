@@ -317,6 +317,60 @@ export class FakeChestSim {
     this.#lastSentPlayer[slot] = copy(stack);
   }
 
+  /**
+   * Block.onBlockActivated for the block a C08 clicks: a chest or crafting table opens its
+   * window (true); any other block does nothing (false). Recorded either way.
+   */
+  activate(x: number, y: number, z: number): boolean {
+    this.activations.push({ x, y, z, heldSlot: this.heldSlot });
+    const key = `${x},${y},${z}`;
+    const chest = this.#chests.get(key);
+    if (chest !== undefined) {
+      this.#openChest(key, chest.length);
+      return true;
+    }
+    if (this.#tables.has(key)) {
+      this.#openTable(key);
+      return true;
+    }
+    return false;
+  }
+
+  /** The stack in the selected hotbar slot (window-0 slot 36 + heldSlot). */
+  get heldStack(): FakeStack | null {
+    return copy(this.#player[36 + this.heldSlot] ?? null);
+  }
+
+  /** A placement used one item of the held stack (server side; nothing is sent). */
+  useHeldItem(): void {
+    const slot = 36 + this.heldSlot;
+    const s = this.#player[slot];
+    if (s != null) this.#player[slot] = s.count > 1 ? { ...s, count: s.count - 1 } : null;
+  }
+
+  /**
+   * S2F for the held slot in the open container (window 0 when none is open), as
+   * processPlayerBlockPlacement sends it when the stack differs from the client's claim.
+   */
+  sendHeldSlot(): void {
+    const open = this.#open;
+    const windowSlot =
+      open === null
+        ? 36 + this.heldSlot
+        : (open.kind === 'chest' ? open.size : 10) + 27 + this.heldSlot;
+    this.#send(
+      encodeFrame(
+        0x2f,
+        Buffer.concat([
+          Buffer.from([open?.windowId ?? 0]),
+          i16(windowSlot),
+          encodeStack(this.heldStack, this.#modularUi),
+        ]),
+      ),
+    );
+    this.#lastSentPlayer[36 + this.heldSlot] = this.heldStack;
+  }
+
   /** Handles a play-state packet if it is a container packet; returns whether it was. */
   handle(packetId: number, r: Reader): boolean {
     switch (packetId) {
@@ -326,11 +380,7 @@ export class FakeChestSim {
         const z = r.i32();
         r.u8(); // face
         readItemStack(r, { ...VANILLA_DECODING, itemStackSizeVarInt: this.#modularUi });
-        this.activations.push({ x, y, z, heldSlot: this.heldSlot });
-        const key = `${x},${y},${z}`;
-        const chest = this.#chests.get(key);
-        if (chest !== undefined) this.#openChest(key, chest.length);
-        else if (this.#tables.has(key)) this.#openTable(key);
+        this.activate(x, y, z);
         return true;
       }
       case 0x09:

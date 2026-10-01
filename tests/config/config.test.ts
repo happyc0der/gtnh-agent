@@ -64,6 +64,20 @@ describe('configuration', () => {
     ).toThrow();
   });
 
+  it('placing is off unless enabled, and its heights are bounded', () => {
+    expect(defaultConfig().minecraft.placing).toEqual({ enabled: false, maxHeightAboveFence: 4 });
+    const { config } = loadConfig({ cwd: emptyDir(), env: { MC_ENABLE_PLACING: 'true' } });
+    expect(config.minecraft.placing.enabled).toBe(true);
+    expect(config.minecraft.digging.enabled).toBe(false);
+    expect(
+      loadConfig({ cwd: emptyDir(), env: { MC_ENABLE_PLACING: 'yes' } }).config.minecraft.placing
+        .enabled,
+    ).toBe(false);
+    expect(() =>
+      defaultConfig({ minecraft: { placing: { enabled: true, maxHeightAboveFence: 9 } } }),
+    ).toThrow();
+  });
+
   it('rejects invalid values with a readable error', () => {
     expect(() => loadConfig({ cwd: emptyDir(), env: { SAFETY_MIN_HEALTH: 'lots' } })).toThrow(
       /must be a number/,
