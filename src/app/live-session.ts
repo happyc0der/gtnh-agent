@@ -32,11 +32,12 @@ export const DEFAULT_SESSION_LIMITS: SessionLimits = {
   pauseMs: 300,
 };
 
-/** Decisions after which the run may go on: steps of the task itself. */
+/** Decisions after which the run may go on: steps of the task itself, and resting for it. */
 const TASK_PROGRESS: ReadonlySet<Decision> = new Set([
   'REQUEST_PLANNER',
   'EXECUTE_KNOWN_SAFE_STEP',
   'WAIT_FOR_MACHINE',
+  'REST',
 ]);
 
 /** Why a run stopped, for callers that decide what comes next (the play loop). */

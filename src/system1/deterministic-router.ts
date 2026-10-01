@@ -58,7 +58,7 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  *                                                         defend.ts: cornered by a quick kill,
  *                                                         or nowhere to retreat to)
  *      lava/void/hostiles nearby                       -> RETREAT_HOME (or PAUSE if already home / no home)
- *   2. low health                                      -> RETREAT_HOME (or PAUSE)
+ *   2. low health                                      -> REST (food enough to heal), else RETREAT_HOME (or PAUSE)
  *      hungry                                          -> EAT (or RETREAT_HOME/PAUSE with no approved food)
  *   3. inventory nearly full                           -> EMPTY_INVENTORY (or PAUSE without a dump container)
  *   4. known generator out of fuel + approved fuel     -> REFUEL_GENERATOR
@@ -161,6 +161,13 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
   facts['health'] = health;
   facts['hunger'] = hunger;
   if (health < ctx.safety.config.minHealth) {
+    // Nothing threatens the player (rule 1 took every danger): it rests where it is while the
+    // food bar heals it, as a person does (seen live: at 8 health with no food, the retreat
+    // home was 100 blocks through a forest, and the pause there healed nothing: nothing heals
+    // offline). Too hungry to heal: retreat or pause, as before.
+    if (hunger >= ctx.safety.config.minHungerToHeal) {
+      return decide('REST', CONFIDENCE.vitals, ['LOW_HEALTH']);
+    }
     return retreatOrPause(['LOW_HEALTH'], CONFIDENCE.vitals);
   }
   if (hunger < ctx.safety.config.hungerEatThreshold) {

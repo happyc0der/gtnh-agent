@@ -110,9 +110,19 @@ describe('System1 deterministic router', () => {
   });
 
   describe('priority 2: vitals', () => {
-    it('low health away from home -> RETREAT_HOME', () => {
+    it('low health with food enough to heal -> REST where it is', () => {
       const d = route((w) => {
         w.player.health = 5;
+        w.player.position = { x: 40, y: 64, z: 40 };
+      });
+      expect(d.decision).toBe('REST');
+      expect(d.reasonCodes).toEqual(['LOW_HEALTH']);
+    });
+
+    it('low health, too hungry to heal, away from home -> RETREAT_HOME', () => {
+      const d = route((w) => {
+        w.player.health = 5;
+        w.player.hunger = 7;
         w.player.position = { x: 40, y: 64, z: 40 };
       });
       expect(d.decision).toBe('RETREAT_HOME');

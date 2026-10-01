@@ -57,6 +57,13 @@ export const SafetyConfigSchema = z.strictObject({
   hostileThreatRadius: z.number().min(1).max(64).default(10),
   /** Retreat when health (half-hearts) is below this. */
   minHealth: z.number().min(1).max(1024).default(10),
+  /**
+   * Below minHealth with nothing else wrong, the agent rests (waits) to heal only at or above
+   * this food level: HungerOverhaul stops natural healing under 8 here.
+   */
+  minHungerToHeal: z.number().min(0).max(20).default(8),
+  /** One rest (REST's WAIT), in ms. */
+  restMs: z.int().min(1_000).max(60_000).default(30_000),
   /** Eat when food level is below this (and approved food is available). */
   hungerEatThreshold: z.number().min(1).max(20).default(14),
   /** Below this food level with no approved food, retreat or pause. */

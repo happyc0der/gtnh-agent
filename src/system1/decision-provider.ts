@@ -52,6 +52,7 @@ const FACT_CHECKED_DECISIONS: ReadonlySet<Decision> = new Set<Decision>([
   'PAUSE_AND_ASK_USER',
   'RETREAT_HOME',
   'EAT',
+  'REST',
   'DEFEND',
 ]);
 

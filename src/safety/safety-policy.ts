@@ -630,6 +630,8 @@ function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolati
     permitted =
       type === 'RETURN_TO_SAFE_LOCATION' ||
       (type === 'EAT_FOOD' && onlyVitals) ||
+      // Resting is how health comes back when nothing else is wrong (REST).
+      (type === 'WAIT' && onlyVitals) ||
       (type === 'ATTACK_ENTITY' && onlyHostiles);
   }
   if (permitted) return [];
