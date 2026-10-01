@@ -48,6 +48,27 @@ describe('OllamaPlannerProvider', () => {
     expect(JSON.stringify(body?.format)).not.toContain('PLACE_BLOCK');
   });
 
+  it('tells the model what a tool saves, from the verified tables, and the tool recipes', () => {
+    // Dig times come from src/domain/dig-time.ts and tools.ts, not from the model's memory.
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      '13. Tools: digging time in ticks: sand or dirt 21 by hand, 12 with a minecraft:wooden_shovel; ' +
+        'gravel, grass or clay 25 by hand, 14 with the shovel; logs 77 by hand, 40 with a ' +
+        'minecraft:wooden_axe, 21 with a minecraft:stone_axe. A wooden tool lasts 59 digs',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/Before gathering 32 or more of a block/);
+    // DIG_BLOCK picks the tool itself; the planner only decides whether to make one.
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/It holds the best tool from state\.tools/);
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      'wooden_shovel: 1 any of minecraft:planks|minecraft:planks@1|minecraft:planks@2|minecraft:planks@3|minecraft:planks@4|minecraft:planks@5 + 2 minecraft:stick -> 1 minecraft:wooden_shovel (3x3, at a table)',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/sticks: 2 any of [^;]* -> 2 minecraft:stick \(2x2\)/);
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/wooden_axe: 3 any of [^;]* \+ 2 minecraft:stick/);
+    // A crafted table is useless to an agent that cannot place blocks.
+    expect(PLANNER_SYSTEM_PROMPT).not.toMatch(/crafting_table:/);
+    // The request carries the tools the player has (none in this state).
+    expect(request().state.tools).toEqual([]);
+  });
+
   it('returns a recorded valid plan, which then passes validatePlan', async () => {
     const { provider } = planner({ body: golden('planner-plan.qwen3-14b') });
     const response = await provider.plan(request());

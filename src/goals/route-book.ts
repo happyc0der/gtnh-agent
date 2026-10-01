@@ -108,8 +108,9 @@ function digSources(): RouteSource[] {
 }
 
 function craftingRecipes(): RouteRecipe[] {
-  // GTNH removes the vanilla crafting table recipe (recipes.ts): never route through it.
-  return RECIPE_IDS.filter((id) => id !== 'crafting_table').map((id) => {
+  // Every recipe in the table is verified for GTNH (e.g. the crafting table is GTNH's own
+  // 2x2: two flint above two logs).
+  return RECIPE_IDS.map((id) => {
     const r = RECIPES[id];
     return {
       id,

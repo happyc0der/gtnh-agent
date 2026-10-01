@@ -184,12 +184,12 @@ function planOf(
 
 /**
  * What the live agent can obtain: everything digging gathers, and the results of the
- * recipes it can craft (2x2 always; 3x3 only when a crafting table is configured). GTNH
- * removes the vanilla crafting-table recipe, so the table itself is never counted.
+ * recipes it can craft (2x2 always; 3x3 only when a crafting table is configured). The
+ * crafting table itself is never counted: the agent cannot place it, so making one (from
+ * GTNH's flint recipe) would only spend flint.
  */
 export function liveAbilities(hasCraftingTable: boolean): Abilities {
-  const craft = RECIPE_IDS.filter((id) => id !== 'crafting_table')
-    .map((id) => RECIPES[id])
+  const craft = RECIPE_IDS.map((id) => RECIPES[id])
     .filter((r) => hasCraftingTable || !needsCraftingTable(r))
     .map((r) => r.result.item.replace(/@\d+$/, ''));
   return { gather: BASE_ABILITIES.gather, craft: new Set(craft) };

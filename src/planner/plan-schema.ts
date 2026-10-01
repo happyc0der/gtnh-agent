@@ -21,6 +21,9 @@ export const MAX_PLAN_STEPS = 16;
 /** Diggable blocks passed to the planner (the nearest ones). */
 export const MAX_COMPACT_RESOURCES = 32;
 
+/** Tools passed to the planner (the best ones). */
+export const MAX_COMPACT_TOOLS = 8;
+
 export const PlanStepSchema = z.strictObject({
   /** 1-based, sequential. */
   step: z.int().min(1).max(MAX_PLAN_STEPS),
@@ -107,6 +110,23 @@ export const CompactStateSchema = z.strictObject({
       }),
     )
     .max(MAX_COMPACT_RESOURCES),
+  /**
+   * Tools the player carries that DIG_BLOCK may hold (src/domain/tools.ts; never a protected
+   * one), best first: how many, how many digs each has left before the agent stops using it
+   * (0 = worn out), and the blocks it digs faster than a hand. DIG_BLOCK picks one by itself.
+   * Built from inventory names, which do not show NBT data: an enchanted or renamed tool is
+   * listed too, though the client never holds one.
+   */
+  tools: z
+    .array(
+      z.strictObject({
+        item: z.string(),
+        count: z.int().min(1),
+        durabilityLeft: z.int().min(0),
+        digsFaster: z.array(DiggableBlockSchema),
+      }),
+    )
+    .max(MAX_COMPACT_TOOLS),
   machines: z
     .array(
       z.strictObject({

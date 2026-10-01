@@ -14,6 +14,11 @@ export interface ValidatedAction {
   readonly action: Readonly<Action>;
   /** Resolved world position for location-named actions (e.g. RETURN_TO_SAFE_LOCATION). */
   readonly resolvedTarget: Readonly<Position> | null;
+  /**
+   * The protected items when the action was validated (sorted). The client must not use them
+   * up or wear them: a dig never holds a protected tool.
+   */
+  readonly protectedItems: readonly string[];
   readonly validatedAt: string;
   readonly [validatedBrand]: true;
 }
@@ -33,10 +38,12 @@ export function mintValidatedAction(
   action: Action,
   resolvedTarget: Position | null,
   validatedAt: Date,
+  protectedItems: Iterable<string> = [],
 ): ValidatedAction {
   const token = deepFreeze({
     action: structuredClone(action),
     resolvedTarget: resolvedTarget === null ? null : structuredClone(resolvedTarget),
+    protectedItems: [...new Set(protectedItems)].sort(),
     validatedAt: validatedAt.toISOString(),
   }) as unknown as ValidatedAction;
   minted.add(token);

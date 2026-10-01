@@ -128,7 +128,7 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
     expect(route?.stock).toEqual([
       { item: 'minecraft:stick', have: 0, stored: 0, need: 4, missing: 4 },
     ]);
-    expect(route?.steps.some((s) => s.includes('craft sticks x1'))).toBe(true);
+    expect(route?.steps.some((s) => s.includes('craft sticks x2'))).toBe(true); // GTNH: 2 sticks per craft
     expect(routeForPlanner(base)).toBeNull();
   });
 });

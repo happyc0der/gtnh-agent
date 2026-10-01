@@ -143,6 +143,21 @@ describe('ValidatedAction token', () => {
     expect(Object.isFrozen(token.action)).toBe(true);
     (a.args as { durationMs: number }).durationMs = 60_000;
     expect(token.action.args).toEqual({ durationMs: 100 });
+    expect(token.protectedItems).toEqual([]);
+  });
+
+  it('carry the protected items the action was validated with (a dig never wears them)', () => {
+    const protectedItems = new Set(['minecraft:wooden_shovel', 'minecraft:diamond']);
+    const token = mintValidatedAction(
+      action({ type: 'DIG_BLOCK', args: { position: { x: 2, y: 64, z: 1 } } }),
+      null,
+      new Date(),
+      protectedItems,
+    );
+    expect(token.protectedItems).toEqual(['minecraft:diamond', 'minecraft:wooden_shovel']);
+    expect(Object.isFrozen(token.protectedItems)).toBe(true);
+    protectedItems.clear();
+    expect(token.protectedItems).toHaveLength(2);
   });
 });
 

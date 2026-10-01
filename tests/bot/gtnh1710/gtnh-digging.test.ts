@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runUserAction, syncConfigToDatabase } from '../../../src/app/agent-loop.ts';
-import { digWaitTicks } from '../../../src/bot/gtnh1710/digging.ts';
+import { digWaitTicks } from '../../../src/domain/dig-time.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig, type DiggingConfig } from '../../../src/config/env.ts';
 import { createAction, type ActionSpec } from '../../../src/domain/actions.ts';
@@ -70,7 +70,11 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function start(server: FakeServerOptions = {}, digging: Partial<DiggingConfig> = {}) {
+async function start(
+  server: FakeServerOptions = {},
+  digging: Partial<DiggingConfig> = {},
+  protectedItems: string[] = [],
+) {
   const fake = new FakeGtnhServer({
     blocks: DIG_TEST_BLOCK_REGISTRY,
     blockOverrides: WORLD,
@@ -93,6 +97,7 @@ async function start(server: FakeServerOptions = {}, digging: Partial<DiggingCon
       },
       digging: { enabled: true, ...digging },
     },
+    safety: { protectedItems },
   });
   const client = new Gtnh1710Client({
     config: config.minecraft,
@@ -452,4 +457,224 @@ describe('Gtnh1710Client digging', () => {
       /rejected \[NOT_DIGGABLE\]/,
     );
   }, 10_000);
+});
+
+/** Item ids the tool tests use (the vanilla 1.7.10 numbering). */
+const TOOL = { bread: 297, shovel: 269, axe: 271, stoneAxe: 275, ironShovel: 256 } as const;
+const TOOL_ITEMS: Array<[number, string]> = [
+  [TOOL.bread, 'minecraft:bread'],
+  [TOOL.shovel, 'minecraft:wooden_shovel'],
+  [TOOL.axe, 'minecraft:wooden_axe'],
+  [TOOL.stoneAxe, 'minecraft:stone_axe'],
+  [TOOL.ironShovel, 'minecraft:iron_shovel'],
+];
+
+describe('Gtnh1710Client digging with tools', () => {
+  it('digs dirt with the wooden shovel in hand: 12 ticks instead of 21; it wears by one, as reported', async () => {
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      inventory: [{ slot: 36, id: TOOL.shovel, count: 1, damage: 0 }],
+    });
+    const result = await perform(client, dig(AT.dirt));
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        block: 'minecraft:dirt',
+        ticks: 12,
+        tool: 'minecraft:wooden_shovel',
+        toolUsesLeft: 58,
+        dropCollected: true,
+        drops: '1 x minecraft:dirt',
+      },
+    });
+    expect(result.message).toMatch(/in 12 ticks with minecraft:wooden_shovel \(58 uses left\)/);
+    expect(digWaitTicks('minecraft:dirt', 2)).toBe(12);
+
+    // The server dug with the shovel (already in hand: no hotbar change), for the shorter time.
+    const digs = server.digSim.digs;
+    expect(digs.map((d) => [d.status, d.held])).toEqual([
+      [0, 'minecraft:wooden_shovel@0'],
+      [2, 'minecraft:wooden_shovel@0'],
+    ]);
+    const elapsed = (digs[1]?.at ?? 0) - (digs[0]?.at ?? 0);
+    expect(elapsed).toBeGreaterThanOrEqual(12 * 50 - 5);
+    expect(elapsed).toBeLessThan(21 * 50);
+    expect(server.playPacketIds()).not.toContain(0x09);
+    expect(server.digSim.broken).toEqual([
+      { ...AT.dirt, name: 'minecraft:dirt', late: false, held: 'minecraft:wooden_shovel@0' },
+    ]);
+    expect(server.chestSim.playerSlots()[36]).toMatchObject({ id: TOOL.shovel, damage: 1 });
+
+    // The worn shovel shows its damage; the drop is not mistaken for it.
+    const state = await client.observe();
+    expect(state.inventory).toMatchObject({
+      known: true,
+      value: { items: { 'minecraft:dirt': 1, 'minecraft:wooden_shovel@1': 1 } },
+    });
+    expect(state.player.heldTool).toEqual({
+      known: true,
+      value: { item: 'minecraft:wooden_shovel', durabilityFraction: 58 / 59 },
+    });
+  }, 10_000);
+
+  it('moves a shovel from the main inventory into an empty hotbar slot first (two confirmed clicks)', async () => {
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      inventory: [
+        { slot: 36, id: TOOL.bread, count: 2, damage: 0 },
+        { slot: 9, id: TOOL.shovel, count: 1, damage: 5 },
+      ],
+    });
+    const result = await perform(client, dig(AT.dirt));
+    expect(result).toMatchObject({
+      ok: true,
+      data: { ticks: 12, tool: 'minecraft:wooden_shovel', toolUsesLeft: 53 },
+    });
+    const sim = server.chestSim;
+    // Pick it up from slot 9, put it down in the first empty hotbar slot (37), hold that.
+    expect(sim.clicks.map((c) => [c.windowId, c.slot, c.button, c.accepted])).toEqual([
+      [0, 9, 0, true],
+      [0, 37, 0, true],
+    ]);
+    expect(sim.heldSlot).toBe(1);
+    expect(sim.playerSlots()[9]).toBeNull();
+    expect(sim.playerSlots()[37]).toMatchObject({ id: TOOL.shovel, damage: 6 });
+    expect(sim.cursor).toBeNull();
+    expect(sim.dropped).toEqual([]);
+    expect(server.digSim.digs[0]?.held).toBe('minecraft:wooden_shovel@5');
+  }, 10_000);
+
+  it('passes over a worn-out shovel, one with NBT data and a disabled iron shovel: an empty hand', async () => {
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      inventory: [
+        // The agent's limit: one more use would be its 60th (the server allows 64).
+        { slot: 36, id: TOOL.shovel, count: 1, damage: 59 },
+        // IguanaTweaks makes it dig nothing on this server: not on the agent's allowlist.
+        { slot: 37, id: TOOL.ironShovel, count: 1, damage: 0 },
+        { slot: 38, id: TOOL.shovel, count: 1, damage: 0, nbt: true },
+      ],
+    });
+    const result = await perform(client, dig(AT.dirt));
+    expect(result).toMatchObject({ ok: true, data: { ticks: 21, tool: null, toolUsesLeft: null } });
+    expect(result.data['toolNote']).toMatch(
+      /worn out \(damage 59, the agent stops at 59\); minecraft:wooden_shovel has NBT data/,
+    );
+    expect(result.message).toMatch(
+      /with an empty hand \(not used: minecraft:wooden_shovel is worn out/,
+    );
+    // The first empty hotbar slot (3) was held; nothing wore.
+    expect(server.chestSim.heldSlot).toBe(3);
+    expect(server.digSim.digs.map((d) => d.held)).toEqual([null, null]);
+    expect(server.chestSim.playerSlots()[36]).toMatchObject({ damage: 59 });
+  }, 10_000);
+
+  it('takes the fastest axe for a log: a stone axe from the main inventory over the wooden one in hand', async () => {
+    const log = { x: -6, y: 106, z: -8 };
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      blockOverrides: new Map([...WORLD, [key(log), BLOCK.log]]),
+      inventory: [
+        { slot: 36, id: TOOL.axe, count: 1, damage: 0 },
+        { slot: 9, id: TOOL.stoneAxe, count: 1, damage: 0 },
+      ],
+    });
+    const result = await perform(client, dig(log));
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        block: 'minecraft:log',
+        ticks: 21,
+        tool: 'minecraft:stone_axe',
+        toolUsesLeft: 130,
+        drops: '1 x minecraft:log',
+      },
+    });
+    expect(server.digSim.digs[0]?.held).toBe('minecraft:stone_axe@0');
+    expect(server.chestSim.playerSlots()[37]).toMatchObject({ id: TOOL.stoneAxe, damage: 1 });
+    expect(server.chestSim.playerSlots()[36]).toMatchObject({ id: TOOL.axe, damage: 0 });
+  }, 10_000);
+
+  it('never holds a protected tool: the executor hands the protected items to the client', async () => {
+    const { server, client, config } = await start(
+      { items: TOOL_ITEMS, inventory: [{ slot: 36, id: TOOL.shovel, count: 1, damage: 0 }] },
+      {},
+      ['minecraft:wooden_shovel'],
+    );
+    const repos = createRepositories(openDatabase(IN_MEMORY), systemClock);
+    syncConfigToDatabase(config, repos);
+    const deps = {
+      config,
+      client,
+      repos,
+      decisionProvider: new DeterministicDecisionProvider(),
+      planner: null,
+      clock: systemClock,
+      newId: sequentialIds(),
+    };
+    const done = await runUserAction(deps, dig(AT.dirt), 'test');
+    expect(done.status).toBe('succeeded');
+    expect(done.outcome?.execution?.data).toMatchObject({ tool: null, ticks: 21 });
+    expect(done.outcome?.execution?.data['toolNote']).toMatch(/is a protected item/);
+    expect(server.digSim.digs.map((d) => d.held)).toEqual([null, null]);
+    expect(server.chestSim.playerSlots()[36]).toMatchObject({ damage: 0 });
+  }, 10_000);
+
+  it('stops and cancels when the tool in hand changes while digging', async () => {
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      inventory: [{ slot: 36, id: TOOL.shovel, count: 1, damage: 0 }],
+    });
+    const digging = perform(client, dig(AT.dirt));
+    await vi.waitFor(() => expect(server.digSim.digs.length).toBe(1));
+    server.chestSim.setPlayerSlot(36, null); // e.g. an operator cleared the slot
+    const result = await digging;
+    expect(result).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(result.message).toMatch(/stopped: the tool in hand changed/);
+    await vi.waitFor(() => expect(server.digSim.digs.map((d) => d.status)).toEqual([0, 1]));
+    expect(server.digSim.broken).toEqual([]);
+  });
+
+  it('a rejected click while moving the tool: the cursor goes back into the inventory, no dig', async () => {
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      rejectClicks: [1], // the server applies the pick-up, rejects it and re-sends the window
+      inventory: [
+        { slot: 36, id: TOOL.bread, count: 2, damage: 0 },
+        { slot: 9, id: TOOL.shovel, count: 1, damage: 0 },
+      ],
+    });
+    const result = await perform(client, dig(AT.dirt));
+    expect(result).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(result.message).toMatch(
+      /the minecraft:wooden_shovel could not be moved into the hotbar: a click was rejected/,
+    );
+    const sim = server.chestSim;
+    expect(sim.cursor).toBeNull();
+    expect(sim.dropped).toEqual([]);
+    expect(sim.playerSlots().filter((s) => s?.id === TOOL.shovel)).toHaveLength(1);
+    expect(digPackets(server)).toEqual([]);
+  }, 10_000);
+
+  it('refuses when the tool cannot reach the hotbar and there is no empty hand either', async () => {
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      inventory: [
+        ...Array.from({ length: 9 }, (_, j) => ({
+          slot: 36 + j,
+          id: TOOL.bread,
+          count: 1,
+          damage: 0,
+        })),
+        { slot: 9, id: TOOL.shovel, count: 1, damage: 0 },
+      ],
+    });
+    const result = await perform(client, dig(AT.dirt));
+    expect(result).toMatchObject({ ok: false, code: 'REFUSED' });
+    expect(result.message).toMatch(
+      /no empty hotbar slot \(to move the minecraft:wooden_shovel into, or to dig with an empty hand\)/,
+    );
+    expect(digPackets(server)).toEqual([]);
+    expect(server.chestSim.clicks).toEqual([]);
+  });
 });

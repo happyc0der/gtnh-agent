@@ -433,11 +433,11 @@ export const SCENARIOS: readonly Scenario[] = [
   ),
   scenario(
     'craft-recipe-differs',
-    "The server's recipe differs from the agent's table (2 sticks, not 4): nothing is crafted.",
+    "The server's recipe differs from the agent's table (vanilla's 4 sticks, not GregTech's 2): nothing is crafted.",
     { decision: 'EXECUTE_KNOWN_SAFE_STEP', actionType: 'CRAFT_ITEM', status: 'failed' },
     (w) => {
       w.inventory.items['minecraft:planks'] = 4;
-      w.craftingResults.sticks = { item: 'minecraft:stick', count: 2 };
+      w.craftingResults.sticks = { item: 'minecraft:stick', count: 4 };
       if (w.recipe !== null) {
         w.recipe.nextKnownSafeStep = {
           type: 'CRAFT_ITEM',

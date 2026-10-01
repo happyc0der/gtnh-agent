@@ -174,6 +174,54 @@ describe('planner request and mock planner', () => {
     expect(hidden.unknownFields).toContain('nearbyBlocks');
   });
 
+  it('lists the tools DIG_BLOCK may hold, best first, with the digs they have left', () => {
+    const state = makeState((w) => {
+      Object.assign(w.inventory.items, {
+        'minecraft:wooden_shovel': 2,
+        'minecraft:wooden_shovel@57': 1,
+        'minecraft:wooden_shovel@59': 1, // worn out for the agent
+        'minecraft:stone_axe@1': 1,
+        'minecraft:iron_shovel': 1, // digs nothing on this server: not a tool for the agent
+        'minecraft:diamond_axe': 1, // protected below
+      });
+    });
+    const shovel = [
+      'minecraft:dirt',
+      'minecraft:grass',
+      'minecraft:sand',
+      'minecraft:gravel',
+      'minecraft:clay',
+    ];
+    const axe = ['minecraft:log', 'minecraft:log2'];
+    expect(sanitizeStateForPlanner(state, new Set(['minecraft:diamond_axe'])).tools).toEqual([
+      { item: 'minecraft:stone_axe', count: 1, durabilityLeft: 130, digsFaster: axe },
+      { item: 'minecraft:wooden_shovel', count: 2, durabilityLeft: 59, digsFaster: shovel },
+      { item: 'minecraft:wooden_shovel', count: 1, durabilityLeft: 2, digsFaster: shovel },
+      { item: 'minecraft:wooden_shovel', count: 1, durabilityLeft: 0, digsFaster: shovel },
+    ]);
+    // Through buildPlannerRequest, protected tools come from the safety context.
+    const r = buildPlannerRequest({
+      state,
+      safety: safetyCtx(),
+      maxPlanSteps: 4,
+      recentActions: [],
+      recentFailures: [],
+    });
+    expect(r.state.tools.map((t) => t.item)).toContain('minecraft:diamond_axe');
+    const guarded = buildPlannerRequest({
+      state,
+      safety: { ...safetyCtx(), protectedItems: new Set(['minecraft:stone_axe']) },
+      maxPlanSteps: 4,
+      recentActions: [],
+      recentFailures: [],
+    });
+    expect(guarded.state.tools.map((t) => t.item)).not.toContain('minecraft:stone_axe');
+    // No tools, or an unknown inventory: an empty list.
+    expect(request().state.tools).toEqual([]);
+    const blind = sanitizeStateForPlanner(makeState((w) => void (w.unobservable = ['inventory'])));
+    expect(blind.tools).toEqual([]);
+  });
+
   it('the request carries the allowlist and constraints', () => {
     const r = request();
     expect(r.allowedActions).toHaveLength(13);
