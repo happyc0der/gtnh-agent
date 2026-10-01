@@ -1,4 +1,5 @@
 import type { GardenBlock } from './blocks.ts';
+import type { GameState } from './game-state.ts';
 
 /**
  * Food on the GTNH 2.8.4 test server: what each food is worth, which raw foods are safe, what
@@ -21,7 +22,8 @@ import type { GardenBlock } from './blocks.ts';
  * Items class): bread and pumpkin pie 3; cooked beef, porkchop, chicken and fish, baked potato
  * and mushroom stew 2; apple, carrot, potato, melon, cookie and the raw meats 1.
  * ModuleHarvestCraft: every crop in ItemRegistry.PamCropItems 1 (it sets cropfoodRestore to 1),
- * but cantaloupe 2; raw mutton 1. ModuleBOP: BiomesOPlenty:food (meta 0, berries) 1.
+ * but cantaloupe 2; raw mutton 1. ModuleBOP: BiomesOPlenty:food 1 at meta 0 (berries) and 8
+ * (persimmons, from ripe persimmon leaves).
  */
 export const FOOD_POINTS: ReadonlyMap<string, number> = new Map([
   ['minecraft:bread', 3],
@@ -42,6 +44,7 @@ export const FOOD_POINTS: ReadonlyMap<string, number> = new Map([
   ['minecraft:porkchop', 1],
   ['harvestcraft:muttonrawItem', 1],
   ['BiomesOPlenty:food', 1],
+  ['BiomesOPlenty:food@8', 1],
 ]);
 
 /** HungerOverhaul's smallest value: what any other food restores at least. */
@@ -352,3 +355,19 @@ export const FOOD_TASK_ID = 'get-food';
  * is about ten foods, and with gardens' mixed produce, not ten of one kind.
  */
 export const FOOD_TRIP_POINTS = 10;
+
+/**
+ * The current task is the food task (FOOD_TASK_ID), active, and it is day: the agent is out
+ * getting food, so too little food is the task, not a reason to stop. System 1 then goes on
+ * with the task's steps below minHunger instead of retreating or pausing
+ * (deterministic-router.ts), and the safety policy lets the steps that get food run
+ * (safety-policy.ts dangerGate). At dusk the night shelter comes first, as for any task.
+ */
+export function gettingFood(state: GameState): boolean {
+  return (
+    state.currentTask?.taskId === FOOD_TASK_ID &&
+    state.currentTask.status === 'active' &&
+    state.time.known &&
+    state.time.value.phase === 'day'
+  );
+}

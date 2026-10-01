@@ -35,7 +35,6 @@
     "hungerEatThreshold": 14,
     "minHunger": 6,
     "protectedItems": ["minecraft:diamond", "minecraft:nether_star", "minecraft:emerald"],
-    "approvedFoods": ["minecraft:bread", "minecraft:cooked_beef"],
     "approvedFuels": ["minecraft:coal", "minecraft:charcoal"],
     "maxFailuresPerActionPerTask": 2,
     "maxStateAgeMs": 5000,

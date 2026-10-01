@@ -608,7 +608,16 @@ export async function runPlay(
   if (deps.scouting !== undefined) {
     const due = scoutingDue(deps.repos, deps.scouting);
     if (due.kind === 'stop') return done(due.reason);
-    if (due.kind === 'scout') {
+    // Hungry with nothing to eat, food comes first: a food trip explores for food itself, and
+    // below food 6 a scout's EXPLOREs would be refused (only the food task's may run then).
+    // The scouting waits for the next play.
+    const fed = due.kind === 'scout' ? ((await deps.food?.now()) ?? null) : null;
+    if (fed !== null && foodDue(fed)) {
+      emit({
+        kind: 'food',
+        message: `food ${fed.hunger}/20 and nothing to eat: food before scouting`,
+      });
+    } else if (due.kind === 'scout') {
       const stop = hooks.stopRequested();
       if (stop !== null) return done(stop);
       const clock = (await deps.time?.()) ?? null;
@@ -781,13 +790,15 @@ export async function runPlay(
       const adopted = adoptFoodTask(deps.repos, fed);
       emit({
         kind: 'goal',
-        quest: 'food',
+        quest: `food: ${fed.carried}/${FOOD_TRIP_POINTS} hunger points carried`,
         goal: `get ${FOOD_TRIP_POINTS} hunger points of food`,
         missing: {},
         taskId: adopted.taskId,
         created: adopted.created,
       });
-      let got = fed.carried;
+      // The trip got somewhere: more food carried, or a fuller food bar (System 1 eats what is
+      // gathered while hungry, so the food carried can stay at 0 as the bar fills).
+      let progressed = false;
       let enough = false;
       let foodDark: WorldTime | null = null;
       const session = sessions + 1;
@@ -806,7 +817,7 @@ export async function runPlay(
           if (after === undefined || after === null) return;
           const now = food.of(after);
           if (now !== null) {
-            got = Math.max(got, now.carried);
+            if (now.carried > fed.carried || now.hunger > fed.hunger) progressed = true;
             if (foodTripDone(now)) enough = true;
           }
           // Shelter time (or dark, without shelters) ends a food session as it ends a quest's.
@@ -821,7 +832,7 @@ export async function runPlay(
       sessions = session;
       lastStop = result.stopReason;
       const sawMore = seenBefore !== null && (deps.scouting?.chunksSeen() ?? 0) > seenBefore;
-      foodStuck = got > fed.carried || sawMore ? 0 : foodStuck + 1;
+      foodStuck = progressed || sawMore ? 0 : foodStuck + 1;
       emit({
         kind: 'session-end',
         session,

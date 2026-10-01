@@ -107,6 +107,41 @@ describe('routes: what a goal needs, exactly, and in which order', () => {
     ]);
   });
 
+  it("gets a farm animal's drops by killing it (a kill leg), never by digging", () => {
+    const route = planRoute({ 'minecraft:leather': 2 }, {}, HAND_BOOK);
+    expect(route.legs).toMatchObject([
+      {
+        kind: 'gather',
+        item: 'minecraft:leather',
+        via: 'kill',
+        blocks: ['minecraft:Cow'],
+        quantity: 2,
+        actions: 2, // 0-2 leather a cow: 1 on average
+      },
+    ]);
+    const line = describeRoute(route).find((l) => l.includes('minecraft:leather:'));
+    expect(line).toContain('kill minecraft:Cow (~2 kills');
+    expect(line).toContain('grassy biomes');
+  });
+
+  it("digs a garden for its food: 3 of its kinds' produce a dig, never for its other drops", () => {
+    // A berry garden drops 3 of its 6 berries: 0.5 of each a dig.
+    expect(DIG_YIELDS['harvestcraft:berrygarden']).toContainEqual({
+      item: 'harvestcraft:strawberryItem',
+      perDig: 0.5,
+    });
+    const berries = planRoute({ 'harvestcraft:strawberryItem': 2 }, {}, HAND_BOOK);
+    expect(berries.legs).toMatchObject([
+      { kind: 'gather', via: 'dig', blocks: ['harvestcraft:berrygarden'], actions: 4 },
+    ]);
+    // Cactus and pumpkins come from their own blocks' routes, never from a garden.
+    expect(
+      HAND_BOOK.sources.filter(
+        (s) => s.item === 'minecraft:cactus' && s.blocks.some((b) => b.startsWith('harvestcraft:')),
+      ),
+    ).toEqual([]);
+  });
+
   it('reports what nothing it knows can make, and why', () => {
     const route = planRoute({ 'minecraft:torch': 6 }, { 'minecraft:coal': 1 }, HAND_BOOK);
     expect(route.unresolved).toEqual({ 'minecraft:coal': 1 });

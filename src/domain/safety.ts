@@ -101,9 +101,12 @@ export const SafetyConfigSchema = z.strictObject({
       'minecraft:beef',
       'minecraft:porkchop',
       'harvestcraft:muttonrawItem',
-      // Biomes O' Plenty's berries (BiomesOPlenty:food at meta 0, from its berry bushes): an
-      // ItemBOPFood whose eating code adds nothing for that meta.
+      // Biomes O' Plenty's berries (BiomesOPlenty:food at meta 0, from its berry bushes) and
+      // persimmons (meta 8, from ripe persimmon leaves, which walks and digs break): an
+      // ItemBOPFood whose eating code adds nothing for either meta (onFoodEaten gives potion
+      // effects to meta 1, 2, 4, 5, 6 and 10 only).
       'BiomesOPlenty:food',
+      'BiomesOPlenty:food@8',
       // The produce of HarvestCraft's land gardens: ItemPamSeedFood crops, plain food.
       ...GARDEN_FOODS.filter(
         (f) => !['minecraft:carrot', 'minecraft:potato', 'minecraft:melon'].includes(f),

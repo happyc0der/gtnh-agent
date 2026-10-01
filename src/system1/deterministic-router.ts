@@ -1,6 +1,6 @@
 import type { Decision, DecisionResult, FactValue, ReasonCode } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
-import { FOOD_TASK_ID } from '../domain/food.ts';
+import { gettingFood } from '../domain/food.ts';
 import { distance } from '../domain/geometry.ts';
 import { NIGHT_SHELTER_TASK_ID } from '../domain/night-shelter.ts';
 import { assessDangers, assessStateReliability } from '../safety/safety-policy.ts';
@@ -267,17 +267,4 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
 
   // 7. Nothing deterministic applies.
   return decide('REQUEST_PLANNER', CONFIDENCE.planner, ['NO_KNOWN_STEP']);
-}
-
-/**
- * The current task is the play loop's food task (FOOD_TASK_ID), and it is day: the agent is
- * out getting food, so too little food is the task, not a reason to stop.
- */
-export function gettingFood(state: GameState): boolean {
-  return (
-    state.currentTask?.taskId === FOOD_TASK_ID &&
-    state.currentTask.status === 'active' &&
-    state.time.known &&
-    state.time.value.phase === 'day'
-  );
 }

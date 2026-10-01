@@ -8,7 +8,12 @@ import {
   type ExploreToward,
 } from '../domain/actions.ts';
 import { parseObservedStorageId, profileForBlock } from '../domain/interactions.ts';
-import { FALLING_DIGGABLE_BLOCKS, fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
+import {
+  FALLING_DIGGABLE_BLOCKS,
+  fallsWhenPlaced,
+  isGardenBlock,
+  type PlaceableItem,
+} from '../domain/blocks.ts';
 import {
   calmSpiderBlocker,
   HURT_DANGER_MS,
@@ -16,6 +21,7 @@ import {
   recentHurtMs,
 } from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
+import { FOOD_TASK_ID, gettingFood } from '../domain/food.ts';
 import { MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
 import {
   isDigDownBlock,
@@ -628,12 +634,23 @@ function hurtLately(state: GameState): number | null {
  * deliberately not an escape: one block does not make a shelter, sealing one with a mob
  * within reach can wall the agent in with it, and a creeper's blast opens it again. Shelters
  * are built before dark, while the state is safe (docs/action-contract.md).
+ *
+ * One more cure: food, for a food level below minHunger with nothing else wrong. An action
+ * that gets food (`getsFood`, below) may run then, since with no food carried a retreat home
+ * finds none there, and a pause only starves: nothing heals offline, and on Hard a food bar
+ * at 0 starves the player to death. Seen live: food 2 with no food, the agent offline. Low
+ * health still stops it (LOW_HEALTH is another danger).
  */
-function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolation[] {
+function dangerGate(
+  type: ActionType,
+  dangers: SafetyViolation[],
+  getsFood = false,
+): SafetyViolation[] {
   if (dangers.length === 0) return [];
   const codes = new Set(dangers.map((d) => d.code));
   const outsideWorkArea = codes.has('OUT_OF_BOUNDS') || codes.has('DIMENSION_NOT_ALLOWED');
   const onlyVitals = [...codes].every((c) => c === 'LOW_HEALTH' || c === 'LOW_HUNGER');
+  const onlyHunger = [...codes].every((c) => c === 'LOW_HUNGER');
   // Fighting back is how the agent survives a hostile it cannot retreat from; any other
   // danger (lava, an unidentified entity, low health or food) forbids it.
   const onlyHostiles = [...codes].every((c) => c === 'HOSTILES_NEARBY');
@@ -645,7 +662,8 @@ function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolati
       (type === 'EAT_FOOD' && onlyVitals) ||
       // Resting is how health comes back when nothing else is wrong (REST).
       (type === 'WAIT' && onlyVitals) ||
-      (type === 'ATTACK_ENTITY' && onlyHostiles);
+      (type === 'ATTACK_ENTITY' && onlyHostiles) ||
+      (getsFood && onlyHunger);
   }
   if (permitted) return [];
   return [
@@ -656,6 +674,24 @@ function dangerGate(type: ActionType, dangers: SafetyViolation[]): SafetyViolati
       details: { actionType: type, dangers: [...codes].join(',') },
     },
   ];
+}
+
+/**
+ * The action gets food: the food task's own action (its task is FOOD_TASK_ID) while that task
+ * gets food by day (food.ts gettingFood), and one of the actions a food trip is made of: a walk
+ * (MOVE_TO), an EXPLORE (to where food grows or grazes), or the dig of a HarvestCraft garden
+ * the observation lists. Nothing else: no dig of anything but a garden, no building, no
+ * crafting, and no fight (ATTACK_ENTITY has its own, higher food limit: combat-checks.ts).
+ */
+export function getsFood(action: Action, state: GameState): boolean {
+  if (action.taskId !== FOOD_TASK_ID || !gettingFood(state)) return false;
+  if (action.type === 'MOVE_TO' || action.type === 'EXPLORE') return true;
+  if (action.type !== 'DIG_BLOCK' || !state.nearbyBlocks.known) return false;
+  const at = action.args.position;
+  const listed = state.nearbyBlocks.value.resources.find(
+    (r) => r.position.x === at.x && r.position.y === at.y && r.position.z === at.z,
+  );
+  return listed !== undefined && isGardenBlock(listed.block);
 }
 
 function dynamicChecks(action: Action, state: GameState, ctx: SafetyContext): SafetyViolation[] {
@@ -1224,7 +1260,7 @@ export function evaluateAction(
   const reliability = assessStateReliability(state, ctx);
   if (reliability.length > 0) return result([...violations, ...reliability]);
 
-  violations.push(...dangerGate(action.type, assessDangers(state, ctx)));
+  violations.push(...dangerGate(action.type, assessDangers(state, ctx), getsFood(action, state)));
   violations.push(...evaluateStaticSpec(spec, ctx));
   violations.push(...dynamicChecks(action, state, ctx));
 

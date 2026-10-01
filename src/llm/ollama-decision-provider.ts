@@ -7,13 +7,13 @@ import {
   type DecisionResult,
   type ReasonCode,
 } from '../domain/decisions.ts';
+import { gettingFood } from '../domain/food.ts';
 import type { GameState, MachineStatus } from '../domain/game-state.ts';
 import type { TaskStatus } from '../domain/tasks.ts';
 import { distance } from '../domain/geometry.ts';
 import { assessDangers, assessStateReliability } from '../safety/safety-policy.ts';
 import type { DecisionProvider } from '../system1/decision-provider.ts';
 import { assessDefense } from '../system1/defend.ts';
-import { gettingFood } from '../system1/deterministic-router.ts';
 import {
   availableApprovedFood,
   canRetreat,
@@ -56,7 +56,7 @@ export interface DecisionSummary {
   starving: boolean;
   approvedFoodCarried: boolean;
   /**
-   * The task is the play loop's food task, by day (deterministic-router.ts gettingFood): too
+   * The task is the play loop's food task, by day (src/domain/food.ts gettingFood): too
    * little food is the task then, not a reason to retreat or pause.
    */
   gettingFood: boolean;

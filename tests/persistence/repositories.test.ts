@@ -175,6 +175,49 @@ describe('repositories', () => {
     expect(() => repos.actions.update('nope', { status: 'failed' })).toThrow();
   });
 
+  it("action logs: the agent's recent meals, newest first (Spice of Life's history)", () => {
+    const eat = (actionId: string, item: string, status: 'succeeded' | 'failed'): void => {
+      repos.actions.insert({
+        actionId,
+        cycleId: 'c',
+        taskId: 't1',
+        actionType: 'EAT_FOOD',
+        origin: 'deterministic-router',
+        fingerprint: `EAT_FOOD:${item}`,
+        reason: 'r',
+        action: { type: 'EAT_FOOD', args: { item } },
+        status: 'proposed',
+        validation: { ok: true },
+      });
+      repos.actions.update(actionId, { status });
+    };
+    eat('m1', 'minecraft:apple', 'succeeded');
+    eat('m2', 'minecraft:carrot', 'succeeded');
+    eat('m3', 'minecraft:bread', 'failed'); // not eaten
+    eat('m4', 'harvestcraft:strawberryItem', 'succeeded');
+    repos.actions.insert({
+      actionId: 'w1',
+      cycleId: 'c',
+      taskId: 't1',
+      actionType: 'WAIT',
+      origin: 'test',
+      fingerprint: 'fp',
+      reason: 'r',
+      action: { type: 'WAIT', args: { durationMs: 100 } },
+      status: 'succeeded',
+      validation: { ok: true },
+    });
+    expect(repos.actions.recentMeals(20)).toEqual([
+      'harvestcraft:strawberryItem',
+      'minecraft:carrot',
+      'minecraft:apple',
+    ]);
+    expect(repos.actions.recentMeals(2)).toEqual([
+      'harvestcraft:strawberryItem',
+      'minecraft:carrot',
+    ]);
+  });
+
   it('action logs: the status CHECK constraint rejects unknown statuses', () => {
     expect(() =>
       db

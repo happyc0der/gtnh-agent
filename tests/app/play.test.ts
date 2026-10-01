@@ -14,6 +14,7 @@ import {
   type PlayEvent,
 } from '../../src/app/play.ts';
 import type { DecisionResult } from '../../src/domain/decisions.ts';
+import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import { NIGHT_PIT_WINDOW_MINUTES, nightPitTime } from '../../src/domain/night-shelter.ts';
 import { completedQuests, questTaskId } from '../../src/app/quest-commands.ts';
 import { nextKnownStep } from '../../src/app/known-steps.ts';
@@ -986,5 +987,167 @@ describe('a mob near home', () => {
       mobPause('needs-attention', { ...pause(['HOSTILES_NEARBY']), decision: 'RETREAT_HOME' }),
     ).toBeNull();
     expect(mobPause('needs-attention', null)).toBeNull();
+  });
+});
+
+describe('food trips', () => {
+  /** Approved foods the test counts as carried, one hunger point each. */
+  const FOODS = ['harvestcraft:strawberryItem', 'minecraft:carrot'];
+  const carriedIn = (items: Readonly<Record<string, number>>): number =>
+    FOODS.reduce((n, f) => n + (items[f] ?? 0), 0);
+  /** The food dependency over the test world: its food level, and the foods it holds. */
+  const foodDeps = (world: World, hunger: { level: number }): NonNullable<PlayDeps['food']> => ({
+    now: () =>
+      Promise.resolve({ hunger: hunger.level, carried: carriedIn(world.inventory), eatBelow: 14 }),
+    of: (state) =>
+      state.player.hunger.known && state.inventory.known
+        ? {
+            hunger: state.player.hunger.value,
+            carried: carriedIn(state.inventory.value.items),
+            eatBelow: 14,
+          }
+        : null,
+  });
+  /** An observation with food level `level` and the world's inventory. */
+  const observed = (world: World, level: number): GameState => ({
+    ...makeState((w) => void (w.player.hunger = level)),
+    inventory: inventoryOf(world),
+  });
+  const cycle = (after: GameState): CycleResult =>
+    ({ summary: 'x', outcome: { stateAfter: after } }) as unknown as CycleResult;
+
+  it('hungry with nothing to eat, by day: gets about a day of food first, then the quest goes on', async () => {
+    const repos = open();
+    const world: World = {
+      inventory: {},
+      sessions: [
+        { gain: { 'harvestcraft:strawberryItem': 6, 'minecraft:carrot': 4 } },
+        { gain: { 'minecraft:sand': 100 } },
+        { gain: { 'minecraft:gravel': 50 } },
+      ],
+      calls: 0,
+    };
+    const tasks: Array<string | null> = [];
+    const base = deps(repos, world);
+    const events: PlayEvent[] = [];
+    const result = await runPlay(
+      {
+        ...base,
+        food: foodDeps(world, { level: 9 }),
+        session: (limits, hooks) => {
+          tasks.push(repos.memory.getValue(CURRENT_TASK_KEY));
+          return base.session(limits, hooks);
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(tasks).toEqual([FOOD_TASK_ID, questTaskId('2'), questTaskId('3')]);
+    expect(result.questsCompleted).toEqual(['Q1', 'Q2', 'Q3']);
+    expect(repos.tasks.get(FOOD_TASK_ID)?.status).toBe('completed');
+    expect(repos.memory.journal(FOOD_TASK_ID).at(-1)?.text).toBe(
+      'food trip over: 10 hunger points of food carried',
+    );
+    expect(
+      events
+        .filter((e) => e.kind === 'food' || (e.kind === 'goal' && e.taskId === FOOD_TASK_ID))
+        .map((e) => describePlayEvent(e)),
+    ).toEqual([
+      'food: food 9/20 and nothing to eat: getting food first',
+      'goal: "food: 0/10 hunger points carried" (new task)',
+      'food: trip over: 10 hunger points of food carried',
+    ]);
+  });
+
+  it('a quest session ends as soon as an observation shows the agent hungry with nothing to eat', async () => {
+    const repos = open();
+    const hunger = { level: 18 };
+    const world: World = {
+      inventory: {},
+      sessions: [{ stopKind: 'stop-requested' }, { gain: { 'harvestcraft:strawberryItem': 10 } }],
+      calls: 0,
+    };
+    const base = deps(repos, world);
+    const seen: Array<string | null> = [];
+    await runPlay(
+      {
+        ...base,
+        food: foodDeps(world, hunger),
+        session: (limits, hooks) => {
+          if (repos.memory.getValue(CURRENT_TASK_KEY) === questTaskId('2')) {
+            hooks.onCycle(cycle(observed(world, 18)), 1);
+            seen.push(hooks.stopRequested());
+            hunger.level = 9; // the food bar went down while working
+            hooks.onCycle(cycle(observed(world, 9)), 2);
+            seen.push(hooks.stopRequested());
+          }
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
+      noStop,
+    );
+    expect(seen).toEqual([null, 'hungry (food 9/20) with nothing to eat: getting food first']);
+    // The next round went for food.
+    expect(repos.tasks.get(FOOD_TASK_ID)?.status).toBe('active');
+    expect(world.calls).toBe(2);
+  });
+
+  it('hungry at the start: food before scouting (a food trip explores for food itself)', async () => {
+    const repos = open();
+    const world: World = {
+      inventory: {},
+      sessions: [{ gain: { 'harvestcraft:strawberryItem': 10 } }],
+      calls: 0,
+    };
+    const tasks: Array<string | null> = [];
+    const base = deps(repos, world);
+    const events: PlayEvent[] = [];
+    await runPlay(
+      {
+        ...base,
+        scouting: { chunksSeen: () => 10 },
+        food: foodDeps(world, { level: 2 }),
+        session: (limits, hooks) => {
+          tasks.push(repos.memory.getValue(CURRENT_TASK_KEY));
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 1 },
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(tasks).toEqual([FOOD_TASK_ID]);
+    expect(events.filter((e) => e.kind === 'scout')).toEqual([]);
+    expect(describePlayEvent(events.find((e) => e.kind === 'food') as PlayEvent)).toBe(
+      'food: food 2/20 and nothing to eat: food before scouting',
+    );
+  });
+
+  it('counts a fuller food bar as progress (what it gathers it eats), and gives up after sessions with none', async () => {
+    const repos = open();
+    const hunger = { level: 9 };
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const base = deps(repos, world);
+    const result = await runPlay(
+      {
+        ...base,
+        food: foodDeps(world, hunger),
+        session: (limits, hooks) => {
+          // The first session: three foods gathered and eaten at once (food 9 -> 12).
+          if (world.calls === 0) {
+            hunger.level = 12;
+            hooks.onCycle(cycle(observed(world, 12)), 1);
+          }
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxStuckSessions: 2 },
+      noStop,
+    );
+    expect(world.calls).toBe(3);
+    expect(result.stopReason).toBe(
+      'hungry (food 12/20) with nothing to eat, and 2 food sessions in a row found no food and ' +
+        'no new ground (last: stop: limit)',
+    );
   });
 });

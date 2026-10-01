@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MockWorld } from '../../src/bot/mock-minecraft-client.ts';
+import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import { OllamaClient } from '../../src/llm/ollama-client.ts';
 import {
   DECISION_FORMAT,
@@ -86,6 +87,23 @@ describe('OllamaDecisionProvider', () => {
       requiredMachines: [{ id: 'machine.macerator.1', status: 'idle' }],
     });
     expect(s.dangers).toEqual(['LOW_HEALTH']);
+  });
+
+  it('says when the agent is out getting food: starving is then the task, not a stop', () => {
+    const s = summarizeForDecision(
+      makeState((w) => {
+        w.player.hunger = 2;
+        delete w.inventory.items['minecraft:bread'];
+        w.task = { taskId: FOOD_TASK_ID, goal: 'Get food', subgoal: '0/10', status: 'active' };
+        w.recipe = null;
+      }),
+      routerCtx(),
+    );
+    expect(s).toMatchObject({ starving: true, approvedFoodCarried: false, gettingFood: true });
+    expect(DECISION_SYSTEM_PROMPT).toContain(
+      'starving is true AND approvedFoodCarried is false AND gettingFood is false',
+    );
+    expect(summarizeForDecision(nominal(), routerCtx()).gettingFood).toBe(false);
   });
 
   it('the reply grammar ends the checks at the first true one', () => {

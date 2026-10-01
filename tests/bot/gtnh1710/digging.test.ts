@@ -159,6 +159,7 @@ const ID = {
   torch: 50,
   chest: 54,
   modded: 4000,
+  garden: 4100,
   unnamed: 4242,
 } as const;
 const NAMES = new Map<number, string>([
@@ -177,6 +178,7 @@ const NAMES = new Map<number, string>([
   [ID.torch, 'minecraft:torch'],
   [ID.chest, 'minecraft:chest'],
   [ID.modded, 'gregtech:gt.blockmachines'],
+  [ID.garden, 'harvestcraft:berrygarden'],
 ]);
 
 function world(
@@ -361,6 +363,37 @@ describe('checkDig', () => {
     expect(checkDig(world(onTop), AREA, FEET, { x: 1, y: 200, z: 0 })).toMatchObject({
       ok: false,
       reason: expect.stringMatching(/touches minecraft:tallgrass at \(1, 201, 0\)/) as unknown,
+    });
+  });
+
+  describe('a HarvestCraft garden (a plant: its cell is open already)', () => {
+    const at = { x: 1, y: 200, z: 0 };
+    const dig = (around: Record<string, number> = {}) =>
+      checkDig(world({ [k(1, 200, 0)]: ID.garden, ...around }), AREA, FEET, at);
+
+    it('breaks one on plain ground, with plants beside it (another garden, tall grass)', () => {
+      expect(dig()).toMatchObject({ ok: true, block: 'harvestcraft:berrygarden' });
+      expect(dig({ [k(2, 200, 0)]: ID.garden, [k(1, 200, 1)]: ID.tallgrass }).ok).toBe(true);
+    });
+
+    it.each<[string, Record<string, number>, RegExp]>([
+      ['beside water (it would flow in)', { [k(2, 200, 0)]: ID.water }, /touches minecraft:water/],
+      [
+        'under sand',
+        { [k(1, 201, 0)]: ID.sand },
+        /minecraft:sand on top of the garden .* would fall/,
+      ],
+      ['standing on nothing', { [k(1, 199, 0)]: ID.air }, /stands on minecraft:air/],
+      [
+        'beside a modded block',
+        { [k(1, 200, 1)]: ID.modded },
+        /touches gregtech:gt\.blockmachines/,
+      ],
+      ['next to lava', { [k(2, 201, 1)]: ID.lava }, /next to minecraft:lava/],
+    ])('refuses one %s', (_name, around, reason) => {
+      const r = dig(around);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(reason);
     });
   });
 

@@ -1400,6 +1400,108 @@ Hodgepodge, Backhand, Battlegear2 and Et Futurum. Spice of Life (`food.eating.sp
 does lengthen the use of a food eaten often lately (up to 128 ticks for 4 recent eats), within
 the client's 8 s wait.
 
+## Food (2026-10-01)
+
+What the agent eats and how it gets food ([architecture: food](architecture.md#routes-nights-and-the-play-loop)),
+read in the test server's jars (javap; vanilla classes named through Forge's
+`deobfuscation_data-1.7.10.lzma` and the vanilla jar) and configs. The data is in
+`src/domain/food.ts`. Tested on the mock and the fake server; **not run live yet.**
+
+**What a food is worth** (_verified_). HungerOverhaul 1.0.0-jenkins104
+(`config/HungerOverhaul/HungerOverhaul.cfg`: `modifyFoodValues=true`, `useHOFoodValues=true`)
+sets its own values through AppleCore's `GetFoodValues` event, food by food; Spice of Life then
+scales them per player. Seen live: an apple took the food bar from 8 to 9.
+
+| Food                                                                    | Hunger                  | Where read                                         |
+| ----------------------------------------------------------------------- | ----------------------- | -------------------------------------------------- |
+| bread, pumpkin pie                                                      | 3                       | `ModuleVanilla`                                    |
+| cooked beef, porkchop, chicken and fish; baked potato; mushroom stew    | 2                       | `ModuleVanilla`                                    |
+| apple, carrot, potato, melon slice, cookie, raw beef, raw porkchop      | 1                       | `ModuleVanilla`                                    |
+| every HarvestCraft crop (`ItemRegistry.PamCropItems`), but cantaloupe 2 | 1                       | `ModuleHarvestCraft` (its `cropfoodRestore` is 1)  |
+| raw mutton (`harvestcraft:muttonrawItem`)                               | 1                       | `ModuleHarvestCraft`                               |
+| `BiomesOPlenty:food` at 0 (berries) and 8 (persimmons)                  | 1                       | `ModuleBOP` (1, 2, 9 and 11: 1; 4, 5, 6 and 10: 3) |
+| any other food                                                          | max(1, round(hunger/2)) | `foodHungerDivider` 2.0                            |
+
+**Spice of Life** (_verified_, 2.2.3-carrot, `config/SpiceOfLife.cfg`). The player's last
+`food.history.length=20` foods count. A food eaten `count` times among them gives its value
+times `MAX(IF(count>=4 && distinct_food_groups_eaten<=5, 1-(count-4)/8, 1),
+IF((count-8) < food_hunger_value, 1/MAX(food_hunger_value,2), 0))`, rounded down
+(`food.hunger.rounding.mode=floor`). No food groups are configured (only the disabled example
+file), so `count` is of the food itself. With HungerOverhaul's 1-point foods, a food eaten 4
+times lately still gives 1, and 5 times gives 0: variety is food here. A new player's first 10
+meals (`new.player.food.eaten.threshold=10`) are exempt; the agent assumes it is past them,
+which can only underrate a food. Its meals are its own successful `EAT_FOOD`s, newest first.
+
+**Never eaten** (_verified_, vanilla `Item.registerItems` and `ItemFishFood`): raw chicken
+(Hunger for 30 s at a 30% chance), rotten flesh (Hunger, 80%), spider eyes (Poison 5 s),
+poisonous potatoes (Poison 5 s, 60%), pufferfish (Poison, Hunger and Nausea), and golden apples
+(worth keeping). Raw beef, porkchop and mutton are plain `ItemFood`s with no effect, and so are
+HarvestCraft's crops (`ItemPamSeedFood`). `ItemBOPFood.onFoodEaten` gives effects at meta 1, 2,
+4, 5, 6 and 10 only; berries (0) and persimmons (8) are plain. The approved list
+(`approvedFoods` in `src/domain/safety.ts`) is reviewed food by food against these.
+
+**HarvestCraft's gardens** (_verified_, harvestcraft-1.3.2-GTNH, `harvestcraft.cfg`):
+
+- `BlockGarden extends BlockFlower`: no collision box, no tile entity. Its registration sets no
+  hardness, so 0: the server harvests a garden on the dig's start (C07 start;
+  `ItemInWorldManager.onBlockClicked` calls `tryHarvestBlock` when the relative hardness is 1 or
+  more), and a bare hand harvests it.
+- Breaking one drops `gardendropAmount=3` items, each a random one of its kind's list
+  (`BlockGarden.getDropList`; `gardensdropSeeds=false`). A right-click picks the garden up as a
+  block instead (`onBlockActivated`): the agent never right-clicks one.
+- The land gardens and what they drop (food: all but cactus, pumpkins, mushrooms and cotton):
+  berry (blackberries, blueberries, candleberries, raspberries, strawberries, grapes), desert
+  (cactus fruit, cactus), grass (asparagus, barley, oats, rye, corn, bamboo shoots), gourd
+  (cantaloupe, cucumbers, winter squash, zucchini, pumpkins), ground (beets, onions, parsnips,
+  peanuts, radishes, rutabagas, sweet potatoes, turnips, rhubarb, potatoes, carrots), herb
+  (celery, garlic, ginger, spice leaves, edible roots, tea leaves, coffee beans, mustard seeds),
+  leafy (broccoli, cauliflower, leeks, lettuce, scallions, artichokes, brussels sprouts,
+  cabbage, spinach), mushroom (brown and red mushrooms, white mushrooms), stalk (beans,
+  soybeans, bell peppers, chili peppers, eggplants, okra, peas, tomatoes), textile (cotton only:
+  no food) and tropical (pineapples, kiwis, melon slices, curry leaves, sesame seeds). The water
+  garden floats on water (`BlockPamWaterGarden.canPlaceBlockOn`), where its drop would fall into
+  water the walker never enters: it is not on the dig allowlist.
+- Where they grow (`PamGardenGenerator.generateSurface`): `gardenRarity=2` tries per chunk, by
+  the Forge BiomeDictionary types of the biome at the chunk's corner, none in DEAD biomes. Berry:
+  forests, hills, cold and wet biomes; desert: deserts and beaches (on sand); grass: plains that
+  are not cold; gourd: plains and forests; ground: savannas, hills, mountains and mesas; herb and
+  leafy: forests that are not cold, wet biomes; mushroom: forests and wet biomes; stalk: plains
+  and forests that are not cold, wet biomes; textile: cold, hilly and wet biomes; tropical: hot
+  and wet biomes. The test world's generator is Realistic World Gen
+  (`rwg.biomes.base.BaseBiomes`): its Hot Forest and Hot Plains are HOT, SAVANNA, PLAINS and
+  SPARSE (grass, ground and tropical gardens), its Hot Desert HOT, DRY and SANDY.
+- GTNH's own quest "Sticks 'n Stones" sends a new player looking for them.
+
+**Farm animals** (_verified_, vanilla `dropFewItems` of `EntityCow` (wh), `EntityPig` (wo),
+`EntitySheep` (wp) and `EntityChicken` (wg); health from `applyEntityAttributes`):
+
+| Animal  | Health | Drops (no looting)                                                                                                                              |
+| ------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| cow     | 10     | 1-3 raw beef, 0-2 leather                                                                                                                       |
+| pig     | 10     | 1-3 raw porkchops                                                                                                                               |
+| sheep   | 8      | 1-3 raw mutton (HarvestCraft's `PamSheepDrops`, `sheepdropMutton=true`; Et Futurum's own is off, `enableMutton=false`), its wool unless sheared |
+| chicken | 4      | 1 raw chicken, 0-2 feathers                                                                                                                     |
+
+A burning animal drops its meat cooked. The drops spawn where it died, as items with a 10-tick
+pickup delay; a player picks one up inside its body's box grown by 1 sideways and 0.5 up and
+down (`EntityPlayer.onLivingUpdate`), so the client walks to them when they lie farther away.
+A bare hand deals 1 a hit (10 hits for a cow, 0.3 exhaustion each), and a struck animal runs
+(`EntityAIPanic`). Hunting keeps the combat limits ([combat](#combat-2026-09-30)): food 8 and
+health 14 at least, since HungerOverhaul heals no one below food 8 and AngerMod's kill explosion
+may follow a kill. Chickens are never hunted for food (raw chicken is never eaten).
+
+**Seen, not used:**
+
+- Biomes O' Plenty's berry bush (`BiomesOPlenty:foliage` at meta 8) gives one berry when broken
+  or right-clicked (`BlockBOPFoliage.getDrops`, `onBlockActivated`). Foliage is one block for 16
+  plants, poison ivy (7) among them, so it is not on the dig allowlist.
+- Biomes O' Plenty's apple and persimmon leaves (on the dig allowlist) drop their fruit only when
+  ripe: the metadata's low two bits at 3 (`BlockBOPPersimmonLeaves.dropBlockAsItemWithChance`;
+  a random tick ripens them a stage at a time). The scan does not see ripeness, so no route
+  counts on them; an apple or persimmon a dig or a walk through them drops is approved food.
+- Natura's and Et Futurum's berry bushes hurt on contact (`damaging_block` above): avoided.
+- Cooking (a furnace needs cobblestone, so a pickaxe), fishing and farming: not covered yet.
+
 ## Quest book (Better Questing) (2026-09-30)
 
 The "Finish Age 0" benchmark is scored from the quest book's OWN records: the quests Better

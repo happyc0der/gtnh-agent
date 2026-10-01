@@ -227,7 +227,8 @@ and [docs/action-contract.md](docs/action-contract.md).
   `DIG_DOWN`, the night pit's dig under the player's own feet, that only code's night-shelter
   blueprint makes). No dropping, lava, network/multiblock changes or rare-item use. The action
   that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs, leaves, dirt, grass, sand, gravel
-  and clay (`DIG_DOWN`: dirt, grass, sand, gravel or clay under the feet); the
+  and clay, Biomes O' Plenty's leaves and HarvestCraft's land gardens (`DIG_DOWN`: dirt, grass,
+  sand, gravel or clay under the feet); the
   one that places blocks, `PLACE_BLOCK`, only places vanilla dirt, cobblestone, sand, gravel,
   sandstone, planks and logs; `EXPLORE` only walks, in hops, inside the boundary and only in
   daylight. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT`, and only
@@ -272,10 +273,21 @@ and [docs/action-contract.md](docs/action-contract.md).
   below 8, more than 2 hostiles near, or anything that may explode within 16 blocks
   (`safety.combat`), and stops at the first damage it takes (see below).
 - Eating is off unless `MC_ENABLE_EATING=true`. `EAT_FOOD` eats only an approved food
-  (`safety.approvedFoods`), moved into the hotbar if need be and used in the air. Right after a
-  join, GTNH's AngerMod keeps the player invulnerable, and an invulnerable player cannot eat;
-  the client ends that protection first with one empty-handed right-click on the plain ground
-  underfoot (grass, dirt, sand, stone...), which uses, places and opens nothing.
+  (`safety.approvedFoods`), moved into the hotbar if need be and used in the air. The default
+  list was reviewed food by food in the server's jars: cooked and plain foods, raw beef,
+  porkchop and mutton, HarvestCraft's garden produce, berries and persimmons; never raw chicken
+  or rotten flesh (Hunger), spider eyes, poisonous potatoes or pufferfish (Poison), nor golden
+  apples. It eats the carried food that restores the most now (HungerOverhaul's values, less
+  for a food eaten often lately: Spice of Life), never one that would restore nothing. Right
+  after a join, GTNH's AngerMod keeps the player invulnerable, and an invulnerable player cannot
+  eat; the client ends that protection first with one empty-handed right-click on the plain
+  ground underfoot (grass, dirt, sand, stone...), which uses, places and opens nothing.
+- Getting food (approved 2026-10-01): hungry (below 14) with nothing to eat, `cli play` goes for
+  food by day before the quest goes on: HarvestCraft gardens (with digging on), and cows, pigs
+  and sheep (with combat on, within its limits above). Below food 6 with no food the agent
+  otherwise retreats or pauses; on that food task by day it goes on, and the safety policy then
+  lets only its walks, `EXPLORE`s and garden digs run. Low health, hostiles, hazards and the
+  boundary still stop it. No cooking, fishing or farming.
 - Quest-book clicks are off unless `MC_ENABLE_QUEST_BOOK=true`. They are made only for the Age 0
   quests the server lists as active (claims: completed), never hand in a protected item, and
   claim rewards only with room for them in the inventory (Better Questing drops the rest).

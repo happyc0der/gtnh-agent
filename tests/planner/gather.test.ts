@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MockResourceBlock, MockWorld } from '../../src/bot/mock-minecraft-client.ts';
+import type { MockMob, MockResourceBlock, MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import type { ActionSpec } from '../../src/domain/actions.ts';
 import { DIGGABLE_BLOCKS, type DiggableBlock } from '../../src/domain/blocks.ts';
 import type { Position } from '../../src/domain/common.ts';
@@ -9,6 +9,8 @@ import {
   givesSame,
   GATHER_MAX_ACTIONS,
   GATHER_MAX_MS,
+  HUNT_TOLERANCE,
+  HUNT_WALKS_PER_TARGET,
   recordGatherAction,
   startGather,
   type GatherOptions,
@@ -341,6 +343,130 @@ describe('GATHER ends', () => {
   });
 });
 
+describe('GATHER of a farm animal: hunting it', () => {
+  // The mock player stands at (1, 64, 1) with a bare hand: it strikes within 2.2 blocks, and
+  // the step keeps 0.3 of that for the animal's moving.
+  const hunt = (count = 3, animal: GatherStep['args'] = { animal: 'minecraft:Cow', count }) =>
+    ({ type: 'GATHER', args: animal }) as GatherStep;
+  const cow = (id: number, x: number, z: number, more: Partial<MockMob> = {}): MockMob => ({
+    id,
+    type: 'minecraft:Cow',
+    category: 'passive',
+    position: { x, y: 64, z },
+    health: 10,
+    ...more,
+  });
+  const herd = (mobs: MockMob[], mutate: (w: MockWorld) => void = () => undefined) => {
+    const state = makeState((w) => {
+      w.mobs = mobs;
+      mutate(w);
+    });
+    return { state, progress: startGather(1, 0, hunt(), state, NOW) };
+  };
+
+  it('strikes the nearest cow within reach (ATTACK_ENTITY), else walks next to it', () => {
+    const near = herd([cow(7, 6, 1), cow(8, 2.5, 1)]);
+    expect(chooseGatherAction(hunt(), near.progress, near.state, opts())).toEqual({
+      kind: 'act',
+      spec: { type: 'ATTACK_ENTITY', args: { entityId: 8 } },
+      target: { x: 2, y: 64, z: 1 },
+      walk: false,
+      entity: 8,
+      skip: [],
+      skipEntities: [],
+    });
+    const far = herd([cow(7, 6, 1)]);
+    const o = opts();
+    expect(chooseGatherAction(hunt(), far.progress, far.state, o)).toEqual({
+      kind: 'act',
+      spec: { type: 'MOVE_TO', args: { target: { x: 6, y: 64, z: 1 }, tolerance: HUNT_TOLERANCE } },
+      target: { x: 6, y: 64, z: 1 },
+      walk: true,
+      entity: 7,
+      skip: [],
+      skipEntities: [],
+    });
+    // The strike is checked from where the walk ends, and the walk from here.
+    expect(o.calls.map((c) => [c.spec.type, c.from])).toEqual([
+      ['ATTACK_ENTITY', { x: 6, y: 64, z: 1 }],
+      ['MOVE_TO', { x: 1, y: 64, z: 1 }],
+    ]);
+  });
+
+  it('never hunts a calf, an owned animal, another kind, or one it passed over', () => {
+    const { state, progress } = herd([
+      cow(1, 2, 1, { baby: true }),
+      cow(2, 2, 2, { owned: true }),
+      { ...cow(3, 1, 2), type: 'minecraft:Pig' },
+      cow(4, 3, 1),
+    ]);
+    expect(
+      chooseGatherAction(hunt(), { ...progress, skippedEntities: [4] }, state, opts()),
+    ).toMatchObject({
+      kind: 'end',
+      end: 'no-target',
+      why: "no minecraft:Cow in view that may be hunted (grown and nobody's)",
+    });
+  });
+
+  it('passes over a cow that keeps getting away after 3 walks in a row to it', () => {
+    const { state, progress } = herd([cow(7, 6, 1)]);
+    let p = progress;
+    for (let i = 0; i < HUNT_WALKS_PER_TARGET; i++) {
+      p = recordGatherAction(p, { target: { x: 6, y: 64, z: 1 }, walk: true, entity: 7 }, true);
+    }
+    expect(p.last).toMatchObject({ entity: 7, walk: true, walks: HUNT_WALKS_PER_TARGET });
+    expect(chooseGatherAction(hunt(), p, state, opts())).toMatchObject({
+      kind: 'end',
+      why: 'the minecraft:Cow in view keep getting away (1 passed over)',
+      skipEntities: [7],
+    });
+    // A strike in between starts the count again.
+    const struck = recordGatherAction(
+      p,
+      { target: { x: 6, y: 64, z: 1 }, walk: false, entity: 7 },
+      true,
+    );
+    expect(struck).toMatchObject({ dug: 1, last: { walks: 0 } });
+  });
+
+  it('ends, saying why, when the policy would not let it hunt now (too hungry to fight)', () => {
+    const { state, progress } = herd([cow(7, 2.5, 1)]);
+    const refused = opts((spec) => (spec.type === 'ATTACK_ENTITY' ? 'LOW_HUNGER' : null));
+    expect(chooseGatherAction(hunt(), progress, state, refused)).toMatchObject({
+      kind: 'end',
+      end: 'no-target',
+      why: 'none of the 1 minecraft:Cow in view can be hunted now (nearest minecraft:Cow 7: LOW_HUNGER)',
+    });
+  });
+
+  it("counts the animal's drops, and an attack that failed passes that animal over", () => {
+    const { progress } = herd([cow(7, 2.5, 1)], (w) => {
+      w.inventory.items['minecraft:beef'] = 1;
+    });
+    expect(progress).toMatchObject({ animal: 'minecraft:Cow', startHeld: 1, skippedEntities: [] });
+    expect(gatherDrops({ animal: 'minecraft:Cow' })).toEqual([
+      'minecraft:beef',
+      'minecraft:leather',
+    ]);
+    const after = makeState((w) => {
+      w.mobs = [];
+      w.inventory.items['minecraft:beef'] = 3;
+      w.inventory.items['minecraft:leather'] = 1;
+    });
+    expect(chooseGatherAction(hunt(3), progress, after, opts())).toMatchObject({
+      kind: 'end',
+      end: 'done',
+    });
+    const failed = recordGatherAction(
+      progress,
+      { target: { x: 2, y: 64, z: 1 }, walk: false, entity: 7 },
+      false,
+    );
+    expect(failed).toMatchObject({ skipped: [], skippedEntities: [7] });
+  });
+});
+
 describe('GATHER in a plan', () => {
   const plan = (action: unknown): unknown => ({
     goal: 'Gather sand',
@@ -353,6 +479,9 @@ describe('GATHER in a plan', () => {
   it('is a plan step: the schema takes a diggable block and a count of 1 to 256', () => {
     expect(PlanSchema.safeParse(plan(gather('minecraft:sand', 54))).success).toBe(true);
     expect(PlanSchema.safeParse(plan(gather('minecraft:log', 256))).success).toBe(true);
+    expect(PlanSchema.safeParse(plan(gather('harvestcraft:berrygarden', 6))).success).toBe(true);
+    const cows = { type: 'GATHER', args: { animal: 'minecraft:Cow', count: 3 } };
+    expect(PlanSchema.safeParse(plan(cows)).success).toBe(true);
     for (const bad of [
       { type: 'GATHER', args: { block: 'minecraft:sand', count: 0 } },
       { type: 'GATHER', args: { block: 'minecraft:sand', count: 257 } },
@@ -360,6 +489,9 @@ describe('GATHER in a plan', () => {
       { type: 'GATHER', args: { block: 'minecraft:stone', count: 4 } }, // not on DIG_BLOCK's list
       { type: 'GATHER', args: { block: 'minecraft:sand' } },
       { type: 'GATHER', args: { block: 'minecraft:sand', count: 4, radius: 64 } },
+      // Only a farm animal, and never a block and an animal at once.
+      { type: 'GATHER', args: { animal: 'minecraft:Zombie', count: 1 } },
+      { type: 'GATHER', args: { animal: 'minecraft:Cow', block: 'minecraft:sand', count: 1 } },
     ]) {
       expect(PlanSchema.safeParse(plan(bad)).success, JSON.stringify(bad)).toBe(false);
     }

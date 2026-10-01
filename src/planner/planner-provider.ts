@@ -580,8 +580,10 @@ function foodRouteForPlanner(
       else a.count += 1;
     }
   }
+  // Said after the sources (or where to look), which it does not replace.
+  const notes: string[] = [];
   if (animals.size > 0 && hunt.length > 0) {
-    lines.push(
+    notes.push(
       `animals are in view, but hunting is not allowed now (${hunt.join(', ')}): gardens only`,
     );
   } else {
@@ -623,7 +625,7 @@ function foodRouteForPlanner(
   }
   return {
     stock,
-    steps: [...steps, ...lines.map((l, i) => `${i + 1}. ${l}`)].map((l) =>
+    steps: [...steps, ...lines.map((l, i) => `${i + 1}. ${l}`), ...notes].map((l) =>
       l.length > 480 ? `${l.slice(0, 477)}...` : l,
     ),
   };

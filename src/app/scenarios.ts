@@ -152,15 +152,16 @@ const placeStep =
   };
 
 /**
- * Hungry with nothing to eat, on the play loop's food task (src/app/food.ts): food 9/20, no
- * bread, the task get-food active with no known step (the planner plans it from the food route).
+ * Hungry with nothing to eat, on the play loop's food task (src/app/food.ts), by day: food
+ * `food`/20 (9 unless given), no bread, the task get-food active with no known step (the
+ * planner plans it from the food route).
  */
-const hungryForFood = (w: MockWorld): void => {
-  w.player.hunger = 9;
+const hungryForFood = (w: MockWorld, food = 9): void => {
+  w.player.hunger = food;
   delete w.inventory.items['minecraft:bread'];
   w.task = {
     taskId: FOOD_TASK_ID,
-    goal: 'Get food: hungry (food 9/20) with nothing to eat.',
+    goal: `Get food: hungry (food ${food}/20) with nothing to eat.`,
     subgoal: '0/10 hunger points of food carried',
     status: 'active',
   };
@@ -275,6 +276,37 @@ export const SCENARIOS: readonly Scenario[] = [
           ),
         },
       ],
+    },
+  ),
+  scenario(
+    'starving-no-food-garden',
+    'Food 2 and nothing to eat (seen live), on the food task by day; a garden within reach: getting food goes on below minHunger, and the garden is dug.',
+    { decision: 'REQUEST_PLANNER', actionType: 'DIG_BLOCK', status: 'succeeded' },
+    (w) => {
+      hungryForFood(w, 2);
+      w.resourceBlocks.push({ block: 'harvestcraft:berrygarden', position: { x: 1, y: 64, z: 2 } });
+    },
+    {
+      plannerFixtures: [
+        {
+          name: 'dig-a-garden-starving',
+          when: { taskId: FOOD_TASK_ID },
+          response: gatherPlan(
+            { block: 'harvestcraft:berrygarden', count: 6 },
+            'Dig the garden in view',
+          ),
+        },
+      ],
+    },
+  ),
+  scenario(
+    'starving-no-food-task',
+    'Food 2 and nothing to eat, on a quest task (not the food task), away from home: retreats home as before.',
+    { decision: 'RETREAT_HOME', actionType: 'RETURN_TO_SAFE_LOCATION', status: 'succeeded' },
+    (w) => {
+      w.player.hunger = 2;
+      w.player.position = { x: 40, y: 64, z: 40 };
+      delete w.inventory.items['minecraft:bread'];
     },
   ),
   scenario(
