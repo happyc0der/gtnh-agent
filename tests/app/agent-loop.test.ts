@@ -7,6 +7,8 @@ import { defaultConfig } from '../../src/config/env.ts';
 import type { SeenChunk } from '../../src/domain/world-memory.ts';
 import { IN_MEMORY, openDatabase } from '../../src/persistence/database.ts';
 import { MockPlannerProvider } from '../../src/planner/mock-planner-provider.ts';
+import type { PlannerRequest, PlannerResponse } from '../../src/planner/plan-schema.ts';
+import type { PlannerProvider } from '../../src/planner/planner-provider.ts';
 import type { DecisionProvider } from '../../src/system1/decision-provider.ts';
 import { MockDecisionProvider } from '../../src/system1/mock-decision-provider.ts';
 import type { ManualClock } from '../../src/util/clock.ts';
@@ -237,6 +239,57 @@ describe('world memory and exploring', () => {
     // The plan's EXPLORE ran (the mock walks straight toward the point) and was verified.
     expect(result.status).toBe('succeeded');
     expect(client.world.player.position.z).toBeGreaterThan(60);
+  });
+
+  it('asks the planner once more when it escalates for want of a place while exploring is open', async () => {
+    const clock = testClock();
+    // Gravel: nothing in view gives it, so the route says to explore.
+    const { client } = makeWorld((w) => {
+      if (w.task !== null) w.task.requirements = { 'minecraft:gravel': 8 };
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = defaultConfig({
+      ...MOCK_CONFIG,
+      minecraft: { movement: { enabled: true, mode: 'follow' } },
+    });
+    syncConfigToDatabase(config, repos);
+    const taskId = (await client.observe()).currentTask?.taskId ?? '';
+    const requests: PlannerRequest[] = [];
+    const planner: PlannerProvider = {
+      name: 'stubborn',
+      plan: (request) => {
+        requests.push(request);
+        return Promise.resolve<PlannerResponse>(
+          requests.length === 1
+            ? {
+                kind: 'escalation',
+                escalation: {
+                  reason: 'INSUFFICIENT_STATE',
+                  message: 'the allowed actions do not provide a way to explore',
+                  questionForUser: 'Where is gravel?',
+                },
+              }
+            : (explorePlan as PlannerResponse),
+        );
+      },
+    };
+    const result = await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.route?.steps.join(' ')).toContain('no known place yet: explore');
+    expect(requests[1]?.journal.at(-1)).toMatch(/EXPLORE is in allowedActions/);
+    expect(result.planner).toMatchObject({ kind: 'plan-accepted' });
+    expect(repos.memory.journal(taskId).map((e) => e.text)).toContainEqual(
+      expect.stringContaining('although EXPLORE was open; asked again'),
+    );
   });
 
   it('keeps remembering, but offers no EXPLORE, with a fixed fence', async () => {

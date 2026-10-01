@@ -657,6 +657,7 @@ export async function runPlay(
           return done(`the player could not dig out of its shelter in ${exitTries} sessions`);
         }
         exitTries += 1;
+        const out = status.exit.at(-1)?.position;
         const result = await blueprintSession({
           taskId: 'leave-shelter',
           goal: 'Morning: dig your way out of the night shelter (the route), then carry on',
@@ -670,6 +671,12 @@ export async function runPlay(
         if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
           return done(result.stopReason);
         }
+        // The next goal's planner learns that the walls are open: walks and EXPLORE that
+        // failed from inside them say nothing about now.
+        wakeNote =
+          `morning: the player dug out of its night shelter` +
+          (out === undefined ? '' : ` through (${out.x}, ${out.y}, ${out.z})`) +
+          ': walking and EXPLORE work again; failures from inside its walls no longer apply';
         continue;
       }
     }

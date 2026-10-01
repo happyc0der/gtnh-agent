@@ -16,7 +16,12 @@ import { SqliteActionLog } from '../executor/action-log.ts';
 import { CURRENT_TASK_KEY } from '../persistence/memory-repository.ts';
 import type { StoredPlan } from '../persistence/plan-repository.ts';
 import type { Repositories } from '../persistence/repositories.ts';
-import { PlannerResponseSchema, type Plan, type PlannerResponse } from '../planner/plan-schema.ts';
+import {
+  PlannerResponseSchema,
+  type Plan,
+  type PlannerRequest,
+  type PlannerResponse,
+} from '../planner/plan-schema.ts';
 import { validatePlan } from '../planner/plan-validator.ts';
 import { buildPlannerRequest, type PlannerProvider } from '../planner/planner-provider.ts';
 import { mergeProtectedItems } from '../safety/protected-items.ts';
@@ -756,6 +761,22 @@ function updatePlanProgress(
   }
 }
 
+/** What the planner is told when it escalated for want of a place while exploring was open. */
+const EXPLORE_REMINDER =
+  'Your last answer escalated for want of a place, but EXPLORE is in allowedActions and it is ' +
+  'day, and the route says where to look: plan an EXPLORE toward the place or biome the route ' +
+  'names (or a direction with little seen) as the last step of the plan. An EXPLORE that ' +
+  'failed before, from elsewhere or toward another point, says nothing about this one.';
+
+/** EXPLORE is offered, it is day, and the route points at somewhere to explore. */
+function explorationOpen(request: PlannerRequest): boolean {
+  return (
+    request.allowedActions.includes('EXPLORE') &&
+    request.state.time?.phase === 'day' &&
+    (request.route?.steps ?? []).some((s) => s.includes('no known place yet: explore'))
+  );
+}
+
 async function consultPlanner(
   deps: AgentDeps,
   state: GameState,
@@ -827,28 +848,45 @@ async function consultPlanner(
     journal: repos.memory.journal(taskId).map((e) => e.text),
   });
 
-  let response: PlannerResponse;
-  try {
-    const parsed = PlannerResponseSchema.safeParse(await planner.plan(request));
-    response = parsed.success
-      ? parsed.data
-      : {
-          kind: 'escalation',
-          escalation: {
-            reason: 'INVALID_OUTPUT',
-            message: 'Planner response failed schema validation',
-            questionForUser: 'The planner produced invalid output. How should the agent proceed?',
-          },
-        };
-  } catch (error) {
-    response = {
-      kind: 'escalation',
-      escalation: {
-        reason: 'OTHER',
-        message: `Planner error: ${errorMessage(error)}`.slice(0, 500),
-        questionForUser: 'The planner failed. How should the agent proceed?',
-      },
-    };
+  const ask = async (req: PlannerRequest): Promise<PlannerResponse> => {
+    try {
+      const parsed = PlannerResponseSchema.safeParse(await planner.plan(req));
+      return parsed.success
+        ? parsed.data
+        : {
+            kind: 'escalation',
+            escalation: {
+              reason: 'INVALID_OUTPUT',
+              message: 'Planner response failed schema validation',
+              questionForUser: 'The planner produced invalid output. How should the agent proceed?',
+            },
+          };
+    } catch (error) {
+      return {
+        kind: 'escalation',
+        escalation: {
+          reason: 'OTHER',
+          message: `Planner error: ${errorMessage(error)}`.slice(0, 500),
+          questionForUser: 'The planner failed. How should the agent proceed?',
+        },
+      };
+    }
+  };
+  let response = await ask(request);
+  // An escalation for want of a place while exploring is open, in daylight, with the route
+  // saying where to look, contradicts the request: ask once more and say so (seen live: the
+  // model kept escalating "no way to explore" with EXPLORE allowed and a forest in the route).
+  if (
+    response.kind === 'escalation' &&
+    response.escalation.reason === 'INSUFFICIENT_STATE' &&
+    explorationOpen(request)
+  ) {
+    repos.events.append(cycleId, 'PLAN', { provider: planner.name, response });
+    repos.memory.appendJournal(
+      taskId,
+      `planner escalated (${response.escalation.reason}) although EXPLORE was open; asked again`,
+    );
+    response = await ask({ ...request, journal: [...request.journal, EXPLORE_REMINDER] });
   }
   repos.events.append(cycleId, 'PLAN', { provider: planner.name, response });
 
