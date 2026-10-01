@@ -4,15 +4,13 @@ import type { SessionResult, SessionStopKind } from '../../../src/app/loop/live-
 import {
   checkPlayLimits,
   DEFAULT_PLAY_LIMITS,
-  describePlayEvent,
-  mobPause,
-  nightSoon,
-  untilSunrise,
   runPlay,
-  SHELTER_LEAD_MINUTES,
   type PlayDeps,
   type PlayEvent,
 } from '../../../src/app/play/play.ts';
+import { describePlayEvent } from '../../../src/app/play/narration.ts';
+import { nightSoon, untilSunrise, SHELTER_LEAD_MINUTES } from '../../../src/app/play/night.ts';
+import { mobPause } from '../../../src/app/play/play-state.ts';
 import type { DecisionResult } from '../../../src/domain/decisions.ts';
 import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
 import { NIGHT_PIT_WINDOW_MINUTES, nightPitTime } from '../../../src/domain/night-shelter.ts';

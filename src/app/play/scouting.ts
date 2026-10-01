@@ -3,6 +3,11 @@ import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import type { CycleResult } from '../loop/agent-loop.ts';
 import type { SessionLimits, SessionResult } from '../loop/live-session.ts';
+import { foodDue } from './food.ts';
+import { cycleEvent } from './narration.ts';
+import { isDark, nightReason } from './night.ts';
+import { CONTINUE_AFTER, done, mobPause, waitOutMob, type PlayState } from './play-state.ts';
+import type { PlayResult } from './play.ts';
 
 /**
  * Scouting, play's own first task. GTNH rewards a good starting spot ("You will have to travel
@@ -109,4 +114,65 @@ export async function runScoutSession(input: {
     },
   });
   return { session, scouted: enough(), dark };
+}
+
+/**
+ * GTNH start: look around once before settling, when the agent can explore (deps.scouting):
+ * the scouting session, when one is due and the agent is not hungry with nothing to eat. Play
+ * ends here if the session stopped for the dark, a mob, a human or the stop file; else null,
+ * and play goes on to its rounds.
+ */
+export async function scoutingRound(play: PlayState): Promise<PlayResult | null> {
+  const { deps, limits, hooks, emit } = play;
+  if (deps.scouting !== undefined) {
+    const due = scoutingDue(deps.repos, deps.scouting);
+    if (due.kind === 'stop') return done(play, due.reason);
+    // Hungry with nothing to eat, food comes first: a food trip explores for food itself, and
+    // below food 6 a scout's EXPLOREs would be refused (only the food task's may run then).
+    // The scouting waits for the next play.
+    const fed = due.kind === 'scout' ? ((await deps.food?.now()) ?? null) : null;
+    if (fed !== null && foodDue(fed)) {
+      emit({
+        kind: 'food',
+        message: `food ${fed.hunger}/20 and nothing to eat: food before scouting`,
+      });
+    } else if (due.kind === 'scout') {
+      const stop = hooks.stopRequested();
+      if (stop !== null) return done(play, stop);
+      const clock = (await deps.time?.()) ?? null;
+      if (clock !== null && isDark(clock)) return done(play, nightReason(clock), clock);
+      const scout = adoptScoutTask(deps.repos);
+      emit({ kind: 'scout', ...scout, chunksSeen: deps.scouting.chunksSeen() });
+      const session = play.sessions + 1;
+      const r = await runScoutSession({
+        scouting: deps.scouting,
+        limits: limits.session,
+        session: deps.session,
+        stopRequested: hooks.stopRequested,
+        onCycle: (c, index) => {
+          play.lastDecision = c.decision ?? null;
+          emit(cycleEvent(deps.repos, session, c, index));
+        },
+      });
+      play.sessions = session;
+      play.lastStop = r.session.stopReason;
+      emit({
+        kind: 'session-end',
+        session,
+        stopKind: r.session.stopKind,
+        stopReason: r.session.stopReason,
+        cycles: r.session.cycles.length,
+        system1: r.session.system1,
+      });
+      if (r.dark !== null) return done(play, nightReason(r.dark), r.dark);
+      const mob = mobPause(r.session.stopKind, play.lastDecision);
+      if (mob !== null) return waitOutMob(play, SCOUT_TASK_ID, mob);
+      if (r.session.stopKind === 'stop-requested' && !r.scouted) {
+        return done(play, r.session.stopReason);
+      }
+      if (!CONTINUE_AFTER.has(r.session.stopKind)) return done(play, r.session.stopReason);
+      finishScoutTask(deps.repos);
+    }
+  }
+  return null;
 }

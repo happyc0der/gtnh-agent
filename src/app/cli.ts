@@ -45,13 +45,13 @@ import { observeWithQuestBook, runLivePlay } from './play/live-play.ts';
 import {
   checkPlayLimits,
   DEFAULT_PLAY_LIMITS,
-  describePlayEvent,
   liveAbilities,
   type PlayLimits,
   MAX_MOB_WAITS,
   MOB_WAIT_MS,
-  untilSunrise,
 } from './play/play.ts';
+import { describePlayEvent } from './play/narration.ts';
+import { untilSunrise } from './play/night.ts';
 import { createProviders } from './providers.ts';
 import { describeQuests, freeSlotsOf, updateQuests } from './play/quest-progress.ts';
 import { addTask, completeTask, listTasks } from './commands/task-commands.ts';

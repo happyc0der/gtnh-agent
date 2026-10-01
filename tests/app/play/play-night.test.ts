@@ -6,12 +6,8 @@ import type { AgentDeps } from '../../../src/app/loop/agent-loop.ts';
 import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { DEFAULT_SESSION_LIMITS, runSession } from '../../../src/app/loop/live-session.ts';
 import { liveShelter } from '../../../src/app/play/live-play.ts';
-import {
-  DEFAULT_PLAY_LIMITS,
-  describePlayEvent,
-  runPlay,
-  type PlayEvent,
-} from '../../../src/app/play/play.ts';
+import { DEFAULT_PLAY_LIMITS, runPlay, type PlayEvent } from '../../../src/app/play/play.ts';
+import { describePlayEvent } from '../../../src/app/play/narration.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { defaultConfig } from '../../../src/config/env.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';

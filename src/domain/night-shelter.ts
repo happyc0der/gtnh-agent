@@ -27,7 +27,7 @@ export const NIGHT_PIT_DEPTH = 3;
 /**
  * DIG_DOWN is allowed in the evening, at night, and in the day's last minutes before night
  * (real minutes). Play starts on the shelter 2 minutes before night (SHELTER_LEAD_MINUTES in
- * src/app/play/play.ts), well inside this window.
+ * src/app/play/night.ts), well inside this window.
  */
 export const NIGHT_PIT_WINDOW_MINUTES = 4;
 

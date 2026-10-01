@@ -5,10 +5,21 @@ import {
   FOOD_TRIP_POINTS,
   MEAL_HISTORY_LENGTH,
 } from '../../domain/food.ts';
-import type { GameState } from '../../domain/game-state.ts';
+import type { GameState, WorldTime } from '../../domain/game-state.ts';
 import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import { isProtected, mergeProtectedItems } from '../../safety/protected-items.ts';
+import { cycleEvent } from './narration.ts';
+import { isDark, nightReason, nightSoon } from './night.ts';
+import {
+  CONTINUE_AFTER,
+  done,
+  mobPause,
+  waitOutMob,
+  type PlayState,
+  type RoundEnd,
+} from './play-state.ts';
+import type { PlayDeps } from './play.ts';
 
 /**
  * Food trips, play's own task when the agent is hungry and carries no food (approved
@@ -133,4 +144,100 @@ export function finishFoodTask(repos: Repositories, why: string): void {
     }
     repos.memory.appendJournal(FOOD_TASK_ID, `food trip over: ${why}`.slice(0, 300));
   });
+}
+
+/**
+ * Hungry with nothing to eat, by day: food first, as the shelter comes first at dusk
+ * (night.ts). A trip goes on, session after session (eating ends one: it is no task step),
+ * until about a day of food is carried; then the quest goes on where it stopped. With no trip
+ * to begin or go on: null (a trip that has its food ends here first).
+ */
+export async function foodRound(play: PlayState): Promise<RoundEnd> {
+  const { deps, limits, hooks, emit } = play;
+  const fed = deps.food === undefined ? null : await deps.food.now();
+  if (fed !== null && foodTripOngoing(deps.repos) && foodTripDone(fed)) {
+    finishFoodTask(deps.repos, `${fed.carried} hunger points of food carried`);
+    emit({ kind: 'food', message: `trip over: ${fed.carried} hunger points of food carried` });
+    play.foodStuck = 0;
+  } else if (fed !== null && (foodTripOngoing(deps.repos) || foodDue(fed))) {
+    const food = deps.food as NonNullable<PlayDeps['food']>;
+    if (play.foodStuck >= limits.maxStuckSessions) {
+      return done(
+        play,
+        `hungry (food ${fed.hunger}/20) with nothing to eat, and ${play.foodStuck} food sessions in ` +
+          `a row found no food and no new ground (last: ${play.lastStop})`,
+      );
+    }
+    if (!foodTripOngoing(deps.repos)) {
+      emit({
+        kind: 'food',
+        message: `food ${fed.hunger}/20 and nothing to eat: getting food first`,
+      });
+    }
+    const adopted = adoptFoodTask(deps.repos, fed);
+    emit({
+      kind: 'goal',
+      quest: `food: ${fed.carried}/${FOOD_TRIP_POINTS} hunger points carried`,
+      goal: `get ${FOOD_TRIP_POINTS} hunger points of food`,
+      missing: {},
+      taskId: adopted.taskId,
+      created: adopted.created,
+    });
+    // The trip got somewhere: more food carried, or a fuller food bar (System 1 eats what is
+    // gathered while hungry, so the food carried can stay at 0 as the bar fills).
+    let progressed = false;
+    let enough = false;
+    let foodDark: WorldTime | null = null;
+    const session = play.sessions + 1;
+    const seenBefore = deps.scouting?.chunksSeen() ?? null;
+    const result = await deps.session(limits.session, {
+      stopRequested: () =>
+        enough
+          ? 'enough food is carried'
+          : foodDark !== null
+            ? nightReason(foodDark)
+            : hooks.stopRequested(),
+      onCycle: (r, index) => {
+        play.lastDecision = r.decision ?? null;
+        emit(cycleEvent(deps.repos, session, r, index));
+        const after = r.outcome?.stateAfter;
+        if (after === undefined || after === null) return;
+        const now = food.of(after);
+        if (now !== null) {
+          if (now.carried > fed.carried || now.hunger > fed.hunger) progressed = true;
+          if (foodTripDone(now)) enough = true;
+        }
+        // Shelter time (or dark, without shelters) ends a food session as it ends a quest's.
+        if (
+          after.time.known &&
+          (deps.shelter === undefined ? isDark(after.time.value) : nightSoon(after.time.value))
+        ) {
+          foodDark = after.time.value;
+        }
+      },
+    });
+    play.sessions = session;
+    play.lastStop = result.stopReason;
+    const sawMore = seenBefore !== null && (deps.scouting?.chunksSeen() ?? 0) > seenBefore;
+    play.foodStuck = progressed || sawMore ? 0 : play.foodStuck + 1;
+    emit({
+      kind: 'session-end',
+      session,
+      stopKind: result.stopKind,
+      stopReason: result.stopReason,
+      cycles: result.cycles.length,
+      system1: result.system1,
+    });
+    if (foodDark !== null) {
+      deps.repos.memory.appendJournal(FOOD_TASK_ID, `interrupted: ${nightReason(foodDark)}`);
+      if (deps.shelter === undefined) return done(play, nightReason(foodDark), foodDark);
+      return 'next-round'; // the next round builds the shelter
+    }
+    if (result.stopKind === 'stop-requested' && !enough) return done(play, result.stopReason);
+    const mob = mobPause(result.stopKind, play.lastDecision);
+    if (mob !== null) return waitOutMob(play, FOOD_TASK_ID, mob);
+    if (!CONTINUE_AFTER.has(result.stopKind)) return done(play, result.stopReason);
+    return 'next-round'; // the next round ends the trip, or goes on with it
+  }
+  return null;
 }
