@@ -7,6 +7,7 @@ import type { NearbyEntity, TrackedMachine } from '../bot/gtnh1710/world-model.t
 import type { WalkPlan } from '../bot/gtnh1710/walking.ts';
 import type { AgentConfig } from '../config/env.ts';
 import type { ActionSpec } from '../domain/actions.ts';
+import type { PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { openDatabase } from '../persistence/database.ts';
@@ -81,6 +82,24 @@ export function summarizeDiggable(state: GameState, limit = 10): Record<string, 
   };
 }
 
+/** The placeable cells an observation lists (nearest first) and the placed blocks, for printing. */
+export function summarizePlacing(state: GameState, limit = 10): Record<string, unknown> | null {
+  if (!state.nearbyBlocks.known) return null;
+  const b = state.nearbyBlocks.value;
+  return {
+    count: b.placeable.length,
+    nearest: b.placeable
+      .slice(0, limit)
+      .map(
+        (c) =>
+          `(${c.position.x}, ${c.position.y}, ${c.position.z})${c.takesFalling ? '' : ' (no sand or gravel)'}`,
+      ),
+    placed: b.placed.map(
+      (p) => `${p.block} at (${p.position.x}, ${p.position.y}, ${p.position.z})`,
+    ),
+  };
+}
+
 export function summarizeObservation(
   state: GameState,
   info: ConnectionInfo,
@@ -134,6 +153,7 @@ export function summarizeObservation(
             }
           : { unavailable: wideHazardScan.reason },
     diggable: summarizeDiggable(state),
+    placing: summarizePlacing(state),
     machines: machines
       .map((m) => ({
         m,
@@ -186,10 +206,14 @@ export async function runLiveCycle(
 // Walking
 // ---------------------------------------------------------------------------
 
-/** Movement (and digging) settings, and whether the stop file currently halts everything. */
+/**
+ * Movement (and digging and placing) settings, and whether the stop file currently halts
+ * everything.
+ */
 export function movementStatus(config: AgentConfig): Record<string, unknown> {
   const m = config.minecraft.movement;
   const d = config.minecraft.digging;
+  const p = config.minecraft.placing;
   return {
     enabled: m.enabled,
     fence: m.fence,
@@ -199,6 +223,11 @@ export function movementStatus(config: AgentConfig): Record<string, unknown> {
       enabled: d.enabled,
       heights:
         m.fence === null ? null : `y=${m.fence.min.y}..${m.fence.min.y + d.maxHeightAboveFence}`,
+    },
+    placing: {
+      enabled: p.enabled,
+      heights:
+        m.fence === null ? null : `y=${m.fence.min.y}..${m.fence.min.y + p.maxHeightAboveFence}`,
     },
   };
 }
@@ -453,6 +482,70 @@ export async function runLiveDig(
           return {
             result,
             diggable: summarizeDiggable(state),
+            inventory: state.inventory.known ? state.inventory.value.items : null,
+            info: client.info(),
+          };
+        } finally {
+          process.removeListener('SIGINT', onInterrupt);
+        }
+      },
+      log,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Placing
+// ---------------------------------------------------------------------------
+
+export interface LivePlaceResult {
+  result: CycleResult;
+  /** Placeable cells, placed blocks and the inventory after the placement (when known). */
+  placing: Record<string, unknown> | null;
+  inventory: Record<string, number> | null;
+  info: ConnectionInfo;
+}
+
+/**
+ * Places ONE block as a user-requested action: validated (schema, safety policy,
+ * preconditions), placed, re-observed and verified like the agent's own actions.
+ */
+export async function runLivePlace(
+  config: AgentConfig,
+  dbPath: string,
+  at: BlockPosition,
+  item: PlaceableItem,
+  log?: (line: string) => void,
+): Promise<LivePlaceResult> {
+  const db = openDatabase(dbPath);
+  try {
+    const repos = createRepositories(db, systemClock);
+    syncConfigToDatabase(config, repos);
+    return await withLiveClient(
+      config,
+      async (client) => {
+        const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
+        process.once('SIGINT', onInterrupt);
+        try {
+          const result = await runUserAction(
+            {
+              config,
+              client,
+              repos,
+              decisionProvider: new DeterministicDecisionProvider(),
+              planner: null,
+              clock: systemClock,
+              newId: randomIds,
+            },
+            { type: 'PLACE_BLOCK', args: { position: at, item } },
+            `requested by the operator: place --at ${at.x},${at.y},${at.z} --item ${item}`,
+          );
+          const state = await client.observe();
+          return {
+            result,
+            placing: summarizePlacing(state),
             inventory: state.inventory.known ? state.inventory.value.items : null,
             info: client.info(),
           };

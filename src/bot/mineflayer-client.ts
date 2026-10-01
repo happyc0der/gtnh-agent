@@ -168,6 +168,7 @@ export class MineflayerClient implements MinecraftClient {
       case 'INSPECT_MACHINE':
       case 'REFUEL_KNOWN_GENERATOR':
       case 'DIG_BLOCK':
+      case 'PLACE_BLOCK':
       case 'CRAFT_ITEM':
         return Promise.resolve(
           failed(`${action.type} is not implemented for Mineflayer yet`, 'NOT_IMPLEMENTED'),

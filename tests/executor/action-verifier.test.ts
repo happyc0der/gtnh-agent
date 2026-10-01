@@ -119,6 +119,45 @@ describe('verifyPostcondition', () => {
     expect(verify(spec, before, blind).verified).toBe(false);
   });
 
+  it('BLOCK_PLACED needs the cell seen turning into the block, and exactly one item used', () => {
+    const spec: ActionSpec = {
+      type: 'PLACE_BLOCK',
+      args: { position: { x: 2, y: 65, z: 1 }, item: 'minecraft:cobblestone' },
+    };
+    if (!before.nearbyBlocks.known || !before.inventory.known) throw new Error('fixture unknown');
+    const blocks = before.nearbyBlocks.value;
+    const inv = before.inventory.value;
+    const after = (placed: GameState['nearbyBlocks'], cobblestone: number): GameState =>
+      later({
+        ...before,
+        nearbyBlocks: placed,
+        inventory: known({ ...inv, items: { ...inv.items, 'minecraft:cobblestone': cobblestone } }),
+      });
+    const seen = known({
+      ...blocks,
+      placed: [{ block: 'minecraft:cobblestone' as const, position: { x: 2, y: 65, z: 1 } }],
+    });
+    expect(verify(spec, before, after(seen, 63)).verified).toBe(true);
+
+    // Placed, but the inventory did not change (or lost two): not verified.
+    const kept = verify(spec, before, after(seen, 64));
+    expect(kept.checks.filter((c) => !c.passed).map((c) => c.name)).toEqual(['item-used']);
+    expect(verify(spec, before, after(seen, 62)).verified).toBe(false);
+    // The item went, but the cell was never seen turning into the block.
+    const unseen = verify(spec, before, after(known(blocks), 63));
+    expect(unseen.checks.find((c) => c.name === 'block-placed')?.detail).toBe(
+      '(2, 65, 1) was not observed turning into minecraft:cobblestone',
+    );
+    // Another block appeared there.
+    const other = known({
+      ...blocks,
+      placed: [{ block: 'minecraft:dirt' as const, position: { x: 2, y: 65, z: 1 } }],
+    });
+    expect(verify(spec, before, after(other, 63)).verified).toBe(false);
+    // Blocks not observable afterwards: fail closed.
+    expect(verify(spec, before, after(unknown('chunk unloaded'), 63)).verified).toBe(false);
+  });
+
   it('ITEMS_CRAFTED checks the exact result gain, ingredient use, and that nothing else changed', () => {
     const spec: ActionSpec = {
       type: 'CRAFT_ITEM',

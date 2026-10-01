@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ActionIdSchema, ActionSpecSchema, ActionTypeSchema } from './actions.ts';
-import { DiggableBlockSchema } from './blocks.ts';
+import { DiggableBlockSchema, PlaceableBlockSchema } from './blocks.ts';
 import {
   BlockPositionSchema,
   DimensionSchema,
@@ -90,6 +90,10 @@ export type EnvironmentHazards = z.infer<typeof EnvironmentHazardsSchema>;
 export const MAX_REPORTED_RESOURCES = 64;
 /** Largest `nearbyBlocks.removed` list. */
 export const MAX_REPORTED_REMOVED = 16;
+/** Largest `nearbyBlocks.placeable` list (the nearest cells within reach). */
+export const MAX_REPORTED_PLACEABLE = 32;
+/** Largest `nearbyBlocks.placed` list. */
+export const MAX_REPORTED_PLACED = 16;
 
 /** A block DIG_BLOCK may break, where the observation saw it. */
 export const ResourceBlockSchema = z.strictObject({
@@ -105,10 +109,33 @@ export const ResourceBlockSchema = z.strictObject({
 export type ResourceBlock = z.infer<typeof ResourceBlockSchema>;
 
 /**
- * Blocks near the player that matter for digging, from the blocks the server sent. Only
- * allowlisted blocks a player could see (a face touching air) are listed: at or above the
- * player's feet level, plus sand, gravel and clay one level below it (the ground layer a
- * player digs). The blocks the player stands on are never listed.
+ * An empty cell PLACE_BLOCK may fill, where the observation saw it: air (or tall grass or a
+ * dead bush, which a placed block replaces), within reach, clear of the player's body and of
+ * every entity, touching a plain full block to place it against, with nothing but air, plain
+ * blocks and plants around it and no hazard within one block.
+ */
+export const PlaceableCellSchema = z.strictObject({
+  position: BlockPositionSchema,
+  /**
+   * Sand and gravel may go here: a plain full block is directly below it (they fall
+   * otherwise) and it is not in a column the player's body stands in.
+   */
+  takesFalling: z.boolean(),
+});
+export type PlaceableCell = z.infer<typeof PlaceableCellSchema>;
+
+/** A block the observer saw appear in an empty cell (a placed block), still there. */
+export const PlacedBlockSchema = z.strictObject({
+  block: PlaceableBlockSchema,
+  position: BlockPositionSchema,
+});
+export type PlacedBlock = z.infer<typeof PlacedBlockSchema>;
+
+/**
+ * Blocks near the player that matter for digging and placing, from the blocks the server
+ * sent. Only allowlisted blocks a player could see (a face touching air) are listed as
+ * resources: at or above the player's feet level, plus sand, gravel and clay one level below
+ * it (the ground layer a player digs). The blocks the player stands on are never listed.
  */
 export const NearbyBlocksSchema = z.strictObject({
   /**
@@ -125,6 +152,18 @@ export const NearbyBlocksSchema = z.strictObject({
    * recent first. BLOCK_REMOVED is verified against this.
    */
   removed: z.array(BlockPositionSchema).max(MAX_REPORTED_REMOVED),
+  /**
+   * Cells PLACE_BLOCK may fill (see PlaceableCellSchema), nearest to the eyes first. Only
+   * cells within reach are looked at, and only the nearest MAX_REPORTED_PLACEABLE are listed:
+   * a cell not listed may not be placed into. Empty in snapshots stored before placing.
+   */
+  placeable: z.array(PlaceableCellSchema).max(MAX_REPORTED_PLACEABLE).default([]),
+  /**
+   * Positions near the player where the observer saw an empty cell (air, tall grass or a dead
+   * bush) become a placeable block, while it still is, most recent first. BLOCK_PLACED is
+   * verified against this.
+   */
+  placed: z.array(PlacedBlockSchema).max(MAX_REPORTED_PLACED).default([]),
 });
 export type NearbyBlocks = z.infer<typeof NearbyBlocksSchema>;
 
@@ -212,8 +251,8 @@ export const GameStateSchema = z.strictObject({
   nearbyThreats: knownSchema(ThreatsSchema),
   environmentHazards: knownSchema(EnvironmentHazardsSchema),
   /**
-   * Diggable blocks nearby (for DIG_BLOCK). Snapshots stored before this field existed
-   * read back as unknown.
+   * Diggable blocks and placeable cells nearby (for DIG_BLOCK and PLACE_BLOCK). Snapshots
+   * stored before this field existed read back as unknown.
    */
   nearbyBlocks: knownSchema(NearbyBlocksSchema).default({
     known: false,

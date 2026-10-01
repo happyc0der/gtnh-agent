@@ -246,6 +246,9 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
   const diggable = new Set(
     state.diggableBlocks.map((b) => `${b.position.x},${b.position.y},${b.position.z}`),
   );
+  const placeable = new Set(
+    state.placeableCells.map((c) => `${c.position.x},${c.position.y},${c.position.z}`),
+  );
   const problems: string[] = [];
   for (const { step, action: a } of plan.steps) {
     const bad = (what: string): void => void problems.push(`step ${step}: ${what}`);
@@ -284,6 +287,14 @@ function idProblems(plan: Plan, request: PlannerRequest): string[] {
         if (!diggable.has(`${p.x},${p.y},${p.z}`)) {
           bad(`(${p.x}, ${p.y}, ${p.z}) is not a listed diggable block`);
         }
+        break;
+      }
+      case 'PLACE_BLOCK': {
+        const p = a.args.position;
+        if (!placeable.has(`${p.x},${p.y},${p.z}`)) {
+          bad(`(${p.x}, ${p.y}, ${p.z}) is not a listed placeable cell`);
+        }
+        if (!carried.has(a.args.item)) bad(`${a.args.item} is not carried`);
         break;
       }
       case 'OBSERVE_STATE':

@@ -15,6 +15,9 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
       return [spec.args.item];
     case 'REFUEL_KNOWN_GENERATOR':
       return [spec.args.fuelItem];
+    case 'PLACE_BLOCK':
+      // The placed block uses up one item.
+      return [spec.args.item];
     case 'CRAFT_ITEM':
       // Every item the recipe MAY consume: the client picks among them, so all must be allowed.
       return ingredientRequirements(RECIPES[spec.args.recipe]).flatMap((r) => [...r.anyOf]);

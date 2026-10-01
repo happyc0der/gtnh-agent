@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import dotenv from 'dotenv';
 import { loadConfig } from '../config/env.ts';
+import { isPlaceableItem, PLACEABLE_ITEMS } from '../domain/blocks.ts';
 import { TaskStatusSchema } from '../domain/tasks.ts';
 import { IN_MEMORY, openDatabase } from '../persistence/database.ts';
 import { createRepositories } from '../persistence/repositories.ts';
@@ -15,6 +16,7 @@ import {
   runLiveChest,
   runLiveCycle,
   runLiveDig,
+  runLivePlace,
   runLiveSession,
   runLiveMove,
   setMovementHalted,
@@ -39,7 +41,7 @@ import { addTask, completeTask, listTasks } from './task-commands.ts';
 import { findScenario, SCENARIOS } from './scenarios.ts';
 
 const USAGE = `gtnh-agent (single cycle, no autonomy; the live client only observes unless walking,
-chests or digging are explicitly enabled)
+chests, crafting, digging or placing are explicitly enabled)
 
 Usage:
   node src/app/cli.ts once [--scenario <name>] [--db <path> | --memory] [--full]
@@ -64,6 +66,11 @@ Usage:
       BREAK one allowlisted block (logs, leaves, dirt, grass, sand, gravel, clay) inside the
       fence with an empty hand (needs MC_ENABLE_DIGGING=true and a fence), as a checked user
       action; prints the diggable blocks and the inventory afterwards. Ctrl+C stops it.
+  node src/app/cli.ts place --live --at <x,y,z> --item <item> [--db <path>]
+      PLACE one allowlisted block the player carries (dirt, cobblestone, sand, gravel,
+      sandstone, planks, logs) into an empty cell inside the fence (needs
+      MC_ENABLE_PLACING=true and a fence), as a checked user action; prints the placeable
+      cells and the inventory afterwards.
   node src/app/cli.ts run --live [--max-cycles N] [--max-minutes M] [--db <path>] [--verbose]
       BOUNDED auto-run of the current task on one connection: ordinary cycles back to back,
       stopping when the task is done or anything needs you (a pause, rejection, failure,
@@ -80,8 +87,8 @@ Usage:
       and the next goal. --live reads the inventory first and records the quests it now
       satisfies (the agent's own bookkeeping; the server's quest book is not touched).
   node src/app/cli.ts halt [--reason <text>] / unhalt / movement
-      Create / remove the stop file (nothing walks, uses chests or digs while it exists) /
-      show movement and digging settings.
+      Create / remove the stop file (nothing walks, uses chests, digs or places while it
+      exists) / show movement, digging and placing settings.
   node src/app/cli.ts scenarios            List mock scenarios.
   node src/app/cli.ts history [--limit N] [--db <path>]
                                            Show recent logged actions.
@@ -161,6 +168,7 @@ async function main(argv: string[]): Promise<number> {
       reason: { type: 'string' },
       to: { type: 'string' },
       at: { type: 'string' },
+      item: { type: 'string' },
       container: { type: 'string' },
       withdraw: { type: 'string' },
       deposit: { type: 'string' },
@@ -417,6 +425,29 @@ async function main(argv: string[]): Promise<number> {
           ? { result: out.result, connection: out.info }
           : compact('live-dig', dbPath, out.result),
         diggable: out.diggable,
+        inventory: out.inventory,
+      });
+      return out.result.status === 'succeeded' ? 0 : 1;
+    }
+    case 'place': {
+      if (!values.live) {
+        process.stderr.write('place puts a block on the test server; pass --live to confirm.\n');
+        return 1;
+      }
+      const at = values.at === undefined ? null : parseBlockPosition(values.at);
+      if (at === null || values.item === undefined || !isPlaceableItem(values.item)) {
+        process.stderr.write(
+          'place requires --at <x,y,z> (whole-block coordinates; use --at=-8,200,-11 for ' +
+            `negatives) and --item, one of: ${PLACEABLE_ITEMS.join(', ')}\n`,
+        );
+        return 1;
+      }
+      const out = await runLivePlace(config, dbPath, at, values.item, log);
+      print({
+        action: values.full
+          ? { result: out.result, connection: out.info }
+          : compact('live-place', dbPath, out.result),
+        placing: out.placing,
         inventory: out.inventory,
       });
       return out.result.status === 'succeeded' ? 0 : 1;

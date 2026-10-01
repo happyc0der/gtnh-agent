@@ -31,6 +31,12 @@ export const BLOCK = {
   clay: 82,
   leaves2: 161,
   log2: 162,
+  // Placing tests:
+  cobblestone: 4,
+  planks: 5,
+  sandstone: 24,
+  deadbush: 32,
+  yellowFlower: 37,
 } as const;
 
 export const TEST_BLOCK_REGISTRY: Array<[number, string]> = [
@@ -63,6 +69,16 @@ export const DIG_TEST_BLOCK_REGISTRY: Array<[number, string]> = [
   [BLOCK.clay, 'minecraft:clay'],
   [BLOCK.leaves2, 'minecraft:leaves2'],
   [BLOCK.log2, 'minecraft:log2'],
+];
+
+/** The digging registry plus the blocks the placing tests use. */
+export const PLACE_TEST_BLOCK_REGISTRY: Array<[number, string]> = [
+  ...DIG_TEST_BLOCK_REGISTRY,
+  [BLOCK.cobblestone, 'minecraft:cobblestone'],
+  [BLOCK.planks, 'minecraft:planks'],
+  [BLOCK.sandstone, 'minecraft:sandstone'],
+  [BLOCK.deadbush, 'minecraft:deadbush'],
+  [BLOCK.yellowFlower, 'minecraft:yellow_flower'],
 ];
 
 export type BlockFn = (x: number, y: number, z: number) => number;

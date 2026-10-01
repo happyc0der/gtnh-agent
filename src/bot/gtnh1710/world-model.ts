@@ -1,10 +1,14 @@
+import { isPlaceableBlock, type PlaceableBlock } from '../../domain/blocks.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
+  MAX_REPORTED_PLACEABLE,
+  MAX_REPORTED_PLACED,
   MAX_REPORTED_REMOVED,
   type GameState,
 } from '../../domain/game-state.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
+import { PLACE_TARGETS, scanPlaceable } from './placing.ts';
 import {
   buildDiggableTable,
   diggableOf,
@@ -161,10 +165,28 @@ export interface BlockWatch {
   readonly y: number;
   readonly z: number;
   readonly updates: number[];
+  /**
+   * For each update, its place among the updates of every watch (one counter for all), so
+   * the updates of two watched blocks can be put in the order they arrived.
+   */
+  readonly order: number[];
 }
 
 /** Positions of removed diggable blocks remembered per connection (most recent first). */
 const MAX_REMEMBERED_REMOVALS = 64;
+/** Placed blocks remembered per connection (most recent first). */
+const MAX_REMEMBERED_PLACEMENTS = 64;
+/** Entities this close to the player are passed to the placeable-cell scan. */
+const PLACE_SCAN_ENTITY_RADIUS = 12;
+
+/** A placeable block the observer saw appear in an empty cell, and its registry id. */
+interface PlacedRecord {
+  x: number;
+  y: number;
+  z: number;
+  block: PlaceableBlock;
+  id: number;
+}
 
 /**
  * Folds decoded server packets into what the agent knows. Pure: no sockets, no timers.
@@ -225,7 +247,11 @@ export class WorldModel {
   #diggable: Uint8Array | null = null;
   /** Where the server turned a diggable block into air, most recent first. */
   #removed: Array<{ x: number; y: number; z: number }> = [];
+  /** Where the server turned an empty cell into a placeable block, most recent first. */
+  #placed: PlacedRecord[] = [];
   readonly #watches = new Set<BlockWatch>();
+  /** Counts the updates recorded by every watch (BlockWatch.order). */
+  #watchedUpdates = 0;
 
   setRegistry(registry: Registry): void {
     this.#registry = registry;
@@ -235,7 +261,7 @@ export class WorldModel {
 
   /** Records every update the server sends for this block until unwatch(). */
   watchBlock(x: number, y: number, z: number): BlockWatch {
-    const w: BlockWatch = { x, y, z, updates: [] };
+    const w: BlockWatch = { x, y, z, updates: [], order: [] };
     this.#watches.add(w);
     return w;
   }
@@ -244,7 +270,15 @@ export class WorldModel {
     this.#watches.delete(w);
   }
 
-  /** A single block changed: remember removed diggable blocks, and tell the watchers. */
+  #record(w: BlockWatch, id: number): void {
+    w.updates.push(id);
+    w.order.push(++this.#watchedUpdates);
+  }
+
+  /**
+   * A single block changed: remember removed diggable blocks and placed blocks, and tell
+   * the watchers.
+   */
   #onBlockChanged(x: number, y: number, z: number, id: number): void {
     const before = this.#store.blockAt(x, y, z);
     this.#store.setBlock(x, y, z, id);
@@ -260,8 +294,18 @@ export class WorldModel {
         ...this.#removed.filter((p) => p.x !== x || p.y !== y || p.z !== z),
       ].slice(0, MAX_REMEMBERED_REMOVALS);
     }
+    const block = id === 0 ? undefined : this.#registry?.blocks.get(id);
+    const wasEmpty =
+      before === 0 ||
+      (before !== undefined && PLACE_TARGETS.has(this.#registry?.blocks.get(before) ?? ''));
+    if (wasEmpty && block !== undefined && isPlaceableBlock(block)) {
+      this.#placed = [
+        { x, y, z, block, id },
+        ...this.#placed.filter((p) => p.x !== x || p.y !== y || p.z !== z),
+      ].slice(0, MAX_REMEMBERED_PLACEMENTS);
+    }
     for (const w of this.#watches) {
-      if (w.x === x && w.y === y && w.z === z) w.updates.push(this.#store.blockAt(x, y, z) ?? -1);
+      if (w.x === x && w.y === y && w.z === z) this.#record(w, this.#store.blockAt(x, y, z) ?? -1);
     }
   }
 
@@ -269,7 +313,7 @@ export class WorldModel {
   #onColumnChanged(chunkX: number, chunkZ: number): void {
     for (const w of this.#watches) {
       if (Math.floor(w.x / 16) === chunkX && Math.floor(w.z / 16) === chunkZ) {
-        w.updates.push(this.#store.blockAt(w.x, w.y, w.z) ?? -1);
+        this.#record(w, this.#store.blockAt(w.x, w.y, w.z) ?? -1);
       }
     }
   }
@@ -638,7 +682,8 @@ export class WorldModel {
         this.#machines.clear();
         this.#store.clear();
         this.#removed = [];
-        for (const w of this.#watches) w.updates.push(-1);
+        this.#placed = [];
+        for (const w of this.#watches) this.#record(w, -1);
         return;
       case 'chunk-data': {
         const { chunkX, chunkZ } = packet.header;
@@ -954,7 +999,10 @@ export class WorldModel {
     });
   }
 
-  /** Diggable blocks within RESOURCE_SCAN_RADIUS, and recently removed ones (still air). */
+  /**
+   * Diggable blocks within RESOURCE_SCAN_RADIUS, recently removed ones (still air), the cells
+   * a block could be placed into (placing.ts), and recently placed blocks (still there).
+   */
   #nearbyBlocks(): GameState['nearbyBlocks'] {
     if (this.#hazardProblem !== null) return unknown(this.#hazardProblem);
     if (!this.#joined) return unknown('not joined yet');
@@ -965,18 +1013,30 @@ export class WorldModel {
     const feet = { x: pos.x, y: pos.feetY, z: pos.z };
     const scan = scanResources(this.#store, table, feet);
     if (!scan.ok) return unknown(scan.reason);
+    const near = (p: { x: number; y: number; z: number }): boolean =>
+      Math.hypot(p.x + 0.5 - feet.x, p.y + 0.5 - feet.y, p.z + 0.5 - feet.z) <=
+      RESOURCE_SCAN_RADIUS;
     const removed = this.#removed
-      .filter(
-        (p) =>
-          this.#store.blockAt(p.x, p.y, p.z) === 0 &&
-          Math.hypot(p.x + 0.5 - feet.x, p.y + 0.5 - feet.y, p.z + 0.5 - feet.z) <=
-            RESOURCE_SCAN_RADIUS,
-      )
+      .filter((p) => this.#store.blockAt(p.x, p.y, p.z) === 0 && near(p))
       .slice(0, MAX_REPORTED_REMOVED);
+    const placed = this.#placed
+      .filter((p) => this.#store.blockAt(p.x, p.y, p.z) === p.id && near(p))
+      .slice(0, MAX_REPORTED_PLACED);
+    const world = this.walkWorld();
+    const entities = this.trackedEntities().filter(
+      (e) => Math.hypot(e.x - feet.x, e.y - feet.y, e.z - feet.z) <= PLACE_SCAN_ENTITY_RADIUS,
+    );
+    const placeable =
+      world === null ? [] : scanPlaceable(world, feet, entities, MAX_REPORTED_PLACEABLE);
     return known({
       scanRadius: scan.scanRadius,
       resources: scan.resources.map(({ block, position }) => ({ block, position })),
       removed: removed.map((p) => ({ ...p })),
+      placeable: placeable.map(({ position, takesFalling }) => ({
+        position: { ...position },
+        takesFalling,
+      })),
+      placed: placed.map(({ block, x, y, z }) => ({ block, position: { x, y, z } })),
     });
   }
 

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ActionSpecSchema, ActionTypeSchema } from '../domain/actions.ts';
-import { DiggableBlockSchema } from '../domain/blocks.ts';
+import { DiggableBlockSchema, PlaceableItemSchema } from '../domain/blocks.ts';
 import {
   BlockPositionSchema,
   DimensionSchema,
@@ -19,6 +19,9 @@ export const MAX_PLAN_STEPS = 16;
 
 /** Diggable blocks passed to the planner (the nearest ones). */
 export const MAX_COMPACT_RESOURCES = 32;
+
+/** Placeable cells passed to the planner (the nearest ones). */
+export const MAX_COMPACT_PLACEABLE = 16;
 
 export const PlanStepSchema = z.strictObject({
   /** 1-based, sequential. */
@@ -106,6 +109,19 @@ export const CompactStateSchema = z.strictObject({
       }),
     )
     .max(MAX_COMPACT_RESOURCES),
+  /**
+   * Empty cells PLACE_BLOCK may fill (observed), nearest first, with `reach` (blocks from the
+   * eyes to the cell's centre) and `takesFalling` (sand and gravel may go there).
+   */
+  placeableCells: z
+    .array(
+      z.strictObject({
+        position: BlockPositionSchema,
+        reach: z.number().min(0).nullable(),
+        takesFalling: z.boolean(),
+      }),
+    )
+    .max(MAX_COMPACT_PLACEABLE),
   machines: z
     .array(
       z.strictObject({
@@ -168,10 +184,12 @@ export const PlannerRequestSchema = z.strictObject({
     safeLocations: z.array(z.string()),
     /** Action types containing any of these keywords are refused... */
     forbidden: z.array(z.string()),
-    /** ...except exactly these types, which the operator allows (DIG_BLOCK). */
+    /** ...except exactly these types, which the operator allows (DIG_BLOCK, PLACE_BLOCK). */
     forbiddenExceptions: z.array(ActionTypeSchema),
     /** The only blocks DIG_BLOCK may break. */
     diggableBlocks: z.array(DiggableBlockSchema),
+    /** The only items PLACE_BLOCK may place. */
+    placeableItems: z.array(PlaceableItemSchema),
   }),
   recentActions: z
     .array(z.strictObject({ actionType: ActionTypeSchema, status: z.string(), reason: z.string() }))

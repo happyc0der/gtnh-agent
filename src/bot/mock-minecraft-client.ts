@@ -1,9 +1,18 @@
 import type { ActionType } from '../domain/actions.ts';
-import type { DiggableBlock } from '../domain/blocks.ts';
+import {
+  fallsWhenPlaced,
+  isDiggableBlock,
+  placedBlockOf,
+  type DiggableBlock,
+  type PlaceableBlock,
+  type PlaceableItem,
+} from '../domain/blocks.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import {
   GAME_STATE_SCHEMA_VERSION,
   GameStateSchema,
+  MAX_REPORTED_PLACEABLE,
+  MAX_REPORTED_PLACED,
   MAX_REPORTED_REMOVED,
   MAX_REPORTED_RESOURCES,
   type CurrentTask,
@@ -11,8 +20,15 @@ import {
   type Hazard,
   type KnownRecipeState,
   type MachineStatus,
+  type PlaceableCell,
 } from '../domain/game-state.ts';
-import { blockCentre, distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
+import {
+  blockCentre,
+  bodyColumns,
+  distance,
+  eyeDistanceToBlock,
+  formatPosition,
+} from '../domain/geometry.ts';
 import { known, unknown } from '../domain/known.ts';
 import {
   describeIngredient,
@@ -23,6 +39,7 @@ import {
 } from '../domain/recipes.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
 import type { Clock, ManualClock } from '../util/clock.ts';
+import { bodyOverlaps, entityOverlaps } from './gtnh1710/placing.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from './minecraft-client.ts';
 
 const STACK_SIZE = 64;
@@ -51,6 +68,11 @@ const MOCK_DROPS: Readonly<Record<DiggableBlock, { item: string; count: number }
 
 export interface MockResourceBlock {
   block: DiggableBlock;
+  position: BlockPosition;
+}
+
+export interface MockPlacedBlock {
+  block: PlaceableBlock;
   position: BlockPosition;
 }
 
@@ -96,10 +118,15 @@ export interface MockWorld {
   /** Entities the agent cannot identify (e.g. unclassified modded mobs). */
   unclassified: Position[];
   hazards: Hazard[];
-  /** Diggable blocks (the only blocks the mock simulates; everything else counts as air). */
+  /**
+   * Diggable blocks. With the placed blocks, the only blocks the mock simulates: everything
+   * else counts as air (and as nothing to place against).
+   */
   resourceBlocks: MockResourceBlock[];
   /** Where diggable blocks were removed, most recent first. */
   removedBlocks: BlockPosition[];
+  /** Blocks the agent placed, most recent first (diggable ones are resource blocks too). */
+  placedBlocks: MockPlacedBlock[];
   containers: MockContainer[];
   generators: MockGenerator[];
   machines: MockMachine[];
@@ -130,8 +157,8 @@ type FailureMode =
 /**
  * Deterministic in-memory Minecraft stand-in. Simulates the player, inventory,
  * a safe container, a known generator with fuel, machines, crafting (with server recipes
- * that may differ from the agent's table), hazards and hostiles, with injectable failures
- * and "reports success but changes nothing" behavior.
+ * that may differ from the agent's table), digging and placing blocks, hazards and hostiles,
+ * with injectable failures and "reports success but changes nothing" behavior.
  */
 export class MockMinecraftClient implements MinecraftClient {
   readonly kind = 'mock';
@@ -202,6 +229,9 @@ export class MockMinecraftClient implements MinecraftClient {
     const removed = w.removedBlocks
       .filter((p) => near(p) <= BLOCK_SCAN_RADIUS)
       .slice(0, MAX_REPORTED_REMOVED);
+    const placed = w.placedBlocks
+      .filter((p) => near(p.position) <= BLOCK_SCAN_RADIUS)
+      .slice(0, MAX_REPORTED_PLACED);
 
     const state: GameState = {
       schemaVersion: GAME_STATE_SCHEMA_VERSION,
@@ -249,6 +279,8 @@ export class MockMinecraftClient implements MinecraftClient {
             scanRadius: BLOCK_SCAN_RADIUS,
             resources: resources.map((r) => ({ block: r.block, position: { ...r.position } })),
             removed: removed.map((p) => ({ ...p })),
+            placeable: this.#placeableCells().slice(0, MAX_REPORTED_PLACEABLE),
+            placed: placed.map((p) => ({ block: p.block, position: { ...p.position } })),
           }),
       power: {
         availableEUt: unknown('mock: EU/t is not simulated'),
@@ -392,6 +424,8 @@ export class MockMinecraftClient implements MinecraftClient {
 
       case 'DIG_BLOCK':
         return this.#dig(action.args.position);
+      case 'PLACE_BLOCK':
+        return this.#place(action.args.position, action.args.item);
       case 'CRAFT_ITEM':
         return this.#craft(action.args);
 
@@ -415,6 +449,7 @@ export class MockMinecraftClient implements MinecraftClient {
     this.#clock.advance(MOCK_DIG_MS);
     w.resourceBlocks.splice(at, 1);
     w.removedBlocks = [{ ...p }, ...w.removedBlocks];
+    w.placedBlocks = w.placedBlocks.filter((b) => !samePosition(b.position, p));
     const drop = MOCK_DROPS[found.block];
     let dropCollected = false;
     if (drop !== null) {
@@ -432,6 +467,97 @@ export class MockMinecraftClient implements MinecraftClient {
       dropCollected,
       drops: drop === null || !dropCollected ? '' : `${drop.count} x ${drop.item}`,
     });
+  }
+
+  /**
+   * Places the block, like a server would: only into a placeable cell (see #placeableCells),
+   * never sand or gravel where it would fall, and only with the item in the inventory.
+   */
+  #place(p: BlockPosition, item: PlaceableItem): ClientActionResult {
+    const w = this.world;
+    const have = w.inventory.items[item] ?? 0;
+    if (have < 1) return failed(`no ${item} in inventory`);
+    const cell = this.#placeableCells().find((c) => samePosition(c.position, p));
+    if (cell === undefined) return failed(`${formatPosition(p)} is not a placeable cell`);
+    if (fallsWhenPlaced(item) && !cell.takesFalling) {
+      return failed(`${item} would fall at ${formatPosition(p)}`);
+    }
+    const block = placedBlockOf(item);
+    w.inventory.items[item] = have - 1;
+    w.placedBlocks = [{ block, position: { ...p } }, ...w.placedBlocks];
+    if (isDiggableBlock(block)) w.resourceBlocks.push({ block, position: { ...p } });
+    return ok(`placed ${block} at ${formatPosition(p)}`, { block, item, stackUsed: true });
+  }
+
+  /**
+   * Like the live client: empty cells within reach of the eyes, clear of the player's body
+   * and of every hostile or unidentified entity, next to a simulated block to place against,
+   * touching no container, machine, crafting table or generator and no hazard. Sand and
+   * gravel may go where a simulated block is right below, outside the player's own columns.
+   * Nearest to the eyes first.
+   */
+  #placeableCells(): PlaceableCell[] {
+    const w = this.world;
+    const feet = w.player.position;
+    const key = (b: BlockPosition): string => `${b.x},${b.y},${b.z}`;
+    const cellOf = (q: Position): BlockPosition => ({
+      x: Math.floor(q.x),
+      y: Math.floor(q.y),
+      z: Math.floor(q.z),
+    });
+    const solid = new Set([
+      ...w.resourceBlocks.map((r) => key(r.position)),
+      ...w.placedBlocks.map((b) => key(b.position)),
+    ]);
+    const fixtures = new Set(
+      [...w.containers, ...w.machines, ...w.craftingTables, ...w.generators].map((f) =>
+        key(cellOf(f.position)),
+      ),
+    );
+    const hazards = w.hazards.map((h) => cellOf(h.position));
+    const entities = [...w.hostiles, ...w.unclassified];
+    const own = bodyColumns(feet);
+    const faces: ReadonlyArray<readonly [number, number, number]> = [
+      [0, -1, 0],
+      [0, 1, 0],
+      [0, 0, -1],
+      [0, 0, 1],
+      [-1, 0, 0],
+      [1, 0, 0],
+    ];
+    const around = (b: BlockPosition): BlockPosition[] =>
+      faces.map(([dx, dy, dz]) => ({ x: b.x + dx, y: b.y + dy, z: b.z + dz }));
+    const candidates = new Map<string, BlockPosition>();
+    for (const s of [...w.resourceBlocks, ...w.placedBlocks]) {
+      for (const n of around(s.position)) {
+        if (!solid.has(key(n)) && !fixtures.has(key(n))) candidates.set(key(n), n);
+      }
+    }
+    return [...candidates.values()]
+      .filter(
+        (c) =>
+          c.y >= 1 &&
+          c.y <= 254 &&
+          eyeDistanceToBlock(feet, c) <= w.reach &&
+          !bodyOverlaps(feet, c) &&
+          !entities.some((e) => entityOverlaps(e, c)) &&
+          !around(c).some((n) => fixtures.has(key(n))) &&
+          !hazards.some(
+            (h) => Math.abs(h.x - c.x) <= 1 && Math.abs(h.y - c.y) <= 1 && Math.abs(h.z - c.z) <= 1,
+          ),
+      )
+      .sort(
+        (a, b) =>
+          eyeDistanceToBlock(feet, a) - eyeDistanceToBlock(feet, b) ||
+          a.x - b.x ||
+          a.y - b.y ||
+          a.z - b.z,
+      )
+      .map((c) => ({
+        position: c,
+        takesFalling:
+          solid.has(key({ ...c, y: c.y - 1 })) && !own.some((o) => o.x === c.x && o.z === c.z),
+      }));
   }
 
   /** Like the live client: the server's result must match the table, or nothing is crafted. */
@@ -494,6 +620,10 @@ export class MockMinecraftClient implements MinecraftClient {
       return `${id} is out of reach`;
     return c;
   }
+}
+
+function samePosition(a: BlockPosition, b: BlockPosition): boolean {
+  return a.x === b.x && a.y === b.y && a.z === b.z;
 }
 
 function nonZero(items: Record<string, number>): Record<string, number> {

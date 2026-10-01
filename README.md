@@ -5,8 +5,9 @@ A local-first, **safety-first** agent foundation for GregTech: New Horizons (GTN
 
 **Status:** one human-triggered observe → decide → validate → execute → verify cycle, against a
 simulated world or a private GTNH 2.8.4 test server. On the test server the agent observes,
-**walks inside a fenced pen**, **moves exact amounts to and from configured chests** and can **dig
-allowlisted natural blocks** (logs, leaves, dirt, sand, gravel, clay) inside the pen. It works on
+**walks inside a fenced pen**, **moves exact amounts to and from configured chests**, can **dig
+allowlisted natural blocks** (logs, leaves, dirt, sand, gravel, clay) and **place allowlisted
+plain blocks** (dirt, cobblestone, sand, gravel, sandstone, planks, logs) inside the pen. It works on
 **live tasks**: a task you add, with a plan you write, runs one validated step per `once --live`,
 or back to back in a **bounded auto-run** (`run --live`) that stops as soon as anything needs you.
 No open-ended loop. **Local models are opt-in** (off by default, no GPU use unless enabled).
@@ -32,9 +33,11 @@ climbing, falling or block changes). With containers enabled, `OPEN_CONTAINER`, 
 `DEPOSIT_ITEM` work on configured vanilla chests, moving exact amounts. With crafting enabled,
 `CRAFT_ITEM` crafts early-game recipes in the 2x2 grid or at a configured crafting table (fake
 server only so far). With digging enabled, `DIG_BLOCK` breaks one allowlisted block inside the
-fence with an empty hand. The remaining world-changing actions return `NOT_IMPLEMENTED`. See
-[Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting) and
-[Digging](#digging).
+fence with an empty hand. With placing enabled, `PLACE_BLOCK` puts one allowlisted plain block
+the player carries into an empty cell inside the fence (fake server only so far). The remaining
+world-changing actions return `NOT_IMPLEMENTED`. See
+[Walking in the test pen](#walking-in-the-test-pen), [Chests](#chests), [Crafting](#crafting),
+[Digging](#digging) and [Placing](#placing).
 
 ## Requirements
 
@@ -90,6 +93,7 @@ cp agent.config.example.json agent.config.json
 | The agent's Age 0 quest book and next goal   | `pnpm cli quests [--live]`                                                                |
 | Open a chest (and move exact amounts)        | `pnpm cli chest --live --container chest.pen --withdraw minecraft:cobblestone --count 10` |
 | **Dig** one allowlisted block in the pen     | `pnpm cli dig --live --at=-8,200,-11`                                                     |
+| **Place** one allowlisted block in the pen   | `pnpm cli place --live --at=-7,200,-11 --item minecraft:cobblestone`                      |
 | Test-server operator tool (RCON)             | `node scripts/test-server-admin.ts pen show`                                              |
 | Mineflayer/minecraft-protocol comparison     | `pnpm spike:connect`                                                                      |
 | Entity survey (what the server announces)    | `node scripts/entity-survey.ts --seconds 20`                                              |
@@ -151,9 +155,10 @@ and [docs/action-contract.md](docs/action-contract.md).
   (`OLLAMA_URL`).
 - A ±256-block boundary in the overworld; lava/void avoidance radius 6; retreat below 10 health;
   eat below 14 food; at most 2 failures per action per task.
-- Only 13 action types exist. No block placing, dropping, combat, lava, network/multiblock
-  changes or rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks
-  vanilla logs, leaves, dirt, grass, sand, gravel and clay.
+- Only 14 action types exist. No dropping, combat, lava, network/multiblock changes or
+  rare-item use. The one action that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs,
+  leaves, dirt, grass, sand, gravel and clay; the one that places blocks, `PLACE_BLOCK`, only
+  places vanilla dirt, cobblestone, sand, gravel, sandstone, planks and logs.
 - Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
   inside the fence and stops at the first sign of trouble (see below).
 - Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
@@ -163,6 +168,10 @@ and [docs/action-contract.md](docs/action-contract.md).
 - Digging is off unless `MC_ENABLE_DIGGING=true` **and** the fence is set. It only breaks
   allowlisted blocks inside the fence, never the floor, and never anything touching water, a
   chest, a machine or any other non-plain block (see below).
+- Placing is off unless `MC_ENABLE_PLACING=true` **and** the fence is set. It only fills empty
+  cells inside the fence, never one the player's body or an entity is in, only by clicking a
+  plain full block (never a chest or machine, which would open), never next to water, a chest
+  or a machine, never sand or gravel where it could fall, and never during danger (see below).
 - Protected items are never consumed or moved.
 
 ## Project notes
@@ -319,6 +328,41 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
   drop, a nearby threat, or any change to the block.
 - Success needs the server's own block change to air, with no re-send. The result reports
   whether the drop reached the inventory.
+
+### Placing
+
+The newest world-changing ability (approved 2026-09-30, so the agent can seal itself into a pit
+for the night, and later place a crafting table, furnace and coke oven): putting ONE block the
+player carries into an empty cell. Only `minecraft:dirt`, `cobblestone`, `sand`, `gravel`,
+`sandstone`, `planks` and `log`/`log2` are placed. It has been tested against the fake server
+only; the live test is next.
+
+- Settings: `MC_ENABLE_PLACING=true` (it also needs the movement fence), and optionally
+  `minecraft.placing.maxHeightAboveFence` (default 4) in `agent.config.json`.
+- `pnpm cli place --live --at=-7,200,-11 --item minecraft:cobblestone` places one as a checked
+  user action, and prints the placeable cells and the inventory afterwards.
+- `observe --live` lists the cells a block could be placed into, and the blocks it saw placed.
+- Use it as a plan step, e.g.
+  `{ "type": "PLACE_BLOCK", "args": { "position": { "x": -7, "y": 200, "z": -11 }, "item": "minecraft:dirt" } }`.
+
+How it stays safe (see [docs/architecture.md](docs/architecture.md#placing)):
+
+- Only a cell the observation lists as placeable can be asked for, and only with an allowlisted
+  item the player carries.
+- The client re-checks it on the server's own block data just before the click. It refuses:
+  - anything outside the fence's columns, below its level or more than 4 blocks above it;
+  - a cell that is not air, tall grass or a dead bush (water, lava, a flower, a block);
+  - a cell the player's body is in (the server itself would allow that), or that any entity
+    may be in;
+  - a cell touching anything but air, plants and plain full blocks (a chest, a machine, water,
+    a torch...), or with a hazard within one block;
+  - sand or gravel with no plain full block under it, or over the player's head.
+- It clicks only a plain full block next to the cell. The server activates the clicked block
+  first, so clicking a chest or machine would open it instead of placing.
+- Success needs the server's own block change to the placed block after its answer to the
+  click, with nothing else for 250 ms, and the held stack one item smaller.
+- It is refused during danger, like digging: placing a block is not an escape. Shelters are
+  built while it is safe.
 
 ### Live tasks
 

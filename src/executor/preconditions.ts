@@ -180,6 +180,22 @@ export function checkPreconditions(
       }
       break;
     }
+
+    case 'PLACE_BLOCK': {
+      // Reach is measured from the eyes to the cell, like digging.
+      const p = requirePosition();
+      const target = action.args.position;
+      if (p !== null && eyeDistanceToBlock(p, target) > reach) {
+        failures.push(
+          `cell ${formatPosition(target)} is ${eyeDistanceToBlock(p, target).toFixed(1)} blocks from the eyes (reach ${reach})`,
+        );
+      }
+      requireInventory();
+      if (inventory !== null && have(action.args.item) < 1) {
+        failures.push(`inventory holds no ${action.args.item} to place`);
+      }
+      break;
+    }
   }
   return { ok: failures.length === 0, failures, resolvedTarget };
 }
