@@ -16,6 +16,8 @@ import {
   watchCommand,
 } from './commands/cli-live.ts';
 import {
+  commandCommand,
+  commandsCommand,
   historyCommand,
   layoutsCommand,
   placesCommand,
@@ -83,7 +85,7 @@ Usage:
       stopping when the task is done or anything needs you (a pause, rejection, failure,
       approval, a non-task decision), at the limits (default 20 cycles / 10 minutes), the
       stop file (pnpm cli halt) or Ctrl+C.
-  node src/app/cli.ts play --live [--needs item=count,...] [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
+  node src/app/cli.ts play --live [--needs item=count,...] [--listen] [--minutes 30] [--max-cycles 20] [--db <path>] [--verbose]
       AUTONOMOUS PLAY through the Age 0 quest book: the agent picks its next quest, the
       configured decision maker and planner (AGENT_DECISIONS / AGENT_PLANNER, e.g. ollama)
       choose what to do, and every action is validated, executed and verified as always.
@@ -94,6 +96,15 @@ Usage:
       progress on a quest, at the time limit, the stop file (pnpm cli halt) or Ctrl+C.
       --needs pursues your own goal instead (e.g. --needs minecraft:diamond=100): the planner
       gets its route the same way, and play ends when the items are held.
+      The owners (MC_OWNERS) command it in chat (!come, !follow, !goto x y z, !get 20 logs,
+      !stop, !help...) or with \`command\`; their commands come before quests. --listen keeps
+      it online for commands when nothing else is to do (or play is paused), and reconnects
+      when the connection drops, until the stop file, Ctrl+C or the time limit.
+  node src/app/cli.ts command "<text>" [--db <path>]
+      Queue an owner command as if the first owner (MC_OWNERS) had whispered it, e.g.
+      command "!goto 120 64 -40"; a running play --live picks it up between cycles.
+  node src/app/cli.ts commands [--limit N] [--db <path>]
+      Recent owner commands (chat and command line): what each asked, its status and reply.
   node src/app/cli.ts quests [--live] [--db <path>]
       The Age 0 quest book (GTNH "Tier 0 - Stone Age") AS THE SERVER RECORDS IT (Better
       Questing): chapter progress, completed and active quests, unclaimed rewards, due
@@ -151,7 +162,16 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`[gtnh1710] ${line}\n`);
       }
     : undefined;
-  const cli: Cli = { command, values, config, configFile, dbPath, print, log };
+  const cli: Cli = {
+    command,
+    args: positionals.slice(1),
+    values,
+    config,
+    configFile,
+    dbPath,
+    print,
+    log,
+  };
 
   switch (command) {
     case 'observe':
@@ -195,6 +215,10 @@ async function main(argv: string[]): Promise<number> {
       return scenariosCommand();
     case 'history':
       return historyCommand(cli);
+    case 'command':
+      return commandCommand(cli);
+    case 'commands':
+      return commandsCommand(cli);
     case 'task-resume':
       return taskResumeCommand(cli);
     case 'quests':

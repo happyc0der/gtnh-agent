@@ -1,11 +1,16 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { DecisionResult } from '../../domain/decisions.ts';
+import { openDatabase } from '../../persistence/database.ts';
+import { OWNER_PAUSED_KEY } from '../../persistence/memory-repository.ts';
+import { createRepositories } from '../../persistence/repositories.ts';
 import {
   describeSystem1Stats,
   mergeSystem1Stats,
   NO_SYSTEM1_STATS,
 } from '../../system1/model-cadence.ts';
+import { systemClock } from '../../util/clock.ts';
+import { errorMessage } from '../../util/json.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from '../loop/live-session.ts';
 import { runMockScenario } from '../mock/mock-agent.ts';
 import { findScenario, SCENARIOS } from '../mock/scenarios.ts';
@@ -20,7 +25,7 @@ import {
   MAX_MOB_WAITS,
   MOB_WAIT_MS,
 } from '../play/play.ts';
-import { createProviders } from '../providers.ts';
+import { createCommandTranslator, createProviders } from '../providers.ts';
 import { compact, parseNeeds, type Cli } from './cli-context.ts';
 import { runLiveCycle, runLiveSession } from './live-commands.ts';
 
@@ -104,6 +109,8 @@ export async function playCommand(cli: Cli): Promise<number> {
           requirements: needs,
         };
   const providers = createProviders(config);
+  const translator = createCommandTranslator(config);
+  const listen = values.listen;
   const asked =
     config.decisions.provider !== 'ollama'
       ? ''
@@ -114,6 +121,23 @@ export async function playCommand(cli: Cli): Promise<number> {
     `playing: decisions by ${providers.decisionProvider.name}${asked}, plans by ` +
       `${providers.planner?.name ?? 'nobody'}; stop with pnpm cli halt or Ctrl+C\n`,
   );
+  const owners = config.minecraft.owners;
+  if (owners.length > 0) {
+    process.stderr.write(
+      `commands: from ${owners.join(', ')} (a whisper, or !command in chat; pnpm cli command ` +
+        `"<text>"), ${translator === null ? 'structured form only (!help)' : `natural language by ${translator.name}`}` +
+        `${listen ? '; listening: online for commands until the time limit' : ''}\n`,
+    );
+  } else if (listen) {
+    process.stderr.write('--listen: no owner is configured (MC_OWNERS), so no command can come\n');
+  }
+  // A fresh play: an owner's pause (or stop) from before is over; quests off stays.
+  const db = openDatabase(dbPath);
+  try {
+    createRepositories(db, systemClock).memory.setValue(OWNER_PAUSED_KEY, null);
+  } finally {
+    db.close();
+  }
   /** How System 1 decided, over every session of this play. */
   let system1 = NO_SYSTEM1_STATS;
   // Through the nights: play stops before the dark (no shelter yet), the agent is offline
@@ -124,28 +148,83 @@ export async function playCommand(cli: Cli): Promise<number> {
   let interrupted = false;
   const onInterrupt = (): void => void (interrupted = true);
   process.on('SIGINT', onInterrupt);
+  /** Waits `ms`, or less: why it stopped waiting early (Ctrl+C, the stop file, the limit). */
+  const waitUnlessStopped = async (ms: number): Promise<string | null> => {
+    const wakeAt = Date.now() + ms;
+    while (Date.now() < wakeAt) {
+      if (interrupted) return 'interrupted (Ctrl+C)';
+      if (existsSync(stopFile)) return `the stop file ${stopFile} exists`;
+      if (Date.now() >= deadline) return `reached the limit of ${limits.maxMinutes} minutes`;
+      await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(0, wakeAt - Date.now()))));
+    }
+    return null;
+  };
   /** runLivePlay ends in a row that stopped for a mob near home (see mobPause). */
   let mobWaits = 0;
+  /** With --listen: connection attempts in a row that failed. */
+  let failedConnects = 0;
   try {
     for (;;) {
       const minutesLeft = (deadline - Date.now()) / 60_000;
-      const out = await runLivePlay(
-        config,
-        dbPath,
-        {
-          limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, minutesLeft)) },
-          ...providers,
-          abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
-          ...(freeGoal === null ? {} : { goal: freeGoal }),
-          onEvent: (e) => {
-            if (e.kind === 'session-end' && e.system1 !== undefined) {
-              system1 = mergeSystem1Stats(system1, e.system1);
-            }
-            process.stderr.write(`${describePlayEvent(e)}\n`);
+      let out: Awaited<ReturnType<typeof runLivePlay>>;
+      try {
+        out = await runLivePlay(
+          config,
+          dbPath,
+          {
+            limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, minutesLeft)) },
+            ...providers,
+            abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
+            ...(freeGoal === null ? {} : { goal: freeGoal }),
+            listen,
+            translator,
+            onEvent: (e) => {
+              if (e.kind === 'session-end' && e.system1 !== undefined) {
+                system1 = mergeSystem1Stats(system1, e.system1);
+              }
+              process.stderr.write(`${describePlayEvent(e)}\n`);
+            },
           },
-        },
-        log,
-      );
+          log,
+        );
+      } catch (error) {
+        // Staying reachable: a server restart, a kick or the network is waited out.
+        if (!listen) throw error;
+        const wait = reconnectDelay(failedConnects);
+        failedConnects += 1;
+        process.stderr.write(
+          `listen: could not connect (attempt ${failedConnects}): ${errorMessage(error)}; ` +
+            `trying again in ${wait / 1000} s\n`,
+        );
+        const stop = await waitUnlessStopped(wait);
+        if (stop !== null) {
+          print({ stopReason: `${stop} (while reconnecting)`, minutes: minutesSince(started) });
+          return 0;
+        }
+        continue;
+      }
+      failedConnects = 0;
+      if (listen && out.info.closedReason !== null) {
+        const wait = reconnectDelay(0);
+        failedConnects = 1;
+        process.stderr.write(
+          `listen: the connection was lost (${out.info.closedReason}); reconnecting in ${wait / 1000} s\n`,
+        );
+        const stop = await waitUnlessStopped(wait);
+        if (stop === null) continue;
+        print({ stopReason: `${stop} (while reconnecting)`, minutes: minutesSince(started) });
+        return 0;
+      }
+      // Online for commands until the time limit: a long follow may use up one play's
+      // sessions; another play (a new connection) goes on.
+      if (
+        listen &&
+        out.stopReason === `reached the limit of ${limits.maxSessions} sessions` &&
+        Date.now() < deadline
+      ) {
+        process.stderr.write(`listen: ${out.stopReason}; playing on in a new session count\n`);
+        continue;
+      }
       const decided = describeSystem1Stats(system1);
       const summary = {
         stopReason: out.stopReason,
@@ -181,22 +260,31 @@ export async function playCommand(cli: Cli): Promise<number> {
           ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on (${out.stopReason.slice(0, 200)})\n`
           : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits}/${MAX_MOB_WAITS}), then playing on\n`,
       );
-      const wakeAt = Date.now() + sleepMs;
-      while (Date.now() < wakeAt) {
-        if (interrupted || existsSync(stopFile)) {
-          print({
-            ...summary,
-            stopReason: `stopped while waiting ${out.night !== null ? 'for sunrise' : 'for the mob to leave'}`,
-          });
-          return 0;
-        }
-        await new Promise((r) => setTimeout(r, 1000));
+      if ((await waitUnlessStopped(sleepMs)) !== null) {
+        print({
+          ...summary,
+          stopReason: `stopped while waiting ${out.night !== null ? 'for sunrise' : 'for the mob to leave'}`,
+        });
+        return 0;
       }
     }
   } finally {
     process.removeListener('SIGINT', onInterrupt);
   }
 }
+
+/**
+ * With --listen, how long to wait before reconnecting after `attempt` failed attempts in a
+ * row: 5 s, 15 s, 60 s, then every 2 minutes.
+ */
+export const RECONNECT_BACKOFF_MS: readonly number[] = [5_000, 15_000, 60_000, 120_000];
+
+export function reconnectDelay(attempt: number): number {
+  return RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)] ?? 120_000;
+}
+
+const minutesSince = (started: number): number =>
+  Number(((Date.now() - started) / 60_000).toFixed(1));
 
 /** `run --live`: a BOUNDED run of the current task's cycles on one connection. */
 export async function runCommand(cli: Cli): Promise<number> {
