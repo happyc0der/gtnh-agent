@@ -4,10 +4,10 @@ import type { Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
 import {
+  craftingRecipe,
   describeIngredient,
   ingredientRequirements,
   needsCraftingTable,
-  RECIPES,
 } from '../domain/recipes.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import { questBookPreconditions } from './quest-book-checks.ts';
@@ -134,7 +134,14 @@ export function checkPreconditions(
 
     case 'CRAFT_ITEM': {
       requireInventory();
-      const recipe = RECIPES[action.args.recipe];
+      // The same recipe data the client fills the grid from (src/domain/recipes.ts): the
+      // hand-verified table's, or the knowledge base's, whose ingredients may be any of an
+      // ore-dictionary entry's kinds.
+      const recipe = craftingRecipe(action.args.recipe);
+      if (recipe === null) {
+        failures.push(`${action.args.recipe} is not a recipe CRAFT_ITEM can make`);
+        break;
+      }
       const times = action.args.times;
       if (inventory !== null) {
         for (const req of ingredientRequirements(recipe)) {
@@ -142,7 +149,7 @@ export function checkPreconditions(
           const held = req.anyOf.reduce((n, item) => n + have(item), 0);
           if (held < need) {
             failures.push(
-              `inventory holds ${held} of ${describeIngredient(req.anyOf)}, need ${need} for ${times} x ${recipe.id}`,
+              `inventory holds ${held} of ${describeIngredient(req.anyOf, req.label)}, need ${need} for ${times} x ${recipe.id}`,
             );
           }
         }

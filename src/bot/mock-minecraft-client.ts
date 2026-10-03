@@ -51,11 +51,10 @@ import {
 } from '../domain/geometry.ts';
 import { known, unknown } from '../domain/known.ts';
 import {
+  craftingRecipe,
   describeIngredient,
   ingredientRequirements,
   needsCraftingTable,
-  RECIPES,
-  type RecipeId,
 } from '../domain/recipes.ts';
 import { bestTool, parseToolName, toolProblem, usesLeft } from '../domain/tools.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
@@ -249,11 +248,11 @@ export interface MockWorld {
   machines: MockMachine[];
   craftingTables: MockCraftingTable[];
   /**
-   * What the simulated server's crafting grid shows where it differs from the agent's
-   * recipe table (GTNH changes recipes); null = no result at all. Like the live client, the
+   * What the simulated server's crafting grid shows, by recipe id, where it differs from the
+   * agent's recipe (GTNH changes recipes); null = no result at all. Like the live client, the
    * mock then crafts nothing and reports what the server showed.
    */
-  craftingResults: Partial<Record<RecipeId, { item: string; count: number } | null>>;
+  craftingResults: Partial<Record<string, { item: string; count: number } | null>>;
   openContainerId: string | null;
   task: CurrentTask | null;
   recipe: KnownRecipeState | null;
@@ -1135,14 +1134,18 @@ export class MockMinecraftClient implements MinecraftClient {
       }));
   }
 
-  /** Like the live client: the server's result must match the table, or nothing is crafted. */
+  /**
+   * Like the live client: any recipe CRAFT_ITEM makes (src/domain/recipes.ts), and the
+   * server's result must match it, or nothing is crafted.
+   */
   #craft(args: {
-    recipe: RecipeId;
+    recipe: string;
     times: number;
     craftingTableId: string | null;
   }): ClientActionResult {
     const w = this.world;
-    const recipe = RECIPES[args.recipe];
+    const recipe = craftingRecipe(args.recipe);
+    if (recipe === null) return failed(`CRAFT_ITEM does not make ${args.recipe}`, 'REFUSED');
     if (args.craftingTableId !== null) {
       const table = w.craftingTables.find((t) => t.id === args.craftingTableId);
       if (table === undefined) return failed(`no crafting table ${args.craftingTableId}`);
@@ -1170,7 +1173,7 @@ export class MockMinecraftClient implements MinecraftClient {
         after[item] = (after[item] ?? 0) - take;
         need -= take;
       }
-      if (need > 0) return failed(`not enough ${describeIngredient(req.anyOf)}`);
+      if (need > 0) return failed(`not enough ${describeIngredient(req.anyOf, req.label)}`);
     }
     const made = recipe.result.count * args.times;
     after[recipe.result.item] = (after[recipe.result.item] ?? 0) + made;

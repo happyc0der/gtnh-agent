@@ -342,6 +342,34 @@ describe('rule 4: protected items', () => {
     expect(craft('planks_oak')).toEqual([]);
   });
 
+  it("checks a knowledge-base recipe's every kind too (an ore entry's, hundreds of them)", () => {
+    const pickaxe: ActionSpec = {
+      type: 'CRAFT_ITEM',
+      args: { recipe: 'minecraft:wooden_pickaxe#1', times: 1, craftingTableId: 'table.main' },
+    };
+    expect(codes(pickaxe)).toEqual([]);
+    // A BOP plank is one of plankWood's 650 kinds: protecting it protects the recipe.
+    const ctx = safetyCtx(
+      defaultConfig({ ...MOCK_CONFIG, safety: { protectedItems: ['BiomesOPlenty:planks'] } }),
+    );
+    expect(
+      evaluateAction(action(pickaxe), makeState(), ctx, emptyFailureHistory).violations.map(
+        (v) => v.code,
+      ),
+    ).toContain('PROTECTED_ITEM');
+    // An id CRAFT_ITEM does not make (the dump's saw recipe for sticks) never passes the schema.
+    const valid = action({
+      type: 'CRAFT_ITEM',
+      args: { recipe: 'planks_oak', times: 1, craftingTableId: null },
+    });
+    const forged = { ...valid, args: { ...valid.args, recipe: 'minecraft:stick#1' } };
+    expect(
+      evaluateAction(forged, makeState(), safetyCtx(), emptyFailureHistory).violations.map(
+        (v) => v.code,
+      ),
+    ).toEqual(['UNSUPPORTED_ACTION']);
+  }, 30_000);
+
   it('refuses crafting at a crafting table the state does not know', () => {
     expect(
       codes({

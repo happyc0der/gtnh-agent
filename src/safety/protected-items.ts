@@ -1,5 +1,5 @@
 import type { ActionSpec } from '../domain/actions.ts';
-import { ingredientRequirements, RECIPES } from '../domain/recipes.ts';
+import { craftingRecipe, ingredientRequirements } from '../domain/recipes.ts';
 import type { SafetyViolation } from '../domain/safety.ts';
 
 /**
@@ -18,9 +18,12 @@ export function itemsTouchedBy(spec: ActionSpec): string[] {
     case 'PLACE_BLOCK':
       // The placed block uses up one item.
       return [spec.args.item];
-    case 'CRAFT_ITEM':
+    case 'CRAFT_ITEM': {
       // Every item the recipe MAY consume: the client picks among them, so all must be allowed.
-      return ingredientRequirements(RECIPES[spec.args.recipe]).flatMap((r) => [...r.anyOf]);
+      // (A recipe id CRAFT_ITEM does not make never passes the action's schema.)
+      const recipe = craftingRecipe(spec.args.recipe);
+      return recipe === null ? [] : ingredientRequirements(recipe).flatMap((r) => [...r.anyOf]);
+    }
     case 'SMELT':
       // The fuel counts even when none is added: a protected item is never named as fuel.
       return [spec.args.input, spec.args.fuel];
