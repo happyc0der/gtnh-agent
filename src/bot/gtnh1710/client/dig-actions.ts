@@ -351,7 +351,7 @@ export class DigActions {
             ? `the drop reached the inventory: ${drops}`
             : itemsBefore === null
               ? 'the inventory was unknown, so the drop could not be checked'
-              : `no drop reached the inventory (none, or it lies at ${where} out of pickup reach: walk onto it)`)
+              : 'no drop reached the inventory (none, or it lies out of pickup reach)')
         ).slice(0, 500),
         {
           x,
