@@ -1257,7 +1257,7 @@ export class WorldModel {
   /**
    * Whether a dropped item lies still: its position has not changed for ITEM_SETTLE_MS (since
    * it appeared, or last moved) and it lies on a block (#itemOnBlock), or for ITEM_STILL_MS
-   * whatever it seems to lie on. A dropped block flies up and comes down within a dozen ticks
+   * whatever it seems to lie on. A block's drop flies up and comes down within a dozen ticks
    * (EntityItem: 0.2 up, up to 0.1 sideways a tick, falling 0.04 faster a tick); the server
    * shows where it came to rest at its next update, 20 ticks after it appeared.
    */

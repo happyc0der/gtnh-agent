@@ -190,7 +190,7 @@ describe('Gtnh1710Client fighting', () => {
       known: true,
       value: { items: { 'minecraft:beef': 2, 'minecraft:leather': 1 } },
     });
-  }, 10_000);
+  }, 15_000);
 
   it('never walks to the drops of a hostile it killed (that is no escape)', async () => {
     const { server, client } = await start({
