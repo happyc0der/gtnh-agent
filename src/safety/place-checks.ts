@@ -1,4 +1,4 @@
-import { fallsWhenPlaced, type PlaceableItem } from '../domain/blocks.ts';
+import { fallsWhenPlaced, isStationItem, type PlaceableItem } from '../domain/blocks.ts';
 import type { BlockPosition } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { blockCentre, bodyColumns, formatPosition, headBlockY } from '../domain/geometry.ts';
@@ -7,8 +7,9 @@ import { checkHazardClearance } from './coordinate-boundaries.ts';
 
 /**
  * PLACE_BLOCK rules that the observation can answer. The live client re-checks all of them
- * (and more: the fence, everything touching the cell, entities, the block it clicks) on the
- * blocks the server sent, just before it places.
+ * (and more: the fence, everything touching the cell, entities, the block it clicks; for a
+ * crafting table or furnace, that it is not in the way the player walks) on the blocks the
+ * server sent, just before it places.
  *  - The cell must be one the observation lists as placeable: empty (air, tall grass or a
  *    dead bush), within reach, clear of the player's body and of every entity, against a
  *    plain full block, with no hazard next to it.
@@ -16,6 +17,9 @@ import { checkHazardClearance } from './coordinate-boundaries.ts';
  *    placing player out of its entity check).
  *  - Sand and gravel only where they cannot fall: on a plain full block, and never in a
  *    column the player's body stands in (above its head they would fall on it).
+ *  - A crafting table or furnace (approved 2026-09-30) on a solid floor beside the player:
+ *    the cell the observation says takes sand and gravel (a plain full block under it, out
+ *    of the player's own columns). It is placed to be used, and stays.
  *  - Clear of known hazards, like a dug block.
  */
 export function placeChecks(
@@ -73,6 +77,17 @@ export function placeChecks(
       code: 'UNSAFE_PLACE',
       severity: 'pause',
       message: `${item} at ${where} would fall: the observation does not show a plain full block holding it up`,
+      details,
+    });
+  }
+  if (isStationItem(item) && !cell.takesFalling && v.length === 0) {
+    v.push({
+      code: 'UNSAFE_PLACE',
+      severity: 'pause',
+      message:
+        `${item} at ${where} would not stand on a solid floor beside the player (a listed ` +
+        'cell whose takesFalling is true: a plain full block under it, out of the ' +
+        "player's own columns)",
       details,
     });
   }

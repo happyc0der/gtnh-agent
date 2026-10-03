@@ -180,8 +180,9 @@ export const DigBlockSpec = z.strictObject({
 });
 /**
  * Place ONE block the player carries (an allowlisted plain block: dirt, cobblestone, sand,
- * gravel, sandstone, planks, logs) into the empty cell at `position`, which the observation
- * lists as placeable. See docs/action-contract.md.
+ * gravel, sandstone, planks, logs; or a crafting table or furnace, on a solid floor) into
+ * the empty cell at `position`, which the observation lists as placeable. See
+ * docs/action-contract.md.
  */
 export const PlaceBlockSpec = z.strictObject({
   type: z.literal('PLACE_BLOCK'),

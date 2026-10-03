@@ -238,6 +238,9 @@ export class FakePlaceSim {
     this.#chests.useHeldItem();
     record.placed = true;
     this.placed.push({ x: tx, y: ty, z: tz, name: blockName });
+    // A placed crafting table or furnace is one: right-clicked, it opens its window.
+    if (blockName === 'minecraft:crafting_table') this.#chests.addTable(tx, ty, tz);
+    if (blockName === 'minecraft:furnace') this.#chests.addFurnace(tx, ty, tz);
     this.onPlaced?.(tx, ty, tz);
     // The world's own change reaches every watcher on the next tick.
     this.#later(TICK_MS, () =>

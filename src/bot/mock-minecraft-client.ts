@@ -3,6 +3,7 @@ import {
   fallsWhenPlaced,
   GARDEN_BLOCKS,
   isDiggableBlock,
+  isStationItem,
   placedBlockOf,
   type DiggableBlock,
   type GardenBlock,
@@ -63,6 +64,7 @@ import { FURNACE_COOK_TICKS, furnaceFuelTicks, type ProfileId } from '../domain/
 import type { BlockWindow, FurnaceState, InteractableBlock } from '../domain/game-state.ts';
 import type { Clock, ManualClock } from '../util/clock.ts';
 import { bodyOverlaps, entityOverlaps } from './gtnh1710/placing.ts';
+import { observedTableId } from './gtnh1710/world-model.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from './minecraft-client.ts';
 
 const STACK_SIZE = 64;
@@ -1045,7 +1047,11 @@ export class MockMinecraftClient implements MinecraftClient {
 
   /**
    * Places the block, like a server would: only into a placeable cell (see #placeableCells),
-   * never sand or gravel where it would fall, and only with the item in the inventory.
+   * never sand or gravel where it would fall, and only with the item in the inventory. Like
+   * the live client, a crafting table or furnace only on a solid floor, out of the player's
+   * own columns (the mock has no terrain to judge passages by). A placed table is then one
+   * the agent sees (`crafting_table:<x>.<y>.<z>`, as the live client names it), and a placed
+   * furnace an empty one it may smelt in.
    */
   #place(p: BlockPosition, item: PlaceableItem): ClientActionResult {
     const w = this.world;
@@ -1056,10 +1062,34 @@ export class MockMinecraftClient implements MinecraftClient {
     if (fallsWhenPlaced(item) && !cell.takesFalling) {
       return failed(`${item} would fall at ${formatPosition(p)}`);
     }
+    if (isStationItem(item) && !cell.takesFalling) {
+      return failed(`${item} at ${formatPosition(p)} would not stand on a solid floor`, 'REFUSED');
+    }
     const block = placedBlockOf(item);
     w.inventory.items[item] = have - 1;
     w.placedBlocks = [{ block, position: { ...p } }, ...w.placedBlocks];
     if (isDiggableBlock(block)) w.resourceBlocks.push({ block, position: { ...p } });
+    if (block === 'minecraft:crafting_table') {
+      w.craftingTables.push({
+        id: observedTableId(p),
+        name: `Crafting table at (${p.x}, ${p.y}, ${p.z})`,
+        position: { ...p },
+      });
+    }
+    if (block === 'minecraft:furnace') {
+      w.furnaces = [
+        ...(w.furnaces ?? []),
+        {
+          position: { ...p },
+          input: null,
+          fuel: null,
+          output: null,
+          cookTicks: 0,
+          burnTicksLeft: 0,
+          fuelItemTicks: 0,
+        },
+      ];
+    }
     return ok(`placed ${block} at ${formatPosition(p)}`, { block, item, stackUsed: true });
   }
 
@@ -1084,9 +1114,13 @@ export class MockMinecraftClient implements MinecraftClient {
       ...w.placedBlocks.map((b) => key(b.position)),
     ]);
     const fixtures = new Set(
-      [...w.containers, ...w.machines, ...w.craftingTables, ...w.generators].map((f) =>
-        key(cellOf(f.position)),
-      ),
+      [
+        ...w.containers,
+        ...w.machines,
+        ...w.craftingTables,
+        ...w.generators,
+        ...(w.furnaces ?? []),
+      ].map((f) => key(cellOf(f.position))),
     );
     const hazards = w.hazards.map((h) => cellOf(h.position));
     const entities = [...w.hostiles, ...w.unclassified];
