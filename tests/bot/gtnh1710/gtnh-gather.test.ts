@@ -247,4 +247,111 @@ describe('GATHER on the live client (fake server)', () => {
       value: { items: { 'minecraft:log': 1, 'minecraft:sapling': 2 } },
     });
   }, 45_000);
+
+  it('fells a tree from its base, standing beside it: every drop falls to the base and is picked up', async () => {
+    // Seen live 2026-10-01: three logs dug, one picked up. Dug from afar, nearest first, the
+    // log at y=107 dropped onto the log under it, 3 blocks from the player and out of reach.
+    // A trunk of four logs at (-2, 106..109, -11) under leaves; the player stands at
+    // (-4.5, 106, -7.5), three columns off, with the lower three logs within 4.5 of its eyes.
+    const base = { x: -2, y: 106, z: -11 };
+    const world = new Map<string, number>([[`-2,110,-11`, BLOCK.leaves]]);
+    for (let y = 106; y <= 109; y++) world.set(key({ ...base, y }), BLOCK.log);
+    for (const [dx, dz] of [
+      [-1, 0],
+      [1, 0],
+      [0, -1],
+      [0, 1],
+    ] as const) {
+      world.set(key({ x: base.x + dx, y: 109, z: base.z + dz }), BLOCK.leaves);
+    }
+    server = new FakeGtnhServer({ blocks: DIG_TEST_BLOCK_REGISTRY, blockOverrides: world });
+    const config = defaultConfig({
+      minecraft: {
+        host: '127.0.0.1',
+        port: await server.listen(),
+        enableLiveConnection: true,
+        serverIdentityMarker: 'gtnh-agent-test',
+        connectTimeoutMs: 5_000,
+        initialStateGraceMs: 2_000,
+        movement: { enabled: true, fence: TERRAIN, stopFile: join(dir, 'STOP') },
+        digging: { enabled: true },
+      },
+    });
+    client = new Gtnh1710Client({ config: config.minecraft, clock: systemClock, retryDelayMs: 50 });
+    await client.connect();
+    const repos = createRepositories(openDatabase(IN_MEMORY), systemClock);
+    syncConfigToDatabase(config, repos);
+    addTask(repos, config, {
+      taskId: 'gather-logs',
+      goal: 'Gather 4 logs',
+      plan: undefined,
+      now: new Date(),
+    });
+    const planner = new MockPlannerProvider([
+      {
+        name: 'gather',
+        when: {},
+        response: {
+          kind: 'plan',
+          plan: {
+            goal: 'Gather 4 logs',
+            steps: [
+              {
+                step: 1,
+                action: { type: 'GATHER', args: { block: 'minecraft:log', count: 4 } },
+                rationale: 'The tree in view.',
+              },
+            ],
+            requiresUserApproval: false,
+            explanation: 'One GATHER step.',
+            failureHandling: {
+              onStepFailure: 'REPLAN',
+              maxRetriesPerStep: 1,
+              escalationMessage: 'Could not gather the logs.',
+            },
+          },
+        },
+      },
+    ]);
+    const deps = {
+      config,
+      client,
+      repos,
+      decisionProvider: new DeterministicDecisionProvider(),
+      planner,
+      clock: systemClock,
+      newId: sequentialIds(),
+    };
+    const results: CycleResult[] = [];
+    while (results.length < 8 && repos.plans.get(1)?.status !== 'completed') {
+      results.push(await runSingleCycle(deps));
+    }
+    // First the walk to beside the trunk (its base was in reach, but three columns off),
+    // then the trunk from the bottom up.
+    expect(results.map((r) => r.summary)).toEqual([
+      'REQUEST_PLANNER -> MOVE_TO -> succeeded',
+      'REQUEST_PLANNER -> DIG_BLOCK -> succeeded',
+      'REQUEST_PLANNER -> DIG_BLOCK -> succeeded',
+      'REQUEST_PLANNER -> DIG_BLOCK -> succeeded',
+      'REQUEST_PLANNER -> DIG_BLOCK -> succeeded',
+    ]);
+    expect(results[0]?.action?.reason).toMatch(/to dig \(-2, 106, -11\)/);
+    expect(server.digSim.broken.map((b) => b.y)).toEqual([106, 107, 108, 109]);
+    // Each drop fell down the emptied column to the base, next to the player: no walk to one.
+    for (const r of results.slice(1)) {
+      expect(r.outcome?.execution?.data).toMatchObject({
+        dropCollected: true,
+        drops: '1 x minecraft:log',
+      });
+      expect(r.outcome?.execution?.data).not.toHaveProperty('walkedToDrop');
+    }
+    expect(server.itemSim.spawned.map((i) => i.rest.y)).toEqual([
+      106.125, 106.125, 106.125, 106.125,
+    ]);
+    expect(server.digSim.pickedUp).toHaveLength(4);
+    expect((await client.observe()).inventory).toMatchObject({
+      known: true,
+      value: { items: { 'minecraft:log': 4 } },
+    });
+  }, 60_000);
 });

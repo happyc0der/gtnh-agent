@@ -336,6 +336,27 @@ export interface GatherOptions {
 const REMEMBERED_NEAR = 12;
 
 /**
+ * Trunks: a GATHER of logs fells each one from its base, as a person chops a tree. Seen live
+ * 2026-10-01: gathering logs for a crafting table, the agent dug three logs and got one; it
+ * dug the logs at (-20, 116, 123) and (-18, 117, 123) from (-20.5, 114, 122.5), high in the
+ * trees and off its own column, and their drops stopped on the logs and leaves under them, out
+ * of its pickup reach. Dug from the bottom, beside the trunk, every drop falls down the emptied
+ * column to the base, next to the player.
+ */
+const TRUNK_BLOCKS: ReadonlySet<DiggableBlock> = new Set<DiggableBlock>([
+  'minecraft:log',
+  'minecraft:log2',
+]);
+
+/** Whether a dug log's drop would stop on `block` under it (a log, or leaves of any kind). */
+const holdsADrop = (block: DiggableBlock): boolean =>
+  TRUNK_BLOCKS.has(block) || /leaves/i.test(block);
+
+/** Whether feet at `feet` stand in one of the 3 x 3 columns around the block `p`. */
+const besideColumn = (feet: Position, p: BlockPosition): boolean =>
+  Math.abs(Math.floor(feet.x) - p.x) <= 1 && Math.abs(Math.floor(feet.z) - p.z) <= 1;
+
+/**
  * The next action, or how the step ends; `skip`: blocks (and `skipEntities`: animals) to
  * remember not to try again. `entity` is the animal the action is for (null for a block);
  * `travel`: an EXPLORE toward a remembered place (`target`).
@@ -363,6 +384,11 @@ export type GatherChoice =
  *    spot. Blocks within reach come first (no walk at all), then the nearest stand spot. A
  *    block is passed over when `check` says the dig (from where the player would stand) or
  *    the walk would be refused;
+ *  - logs are felled trunk by trunk from the base (TRUNK_BLOCKS): a log with a listed log or
+ *    leaves under it (its drop would stop there) comes after every log with neither; one is
+ *    dug only from beside its trunk (feet in the 3 x 3 columns around it; with a stand spot,
+ *    a log in reach from farther away is walked to first); and the log in reach in the
+ *    column of the log dug last comes first, so the trunk goes on up while it is in reach;
  *  - an animal: see chooseHuntAction;
  *  - nothing left: the step ends, and the planner is asked again (it can EXPLORE).
  */
@@ -397,27 +423,56 @@ export function chooseGatherAction(
 
   const skipped = new Set(progress.skipped.map(key));
   const skip: BlockPosition[] = [];
-  const candidates: Array<{ position: BlockPosition; walkTo: Position | null; cost: number }> = [];
+  const candidates: Array<{
+    position: BlockPosition;
+    walkTo: Position | null;
+    cost: number;
+    /** Felling: a log on another log or on leaves, whose drop would stop there: later. */
+    later: boolean;
+    /** Felling: a log in reach in the column of the log dug last: the trunk goes on. */
+    goesOn: boolean;
+  }> = [];
+  // Felling trunks (logs): the listed blocks a log's drop would stop on, and the log dug last.
+  const resources = state.nearbyBlocks.value.resources;
+  const felling = TRUNK_BLOCKS.has(block);
+  const dropHolders = new Set(
+    felling
+      ? resources
+          .filter((r) => holdsADrop(r.block) && !skipped.has(key(r.position)))
+          .map((r) => key(r.position))
+      : [],
+  );
+  const lastDug =
+    felling && progress.last !== null && !progress.last.walk && progress.last.entity === null
+      ? progress.last.position
+      : null;
   // In view, but with no spot a walk reaches to dig it from (standAt null).
   let unreachable = 0;
-  for (const r of state.nearbyBlocks.value.resources) {
+  for (const r of resources) {
     if (!givesSame(r.block, block) || skipped.has(key(r.position))) continue;
     if (r.standAt === null) {
       unreachable += 1;
       continue;
     }
+    const later = dropHolders.has(key({ ...r.position, y: r.position.y - 1 }));
     const reach = eyeDistanceToBlock(feet, r.position);
-    if (reach <= opts.reach) {
-      candidates.push({ position: r.position, walkTo: null, cost: reach });
+    const walked =
+      progress.last?.walk === true &&
+      progress.last.travel !== true &&
+      same(progress.last.position, r.position);
+    // A log is dug standing beside its trunk, so that its drop falls next to the player; in
+    // reach from farther away, the walk to its stand spot comes first (unless that walk was
+    // just made). Other blocks are dug from wherever they are in reach.
+    const fromHere =
+      !felling || r.standAt === undefined || walked || besideColumn(feet, r.position);
+    if (reach <= opts.reach && fromHere) {
+      const goesOn = lastDug !== null && lastDug.x === r.position.x && lastDug.z === r.position.z;
+      candidates.push({ position: r.position, walkTo: null, cost: reach, later, goesOn });
       continue;
     }
     // Out of reach: walk to its stand spot, unless the adapter computes none, or the last
     // walk (or the player) is already there and it is still out of reach.
     if (r.standAt === undefined) continue;
-    const walked =
-      progress.last?.walk === true &&
-      progress.last.travel !== true &&
-      same(progress.last.position, r.position);
     if (walked || distance(feet, r.standAt) <= GATHER_STAND_TOLERANCE) {
       skip.push(r.position);
       continue;
@@ -426,9 +481,15 @@ export function chooseGatherAction(
       position: r.position,
       walkTo: r.standAt,
       cost: opts.reach + distance(feet, r.standAt),
+      later,
+      goesOn: false,
     });
   }
-  candidates.sort((a, b) => a.cost - b.cost);
+  // Felling: a trunk from its base (no log or leaves under it) up, its next log first.
+  candidates.sort(
+    (a, b) =>
+      Number(a.later) - Number(b.later) || Number(b.goesOn) - Number(a.goesOn) || a.cost - b.cost,
+  );
 
   let nearestRefusal: string | null = null;
   for (const c of candidates) {
