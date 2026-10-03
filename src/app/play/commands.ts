@@ -139,6 +139,7 @@ function runOf(play: PlayState, id: number): CommandRun {
       reportedDistance: null,
       missing: null,
       stuck: 0,
+      startHave: null,
     };
     play.commandRuns.set(id, run);
   }
@@ -868,7 +869,10 @@ async function goalCommandRound(
     finish(play, cmd, 'done', `Done: I have ${have} ${command.item}`);
     return 'next-round';
   }
-  if (have * 2 >= command.count) {
+  // Halfway through what was missing when the command began, not through the count: seen
+  // live, "get me 14 dirt" holding 12 said "Halfway: 12/14" before it had dug anything.
+  run.startHave ??= have;
+  if (have > run.startHave && (have - run.startHave) * 2 >= command.count - run.startHave) {
     sayOnce(play, cmd, 'half', `Halfway: ${have}/${command.count} ${command.item}`);
   }
   const missing = missingFor(free.requirements, inventory);

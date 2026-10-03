@@ -81,6 +81,8 @@ export interface CommandRun {
   /** A goal: items missing before the last session, and sessions in a row with no fewer. */
   missing: number | null;
   stuck: number;
+  /** A goal: how many of its item the inventory held when the command began. */
+  startHave: number | null;
 }
 
 /**

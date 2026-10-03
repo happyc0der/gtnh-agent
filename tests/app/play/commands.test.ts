@@ -383,6 +383,23 @@ describe("owners' commands in play", () => {
     );
   });
 
+  it('halfway counts from what was held when the command began', async () => {
+    // Seen live: "get me 14 dirt" holding 12 said "Halfway: 12/14" before digging anything.
+    const repos = open();
+    const sim = newSim({
+      heard: [whisper('!get 16 dirt')],
+      inventory: { 'minecraft:dirt': 12 },
+      gain: { 'minecraft:dirt': 1 },
+    });
+    await runPlay(deps(repos, sim), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: getting minecraft:dirt until I have 16 (I have 12)',
+      // The fake gains 3 a session: 15 is past halfway from 12; 12 itself never was.
+      'Halfway: 15/16 minecraft:dirt',
+      'Done: I have 18 minecraft:dirt',
+    ]);
+  });
+
   it('a goal that makes no progress fails after maxStuckSessions sessions', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!mine 4 sand')] });
