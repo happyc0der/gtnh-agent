@@ -35,6 +35,12 @@ export const MAX_DROP_WALKS = 2;
  * appeared, world-model.ts ITEM_SETTLE_MS later it counts as settled (ITEM_STILL_MS at most).
  */
 export const DROP_SETTLE_WAIT_MS = 5_000;
+/**
+ * A drop of the client's own that an earlier dig or kill left lying (a walk to it stopped,
+ * the walks ran out, or it lay out of reach then) is swept up with a later one's drops when it
+ * lies within this far of it, as a person sweeps up what fell around the tree.
+ */
+export const SWEEP_RADIUS = 4;
 
 const distance = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
@@ -52,6 +58,30 @@ export function actionDrops(
   return items.filter(
     (i) => i.spawnedAt.getTime() >= since.getTime() && distance(i.spawn, origin) <= spawnRadius,
   );
+}
+
+/**
+ * What an action sweeps up besides its own drops: the client's own earlier drops (`own`: ids
+ * of items earlier digs and kills dropped) still lying within SWEEP_RADIUS of `origin`, lying
+ * still, of an item it wants (`wanted`: what this action dropped or picked up), nearest to
+ * `origin` first. Another player's items are never among them.
+ */
+export function leftovers(
+  items: readonly ItemEntity[],
+  own: ReadonlySet<number>,
+  wanted: ReadonlySet<string>,
+  origin: Vec3,
+): ItemEntity[] {
+  return items
+    .filter(
+      (i) =>
+        own.has(i.entityId) &&
+        i.settled &&
+        i.item !== null &&
+        wanted.has(i.item) &&
+        distance(i.position, origin) <= SWEEP_RADIUS,
+    )
+    .sort((a, b) => distance(a.position, origin) - distance(b.position, origin));
 }
 
 /** How to pick up one dropped item that lies still: it is in reach, a walk, or why not. */

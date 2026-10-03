@@ -3,8 +3,10 @@ import {
   cellText,
   describeDrop,
   DROP_SETTLE_WAIT_MS,
+  leftovers,
   MAX_DROP_WALKS,
   planDropFetch,
+  SWEEP_RADIUS,
 } from '../drops.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import type { Vec3 } from '../walking.ts';
@@ -41,12 +43,15 @@ export interface DropOutcome {
 /**
  * Picking up what a dig or a kill dropped when it did not reach the inventory by itself
  * (drops.ts has the rules): DIG_BLOCK's drop (dig-actions.ts dig) and a killed farm animal's
- * (combat-actions.ts), as a player walks over to what fell.
+ * (combat-actions.ts), as a player walks over to what fell; and sweeping up, with them, what
+ * earlier ones left lying near.
  */
 export class DropActions {
   readonly #core: ClientCore;
   readonly #opts: Gtnh1710ClientOptions;
   readonly #world: WorldModel;
+  /** Ids of the items this client's own digs and kills dropped: only those are swept up. */
+  readonly #own = new Set<number>();
 
   constructor(core: ClientCore) {
     this.#core = core;
@@ -69,6 +74,17 @@ export class DropActions {
     return actionDrops(near.value, req.origin, req.since, req.spawnRadius);
   }
 
+  /** Whether a drop an earlier dig or kill of this client left lies within SWEEP_RADIUS. */
+  leftoversNear(origin: Vec3): boolean {
+    const now = this.#opts.clock.now();
+    // Picked up, merged or despawned: gone for good (the server never reuses an entity id).
+    for (const id of this.#own) {
+      if (this.#world.itemEntity(id, origin, now) === null) this.#own.delete(id);
+    }
+    const near = this.#world.itemEntitiesNear(origin, SWEEP_RADIUS, now);
+    return near.known && near.value.some((i) => this.#own.has(i.entityId));
+  }
+
   /**
    * Picks up the action's drops (lying). First each must lie still (world-model.ts: the server
    * shows where an item came to rest 20 ticks after it appeared) or be picked up, for at most
@@ -77,8 +93,10 @@ export class DropActions {
    * planDropFetch puts the player (an ordinary checked walk inside the fence, movement-actions.ts
    * walkTo: it stops for threats and breaks nothing), at most MAX_DROP_WALKS of them, and its
    * pickup waited for. A drop with no spot to fetch it from, no way there, or past the walks
-   * is left; a walk stopped on the way (a threat, a correction) ends the fetching. The note
-   * says what was picked up where, and what was left there and why.
+   * is left; a walk stopped on the way (a threat, a correction) ends the fetching. Then, with
+   * the walks left, it sweeps up the same way what earlier digs and kills of this client left
+   * lying near (drops.ts leftovers: of an item this action dropped or picked up too). The note
+   * says what was picked up where, and what of the action's drops was left there and why.
    */
   async collect(req: DropRequest): Promise<DropOutcome> {
     const clock = this.#opts.clock;
@@ -111,8 +129,14 @@ export class DropActions {
       notes.push(`its drops cannot be told apart: ${first}`);
       return outcome();
     }
-    if (first.length === 0) {
-      if (gainSince(req.itemsBefore).length === 0) notes.push('no drop of it was seen');
+    for (const i of first) this.#own.add(i.entityId);
+    // What it wants swept up with them: the items it dropped, and what of them arrived.
+    const wanted = new Set<string>([
+      ...first.flatMap((i) => (i.item === null ? [] : [i.item])),
+      ...gainSince(req.itemsBefore).map(([item]) => item),
+    ]);
+    if (first.length === 0 && wanted.size === 0) {
+      notes.push('no drop of it was seen');
       return outcome();
     }
     // Each comes to rest (or is picked up) first: until then, where it will lie is not known.
@@ -132,6 +156,11 @@ export class DropActions {
         notes.push(`its drops cannot be told apart: ${now}`);
         break;
       }
+      const near = this.#world.itemEntitiesNear(req.origin, SWEEP_RADIUS, clock.now());
+      if (!near.known) {
+        notes.push(`its drops cannot be told apart: ${near.reason}`);
+        break;
+      }
       const feet = this.#world.ownPosition;
       if (feet === null) {
         notes.push('the player position is not known');
@@ -139,23 +168,36 @@ export class DropActions {
       }
       const far = (i: ItemEntity): number =>
         Math.hypot(i.position.x - feet.x, i.position.y - feet.y, i.position.z - feet.z);
-      const next = now.filter((i) => !tried.has(i.entityId)).sort((a, b) => far(a) - far(b))[0];
+      const mine = now.filter((i) => !tried.has(i.entityId)).sort((a, b) => far(a) - far(b));
+      // The action's own drops first; then what earlier ones left lying near.
+      const sweeping = mine.length === 0;
+      const next = sweeping
+        ? leftovers(near.value, this.#own, wanted, req.origin).find(
+            (i) => !tried.has(i.entityId) && !now.some((d) => d.entityId === i.entityId),
+          )
+        : mine[0];
       if (next === undefined) break;
       tried.add(next.entityId);
       const what = describeDrop(next);
+      // A leftover that cannot be fetched now was reported when it was left: no more notes.
+      const leave = (why: string): void => {
+        if (!sweeping) notes.push(`${what} is left there: ${why}`);
+      };
       if (!next.settled) {
-        notes.push(`${what} did not come to rest within ${DROP_SETTLE_WAIT_MS / 1000} s`);
+        if (!sweeping) {
+          notes.push(`${what} did not come to rest within ${DROP_SETTLE_WAIT_MS / 1000} s`);
+        }
         continue;
       }
       const world = this.#world.walkWorld();
       const area = this.#core.fence();
       if (world === null || area.fence === null) {
-        notes.push(`${what} is left there: ${area.problem ?? 'the block data is not known'}`);
+        leave(area.problem ?? 'the block data is not known');
         break;
       }
       const plan = planDropFetch(world, area.fence, feet, next);
       if (plan.kind === 'refused') {
-        notes.push(`${what} is left there: ${plan.reason}`);
+        leave(plan.reason);
         continue;
       }
       const before = this.#world.inventoryItems() ?? req.itemsBefore;
@@ -163,23 +205,25 @@ export class DropActions {
         // Its pickup delay, or a tick: the server picks it up at the player's next tick.
         await this.#core.waitFor(() => gone(next.entityId), DROP_WAIT_MS);
         const got = gainSince(before);
-        notes.push(
-          gone(next.entityId)
-            ? `picked up ${got.length > 0 ? describeGain(got) : what}`
-            : `${what} lies within reach but was not picked up (is the inventory full?)`,
-        );
+        if (gone(next.entityId)) {
+          notes.push(`picked up ${got.length > 0 ? describeGain(got) : what}`);
+        } else if (!sweeping) {
+          notes.push(`${what} lies within reach but was not picked up (is the inventory full?)`);
+        }
         continue;
       }
       if (walks >= MAX_DROP_WALKS) {
-        notes.push(`${what} is left there: ${MAX_DROP_WALKS} walks to drops already`);
+        leave(`${MAX_DROP_WALKS} walks to drops already`);
         continue;
       }
       const where = cellText(next.position);
-      this.#core.log(`walking onto ${cellText(plan.spot)} for ${what}`);
+      this.#core.log(
+        `walking onto ${cellText(plan.spot)} for ${what}${sweeping ? ', left there earlier' : ''}`,
+      );
       const walked = await this.#core.movement.walkTo(plan.spot, { stopForThreats: true });
       if (!walked.ok && walked.code !== 'FAILED') {
         // Refused before a step (no way there, a blocker): nothing moved, the next may do.
-        notes.push(`${what} is left there: ${walked.message}`);
+        leave(walked.message);
         continue;
       }
       walks += 1;
@@ -191,9 +235,11 @@ export class DropActions {
       await this.#core.waitFor(() => gone(next.entityId), DROP_WAIT_MS);
       const got = gainSince(before);
       notes.push(
-        got.length > 0
-          ? `walked to the drop${got.length > 1 ? 's' : ''} at ${where} and picked up ${describeGain(got)}`
-          : `walked to ${cellText(plan.spot)} for ${what}, but nothing reached the inventory`,
+        got.length === 0
+          ? `walked to ${cellText(plan.spot)} for ${what}, but nothing reached the inventory`
+          : sweeping
+            ? `swept up ${describeGain(got)} left at ${where} earlier`
+            : `walked to the drop${got.length > 1 ? 's' : ''} at ${where} and picked up ${describeGain(got)}`,
       );
     }
     return outcome();

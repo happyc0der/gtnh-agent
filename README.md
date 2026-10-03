@@ -475,7 +475,8 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
   follows the item the server spawned until it lies still, then walks to where it is in reach,
   with an ordinary checked walk inside the fence that stops for threats and breaks nothing;
   never next to a hazard or out of the fence, at most 2 walks. Otherwise the result says why it
-  is left there. A killed farm animal's drops are fetched the same way.
+  is left there. A killed farm animal's drops are fetched the same way, and a later dig or kill
+  sweeps up what an earlier one of its own left lying within 4 blocks (never anyone else's).
 - A `GATHER` of logs fells each tree from its base, standing beside the trunk, so every drop
   falls down the emptied column to the player.
 - A `MOVE_TO` over terrain may break up to 4 leaves in its way, the same way: before a move

@@ -1083,6 +1083,12 @@ cell. A player watches where a drop goes and walks over to it; the client does t
   fence, in lava), one that ended up more than 6 blocks from where it appeared, one no walk
   reaches, and any past 2 walks are left where they lie; a walk that stops on the way (a
   threat, a correction, the stop file) ends the fetching. The dig or the kill stands either way.
+- **Sweeping up**, as a person sweeps up what fell around a tree. The client remembers which
+  items its own digs and kills dropped. With the walks left, a dig or a kill also picks up, the
+  same way, such an item an earlier one left lying (a walk to it stopped, the walks ran out, it
+  lay out of reach then) within 4 blocks, lying still, of an item this one dropped or picked up
+  too; never another player's items. A dig whose drop arrived at once looks only when such an
+  item lies near.
 - **The result** says what was picked up where, and what was left there and why ("walked to the
   drop at (-5, 105, -9) and picked up 1 x minecraft:sand"; "1 x minecraft:dirt at (1, 106, -8)
   is left there: no cell inside the play area ... puts it within pickup reach"), with

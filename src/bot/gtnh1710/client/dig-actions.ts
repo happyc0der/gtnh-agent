@@ -111,7 +111,8 @@ export class DigActions {
    * by itself (it flew off, or stopped on a log or in a hole out of the pickup reach) is
    * fetched as a player would: the client follows the item the server spawned until it lies
    * still, then walks to where it is within the pickup reach (drop-actions.ts collect: an
-   * ordinary checked walk inside the fence), or says why it is left there.
+   * ordinary checked walk inside the fence), or says why it is left there. What earlier digs
+   * left lying near, of the same item, is swept up with it.
    */
   async dig(
     target: BlockPosition,
@@ -128,14 +129,20 @@ export class DigActions {
       // The tool's wear changes its name (`@damage`): that is no drop.
       notDrop: (item) => tool !== null && (item === tool.item || item.startsWith(`${tool.item}@`)),
     };
-    // Picked up where it fell, the usual case: nothing of it is left to fetch.
+    // Picked up where it fell, the usual case: nothing of it is left to fetch, and nothing an
+    // earlier dig left lies near to sweep up with it.
     const lying = this.#core.drops.lying(request);
-    if (collected && (typeof lying === 'string' || lying.length === 0)) return dug.result;
+    const allIn = collected && (typeof lying === 'string' || lying.length === 0);
+    if (allIn && !this.#core.drops.leftoversNear(request.origin)) return dug.result;
     const fetched = await this.#core.drops.collect(request);
-    const before = collected
-      ? dug.result.message
-      : dug.result.message.replace(/; no drop reached.*$/, '');
-    return ok(`${before}; ${fetched.note}`.slice(0, 500), {
+    const quiet = collected && fetched.walks === 0 && fetched.left === 0;
+    const message = quiet
+      ? dug.result.message.replace(
+          /the drop reached the inventory: .*$/,
+          `the drop reached the inventory: ${describeGain(fetched.gained)}`,
+        )
+      : `${collected ? dug.result.message : dug.result.message.replace(/; no drop reached.*$/, '')}; ${fetched.note}`;
+    return ok(message.slice(0, 500), {
       ...dug.result.data,
       dropCollected: fetched.gained.length > 0,
       drops: describeGain(fetched.gained),
