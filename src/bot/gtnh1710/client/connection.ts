@@ -309,11 +309,15 @@ export class Connection {
         if (packet.health <= 0) this.#onDeath();
         else this.#respawnAsked = false;
         break;
+      case 'chat':
+        // An owner's command (MC_OWNERS) is kept for the play loop, and a stop stops the
+        // action in progress at once (chat-actions.ts); the world model keeps the raw line.
+        this.#core.chat.onChat(packet.json, at);
+        break;
       case 'open-window':
       case 'close-window':
       case 'window-property':
       case 'join-game':
-      case 'chat':
       case 'spawn-position':
       case 'time-update':
       case 'change-game-state':

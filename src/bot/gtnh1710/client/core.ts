@@ -8,6 +8,7 @@ import {
 } from '../packets.ts';
 import { playArea, type PlayArea } from '../play-area.ts';
 import { WorldModel } from '../world-model.ts';
+import { ChatActions } from './chat-actions.ts';
 import { CombatActions } from './combat-actions.ts';
 import { Connection } from './connection.ts';
 import { CraftActions } from './craft-actions.ts';
@@ -50,7 +51,38 @@ export class ClientCore {
   /** Server verdicts on our clicks (S32), by action number. */
   readonly clickVerdicts = new Map<number, boolean>();
   lastYaw = 0;
-  haltReason: string | null = null;
+  /** halt()'s reason (Ctrl+C): for the rest of the connection. */
+  #halt: string | null = null;
+  /** interrupt()'s reason (an owner's stop): until clearInterrupt(). */
+  #interrupt: string | null = null;
+
+  /**
+   * Why every action must stop at its next step or tick, and none may start: halt()'s reason
+   * (Ctrl+C: for good) or an interrupt's (an owner's stop: until the play loop has taken the
+   * stop, clearInterrupt()). Every walk (and so every EXPLORE hop and retreat), dig, placement,
+   * fight, window and quest-book click checks it before it starts and while it runs, so an
+   * interrupt stops the action in progress at its next tick, and the one a cycle in flight
+   * was about to start, without halt()'s lasting latch.
+   */
+  get haltReason(): string | null {
+    return this.#halt ?? this.#interrupt;
+  }
+
+  set haltReason(reason: string | null) {
+    this.#halt = reason;
+  }
+
+  /** Stops the action in progress (see haltReason) until clearInterrupt(). */
+  interrupt(reason: string): void {
+    if (this.#interrupt !== null) return;
+    this.#interrupt = reason;
+    this.log(`interrupted: ${reason}`);
+    this.emit();
+  }
+
+  clearInterrupt(): void {
+    this.#interrupt = null;
+  }
 
   // What is running now: each action checks these before it starts.
   walking = false;
@@ -69,6 +101,8 @@ export class ClientCore {
 
   // The feature modules: each holds this core, through which they use one another.
   readonly connection: Connection;
+  /** Owner commands heard in chat, and whispered replies (chat-actions.ts). */
+  readonly chat: ChatActions;
   readonly observation: Observation;
   readonly inventory: InventoryActions;
   readonly crafting: CraftActions;
@@ -84,6 +118,7 @@ export class ClientCore {
   constructor(opts: Gtnh1710ClientOptions) {
     this.opts = opts;
     this.connection = new Connection(this);
+    this.chat = new ChatActions(this);
     this.observation = new Observation(this);
     this.inventory = new InventoryActions(this);
     this.crafting = new CraftActions(this);
@@ -148,6 +183,7 @@ export class ClientCore {
     this.phase = 'closed';
     this.closedReason = reason;
     this.movement.stopIdle();
+    this.chat.stop();
     const socket = this.socket;
     if (socket !== null && !socket.destroyed) {
       if (graceful) {

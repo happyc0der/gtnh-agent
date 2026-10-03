@@ -518,6 +518,37 @@ export class FakeGtnhServer {
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
+  /** Every chat line (C01) the client sent, in order, as the server read it. */
+  readonly chat: string[] = [];
+
+  /** S02: one chat line (its JSON, as 1.7.10 serializes a chat component) to every client. */
+  sendChat(json: string): void {
+    this.broadcast(encodeFrame(0x02, encodeString(json)));
+  }
+
+  /**
+   * A chat line from the client. Vanilla answers a `/tell <player> <text>` with the sender's
+   * own copy (commands.message.display.outgoing, which names the RECIPIENT, in gray italics):
+   * the client must never take that echo for a command.
+   */
+  #onChatLine(line: string, send: (frame: Buffer) => void): void {
+    this.chat.push(line);
+    const m = /^\/tell ([A-Za-z0-9_]+) (.+)$/.exec(line);
+    if (m === null) return;
+    const [, to = '', text = ''] = m;
+    const words = text.split(' ').flatMap((w, i) => (i === 0 ? [w] : [' ', w]));
+    const echo = {
+      italic: true,
+      color: 'gray',
+      translate: 'commands.message.display.outgoing',
+      with: [
+        { clickEvent: { action: 'suggest_command', value: `/msg ${to} ` }, text: to },
+        { extra: words, text: '' },
+      ],
+    };
+    send(encodeFrame(0x02, encodeString(JSON.stringify(echo))));
+  }
+
   /** Eats the server started (a C08 in the air with an edible stack in hand). */
   eatsStarted = 0;
   /** Client Status actions received (C16; 0 = Perform Respawn). */
@@ -832,6 +863,9 @@ export class FakeGtnhServer {
         switch (frame.packetId) {
           case 0x00:
             this.keepAliveEchoes.push(r.i32());
+            break;
+          case 0x01:
+            this.#onChatLine(r.string(), send);
             break;
           case 0x03:
             this.idleTicks += 1;

@@ -6,6 +6,7 @@ import type { SeenChunk } from '../../domain/world-memory.ts';
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
+import type { OwnerMessage } from './client/chat-actions.ts';
 import { ClientCore } from './client/core.ts';
 import type { PointBox } from './play-area.ts';
 import type { Fence, WalkPlan } from './walking.ts';
@@ -38,6 +39,9 @@ export interface Gtnh1710ClientOptions {
   questBookTimeoutMs?: number;
 }
 
+/** How long disconnect() waits for the last replies to an owner (one chat line a second). */
+const REPLY_FLUSH_MS = 4_000;
+
 export interface ConnectionInfo {
   identity: { motd: string; version: string | null; mods: number } | null;
   handshakeStep: string | null;
@@ -66,7 +70,12 @@ export interface ConnectionInfo {
  *    start/cancel/finish, a block placement with the held block item, attacks on one checked
  *    entity (C02, attack only), the cosmetic head look and arm swing, and Better Questing's
  *    four typed quest-book messages (the main_sync answer that reading the quest book needs,
- *    and submit, checkbox, choice and claim when the quest book is enabled);
+ *    and submit, checkbox, choice and claim when the quest book is enabled), and one chat
+ *    packet: a whisper (`/tell`) to one of the bot's owners (MC_OWNERS), plain text, at most
+ *    one line a second;
+ *  - reads chat only for its owners' commands (client/chat-actions.ts): a whisper to the bot,
+ *    or public chat starting with ! or # or the bot's name; a stop stops the action in
+ *    progress at once (interrupt());
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
  *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
  *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
@@ -129,6 +138,8 @@ export class Gtnh1710Client implements MinecraftClient {
   }
 
   async disconnect(): Promise<void> {
+    // The last replies to an owner (a command's "Done: ...") go out first, at the chat rate.
+    await this.#core.chat.flush(REPLY_FLUSH_MS);
     // The server drops a crafting grid's contents and the cursor when the player leaves.
     try {
       await this.#core.crafting.returnCraftingLeftovers();
@@ -243,6 +254,53 @@ export class Gtnh1710Client implements MinecraftClient {
   /** Stops a walk in progress at its next step and refuses new walks (e.g. on Ctrl+C). */
   halt(reason: string): void {
     this.#core.haltReason = reason;
+  }
+
+  /**
+   * Stops the action in progress (a walk, an EXPLORE hop, a dig, a fight...) at its next step
+   * or tick, and refuses new ones, until clearInterrupt(): an owner's stop. Unlike halt(), it
+   * does not last; the play loop clears it once the session it stopped is over.
+   */
+  interrupt(reason: string): void {
+    this.#core.interrupt(reason);
+  }
+
+  clearInterrupt(): void {
+    this.#core.clearInterrupt();
+  }
+
+  /** The owners' commands heard in chat since the last call (MC_OWNERS), oldest first. */
+  takeOwnerMessages(): OwnerMessage[] {
+    return this.#core.chat.take();
+  }
+
+  /** Whether owners' commands are waiting to be taken. */
+  ownerMessagesWaiting(): boolean {
+    return this.#core.chat.waiting > 0;
+  }
+
+  /**
+   * Whispers to one of the bot's owners: the only chat the client sends (`/tell <owner>`),
+   * plain text cut into at most three lines, at most one line a second. Null when it is on
+   * its way, else why not.
+   */
+  whisper(owner: string, text: string): string | null {
+    return this.#core.chat.whisper(owner, text);
+  }
+
+  /**
+   * Where a player the server shows the bot is (its feet, as last sent), by its exact name;
+   * null when it is not in view (the server sends a player's entity within its tracking
+   * range only).
+   */
+  playerPosition(name: string): Position | null {
+    const player = this.#core.world
+      .trackedEntities()
+      .find(
+        (e) =>
+          e.kind === 'player' && e.classification.name === `player:${name}` && e.diedAt == null,
+      );
+    return player === undefined ? null : { x: player.x, y: player.y, z: player.z };
   }
 
   /**
