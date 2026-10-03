@@ -17,6 +17,7 @@ import {
   RECIPE_IDS,
   RECIPES,
 } from '../domain/recipes.ts';
+import { TOOL_ITEMS, TOOLS } from '../domain/tools.ts';
 import {
   CraftFlag,
   ingredientItems,
@@ -602,15 +603,29 @@ function oreSources(data: KnowledgeData): RouteSource[] {
   return out;
 }
 
+/** The kind of a worn-out tool: no requirement asks for it, so it never counts as held. */
+export const WORN_OUT_TOOL = 'worn out';
+
 /**
  * Items that work as tools on this server. Tools IguanaTweaks disables (vanilla stone, iron,
  * gold and diamond pickaxes and shovels, and a few mods' tools) mine nothing, so they are
  * not tools here: a route never makes one to dig, and one in the inventory does not count.
+ * Nor does a vanilla tool the agent has worn to its limit (src/domain/tools.ts: it stops one
+ * use before the tool breaks, at damage maxDamage): listed by that worn name as a worn-out
+ * tool, it never covers a dig, so the route gets a new one (seen in a mock run: the route
+ * counted "minecraft:wooden_pickaxe@59" as held, and the next GATHER of stone had nothing to
+ * dig with).
  */
 function toolsOf(data: KnowledgeData): RouteTool[] {
-  return data.tools
+  const tools = data.tools
     .filter(([item]) => data.disabledTools[item] === undefined)
     .map(([item, kind, level]) => ({ item, kind, level }));
+  const worn = TOOL_ITEMS.filter((t) => tools.some((x) => x.item === t)).map((t) => ({
+    item: `${t}@${TOOLS[t].maxDamage}`,
+    kind: WORN_OUT_TOOL,
+    level: 0,
+  }));
+  return [...tools, ...worn];
 }
 
 let full: RouteBook | null = null;

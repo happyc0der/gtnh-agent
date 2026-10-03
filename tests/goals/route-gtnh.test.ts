@@ -177,6 +177,32 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     ]);
   });
 
+  it('a wooden pickaxe worn to its last safe use (damage 59) digs nothing more: a new one', () => {
+    // The agent stops one use before a tool breaks (src/domain/tools.ts usesLeft).
+    const route = planRoute(
+      { 'minecraft:cobblestone': 5 },
+      { 'minecraft:wooden_pickaxe@59': 1, 'minecraft:planks': 6 },
+      ROUTE_BOOK,
+      () => [],
+      [],
+      ['crafting_table'],
+    );
+    expect(route.unresolved).toEqual({});
+    expect(steps(route)).toEqual([
+      'craft minecraft:stick',
+      'craft minecraft:wooden_pickaxe',
+      'gather minecraft:cobblestone',
+    ]);
+    expect(route.tools).toEqual([
+      {
+        for: 'dig minecraft:stone',
+        need: 'pickaxe level >= 0',
+        have: null,
+        get: 'minecraft:wooden_pickaxe',
+      },
+    ]);
+  });
+
   it('a chest: the GTNH recipe, with flint made from gravel', () => {
     const route = planRoute(
       { 'minecraft:chest': 1 },
