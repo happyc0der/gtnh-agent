@@ -522,12 +522,15 @@ export interface ItemStackData {
 }
 
 /**
- * One DataWatcher entry: index 0-31 and its value. Item stacks and block coordinates (types
- * 5 and 6) are read past but kept as null: nothing the agent uses is stored in them.
+ * One DataWatcher entry: index 0-31 and its value. An item stack (type 5) has the value null
+ * and the stack in `stack`: a dropped item (EntityItem) says what it is only there (index 10).
+ * Block coordinates (type 6) are read past and kept as null: nothing the agent uses is in them.
  */
 export interface MetadataEntry {
   index: number;
   value: number | string | null;
+  /** Type 5 only: the item stack (null for an empty one). */
+  stack?: ItemStackData | null;
 }
 export type EntityMetadata = readonly MetadataEntry[];
 
@@ -799,9 +802,8 @@ export function readEntityMetadata(
         value = r.string(32767 * 4);
         break;
       case 5:
-        readItemStack(r, options);
-        value = null;
-        break;
+        entries.push({ index, value: null, stack: readItemStack(r, options) });
+        continue;
       case 6:
         r.i32();
         r.i32();

@@ -654,6 +654,9 @@ anew: no code was taken from Baritone (LGPL-3.0).
     skipped;
   - one within reach (4.5 from the eyes) is dug (`DIG_BLOCK`), nearest first; otherwise the
     agent walks to the nearest stand spot (`MOVE_TO`, tolerance 0.5);
+  - logs are felled trunk by trunk from the base, standing beside the trunk, so every drop
+    falls to the player ([Felling trees](#felling-trees)); a drop that still stops out of
+    reach is fetched by the dig itself ([Fetching the drop](#fetching-the-drop));
   - only an action the executor would accept now: code dry-runs the real validation (schema,
     safety policy, preconditions, the repeated-failure rule; for a walk, also the dig from the
     stand spot). A block the policy would refuse (sand over the head or on top, a hazard near,
@@ -829,7 +832,7 @@ digging enabled, a `MOVE_TO` over terrain may break `minecraft:leaves` and `leav
   (15 ticks) and reports them, so they arrive during the walk and do not pass for the next
   dig's drop. `MOVE_TO`'s verification is unchanged: the player near the target.
 - Only `MOVE_TO` breaks (and `cli move --dry-run` plans it so). `EXPLORE`'s hops, retreats (a
-  threat stops every dig, and a retreat runs from one) and the walk to a dig's drop do not.
+  threat stops every dig, and a retreat runs from one) and the walk to a drop do not.
 
 The `move` command runs one such action for a human (origin `user`). The repeated-failure rule does
 not apply to it (it is the human's decision each time), and its failures do not count against the
@@ -1092,9 +1095,8 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
    (one more damage) and up to 2 s for the inventory to grow. The result reports the tool
    (`tool`, null for an empty hand), its uses left (`toolUsesLeft`), why other tools for the
    block were passed over (`toolNote`), `dropCollected` and which items arrived. The tool's
-   new name (`minecraft:wooden_shovel@1`) is not counted as a drop. A drop out of pickup range
-   is fetched by walking onto it when the fence is terrain and the spot is standable;
-   otherwise it is reported.
+   new name (`minecraft:wooden_shovel@1`) is not counted as a drop. What did not reach the
+   inventory by itself is fetched: see [Fetching the drop](#fetching-the-drop).
 7. **Verification:** `BLOCK_REMOVED` passes only if the new observation lists the position in
    `nearbyBlocks.removed` (seen turning into air, still air) and not among the resources.
 
@@ -1112,6 +1114,84 @@ are digs inside the walk, with this same routine: see
   chopping.
 - Enchanted or renamed tools (NBT data), GregTech tools and TConstruct tools: never held. Their
   data would have to be decoded first.
+
+### Fetching the drop
+
+Seen live 2026-10-01: gathering logs for a crafting table, the agent dug three logs and got
+one. The drops of the logs it dug high in the trees stopped on the logs and leaves under them,
+out of its pickup reach, and the client looked for a missed drop only on the floor of the dug
+cell. A player watches where a drop goes and walks over to it; the client does the same
+(`client/drop-actions.ts`, with its rules in `drops.ts`):
+
+- **Dropped items are tracked** (`world-model.ts`, its entity section). The server spawns a drop
+  as an item entity (Spawn Object type 2), then sends its DataWatcher, whose ItemStack (index
+  10; `packets.ts` keeps the item stacks of entity metadata) says what it is. The client
+  follows its moves and teleports, and knows where and when it appeared.
+  `itemEntitiesNear(point, radius, now)` lists them with the item's name, count, position and
+  whether each lies still; unknown while an entity update was lost.
+- **Lying still.** The server sends an item's position only every 20 ticks (EntityTracker: an
+  EntityItem's update frequency), and only once it moved 1/8 block (EntityTrackerEntry), so a
+  few quiet ticks prove nothing. An item counts as settled after 25 ticks without a move while
+  it lies on a block top (the bottom of its 0.25 box within 1/32 of a block top, over a block
+  that is not air), or after 70 ticks wherever it is (past the tracker's forced update every 60
+  ticks: a slab, a snow layer). These server facts are vanilla 1.7.10's, not yet checked live
+  ([GTNH compatibility](gtnh-compatibility.md#digging-2026-09-30) says what the mods change).
+- **Which items.** The action's own drops: the items that appeared since it began, within 1
+  block of the dug block's centre (a drop appears 0.15-0.85 into the cell) or 2 of where a
+  killed animal was last seen. Older drops and other players' items are left alone.
+- **When.** After a `DIG_BLOCK` whose drop did not all reach the inventory within its 2 s
+  (one that arrived, with nothing of it left lying, needs nothing more), and after killing a
+  farm animal ([Combat](#combat)). Never after `DIG_DOWN` (the player falls into the hole with
+  its drop) or after killing a hostile (walking to its drops is no escape).
+- **How.** It waits until each of them lies still or is picked up (at most 5 s; one still
+  moving then is left). Then, nearest first: one within the pickup reach (the player's box
+  grown by 1 sideways and 0.5 up and down) is waited for; for another, `dropSpot` (`combat.ts`)
+  chooses where to stand: the item's own cell, else the nearest cell beside it (one level up or
+  down at most) that a player may stand in (a full block underfoot, room for the body, no hazard
+  within a block), inside the fence, from which the item is within reach. The walk there is the
+  ordinary checked walk (`walkTo`, as for `MOVE_TO`: it stops for threats, and breaks nothing),
+  then the pickup is waited for (2 s).
+- **Refusals and bounds.** An item with no such cell (on leaves high in a tree, out of the
+  fence, in lava), one that ended up more than 6 blocks from where it appeared, one no walk
+  reaches, and any past 2 walks are left where they lie; a walk that stops on the way (a
+  threat, a correction, the stop file) ends the fetching. The dig or the kill stands either way.
+- **Sweeping up**, as a person sweeps up what fell around a tree. The client remembers which
+  items its own digs and kills dropped (what it dug and killed for). With the walks left, a dig
+  or a kill also picks up, the same way, such an item an earlier one left lying (a walk to it
+  stopped, the walks ran out, it lay out of reach then) within 4 blocks, lying still; never
+  another player's items. A new drop that lands within half a block of an older one of the same
+  item merges into it and is gone, so the older one, swept up, holds both. A dig whose drop
+  arrived at once looks only when such an item lies near.
+- **The result** says what was picked up where, and what was left there and why ("walked to the
+  drop at (-5, 105, -9) and picked up 1 x minecraft:sand"; "1 x minecraft:dirt at (1, 106, -8)
+  is left there: no cell inside the play area ... puts it within pickup reach"), with
+  `dropCollected`, `drops`, `walkedToDrop` (for a kill `dropsCollected`, `drops`,
+  `walkedToDrops`) and `dropsLeft`.
+
+On the fake server (`tests/bot/gtnh1710/fixtures/fake-items.ts`) drops are item entities too: the
+spawn, the DataWatcher, a fall onto the block under them, the tracker's position updates every
+20 ticks, and the pickup within reach at the player's ticks.
+
+### Felling trees
+
+A person chops a trunk from its base, standing beside it, reaching up to about 5 blocks high
+from the ground; every drop falls down the emptied column to the base and is picked up there.
+A `GATHER` of logs (`log`, `log2`) chooses its digs that way (`chooseGatherAction` in
+`src/planner/gather.ts`, from the listed resources):
+
+- A log with a listed log or leaves under it (its drop would stop there) comes after every log
+  with neither: the base of each trunk first, then the next one up as it becomes the lowest. It
+  is still dug when nothing else is left.
+- A log is dug only from beside its trunk (feet in the 3 x 3 columns around it): in reach from
+  farther away, the walk to its stand spot comes first (unless that walk was just made), so its
+  drop lands next to the player.
+- Among the logs in reach, the one in the column of the log dug last comes first: the trunk
+  goes on up while its logs are in reach from the same spot (up to `maxHeightAboveFence`, 4
+  above the feet; a higher one has no stand spot).
+
+Other blocks keep [GATHER](#gather-gathering-in-one-plan-step)'s order: the nearest in reach,
+then the nearest stand spot. On the fake server, a four-log tree three columns off is walked to,
+felled from y 106 to 109, and each drop falls to the base and is picked up without a walk.
 
 ## Digging down: the night pit
 
@@ -1543,12 +1623,13 @@ not stopping the client's walks, digs or placements, and never attacked. The rul
    after the action started), its health fell, or (health unknown) the server showed it hurt.
    A target that vanished without a death status fails.
 7. **The drops of a farm animal** (hunting for food: [GATHER](#gather-gathering-in-one-plan-step)).
-   A killed animal drops its meat where it last stood. When that is beyond a player's pickup
-   reach (the body's box grown by 1 sideways: `withinPickup`), the client walks to its cell, or
-   the nearest cell beside it a player may stand in from which the drops are in reach
-   (`dropSpot`), with the walker's checks and stopping for threats, then waits for the inventory
-   to grow. The result says what arrived (`dropsCollected`, `drops`, `walkedToDrops`). Never
-   after killing a hostile: walking to its drops is no escape.
+   A killed animal drops its meat where it last stood, often beyond a player's pickup reach
+   (the body's box grown by 1 sideways: `withinPickup`). The client picks them up as a dig's
+   drop ([Fetching the drop](#fetching-the-drop)): it follows the items the kill dropped until
+   they lie still, then walks to the cell `dropSpot` gives (with the walker's checks, stopping
+   for threats) and waits for the pickup. The result says what arrived and what was left
+   (`dropsCollected`, `drops`, `walkedToDrops`, `dropsLeft`). Never after killing a hostile:
+   walking to its drops is no escape.
 
 `cli attack --live --entity <id>` runs one burst for a person (origin `user`); `observe` and
 `watch` print the entity ids. Walking, chests, crafting, digging and fighting exclude each
@@ -1600,7 +1681,7 @@ src/safety       safety policy (evaluateAction) and its per-action checks (dig, 
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider and the model's cadence: decision points), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner, owner-command translator (opt-in)
-src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: inventory and chests, crafting, block windows, digging, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, placing, crafting, combat, world surveys, the world model, packets)
+src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: chat (owners' commands in, whispers out), inventory and chests, crafting, block windows, digging, picking up drops, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, drops, placing, crafting, combat, world surveys, the world model, packets)
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
