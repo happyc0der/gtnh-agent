@@ -12,6 +12,7 @@ import { CombatActions } from './combat-actions.ts';
 import { Connection } from './connection.ts';
 import { CraftActions } from './craft-actions.ts';
 import { DigActions } from './dig-actions.ts';
+import { DropActions } from './drop-actions.ts';
 import { InteractActions } from './interact-actions.ts';
 import { InventoryActions } from './inventory-actions.ts';
 import { MovementActions } from './movement-actions.ts';
@@ -27,8 +28,9 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  * What all parts of one Gtnh1710Client share: the options, the world model, the connection's
  * state and plumbing (send, close, waitFor, log), the fence of the moment, the flags that keep
  * walking, window work, digging, placing and fighting apart, and the feature modules, so that
- * each can use the others (a dig walks to its drop with movement.walkTo, a walk breaks leaves
- * with dig.digChecked, and whatever holds an item arranges the hotbar with inventory clicks).
+ * each can use the others (a dig or a kill picks up its drops with drops.collect, which walks
+ * with movement.walkTo; a walk breaks leaves with dig.digChecked; and whatever holds an item
+ * arranges the hotbar with inventory clicks).
  */
 export class ClientCore {
   readonly opts: Gtnh1710ClientOptions;
@@ -74,6 +76,7 @@ export class ClientCore {
   readonly crafting: CraftActions;
   readonly interact: InteractActions;
   readonly dig: DigActions;
+  readonly drops: DropActions;
   readonly place: PlaceActions;
   readonly combat: CombatActions;
   readonly questBook: QuestBookActions;
@@ -89,6 +92,7 @@ export class ClientCore {
     this.crafting = new CraftActions(this);
     this.interact = new InteractActions(this);
     this.dig = new DigActions(this);
+    this.drops = new DropActions(this);
     this.place = new PlaceActions(this);
     this.combat = new CombatActions(this);
     this.questBook = new QuestBookActions(this);

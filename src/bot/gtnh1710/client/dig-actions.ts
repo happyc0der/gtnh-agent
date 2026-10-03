@@ -23,13 +23,15 @@ import {
   type DigArea,
   type DigCheck,
 } from '../digging.ts';
+import { DIG_DROP_SPAWN_RADIUS } from '../drops.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { DIG_STATUS, outbound } from '../packets.ts';
 import { nameItemStack } from '../registry.ts';
-import { checkSupport, fallDistances, landingHazard, standProblem } from '../terrain.ts';
+import { checkSupport, fallDistances, landingHazard } from '../terrain.ts';
 import type { Vec3, WalkWorld } from '../walking.ts';
 import type { BlockWatch, WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
+import type { DropRequest } from './drop-actions.ts';
 import {
   delay,
   describeGain,
@@ -105,10 +107,11 @@ export class DigActions {
    * time (vanilla x 1.25 + 2 ticks at the tool's verified speed, re-checking everything
    * every tick), C07 finish; a problem on the way sends C07 cancel. Success needs the
    * server's own block change to air, with no re-send after it. Reports the tool used and
-   * its uses left, and whether the drop reached the inventory. A drop that landed out of
-   * the player's pickup reach (in a hole next to it, or a few blocks away) is picked up as a
-   * player would: by walking onto it, when the spot it lies on is standable (an ordinary
-   * checked walk inside the fence).
+   * its uses left, and whether the drop reached the inventory. A drop that did not reach it
+   * by itself (it flew off, or stopped on a log or in a hole out of the pickup reach) is
+   * fetched as a player would: the client follows the item the server spawned until it lies
+   * still, then walks to where it is within the pickup reach (drop-actions.ts collect: an
+   * ordinary checked walk inside the fence), or says why it is left there.
    */
   async dig(
     target: BlockPosition,
@@ -116,30 +119,29 @@ export class DigActions {
   ): Promise<ClientActionResult> {
     const dug = await this.#digOnce(target, protectedItems);
     if (dug.drop === null) return dug.result;
-    const spot = dug.drop.spot;
-    const walked = await this.#core.movement.walkTo(spot, { stopForThreats: true });
-    const gained = walked.ok ? await this.#dropGain(dug.drop.itemsBefore, dug.drop.tool) : [];
-    const drops = describeGain(gained);
-    const where = `(${Math.floor(spot.x)}, ${spot.y}, ${Math.floor(spot.z)})`;
-    this.#core.log(
-      `walked to the drop at ${where}: ${walked.ok ? (gained.length > 0 ? drops : 'no drop') : walked.message}`,
-    );
-    return ok(
-      (
-        `${dug.result.message.replace(/; no drop reached.*$/, '')}; ` +
-        (walked.ok
-          ? gained.length > 0
-            ? `walked to the drop at ${where} and picked up ${drops}`
-            : `walked to ${where}, but no drop reached the inventory`
-          : `the drop lies at ${where}, but walking there failed: ${walked.message}`)
-      ).slice(0, 500),
-      {
-        ...dug.result.data,
-        dropCollected: gained.length > 0,
-        drops,
-        walkedToDrop: walked.ok,
-      },
-    );
+    const { itemsBefore, since, tool, collected } = dug.drop;
+    const request: DropRequest = {
+      origin: centreOf(target),
+      spawnRadius: DIG_DROP_SPAWN_RADIUS,
+      since,
+      itemsBefore,
+      // The tool's wear changes its name (`@damage`): that is no drop.
+      notDrop: (item) => tool !== null && (item === tool.item || item.startsWith(`${tool.item}@`)),
+    };
+    // Picked up where it fell, the usual case: nothing of it is left to fetch.
+    const lying = this.#core.drops.lying(request);
+    if (collected && (typeof lying === 'string' || lying.length === 0)) return dug.result;
+    const fetched = await this.#core.drops.collect(request);
+    const before = collected
+      ? dug.result.message
+      : dug.result.message.replace(/; no drop reached.*$/, '');
+    return ok(`${before}; ${fetched.note}`.slice(0, 500), {
+      ...dug.result.data,
+      dropCollected: fetched.gained.length > 0,
+      drops: describeGain(fetched.gained),
+      walkedToDrop: fetched.walks > 0,
+      dropsLeft: fetched.left,
+    });
   }
 
   /**
@@ -260,11 +262,16 @@ export class DigActions {
     down = false,
   ): Promise<{
     result: ClientActionResult;
-    /** Set when the drop was not picked up and lies on a spot the player can walk to. */
+    /**
+     * Set when a DIG_BLOCK succeeded with the inventory known: what dig() needs to fetch the
+     * drop (the inventory before, when the dig began, the tool used, whether something
+     * reached the inventory by itself).
+     */
     drop: {
       itemsBefore: Readonly<Record<string, number>>;
-      spot: Vec3;
+      since: Date;
       tool: ToolInfo | null;
+      collected: boolean;
     } | null;
   }> {
     const done = (result: ClientActionResult): { result: ClientActionResult; drop: null } => ({
@@ -287,11 +294,13 @@ export class DigActions {
     const rule = (world: WalkWorld, at: Vec3): DigCheck =>
       down ? checkDigDown(world, area, at, target) : checkDig(world, area, at, target);
     const where = `(${target.x}, ${target.y}, ${target.z})`;
+    // Items that appear after this are the dig's drop (dig() fetches one that is not picked up).
+    const since = this.#opts.clock.now();
     this.#core.digging = true;
     try {
       const dug = await this.digChecked(target, rule, protectedItems, verb, null);
       if (!dug.ok) return done(dug.result);
-      const { world, check, hand, held, itemsBefore, ticks, guard } = dug;
+      const { check, hand, held, itemsBefore, ticks, guard } = dug;
       const tool = hand.tool;
       const { x, y, z } = target;
 
@@ -351,21 +360,11 @@ export class DigActions {
           ...(down && now !== null ? { feetX: now.x, feetY: now.y, feetZ: now.z } : {}),
         },
       );
-      // Not picked up: the drop fell to the floor of the dug cell (or below it). On terrain,
-      // if a player could stand there, walk onto it. (After DIG_DOWN the player stands in
-      // that cell already.)
-      const terrain = area.fence.min.y !== area.fence.max.y;
-      if (dropCollected || itemsBefore === null || !terrain || down) return { result, drop: null };
-      let floor = y;
-      while (floor > y - 3 && world.blockAt(x, floor - 1, z) === 0) floor -= 1;
-      const standable =
-        floor >= area.fence.min.y &&
-        floor <= area.fence.max.y &&
-        standProblem(world, x, floor, z) === null;
-      return {
-        result,
-        drop: standable ? { itemsBefore, spot: { x: x + 0.5, y: floor, z: z + 0.5 }, tool } : null,
-      };
+      // dig() fetches what did not reach the inventory by itself: the drop may stop where the
+      // player cannot reach it (seen live: logs dug high in a tree dropped onto the logs and
+      // leaves under them). After DIG_DOWN the player falls into the hole with it.
+      if (itemsBefore === null || down) return { result, drop: null };
+      return { result, drop: { itemsBefore, since, tool, collected: dropCollected } };
     } finally {
       this.#core.digging = false;
     }

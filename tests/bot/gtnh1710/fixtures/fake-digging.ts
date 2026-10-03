@@ -1,6 +1,7 @@
 import type { Reader } from '../../../../src/bot/gtnh1710/wire.ts';
 import { blockChangeFrame } from './chunk-fixtures.ts';
 import type { FakeChestSim } from './fake-chests.ts';
+import type { FakeItemSim } from './fake-items.ts';
 
 /** Vanilla 1.7.10 hardness of the blocks the tests dig (the server's own table). */
 const VANILLA_HARDNESS: Readonly<Record<string, number>> = {
@@ -38,8 +39,6 @@ const DROPS: Readonly<Record<string, { item: string; count: number } | null>> = 
 };
 
 const TICK_MS = 50;
-/** EntityItem pickup delay for block drops (Block.dropBlockAsItem_do). */
-const PICKUP_DELAY_MS = 10 * TICK_MS;
 
 const SHOVEL_BLOCKS = [
   'minecraft:dirt',
@@ -92,16 +91,18 @@ export interface FakeDigOptions {
    * count: 1 } }` makes every leaf drop one).
    */
   drops?: Record<string, { item: string; count: number } | null>;
+  /**
+   * Where the drop of the block at (x, y, z) comes to rest (an item's position: the centre of
+   * its box), when not straight under its cell: one that bounced off, or stopped on a log.
+   */
+  dropRest?: (x: number, y: number, z: number) => { x: number; y: number; z: number } | undefined;
 }
 
 export interface FakeDigWorld {
   blockAt(x: number, y: number, z: number): number;
   setBlock(x: number, y: number, z: number, id: number): void;
   blockName(id: number): string | undefined;
-  itemId(name: string): number | undefined;
   itemName(id: number): string | undefined;
-  /** The player's feet, from its last position packet. */
-  playerFeet(): { x: number; y: number; z: number } | null;
 }
 
 export interface RecordedDig {
@@ -131,18 +132,10 @@ export interface RecordedDig {
  *    server's own schedule once progress reaches 1 (vanilla's receivedFinishDiggingPacket);
  *  - a held tool wears by 1 per broken block (ItemTool.onBlockDestroyed) and breaks when that
  *    takes its damage above its maximum; its slot is re-sent (S2F);
- *  - the drop can be picked up 10 ticks later, only if it lies within the player's box grown
- *    by 1 sideways and 0.5 up/down: it goes into the inventory like InventoryPlayer, S2F.
+ *  - the drop is an item entity in the middle of the block's cell (Block.dropBlockAsItem: 0.15
+ *    to 0.85 into it), which falls onto the block under it (fake-items.ts); it can be picked up
+ *    10 ticks later, only within the player's box grown by 1 sideways and 0.5 up/down.
  */
-/** A drop lying on the ground: its block cell and the item. */
-interface GroundDrop {
-  x: number;
-  y: number;
-  z: number;
-  item: string;
-  count: number;
-}
-
 export class FakeDigSim {
   readonly digs: RecordedDig[] = [];
   /** Blocks the server broke, in order, and what the player held ("name@damage" or null). */
@@ -156,21 +149,26 @@ export class FakeDigSim {
   }> = [];
   /** Tools that broke (their last use took the damage above the maximum). */
   readonly toolsBroken: string[] = [];
-  /** Items picked up by the player. */
+  /** Items picked up by the player (the drops of broken blocks). */
   readonly pickedUp: Array<{ item: string; count: number }> = [];
   readonly #world: FakeDigWorld;
   readonly #chests: FakeChestSim;
+  readonly #items: FakeItemSim;
   readonly #opts: FakeDigOptions;
   readonly #timers = new Set<NodeJS.Timeout>();
   #send: (frame: Buffer) => void = () => undefined;
   #broadcast: (frame: Buffer) => void = () => undefined;
   #current: { x: number; y: number; z: number; startedAt: number } | null = null;
-  /** Drops lying on the ground, out of the player's reach when they could first be picked up. */
-  readonly #ground: GroundDrop[] = [];
 
-  constructor(world: FakeDigWorld, chests: FakeChestSim, options: FakeDigOptions = {}) {
+  constructor(
+    world: FakeDigWorld,
+    chests: FakeChestSim,
+    items: FakeItemSim,
+    options: FakeDigOptions = {},
+  ) {
     this.#world = world;
     this.#chests = chests;
+    this.#items = items;
     this.#opts = options;
   }
 
@@ -296,47 +294,13 @@ export class FakeDigSim {
     const drops = this.#opts.drops ?? {};
     const drop = name in drops ? drops[name] : DROPS[name];
     if (drop === null || drop === undefined) return;
-    this.#later(PICKUP_DELAY_MS, () => this.#pickUp(x, y, z, drop));
-  }
-
-  /**
-   * The drop falls to the ground under the block and is picked up if it is close enough;
-   * otherwise it stays there, and a later player tick in range picks it up (as vanilla's
-   * player update does every tick).
-   */
-  #pickUp(x: number, y: number, z: number, drop: { item: string; count: number }): void {
-    let ground = y;
-    while (ground > 0 && this.#world.blockAt(x, ground - 1, z) === 0) ground -= 1;
-    const item = { x, y: ground, z, ...drop };
-    if (!this.#tryPickUp(item)) this.#ground.push(item);
-  }
-
-  /** A player packet (idle or move) arrived: pick up any lying drop now in range. */
-  onPlayerTick(): void {
-    for (let i = this.#ground.length - 1; i >= 0; i--) {
-      if (this.#tryPickUp(this.#ground[i] as GroundDrop)) {
-        this.#ground.splice(i, 1);
-      }
-    }
-  }
-
-  #tryPickUp(drop: GroundDrop): boolean {
-    const feet = this.#world.playerFeet();
-    const itemId = this.#world.itemId(drop.item);
-    if (feet === null || itemId === undefined) return false;
-    const item = { x: drop.x + 0.5, y: drop.y, z: drop.z + 0.5, half: 0.125 };
-    const reach = { side: 0.3 + 1, down: 0.5, up: 1.8 + 0.5 };
-    const inRange =
-      item.x + item.half > feet.x - reach.side &&
-      item.x - item.half < feet.x + reach.side &&
-      item.z + item.half > feet.z - reach.side &&
-      item.z - item.half < feet.z + reach.side &&
-      item.y + 0.25 > feet.y - reach.down &&
-      item.y < feet.y + reach.up;
-    if (!inRange) return false;
-    this.#chests.pickUp({ id: itemId, count: drop.count, damage: 0 });
-    this.pickedUp.push({ item: drop.item, count: drop.count });
-    return true;
+    this.#items.spawn(
+      drop.item,
+      drop.count,
+      { x: x + 0.5, y: y + 0.5, z: z + 0.5 },
+      (item, count) => this.pickedUp.push({ item, count }),
+      this.#opts.dropRest?.(x, y, z),
+    );
   }
 
   #later(ms: number, fn: () => void): void {

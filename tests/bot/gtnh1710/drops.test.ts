@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  actionDrops,
+  cellText,
+  describeDrop,
+  MAX_FETCH_DISTANCE,
+  planDropFetch,
+} from '../../../src/bot/gtnh1710/drops.ts';
+import {
   decodePlay,
   PLAYER_EYE_HEIGHT,
   type PlayPacket,
 } from '../../../src/bot/gtnh1710/packets.ts';
 import type { Registry } from '../../../src/bot/gtnh1710/registry.ts';
+import type { WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 import { FrameDecoder } from '../../../src/bot/gtnh1710/wire.ts';
 import {
   ITEM_SETTLE_MS,
@@ -173,5 +181,100 @@ describe('world model: dropped items (EntityItems)', () => {
       known: false,
       reason: /undecodable entity packet 0x15/,
     });
+  });
+});
+
+describe('fetching a drop', () => {
+  // Grass at y=63 (feet level 64) everywhere, lava at (-5, 64, 0), and a small tree at (3, 3):
+  // logs at y 64-65 under leaves at 66.
+  const ids = { air: 0, stone: 1, grass: 2, lava: 11, log: 17, leaves: 18 } as const;
+  const names = new Map<number, string>([
+    [ids.stone, 'minecraft:stone'],
+    [ids.grass, 'minecraft:grass'],
+    [ids.lava, 'minecraft:lava'],
+    [ids.log, 'minecraft:log'],
+    [ids.leaves, 'minecraft:leaves'],
+  ]);
+  const world: WalkWorld = {
+    blockAt: (x, y, z) =>
+      y === 63
+        ? ids.grass
+        : y < 63
+          ? ids.stone
+          : x === -5 && y === 64 && z === 0
+            ? ids.lava
+            : x === 3 && z === 3 && y <= 65
+              ? ids.log
+              : x === 3 && z === 3 && y === 66
+                ? ids.leaves
+                : ids.air,
+    blockName: (id) => names.get(id),
+    hazardCode: (id) => (id === ids.lava ? 2 : 0),
+  };
+  const fence = { min: { x: -10, y: 60, z: -10 }, max: { x: 10, y: 70, z: 10 } };
+  const feet = { x: 0.5, y: 64, z: 0.5 };
+  const item = (x: number, y: number, z: number, spawn = { x, y: y + 0.4, z }) => ({
+    position: { x, y, z },
+    spawn,
+  });
+
+  it('needs nothing within the pickup reach; else walks onto its cell, or beside it', () => {
+    expect(planDropFetch(world, fence, feet, item(1.6, 64.125, 0.5))).toEqual({ kind: 'in-reach' });
+    expect(planDropFetch(world, fence, feet, item(3.5, 64.125, 0.5))).toEqual({
+      kind: 'walk',
+      spot: { x: 3.5, y: 64, z: 0.5 },
+    });
+    // Next to the lava: a cell beside it, away from the lava, still puts it in reach.
+    expect(planDropFetch(world, fence, feet, item(-3.6, 64.125, 0.5))).toEqual({
+      kind: 'walk',
+      spot: { x: -2.5, y: 64, z: 0.5 },
+    });
+  });
+
+  it('never chases one into a hazard, out of the fence, up a tree, or far from where it fell', () => {
+    // In the lava: every cell that puts it in reach is next to the lava.
+    expect(planDropFetch(world, fence, feet, item(-4.5, 64.125, 0.5))).toMatchObject({
+      kind: 'refused',
+      reason: /no cell inside the play area/,
+    });
+    expect(planDropFetch(world, fence, feet, item(12.5, 64.125, 0.5))).toMatchObject({
+      kind: 'refused',
+    });
+    // On the leaves on top of the tree (seen live: logs dug high in a tree): nothing a player
+    // stands on puts it within reach.
+    expect(planDropFetch(world, fence, feet, item(3.5, 67.125, 3.5))).toMatchObject({
+      kind: 'refused',
+    });
+    const far = item(0.5, 64.125, 9.5, { x: 0.5, y: 70, z: 0.5 });
+    expect(planDropFetch(world, fence, feet, far)).toMatchObject({
+      kind: 'refused',
+      reason: new RegExp(`at most ${MAX_FETCH_DISTANCE} are fetched`),
+    });
+  });
+
+  it("an action's drops: the items that appeared since it began, where its drops appear", () => {
+    const entity = (id: number, spawnedAt: Date, spawn: { x: number; y: number; z: number }) =>
+      ({
+        entityId: id,
+        item: 'minecraft:log',
+        count: 1,
+        position: spawn,
+        spawn,
+        spawnedAt,
+        settled: true,
+        distance: 0,
+      }) satisfies ItemEntity;
+    const origin = { x: 3.5, y: 64.5, z: 0.5 };
+    const items = [
+      entity(1, at(1_000), { x: 3.3, y: 64.8, z: 0.2 }), // this dig's
+      entity(2, at(-5_000), { x: 3.5, y: 64.5, z: 0.5 }), // an older drop there
+      entity(3, at(1_000), { x: 6.5, y: 64.5, z: 0.5 }), // another block's
+    ];
+    expect(actionDrops(items, origin, T0, 1).map((i) => i.entityId)).toEqual([1]);
+    expect(describeDrop(items[0] as ItemEntity)).toBe('1 x minecraft:log at (3, 64, 0)');
+    expect(
+      describeDrop({ item: null, count: null, position: { x: -0.5, y: 63.9999999, z: 2 } }),
+    ).toBe('an item at (-1, 64, 2)');
+    expect(cellText({ x: -2.5, y: 106, z: -7.5 })).toBe('(-3, 106, -8)');
   });
 });
