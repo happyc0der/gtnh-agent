@@ -14,6 +14,11 @@ export interface FakeStack {
   damage: number;
   /** A stack with (trivial) NBT data, which the agent must never move. */
   nbt?: boolean | undefined;
+  /**
+   * Its NBT data, uncompressed (e.g. a Tinkers' tool's InfiTool), sent gzipped in its slot;
+   * set `nbt: true` with it.
+   */
+  nbtData?: Buffer | undefined;
 }
 
 export interface FakeChest {
@@ -47,14 +52,11 @@ export function encodeStack(s: FakeStack | null, modularUi: boolean): Buffer {
   head.writeInt16BE(s.id, 0);
   head.writeInt8(Math.min(s.count, 127), 2);
   head.writeInt16BE(s.damage, 3);
+  const nbt =
+    s.nbtData !== undefined ? gzipSync(s.nbtData) : s.nbt === true ? EMPTY_NBT : Buffer.alloc(0);
   const nbtLength = Buffer.alloc(2);
-  nbtLength.writeInt16BE(s.nbt === true ? EMPTY_NBT.length : -1);
-  return Buffer.concat([
-    head,
-    nbtLength,
-    s.nbt === true ? EMPTY_NBT : Buffer.alloc(0),
-    modularUi ? encodeVarInt(s.count) : Buffer.alloc(0),
-  ]);
+  nbtLength.writeInt16BE(nbt.length > 0 ? nbt.length : -1);
+  return Buffer.concat([head, nbtLength, nbt, modularUi ? encodeVarInt(s.count) : Buffer.alloc(0)]);
 }
 
 const same = (a: FakeStack | null, b: FakeStack | null): boolean =>
@@ -307,7 +309,13 @@ export class FakeChestSim {
     this.#recipes = opts.recipes ?? [];
     this.#player = Array.from({ length: 45 }, () => null);
     for (const it of opts.playerInventory) {
-      this.#player[it.slot] = { id: it.id, count: it.count, damage: it.damage, nbt: it.nbt };
+      this.#player[it.slot] = {
+        id: it.id,
+        count: it.count,
+        damage: it.damage,
+        nbt: it.nbt,
+        ...(it.nbtData === undefined ? {} : { nbtData: it.nbtData }),
+      };
     }
     this.#lastSentPlayer = this.#player.map(copy);
     this.#send = opts.send;

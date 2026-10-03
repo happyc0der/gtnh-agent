@@ -1,9 +1,13 @@
 import {
+  DIGGABLE_BLOCKS,
   GARDEN_BLOCKS,
+  GT_ORE_BLOCK,
   isGardenBlock,
+  isToolDiggable,
   type DiggableBlock,
   type GardenBlock,
   type SOLID_DIGGABLE_BLOCKS,
+  type ToolDiggableBlock,
 } from '../domain/blocks.ts';
 import { diggableInfo } from '../domain/dig-time.ts';
 import { ANIMAL_DROPS, GARDEN_BIOMES, GARDEN_DROPS, GARDEN_FOODS } from '../domain/food.ts';
@@ -108,15 +112,96 @@ export const GARDEN_DIG_YIELDS: Yields<GardenBlock> = (() => {
   return out;
 })();
 
+/** The 16 colours of stained hardened clay: damageDropped is the block's metadata (BlockColored). */
+const STAINED_CLAY = Array.from({ length: 16 }, (_, m) => ({
+  item: m === 0 ? 'minecraft:stained_hardened_clay' : `minecraft:stained_hardened_clay@${m}`,
+  perDig: 1,
+}));
+
 /**
- * What one bare-hand dig yields on this server: vanilla, with GTNH's changes applied, and the
- * gardens.
+ * What one dig of each allowlisted stone yields, with a tool that harvests it (with any other
+ * the block drops nothing, and the agent never digs it). Checked in the jars:
+ *  - vanilla 1.7.10: BlockStone.getItemDropped is cobblestone; cobblestone, mossy cobblestone,
+ *    netherrack and hardened clay drop themselves; sandstone and stained clay keep their
+ *    metadata (damageDropped); BlockOre gives emerald ore's emerald (1, no fortune);
+ *  - GregTech 5.09.51.482: BlockStonesAbstract.damageDropped turns a smooth stone (metadata
+ *    0 or 8) into its cobblestone (1 or 9);
+ *  - no harvest-drop handler on this server changes them for a vanilla wooden pickaxe or a
+ *    plain Tinkers' one: of the 48 classes in the 210 mod jars that refer to
+ *    HarvestDropsEvent (each read), the ones that act on any block need their own tool,
+ *    enchantment, potion or modifier (GT's tools and Fire Aspect, Thaumcraft's foci,
+ *    auto-smelt enchantments, Avaritia's Tinkers' materials), and Et Futurum's raw ores are
+ *    off (enableRawOres=false).
  */
-export const DIG_YIELDS: Yields = {
-  ...VANILLA_DIG_YIELDS,
-  ...Object.fromEntries(GTNH_DIG_CHANGES.map((c) => [c.block, c.yields])),
-  ...GARDEN_DIG_YIELDS,
+export const STONE_DIG_YIELDS: Yields<Exclude<ToolDiggableBlock, typeof GT_ORE_BLOCK>> = {
+  'minecraft:stone': [{ item: 'minecraft:cobblestone', perDig: 1 }],
+  'minecraft:cobblestone': [{ item: 'minecraft:cobblestone', perDig: 1 }],
+  'minecraft:mossy_cobblestone': [{ item: 'minecraft:mossy_cobblestone', perDig: 1 }],
+  'minecraft:sandstone': [{ item: 'minecraft:sandstone', perDig: 1 }],
+  'minecraft:netherrack': [{ item: 'minecraft:netherrack', perDig: 1 }],
+  'minecraft:hardened_clay': [{ item: 'minecraft:hardened_clay', perDig: 1 }],
+  'minecraft:stained_hardened_clay': STAINED_CLAY,
+  // Black granite (0) drops black granite cobblestone (1), red granite (8) red's (9).
+  'gregtech:gt.blockgranites': [
+    { item: 'gregtech:gt.blockgranites@1', perDig: 1 },
+    { item: 'gregtech:gt.blockgranites@9', perDig: 1 },
+  ],
+  // Marble (0) drops marble cobblestone (1), basalt (8) basalt cobblestone (9).
+  'gregtech:gt.blockstones': [
+    { item: 'gregtech:gt.blockstones@1', perDig: 1 },
+    { item: 'gregtech:gt.blockstones@9', perDig: 1 },
+  ],
+  'minecraft:emerald_ore': [{ item: 'minecraft:emerald', perDig: 1 }],
 };
+
+let gtOreYieldsCache: ReadonlyArray<{ item: string; perDig: number }> | null = null;
+
+/**
+ * What a dig of a GT ore in the Overworld can drop (the knowledge base, loaded on first use):
+ * a vein ore its raw ore (oredropbehavior=FortuneItem, 1 without fortune; TileEntityOres.
+ * getDrops), a small ore the weighted mix of gems, crushed ore and impure dust (per dig on
+ * average). The block does not say which material it is (the tile entity does), so a dig of
+ * an ore can give any of them. Empty without the knowledge base.
+ */
+export function gtOreYields(): ReadonlyArray<{ item: string; perDig: number }> {
+  if (gtOreYieldsCache !== null) return gtOreYieldsCache;
+  const out = new Map<string, number>();
+  try {
+    const data = loadKnowledge();
+    for (const v of data.veins) {
+      if (!v.dims.includes('Overworld')) continue;
+      for (const o of [v.primary, v.secondary, v.between, v.sporadic]) {
+        if (o?.drop != null && o.level >= 0) out.set(o.drop, 1);
+      }
+    }
+    for (const s of data.smallOres) {
+      if (!s.dims.includes('Overworld') || s.level < 0) continue;
+      for (const [item, perDig] of s.drops) {
+        if (perDig > 0) out.set(item, Math.max(out.get(item) ?? 0, perDig));
+      }
+    }
+  } catch {
+    // No knowledge base (e.g. a build that did not copy it): no ore drops are known.
+  }
+  gtOreYieldsCache = [...out].map(([item, perDig]) => ({ item, perDig }));
+  return gtOreYieldsCache;
+}
+
+/**
+ * What one dig yields on this server, with a hand or a tool that harvests the block: vanilla,
+ * with GTNH's changes applied, the gardens, stone, and GT ores. The GT ores' entry is read
+ * from the knowledge base on first use (gtOreYields), so importing this module reads no data.
+ */
+export const DIG_YIELDS: Yields = Object.defineProperty(
+  {
+    ...VANILLA_DIG_YIELDS,
+    ...Object.fromEntries(GTNH_DIG_CHANGES.map((c) => [c.block, c.yields])),
+    ...GARDEN_DIG_YIELDS,
+    ...STONE_DIG_YIELDS,
+  },
+  GT_ORE_BLOCK,
+  { enumerable: true, get: gtOreYields },
+) as Yields;
 
 /**
  * Health of the farm animals (applyEntityAttributes in the vanilla jar: EntityCow and EntityPig
@@ -242,9 +327,9 @@ const GARDEN_SECONDS = 30;
  */
 function digSources(): RouteSource[] {
   const byItem = new Map<string, { blocks: string[]; perAction: number; seconds: number }>();
-  for (const [block, yields] of Object.entries(DIG_YIELDS) as Array<
-    [DiggableBlock, ReadonlyArray<{ item: string; perDig: number }>]
-  >) {
+  // Stone and ores are tool digs (toolDigSources, oreSources): never by hand.
+  for (const block of DIGGABLE_BLOCKS.filter((b) => !isToolDiggable(b))) {
+    const yields = DIG_YIELDS[block];
     const garden = isGardenBlock(block);
     for (const y of yields) {
       if (garden && !GARDEN_FOODS.includes(y.item)) continue;

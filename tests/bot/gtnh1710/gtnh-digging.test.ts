@@ -16,6 +16,7 @@ import { DeterministicDecisionProvider } from '../../../src/system1/decision-pro
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import { BLOCK, DIG_TEST_BLOCK_REGISTRY } from './fixtures/chunk-fixtures.ts';
+import { tinkersPickaxeNbt } from './fixtures/fake-digging.ts';
 import { FakeGtnhServer, type FakeServerOptions } from './fixtures/fake-server.ts';
 
 // The fake player stands at (-4.5, 106, -7.5) on a grass floor at y=105; the fence mirrors
@@ -249,13 +250,15 @@ describe('Gtnh1710Client digging', () => {
     });
     // The wet dirt (water next to it) cannot be dug from anywhere.
     expect(blocks.resources.find((r) => key(r.position) === key(AT.wetDirt))?.standAt).toBeNull();
-    // Distance from the feet to each block's centre; ties (2.29 m) by position.
+    // Distance from the feet to each block's centre; ties (2.29 m) by position. The stone is
+    // listed too: it is dug only with a pickaxe, which the client checks at the dig.
     expect(blocks.resources.map((r) => r.position)).toEqual([
       AT.dirt, // 1.12 m
       AT.wetDirt, // 2.29 m
       AT.chestDirt, // 2.29 m
       AT.sandTopped, // 2.87 m
       AT.sand, // 3.20 m
+      AT.stone, // 3.64 m
       AT.farDirt, // 4.03 m
       AT.outsideFence, // 5.02 m
       AT.outOfReach, // 5.68 m
@@ -419,7 +422,8 @@ describe('Gtnh1710Client digging', () => {
       [dig({ ...AT.dirt, y: FEET_Y + 5 }), /outside the dig heights y=106..110/],
       [dig({ ...AT.dirt, y: FEET_Y - 1 }), /outside the dig heights .*never the floor/],
       [dig(AT.outOfReach), /blocks from the eyes \(max 4.5\)/],
-      [dig(AT.stone), /minecraft:stone, which is not on the dig allowlist/],
+      // A hand would break it with nothing dropped: no pickaxe, no dig.
+      [dig(AT.stone), /no carried tool harvests minecraft:stone: it needs a pickaxe of level 0/],
       [dig({ x: -3, y: 106, z: -7 }), /is air: there is nothing to dig/],
       [dig(AT.wetDirt), /touches minecraft:water/],
       [dig(AT.chestDirt), /touches minecraft:chest/],
@@ -538,9 +542,12 @@ describe('Gtnh1710Client digging', () => {
     expect(
       done.outcome?.verification?.checks.map((c) => `${c.passed ? 'PASS' : 'FAIL'} ${c.name}`),
     ).toEqual(['PASS execution-ok', 'PASS observation-fresh', 'PASS block-removed']);
-    // The safety policy refuses what the observation does not list as diggable.
-    expect((await runUserAction(deps, dig(AT.stone), 'test')).summary).toMatch(
-      /rejected \[NOT_DIGGABLE\]/,
+    // The safety policy refuses stone with no pickaxe carried, and what the observation does
+    // not list as diggable.
+    const stone = await runUserAction(deps, dig(AT.stone), 'test');
+    expect(stone.summary).toMatch(/rejected \[NOT_DIGGABLE\]/);
+    expect(stone.outcome?.validation.violations[0]?.message).toMatch(
+      /only a tool that harvests it may dig: it needs a pickaxe of level 0 or more, and the player carries none/,
     );
     expect((await runUserAction(deps, dig(AT.dirt), 'test')).summary).toMatch(
       /rejected \[NOT_DIGGABLE\]/,
@@ -765,5 +772,171 @@ describe('Gtnh1710Client digging with tools', () => {
     );
     expect(digPackets(server)).toEqual([]);
     expect(server.chestSim.clicks).toEqual([]);
+  });
+});
+
+/** Ids the mining tests use (vanilla's numbering; the modded ones are this test world's). */
+const MINE = {
+  woodenPickaxe: 270,
+  ironPickaxe: 257,
+  tinkersPickaxe: 6100,
+  /** gregtech:gt.metaitem.03: raw ores are its damage values (5000 + the material). */
+  rawOre: 7496,
+  /** gregtech:gt.blockores, a block id below 4096. */
+  gtOres: 1500,
+} as const;
+const MINE_ITEMS: Array<[number, string]> = [
+  [TOOL.bread, 'minecraft:bread'],
+  [MINE.woodenPickaxe, 'minecraft:wooden_pickaxe'],
+  [MINE.ironPickaxe, 'minecraft:iron_pickaxe'],
+  [MINE.tinkersPickaxe, 'TConstruct:pickaxe'],
+  [MINE.rawOre, 'gregtech:gt.metaitem.03'],
+];
+const MINE_BLOCKS: Array<[number, string]> = [
+  ...DIG_TEST_BLOCK_REGISTRY,
+  [BLOCK.cobblestone, 'minecraft:cobblestone'],
+  [MINE.gtOres, 'gregtech:gt.blockores'],
+];
+/** Next to the player's block (south-west), within pickup range of its drop. */
+const NEAR = { x: -5, y: 106, z: -9 };
+/** Two columns east of NEAR, still in reach. */
+const BESIDE = { x: -3, y: 106, z: -9 };
+
+describe('Gtnh1710Client mining stone and ores', () => {
+  it('digs stone with a wooden pickaxe: 31 ticks, the cobblestone is picked up, it wears by one', async () => {
+    const { server, client } = await start({
+      items: MINE_ITEMS,
+      blocks: MINE_BLOCKS,
+      blockOverrides: new Map([...WORLD, [key(NEAR), BLOCK.stone]]),
+      inventory: [{ slot: 36, id: MINE.woodenPickaxe, count: 1, damage: 0 }],
+    });
+    const result = await perform(client, dig(NEAR));
+    expect(result, result.message).toMatchObject({
+      ok: true,
+      data: {
+        block: 'minecraft:stone',
+        ticks: 31,
+        tool: 'minecraft:wooden_pickaxe',
+        toolUsesLeft: 58,
+        dropCollected: true,
+        drops: '1 x minecraft:cobblestone',
+      },
+    });
+    // The server harvested it (a pickaxe of its level) and wore the pickaxe.
+    expect(server.digSim.broken).toEqual([
+      { ...NEAR, name: 'minecraft:stone', late: false, held: 'minecraft:wooden_pickaxe@0' },
+    ]);
+    expect(server.chestSim.playerSlots()[36]).toMatchObject({
+      id: MINE.woodenPickaxe,
+      damage: 1,
+    });
+    const digs = server.digSim.digs;
+    expect((digs[1]?.at ?? 0) - (digs[0]?.at ?? 0)).toBeGreaterThanOrEqual(31 * 50 - 5);
+  }, 10_000);
+
+  it('never holds a disabled vanilla pickaxe: with no other, stone is refused and nothing sent', async () => {
+    const { server, client } = await start({
+      items: MINE_ITEMS,
+      blocks: MINE_BLOCKS,
+      blockOverrides: new Map([...WORLD, [key(NEAR), BLOCK.stone]]),
+      inventory: [{ slot: 36, id: MINE.ironPickaxe, count: 1, damage: 0 }],
+    });
+    const result = await perform(client, dig(NEAR));
+    expect(result).toMatchObject({ ok: false, code: 'REFUSED' });
+    expect(result.message).toMatch(/no carried tool harvests minecraft:stone/);
+    expect(digPackets(server)).toEqual([]);
+  });
+
+  it("digs a GT ore of its level with a Tinkers' pickaxe read from its NBT data; never one above", async () => {
+    // A copper pickaxe (level 2, mining speed 500), 10 uses into 135: its damage value is the
+    // percentage worn. An iron ore (metadata 2) and a tin ore (3) beside it.
+    const nbtData = tinkersPickaxeNbt({
+      harvestLevel: 2,
+      miningSpeed: 500,
+      damage: 10,
+      totalDurability: 135,
+    });
+    const { server, client } = await start({
+      items: MINE_ITEMS,
+      blocks: MINE_BLOCKS,
+      blockOverrides: new Map([...WORLD, [key(NEAR), MINE.gtOres], [key(BESIDE), MINE.gtOres]]),
+      blockMeta: new Map([
+        [key(NEAR), 2],
+        [key(BESIDE), 3],
+      ]),
+      inventory: [
+        { slot: 36, id: MINE.woodenPickaxe, count: 1, damage: 0 },
+        { slot: 37, id: MINE.tinkersPickaxe, count: 1, damage: 7, nbt: true, nbtData },
+      ],
+      dig: { dropsAt: { [key(NEAR)]: { item: 'gregtech:gt.metaitem.03@5032', count: 1 } } },
+    });
+    const ore = await perform(client, dig(NEAR));
+    // Hardness 3 (1 + level 2) at speed 5: vanilla 18 ticks, x 1.25 + 2 = 25 (the table's
+    // hardest ore would have been 62).
+    expect(ore, ore.message).toMatchObject({
+      ok: true,
+      data: {
+        block: 'gregtech:gt.blockores',
+        ticks: 25,
+        tool: 'TConstruct:pickaxe',
+        toolUsesLeft: 124,
+        dropCollected: true,
+        drops: '1 x gregtech:gt.metaitem.03@5032',
+      },
+    });
+    expect(ore.message).toMatch(/with TConstruct:pickaxe \(124 uses left\)/);
+    expect(server.digSim.digs[0]?.held).toBe('TConstruct:pickaxe@7');
+    expect(server.chestSim.heldSlot).toBe(1);
+    expect(server.digSim.broken[0]).not.toHaveProperty('harvested');
+    // The worn pickaxe is not mistaken for a drop, and keeps its name.
+    expect((await client.observe()).inventory).toMatchObject({
+      known: true,
+      value: { items: { 'gregtech:gt.metaitem.03@5032': 1, 'TConstruct:pickaxe@8': 1 } },
+    });
+
+    // Tin needs level 3: neither pickaxe harvests it, and nothing is sent.
+    const tin = await perform(client, dig(BESIDE));
+    expect(tin).toMatchObject({ ok: false, code: 'REFUSED' });
+    // The pickaxe in hand (now the Tinkers' one) is weighed first.
+    expect(tin.message).toMatch(
+      /no carried tool harvests gregtech:gt.blockores: it needs a pickaxe of level 3 or more; not used: TConstruct:pickaxe \(pickaxe, level 2\) does not harvest .*; minecraft:wooden_pickaxe \(a level-0 pickaxe\) does not harvest/,
+    );
+    expect(digPackets(server)).toHaveLength(2);
+  }, 10_000);
+
+  it("uses a Tinkers' tool only from the hotbar, and never a broken one", async () => {
+    const tinkers = (broken: boolean) =>
+      tinkersPickaxeNbt({ harvestLevel: 1, miningSpeed: 400, totalDurability: 113, broken });
+    const { server, client } = await start({
+      items: MINE_ITEMS,
+      blocks: MINE_BLOCKS,
+      blockOverrides: new Map([...WORLD, [key(NEAR), BLOCK.stone]]),
+      inventory: [
+        {
+          slot: 36,
+          id: MINE.tinkersPickaxe,
+          count: 1,
+          damage: 0,
+          nbt: true,
+          nbtData: tinkers(true),
+        },
+        {
+          slot: 9,
+          id: MINE.tinkersPickaxe,
+          count: 1,
+          damage: 0,
+          nbt: true,
+          nbtData: tinkers(false),
+        },
+      ],
+    });
+    const result = await perform(client, dig(NEAR));
+    expect(result).toMatchObject({ ok: false, code: 'REFUSED' });
+    expect(result.message).toMatch(
+      /not used: TConstruct:pickaxe is broken \(InfiTool.Broken\); TConstruct:pickaxe is in the main inventory: a Tinkers' tool is used only from the hotbar/,
+    );
+    // Nothing was clicked (a stack with NBT data is never moved) or dug.
+    expect(server.chestSim.clicks).toEqual([]);
+    expect(digPackets(server)).toEqual([]);
   });
 });

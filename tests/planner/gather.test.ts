@@ -490,13 +490,16 @@ describe('GATHER in a plan', () => {
     expect(PlanSchema.safeParse(plan(gather('minecraft:sand', 54))).success).toBe(true);
     expect(PlanSchema.safeParse(plan(gather('minecraft:log', 256))).success).toBe(true);
     expect(PlanSchema.safeParse(plan(gather('harvestcraft:berrygarden', 6))).success).toBe(true);
+    // Stone and ores: with a pickaxe (each dig is checked for one when it runs).
+    expect(PlanSchema.safeParse(plan(gather('minecraft:stone', 64))).success).toBe(true);
+    expect(PlanSchema.safeParse(plan(gather('gregtech:gt.blockores', 16))).success).toBe(true);
     const cows = { type: 'GATHER', args: { animal: 'minecraft:Cow', count: 3 } };
     expect(PlanSchema.safeParse(plan(cows)).success).toBe(true);
     for (const bad of [
       { type: 'GATHER', args: { block: 'minecraft:sand', count: 0 } },
       { type: 'GATHER', args: { block: 'minecraft:sand', count: 257 } },
       { type: 'GATHER', args: { block: 'minecraft:sand', count: 1.5 } },
-      { type: 'GATHER', args: { block: 'minecraft:stone', count: 4 } }, // not on DIG_BLOCK's list
+      { type: 'GATHER', args: { block: 'minecraft:obsidian', count: 4 } }, // not on DIG_BLOCK's list
       { type: 'GATHER', args: { block: 'minecraft:sand' } },
       { type: 'GATHER', args: { block: 'minecraft:sand', count: 4, radius: 64 } },
       // Only a farm animal, and never a block and an animal at once.

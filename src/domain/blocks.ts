@@ -3,9 +3,9 @@ import { z } from 'zod';
 /**
  * Natural blocks that a bare hand harvests (their material needs no tool): vanilla's, and
  * modded ones read in their mod's code to be the same (Biomes O' Plenty's leaves). Full
- * blocks, with no tile entity, never part of a build. The dig allowlist's solid part: what
- * may touch a dug block (DIG_NEIGHBOURS in src/bot/gtnh1710/digging.ts) is these, never a
- * garden (a plant on a dug block drops).
+ * blocks, with no tile entity, never part of a build. With TOOL_DIGGABLE_BLOCKS, the dig
+ * allowlist's solid part: what may touch a dug block (DIG_NEIGHBOURS in
+ * src/bot/gtnh1710/digging.ts) is these, never a garden (a plant on a dug block drops).
  */
 export const SOLID_DIGGABLE_BLOCKS = [
   'minecraft:log',
@@ -26,6 +26,46 @@ export const SOLID_DIGGABLE_BLOCKS = [
   'minecraft:gravel',
   'minecraft:clay',
 ] as const;
+
+/**
+ * Natural stone that only a pickaxe harvests (material rock: anything else digs it at a third
+ * of the speed and it drops nothing), checked in the test server's jars (src/domain/dig-time.ts
+ * keeps each one's hardness, harvest level and natural metadata; docs/gtnh-compatibility.md,
+ * "Tools"): vanilla stone (it drops cobblestone), cobblestone, mossy cobblestone, sandstone,
+ * netherrack, hardened clay and the stained hardened clay of mesas, and the four stones
+ * GregTech generates in the Overworld (GTStones: black and red granite, gt.blockgranites
+ * metadata 0 and 8; marble and basalt, gt.blockstones 0 and 8). Full blocks with no tile
+ * entity; the client digs only a natural block's metadata (never bricks or chiseled stone).
+ * Never minecraft:monster_egg, which looks like stone and hides a silverfish.
+ */
+export const STONE_DIGGABLE_BLOCKS = [
+  'minecraft:stone',
+  'minecraft:cobblestone',
+  'minecraft:mossy_cobblestone',
+  'minecraft:sandstone',
+  'minecraft:netherrack',
+  'minecraft:hardened_clay',
+  'minecraft:stained_hardened_clay',
+  'gregtech:gt.blockgranites',
+  'gregtech:gt.blockstones',
+] as const;
+
+/**
+ * Ores a pickaxe of the ore's level harvests: GregTech's ores (gt.blockores, vein and small
+ * ores alike: the world metadata is the harvest level, the material is in its tile entity,
+ * BlockOresAbstract and TileEntityOres in gregtech 5.09.51.482), and the one vanilla ore that
+ * still generates in GTNH 2.8.4: emerald ore, which vanilla's Extreme Hills and Biomes O'
+ * Plenty's mountains place directly (no OreGenEvent for GT's disableVanillaOres to deny; the
+ * others are denied: GTProxy.PREVENTED_ORES).
+ */
+export const ORE_DIGGABLE_BLOCKS = ['gregtech:gt.blockores', 'minecraft:emerald_ore'] as const;
+
+/** The allowlisted blocks only a tool harvests: stone and ores. */
+export const TOOL_DIGGABLE_BLOCKS = [...STONE_DIGGABLE_BLOCKS, ...ORE_DIGGABLE_BLOCKS] as const;
+export type ToolDiggableBlock = (typeof TOOL_DIGGABLE_BLOCKS)[number];
+
+/** GregTech's ore block: vein and small ores of every material share it. */
+export const GT_ORE_BLOCK = 'gregtech:gt.blockores';
 
 /**
  * Pam's HarvestCraft gardens on land (harvestcraft-1.3.2-GTNH, approved 2026-10-01 for food:
@@ -55,18 +95,29 @@ export const GARDEN_BLOCKS = [
 export type GardenBlock = (typeof GARDEN_BLOCKS)[number];
 
 /**
- * The ONLY blocks DIG_BLOCK may break, by 1.7.10 registry name: the solid vanilla ones and
- * HarvestCraft's land gardens. Nothing else modded, nothing with a tile entity, nothing that
- * is part of a build. Each block's hardness and falling behaviour are kept next to this list
- * (src/domain/dig-time.ts); a test keeps the two identical.
+ * The ONLY blocks DIG_BLOCK may break, by 1.7.10 registry name: the solid vanilla ones a hand
+ * harvests, natural stone and ores (only with a tool that harvests them: src/domain/tools.ts),
+ * and HarvestCraft's land gardens. Nothing else modded, nothing with a tile entity but a GT
+ * ore, nothing that is part of a build. Each block's hardness, harvest rule, natural metadata
+ * and falling behaviour are kept next to this list (src/domain/dig-time.ts); a test keeps the
+ * two identical.
  */
-export const DIGGABLE_BLOCKS = [...SOLID_DIGGABLE_BLOCKS, ...GARDEN_BLOCKS] as const;
+export const DIGGABLE_BLOCKS = [
+  ...SOLID_DIGGABLE_BLOCKS,
+  ...TOOL_DIGGABLE_BLOCKS,
+  ...GARDEN_BLOCKS,
+] as const;
 
 export const DiggableBlockSchema = z.enum(DIGGABLE_BLOCKS);
 export type DiggableBlock = z.infer<typeof DiggableBlockSchema>;
 
 export function isGardenBlock(name: string): name is GardenBlock {
   return (GARDEN_BLOCKS as readonly string[]).includes(name);
+}
+
+/** Stone or an ore: only a tool of the right kind and level harvests it. */
+export function isToolDiggable(name: string): name is ToolDiggableBlock {
+  return (TOOL_DIGGABLE_BLOCKS as readonly string[]).includes(name);
 }
 
 /** Blocks that fall when the block under them is removed (1.7.10 BlockFalling). */
