@@ -490,6 +490,12 @@ export interface ItemStackData {
   count: number;
   damage: number;
   hasNbt: boolean;
+  /**
+   * The stack's NBT data, gunzipped (readNbt in nbt.ts decodes it), when it has any: read
+   * only (a Tinkers' Construct tool keeps its harvest level, speed and wear there); a stack
+   * with NBT data is still never sent or moved.
+   */
+  nbt?: Buffer;
 }
 
 /**
@@ -811,9 +817,9 @@ export function readItemStack(
   let count = r.i8();
   const damage = r.i16();
   const nbtLength = r.i16();
-  if (nbtLength > 0) gunzipSync(r.bytes(nbtLength)); // validated, contents not used yet
+  const nbt = nbtLength > 0 ? gunzipSync(r.bytes(nbtLength)) : null;
   if (options.itemStackSizeVarInt) count = r.varInt();
-  return { id, count, damage, hasNbt: nbtLength > 0 };
+  return { id, count, damage, hasNbt: nbt !== null, ...(nbt === null ? {} : { nbt }) };
 }
 
 export function decodePlay(

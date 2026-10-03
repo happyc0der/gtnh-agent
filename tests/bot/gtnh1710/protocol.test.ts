@@ -110,8 +110,9 @@ describe('outbound packets', () => {
 });
 
 describe('inbound packets', () => {
-  it('decodes window items, including a stack with gzip NBT', () => {
-    const nbt = gzipSync(Buffer.from([10, 0, 0, 0])); // empty compound
+  it('decodes window items, including a stack with gzip NBT (kept gunzipped, to be read)', () => {
+    const raw = Buffer.from([10, 0, 0, 0]); // empty compound
+    const nbt = gzipSync(raw);
     const stack = Buffer.alloc(7);
     stack.writeInt16BE(7495, 0);
     stack.writeInt8(3, 2);
@@ -121,7 +122,7 @@ describe('inbound packets', () => {
     expect(decodePlay(0x30, new Reader(body))).toEqual({
       type: 'window-items',
       windowId: 0,
-      items: [null, { id: 7495, count: 3, damage: 2032, hasNbt: true }],
+      items: [null, { id: 7495, count: 3, damage: 2032, hasNbt: true, nbt: raw }],
     });
   });
 
