@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import { EntityIdSchema, ItemNameSchema, LocationNameSchema } from '../domain/common.ts';
 import { ObservePatternSchema } from '../domain/interactions.ts';
+import { PlayerNameSchema } from '../domain/owner-commands.ts';
 import { NamedLocationSchema, SafetyConfigSchema } from '../domain/safety.ts';
 import { checkPrivateHost, checkPrivateUrl } from './network.ts';
 
@@ -201,6 +202,13 @@ export const MinecraftConfigSchema = z
     allowedHostnames: z.array(z.string().min(1).max(253)).max(20).default([]),
     /** Must be explicitly true before MineflayerClient will open a socket. */
     enableLiveConnection: z.boolean().default(false),
+    /**
+     * The bot's owners (MC_OWNERS): players whose whispers to the bot, and public chat that
+     * starts with ! or # or the bot's name, are commands (src/domain/owner-commands.ts), and
+     * the only players the bot ever whispers to. Exact, case-sensitive names. Empty (the
+     * default): nobody, and no chat is ever a command.
+     */
+    owners: z.array(PlayerNameSchema).max(16).default([]),
     connectTimeoutMs: z.int().min(1000).max(120_000).default(15_000),
     /**
      * Text that MUST appear in the server's MOTD before a live client logs in, so the
@@ -231,6 +239,13 @@ export const MinecraftConfigSchema = z
   .superRefine((mc, ctx) => {
     const check = checkPrivateHost(mc.host, mc.allowedHostnames);
     if (!check.ok) ctx.addIssue({ code: 'custom', path: ['host'], message: check.reason });
+    if (mc.owners.some((o) => o.toLowerCase() === mc.username.toLowerCase())) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['owners'],
+        message: "the bot's own name cannot be one of its owners",
+      });
+    }
   });
 export type MinecraftConfig = z.infer<typeof MinecraftConfigSchema>;
 
@@ -267,6 +282,17 @@ export type PlannerConfig = z.infer<typeof PlannerConfigSchema>;
 export const MODEL_CADENCES = ['decision-points', 'every-cycle'] as const;
 export type ModelCadence = (typeof MODEL_CADENCES)[number];
 
+/**
+ * Owner commands (src/domain/owner-commands.ts). The structured form (`!come`, `!goto 1 64 2`)
+ * is always parsed in code; `translator` says who turns anything else an owner says into the
+ * same fixed command schema: `none` (it is not understood: "say !help") or `ollama` (a local
+ * model, llm.commandModel; its answer is validated like the structured form).
+ */
+export const CommandsConfigSchema = z.strictObject({
+  translator: z.enum(['none', 'ollama']).default('none'),
+});
+export type CommandsConfig = z.infer<typeof CommandsConfigSchema>;
+
 export const DecisionsConfigSchema = z.strictObject({
   /**
    * System 1. `deterministic`: the rule router. `ollama`: a local model (llm.decisionModel)
@@ -293,6 +319,8 @@ export const LlmConfigSchema = z
     allowedHostnames: z.array(z.string().min(1).max(253)).max(20).default([]),
     plannerModel: ModelNameSchema.default('qwen3:14b'),
     decisionModel: ModelNameSchema.default('qwen2.5:0.5b'),
+    /** Translates an owner's natural-language command (commands.translator: ollama). */
+    commandModel: ModelNameSchema.default('qwen3:14b'),
     /** Per request, including loading the model. A timeout escalates (planner) or pauses (decisions). */
     timeoutMs: z.int().min(1000).max(600_000).default(120_000),
     /** How long Ollama keeps a model in memory after a request: short, the GPU is shared. */
@@ -324,6 +352,7 @@ const AgentConfigFields = z.strictObject({
   routing: RoutingConfigSchema.prefault({}),
   planner: PlannerConfigSchema.prefault({}),
   decisions: DecisionsConfigSchema.prefault({}),
+  commands: CommandsConfigSchema.prefault({}),
   llm: LlmConfigSchema.prefault({}),
   memory: MemoryConfigSchema.prefault({}),
   locations: z.record(LocationNameSchema, NamedLocationSchema).default({}),
@@ -410,6 +439,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_VERSION'))) set(['minecraft', 'version'], v);
   if ((v = e('MC_ALLOWED_HOSTNAMES'))) set(['minecraft', 'allowedHostnames'], list(v));
   if ((v = e('MC_SERVER_MARKER'))) set(['minecraft', 'serverIdentityMarker'], v);
+  if ((v = e('MC_OWNERS'))) set(['minecraft', 'owners'], list(v));
   if ((v = e('MC_PRESENCE_TICKS'))) set(['minecraft', 'presenceTicks'], v === 'true');
   if ((v = e('MC_ENABLE_LIVE_CONNECTION')))
     set(['minecraft', 'enableLiveConnection'], v === 'true');
@@ -447,10 +477,12 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('AGENT_PLANNER'))) set(['planner', 'provider'], v);
   if ((v = e('AGENT_DECISIONS'))) set(['decisions', 'provider'], v);
   if ((v = e('AGENT_DECISION_CADENCE'))) set(['decisions', 'modelCadence'], v);
+  if ((v = e('AGENT_COMMANDS'))) set(['commands', 'translator'], v);
   if ((v = e('OLLAMA_URL'))) set(['llm', 'baseUrl'], v);
   if ((v = e('OLLAMA_ALLOWED_HOSTNAMES'))) set(['llm', 'allowedHostnames'], list(v));
   if ((v = e('OLLAMA_PLANNER_MODEL'))) set(['llm', 'plannerModel'], v);
   if ((v = e('OLLAMA_DECISION_MODEL'))) set(['llm', 'decisionModel'], v);
+  if ((v = e('OLLAMA_COMMAND_MODEL'))) set(['llm', 'commandModel'], v);
   if ((v = e('OLLAMA_TIMEOUT_MS'))) set(['llm', 'timeoutMs'], num('OLLAMA_TIMEOUT_MS', v));
   return o;
 }
