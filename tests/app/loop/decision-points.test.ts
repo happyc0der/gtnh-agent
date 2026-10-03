@@ -321,10 +321,38 @@ describe('System 1 asks the model at decision points only', () => {
     );
     expect(run).toMatchObject({ stopKind: 'stop-requested', stopReason: 'three sand are held' });
     expect(seen.at(-1)).toBe(3);
-    // The stopping observation was the only one with no decision: every counted cycle had one.
-    expect(seen).toHaveLength(run.cycles.length + 1);
+    // One look per cycle before deciding, one more after the one new plan (the late check),
+    // and the stopping look: the only one with no decision.
+    expect(seen).toHaveLength(run.cycles.length + 2);
     expect(run.system1?.decisions).toBe(run.cycles.length);
     expect(a.modelCalls()).toBe(1);
+  });
+
+  it('a session also stops on a fresh look after a new plan, before acting on it', async () => {
+    // Seen live: the server completed "Crafting Time" while the planner planned the craft again.
+    const a = await agent('decision-points', sandRows(27), gather('minecraft:sand', 54));
+    a.repos.tasks.ensure({ id: 'task-test', goal: 'Gather sand', subgoal: null, status: 'active' });
+    a.repos.memory.setValue(CURRENT_TASK_KEY, 'task-test');
+    let looks = 0;
+    const run = await runSession(
+      a.deps,
+      { maxCycles: 50, maxMinutes: 1, pauseMs: 0 },
+      {
+        stopRequested: () => {
+          a.deps.clock.advance(500);
+          return null;
+        },
+        // The first look (before deciding) says go on; the second, after the new plan, stops.
+        stopOnState: () => (++looks >= 2 ? 'the quest was completed meanwhile' : null),
+      },
+    );
+    expect(run).toMatchObject({
+      stopKind: 'stop-requested',
+      stopReason: 'the quest was completed meanwhile',
+    });
+    expect(looks).toBe(2);
+    expect(a.plannerCalls()).toBe(1); // the plan was made...
+    expect(run.cycles).toHaveLength(0); // ...and nothing was done with it
   });
 });
 

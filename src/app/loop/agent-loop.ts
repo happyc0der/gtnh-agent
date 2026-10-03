@@ -187,6 +187,22 @@ async function observeState(
 }
 
 /**
+ * `stopBefore` on a fresh look at the world (validated, not kept as a snapshot), or null when
+ * it says go on or the look failed (the cycle then goes on as it would have).
+ */
+async function lateStop(
+  deps: AgentDeps,
+  stopBefore: (state: GameState) => string | null,
+): Promise<string | null> {
+  try {
+    const parsed = GameStateSchema.safeParse(await deps.client.observe());
+    return parsed.success ? stopBefore(parsed.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The state and safety context the executor validates against. Deciding usually takes
  * microseconds, and then this is the cycle's own observation. When a decision provider or
  * the planner took long enough for the observation to go stale, the client is observed
@@ -382,6 +398,27 @@ export async function runSingleCycle(
     chosen = consulted.chosen;
     planner = consulted.outcome;
     planStep = consulted.planStep;
+    // A new plan took the model seconds, and the server's own update may have come meanwhile
+    // (a crafting quest completes on the craft, a moment later). Seen live: the craft that
+    // finished "Crafting Time" was followed by a new plan that crafted it again, refused for
+    // want of logs. The caller's stop check gets a fresh look before anything is done.
+    if (options.stopBefore !== undefined && planner?.kind === 'plan-accepted') {
+      const late = await lateStop(deps, options.stopBefore);
+      if (late !== null) {
+        return finish({
+          status: 'succeeded',
+          needsUserAttention: false,
+          stateSnapshotId,
+          stateViolations,
+          decision,
+          planner,
+          action: null,
+          outcome: null,
+          summary: `stopped before acting: ${late}`,
+          stoppedBefore: late,
+        });
+      }
+    }
   } else {
     chosen = { spec: proposal.spec, reason: proposal.reason, origin: 'deterministic-router' };
   }
