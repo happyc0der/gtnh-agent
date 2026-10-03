@@ -439,8 +439,8 @@ bare hand.
     area (`pen show` prints it);
   - optionally `minecraft.digging.maxHeightAboveFence` (default 4) in `agent.config.json`.
 - `pnpm cli dig --live --at=-8,200,-11` digs one block as a checked user action, and prints the
-  diggable blocks and the inventory afterwards. To collect the drop, stand next to the block
-  first, e.g. `pnpm cli move --live --to=-6.5,200,-10.5`.
+  diggable blocks and the inventory afterwards. A drop that stops out of the pickup reach is
+  walked to and picked up (see below).
 - `observe --live` lists the diggable blocks the agent sees.
 - `examples/plans/dig-pen.json` is a task plan that walks there and digs the dirt and the grass.
 
@@ -470,6 +470,14 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
   drop, a nearby threat, any change to the block, or a change to the tool in hand.
 - Success needs the server's own block change to air, with no re-send. The result reports
   whether the drop reached the inventory.
+- A drop that stopped out of the pickup reach is fetched, as a player would (seen live
+  2026-10-01: logs dug high in a tree dropped onto the logs and leaves under them): the client
+  follows the item the server spawned until it lies still, then walks to where it is in reach,
+  with an ordinary checked walk inside the fence that stops for threats and breaks nothing;
+  never next to a hazard or out of the fence, at most 2 walks. Otherwise the result says why it
+  is left there. A killed farm animal's drops are fetched the same way.
+- A `GATHER` of logs fells each tree from its base, standing beside the trunk, so every drop
+  falls down the emptied column to the player.
 - A `MOVE_TO` over terrain may break up to 4 leaves in its way, the same way: before a move
   that needs it, the walk stops and digs each one with these checks (leaves only), the dig time
   and the server's confirmation, the upper block first. A break refused or not confirmed stops

@@ -518,6 +518,20 @@ agent's idle ticks.
   first**. The agent's own empty hand slot is often where the first drop lands.
 - A drop from a block next to the player, at its feet or head level (or falling down to its
   feet), is picked up. A drop two or more blocks away is not.
+- What the client sees of a drop (vanilla 1.7.10's code, by MCP names; **not yet checked in the
+  server's own jar, nor live**). The mods' mixins on `EntityTrackerEntry` and `EntityItem`
+  (ArchaicFix, BugTorch, Et Futurum, ServerUtilities; their strings read 2026-10-03) change none
+  of it: the spawn packet at the tracker's own position, no move for an item that lies still,
+  no merge search for a full stack, fireproof netherite, elytras, vanished players. S0E Spawn
+  Object type 2 (`EntityTrackerEntry`: `S0EPacketSpawnObject(entity, 2, 1)`), then S1C with
+  its whole DataWatcher, whose index 10 (type 5) is its ItemStack (`EntityItem.entityInit`),
+  then its velocity (S12). Its position comes only every 20 ticks (`EntityTracker.trackEntity`
+  tracks an `EntityItem` at update frequency 20), and only once it moved 1/8 block since the
+  last one sent (a move of nothing every 60 ticks); its y is the centre of its 0.25-high box
+  (`yOffset` = height / 2), so one lying on a block top is at that top + 0.125. Picked up, it
+  is collected (S0D) and destroyed (S13); merged into another, it is destroyed and the other's
+  stack grows (S1C). The client's drop fetching
+  ([architecture](architecture.md#fetching-the-drop)) relies on this.
 
 Hardness and dig times (empty hand; ticks of 50 ms):
 

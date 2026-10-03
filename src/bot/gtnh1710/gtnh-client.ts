@@ -105,9 +105,10 @@ export class Gtnh1710Client implements MinecraftClient {
    * What all parts of the client share (client/core.ts), and through it the parts, one module
    * each in client/: connection.ts (connecting and the protocol), observation.ts (observe()),
    * inventory-actions.ts (chests, windows and clicks), craft-actions.ts, interact-actions.ts
-   * (block windows, SMELT, TAKE_OUTPUT), dig-actions.ts, place-actions.ts, combat-actions.ts,
-   * quest-book-actions.ts, player-actions.ts (WAIT, EAT_FOOD), movement-actions.ts (walking,
-   * idle ticks, gravity) and travel-actions.ts (EXPLORE, retreats).
+   * (block windows, SMELT, TAKE_OUTPUT), dig-actions.ts, drop-actions.ts (picking up what a
+   * dig or a kill dropped), place-actions.ts, combat-actions.ts, quest-book-actions.ts,
+   * player-actions.ts (WAIT, EAT_FOOD), movement-actions.ts (walking, idle ticks, gravity) and
+   * travel-actions.ts (EXPLORE, retreats).
    */
   readonly #core: ClientCore;
 
