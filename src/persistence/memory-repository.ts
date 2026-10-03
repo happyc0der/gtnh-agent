@@ -18,6 +18,13 @@ export const TASK_GATHER_PREFIX = 'task_gather:';
 export const TASK_STEPS_PREFIX = 'task_steps:';
 /** agent_state key: where the night pit the agent started is (src/app/play/live-play.ts). */
 export const NIGHT_PIT_KEY = 'night_pit';
+/**
+ * agent_state key: an owner paused autonomous play (`pause`, `stop`), and why; cleared by
+ * `resume` and when `cli play` starts (src/app/play/commands.ts).
+ */
+export const OWNER_PAUSED_KEY = 'owner_paused';
+/** agent_state key: an owner turned autonomous quest play off (`quests off`), kept until `quests on`. */
+export const QUESTS_OFF_KEY = 'quests_off';
 /** Journal lines kept in full; older ones are folded into one summary line. */
 export const JOURNAL_KEEP = 16;
 
