@@ -11,6 +11,7 @@ import {
 import {
   BlockPositionSchema,
   EntityNumberSchema,
+  ItemNameSchema,
   TimestampSchema,
   type BlockPosition,
   type Position,
@@ -79,11 +80,18 @@ const REACH_MARGIN = 0.3;
 
 /**
  * Gather `count` of what `block` drops (sand: sand; dirt and grass: dirt; clay: clay balls;
- * gravel: gravel or flint; logs: logs; a garden: its produce), digging listed blocks of that
- * kind; or of what `animal` drops (a cow: raw beef or leather; a pig: raw porkchops; a sheep:
- * raw mutton or wool; a chicken: raw chicken or feathers), hunting it. The block is one of
- * DIG_BLOCK's allowlisted blocks and the animal a farm animal, so GATHER can never ask for
- * anything DIG_BLOCK or ATTACK_ENTITY could not do.
+ * gravel: gravel or flint; logs: logs; a garden: its produce; stone: cobblestone; a GT ore:
+ * its raw ore), digging listed blocks of that kind; or of what `animal` drops (a cow: raw beef
+ * or leather; a pig: raw porkchops; a sheep: raw mutton or wool; a chicken: raw chicken or
+ * feathers), hunting it. The block is one of DIG_BLOCK's allowlisted blocks and the animal a
+ * farm animal, so GATHER can never ask for anything DIG_BLOCK or ATTACK_ENTITY could not do.
+ *
+ * `item` (a block only): count that one of the block's drops, and dig only blocks that can
+ * drop it. It is how a GT ore is mined: every GT ore is the one block gregtech:gt.blockores,
+ * and which ore one is (its material) lives in its tile entity, which the observation does
+ * not read, so "16 raw iron ore" is GATHER {"block": "gregtech:gt.blockores", "item":
+ * "gregtech:gt.metaitem.03@5032", "count": 16}: code digs the GT ores in view, whatever their
+ * material, until 16 raw iron ore are held (the route's GATHER hints name the item).
  */
 export const GatherStepSchema = z.strictObject({
   type: z.literal(GATHER),
@@ -91,6 +99,7 @@ export const GatherStepSchema = z.strictObject({
     z.strictObject({
       block: DiggableBlockSchema,
       count: z.int().min(1).max(MAX_GATHER_COUNT),
+      item: ItemNameSchema.optional(),
     }),
     z.strictObject({
       animal: GatherAnimalSchema,
@@ -100,17 +109,27 @@ export const GatherStepSchema = z.strictObject({
 });
 export type GatherStep = z.infer<typeof GatherStepSchema>;
 
-/** What a GATHER gathers from: a kind of block, or a kind of farm animal. */
-export type GatherSource = { block: DiggableBlock } | { animal: GatherAnimal };
+/**
+ * What a GATHER gathers from: a kind of block (with `item`: for that one of its drops), or a
+ * kind of farm animal.
+ */
+export type GatherSource = { block: DiggableBlock; item?: string } | { animal: GatherAnimal };
 
-/** The step's source: its block, or its animal. */
+/** The step's source: its block (and item), or its animal. */
 export function gatherSourceOf(gather: GatherStep): GatherSource {
-  return 'block' in gather.args ? { block: gather.args.block } : { animal: gather.args.animal };
+  if (!('block' in gather.args)) return { animal: gather.args.animal };
+  const { block, item } = gather.args;
+  return item === undefined ? { block } : { block, item };
 }
 
-/** "minecraft:sand" or "minecraft:Cow": the source's name, for the journal and messages. */
+/**
+ * "minecraft:sand", "gregtech:gt.blockores for gregtech:gt.metaitem.03@5032" or
+ * "minecraft:Cow": the source's name, for the journal and messages (which also count the
+ * blocks of the kind in view, so the block comes first).
+ */
 export function sourceName(source: GatherSource): string {
-  return 'block' in source ? source.block : source.animal;
+  if ('animal' in source) return source.animal;
+  return source.item === undefined ? source.block : `${source.block} for ${source.item}`;
 }
 
 /** What a GATHER step has done so far; kept in agent memory between cycles and sessions. */
@@ -120,6 +139,8 @@ export const GatherProgressSchema = z.strictObject({
   step: z.int().min(0),
   /** The block it digs, or (absent) the animal it hunts. */
   block: DiggableBlockSchema.optional(),
+  /** With a block: the one drop that counts (GatherStep's `item`). */
+  item: ItemNameSchema.optional(),
   animal: GatherAnimalSchema.optional(),
   count: z.int().min(1).max(MAX_GATHER_COUNT),
   /** How many of the source's drops the inventory held when the step started. */
@@ -158,23 +179,32 @@ export type GatherProgress = z.infer<typeof GatherProgressSchema>;
 /** The progress's source (old records hold only a block). */
 export function progressSource(p: GatherProgress): GatherSource {
   if (p.animal !== undefined) return { animal: p.animal };
-  return { block: p.block ?? 'minecraft:dirt' };
+  const block = p.block ?? 'minecraft:dirt';
+  return p.item === undefined ? { block } : { block, item: p.item };
 }
 
 /** Why a GATHER step ended: the count is held, a bound was reached, or nothing is left to dig. */
 export type GatherEnd = 'done' | 'bound' | 'no-target';
 
 /**
- * The items a dig of `block` (the route book's dig yields), or a kill of an animal
- * (food.ts ANIMAL_DROPS), can put into the inventory.
+ * The items that count for a GATHER: what a dig of `block` (the route book's dig yields), or
+ * a kill of an animal (food.ts ANIMAL_DROPS), can put into the inventory; with `item`, that
+ * one drop (none when the block never drops it).
  */
 export function gatherDrops(source: DiggableBlock | GatherSource): string[] {
   if (typeof source !== 'string' && 'animal' in source) return animalDrops(source.animal);
   const block = typeof source === 'string' ? source : source.block;
+  const item = typeof source === 'string' ? undefined : source.item;
+  if (item !== undefined) return ownDrops(block).includes(item) ? [item] : [];
   // A food garden's step is about food, not one kind of garden: any food garden it finds is
   // dug and any produce counts (seen live: a GATHER of a stalk garden walked to the gardens
   // world memory remembered, which were gourd gardens, and ended "none left in view").
   if (isGardenBlock(block) && FOOD_GARDENS.includes(block)) return ALL_GARDEN_PRODUCE;
+  return ownDrops(block);
+}
+
+/** What a dig of `block` itself can drop (the route book's dig yields). */
+function ownDrops(block: DiggableBlock): string[] {
   return DIG_YIELDS[block].map((y) => y.item);
 }
 
@@ -182,13 +212,38 @@ export function gatherDrops(source: DiggableBlock | GatherSource): string[] {
 const ALL_GARDEN_PRODUCE: string[] = [...new Set(FOOD_GARDENS.flatMap((g) => GARDEN_DROPS[g]))];
 
 /**
- * Whether digging `candidate` gives what digging `block` gives: grass gives dirt, so a
- * GATHER of dirt digs grass too (seen live: the floor around the player was all grass).
+ * Whether digging `candidate` gives what a GATHER of `source` counts: grass gives dirt, so a
+ * GATHER of dirt digs grass too (seen live: the floor around the player was all grass). With
+ * an `item`, only blocks that can drop that item.
  */
-export function givesSame(candidate: DiggableBlock, block: DiggableBlock): boolean {
+export function givesSame(
+  candidate: DiggableBlock,
+  source: DiggableBlock | { block: DiggableBlock; item?: string | undefined },
+): boolean {
+  if (typeof source !== 'string' && source.item !== undefined) {
+    return ownDrops(candidate).includes(source.item);
+  }
+  const block = typeof source === 'string' ? source : source.block;
   if (candidate === block) return true;
   const wanted = new Set(gatherDrops(block));
   return gatherDrops(candidate).some((item) => wanted.has(item));
+}
+
+/**
+ * Why a GATHER of `block` for `item` can never count anything: the block never drops it
+ * (a GT ore's drops are the knowledge base's, so none without it). Null when it can.
+ */
+export function itemProblem(block: DiggableBlock, item: string | undefined): string | null {
+  if (item === undefined) return null;
+  const drops = ownDrops(block);
+  if (drops.includes(item)) return null;
+  const shown = drops.slice(0, 4).join(', ');
+  return (
+    `${block} never drops ${item}` +
+    (drops.length === 0
+      ? ' (no drops are known for it)'
+      : ` (it drops ${shown}${drops.length > 4 ? `, ... ${drops.length} kinds` : ''})`)
+  );
 }
 
 /** How many of the source's drops `items` holds. */
@@ -362,7 +417,9 @@ export type GatherChoice =
  *    the step has not skipped: DIG_BLOCK it if it is within reach, else MOVE_TO its stand
  *    spot. Blocks within reach come first (no walk at all), then the nearest stand spot. A
  *    block is passed over when `check` says the dig (from where the player would stand) or
- *    the walk would be refused;
+ *    the walk would be refused (stone or an ore with no carried tool that harvests it: the
+ *    policy's NOT_DIGGABLE). With an `item`, the blocks of any kind that can drop it; a block
+ *    that never drops it ends the step at once;
  *  - an animal: see chooseHuntAction;
  *  - nothing left: the step ends, and the planner is asked again (it can EXPLORE).
  */
@@ -384,6 +441,10 @@ export function chooseGatherAction(
     return chooseHuntAction(gather.args.animal, progress, state, opts);
   }
   const { block } = gather.args;
+  const wrongItem = itemProblem(block, gather.args.item);
+  if (wrongItem !== null) {
+    return { kind: 'end', end: 'no-target', why: wrongItem, skip: [], skipEntities: [] };
+  }
   const feet = state.player.position.known ? state.player.position.value : null;
   if (feet === null || !state.nearbyBlocks.known) {
     return {
@@ -401,7 +462,7 @@ export function chooseGatherAction(
   // In view, but with no spot a walk reaches to dig it from (standAt null).
   let unreachable = 0;
   for (const r of state.nearbyBlocks.value.resources) {
-    if (!givesSame(r.block, block) || skipped.has(key(r.position))) continue;
+    if (!givesSame(r.block, gather.args) || skipped.has(key(r.position))) continue;
     if (r.standAt === null) {
       unreachable += 1;
       continue;

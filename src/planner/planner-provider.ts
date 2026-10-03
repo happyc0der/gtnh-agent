@@ -248,8 +248,10 @@ const PLACE_BLOCKS: Readonly<Record<PlaceKind, readonly string[]>> = {
   gravel: ['minecraft:gravel'],
   clay: ['minecraft:clay'],
   water: [],
-  stone: ['minecraft:stone', 'minecraft:cobblestone'],
-  ore: [],
+  stone: ['minecraft:stone', 'minecraft:cobblestone', 'minecraft:mossy_cobblestone'],
+  // Any block named an ore counts as one (world-survey.ts namesAnOre), but DIG_BLOCK digs only
+  // these: a GATHER that finds another ore there passes the place over.
+  ore: ['gregtech:gt.blockores', 'minecraft:emerald_ore'],
   garden: FOOD_GARDENS,
 };
 
