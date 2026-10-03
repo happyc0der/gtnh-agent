@@ -15,14 +15,27 @@ import {
 import type { BlockPosition, Position } from '../domain/common.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
+import {
+  craftingRecipe,
+  MAX_CRAFT_TIMES,
+  needsCraftingTable,
+  whyNotCraftable,
+} from '../domain/recipes.ts';
 import { SafetyConfigSchema, type SafetyConfig } from '../domain/safety.ts';
 import { gtnhChangesFor } from '../goals/gtnh-changes.ts';
 import { ROUTE_BOOK } from '../goals/route-book.ts';
-import { describeRoute, planRoute, type KnownPlace, type PlaceLookup } from '../goals/route.ts';
+import {
+  describeRoute,
+  planRoute,
+  type KnownPlace,
+  type PlaceLookup,
+  type Route,
+} from '../goals/route.ts';
 import { parseToolName, usesLeft } from '../domain/tools.ts';
 import type { ExplorationSummary, PlaceKind } from '../domain/world-memory.ts';
 import { candidateOf, fightProblems } from '../safety/combat-checks.ts';
 import { forbiddenKeywords, operatorApprovedTypes } from '../safety/forbidden-actions.ts';
+import { OBSERVED_TABLE_PREFIX } from '../safety/interact-checks.ts';
 import { isProtected } from '../safety/protected-items.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
 import {
@@ -685,7 +698,14 @@ export function routeAndChangesForPlanner(
         ]
       : [],
   );
-  const route = planRoute(goal, inventory, ROUTE_BOOK, knownPlaces(state, exploration), storage);
+  const route = planRoute(
+    goal,
+    inventory,
+    ROUTE_BOOK,
+    knownPlaces(state, exploration),
+    storage,
+    usableStations(state),
+  );
   const covered = scanCovers(state);
   const legs = route.legs.map((leg) => {
     if (leg.kind !== 'gather' || leg.places.length > 0 || exploration === undefined) return leg;
@@ -700,10 +720,127 @@ export function routeAndChangesForPlanner(
   return {
     route: {
       stock: route.stock.slice(0, 32),
-      steps: describeRoute({ ...route, legs }).slice(0, 40),
+      steps: withActionArgs(describeRoute({ ...route, legs }), route, state).slice(0, 40),
     },
     gtnhChanges: gtnhChangesFor(route, held),
   };
+}
+
+/**
+ * Stations the agent can use now, for the route: a crafting table configured or seen (CRAFT_ITEM
+ * takes either: `state.craftingTables`), a furnace seen (SMELT). The route then says of each
+ * station it needs whether one is available, held (place it) or missing (make one, place it).
+ */
+function usableStations(state: GameState): string[] {
+  const out: string[] = [];
+  if (state.craftingTables.length > 0) out.push('crafting_table');
+  if (
+    state.interactables.known &&
+    state.interactables.value.blocks.some((b) => b.profile === 'furnace')
+  ) {
+    out.push('furnace');
+  }
+  return out;
+}
+
+/**
+ * Where a crafting table or furnace the agent holds would go: a cell the planner is offered
+ * (state.placeableCells) that the policy lets a station take (takesFalling: a plain full block
+ * under it, out of the player's own columns), at the feet level first (on the ground beside the
+ * player), nearest first; null when none. The client still refuses one in the player's way
+ * (a 1-wide passage: placing.ts checkStation), and the planner then picks another.
+ */
+function stationCell(state: GameState): BlockPosition | null {
+  const at = state.player.position.known ? state.player.position.value : null;
+  if (at === null || !state.nearbyBlocks.known) return null;
+  const feetY = Math.floor(at.y + 1e-6);
+  const cells = state.nearbyBlocks.value.placeable
+    .slice(0, MAX_COMPACT_PLACEABLE)
+    .filter((c) => c.takesFalling);
+  return (cells.find((c) => c.position.y === feetY) ?? cells[0])?.position ?? null;
+}
+
+/** Longest route line the planner request takes (PlannerRequestSchema: route.steps). */
+const MAX_STEP_LINE = 500;
+
+/**
+ * The route's lines with the exact actions that do them, as the planner writes them: each
+ * station the route needs and the player holds, the PLACE_BLOCK that puts it down (on a cell
+ * stationCell picks) and the crafting table's id it then has; each craft step the CRAFT_ITEM
+ * that makes it (its recipe id as the route names it, the times, and the table for a 3x3
+ * recipe: the nearest one known, else the one placing makes), or why CRAFT_ITEM cannot make
+ * it yet (src/domain/recipes.ts). A hint goes after its line, on a line of its own when both
+ * would not fit one.
+ */
+function withActionArgs(lines: readonly string[], route: Route, state: GameState): string[] {
+  const at = state.player.position.known ? state.player.position.value : null;
+  const tables = state.craftingTables
+    .filter((t) => t.position.known)
+    .map((t) => ({
+      id: t.id,
+      d: at === null || !t.position.known ? 0 : distance(at, t.position.value),
+    }))
+    .sort((a, b) => a.d - b.d);
+  const cell = stationCell(state);
+  const tableAt = (p: BlockPosition): string => `${OBSERVED_TABLE_PREFIX}${p.x}.${p.y}.${p.z}`;
+  const tableNeed = route.stationNeeds.find((s) => s.station === 'crafting_table');
+  // The table a 3x3 craft uses: the nearest one known, else the one the route places.
+  const tableId =
+    tables[0]?.id ??
+    (tableNeed !== undefined && tableNeed.status !== 'available' && cell !== null
+      ? tableAt(cell)
+      : null);
+  const place = (item: string): string => {
+    if (cell === null) {
+      return (
+        'no listed placeable cell takes it here (one whose takesFalling is true, on the ground ' +
+        'beside the player): MOVE_TO open, flat ground first'
+      );
+    }
+    const then =
+      item === 'minecraft:crafting_table'
+        ? `it is then the table ${tableAt(cell)}`
+        : `it is then the furnace at (${cell.x}, ${cell.y}, ${cell.z})`;
+    return (
+      `PLACE_BLOCK ${JSON.stringify({ position: cell, item })} (a listed cell whose ` +
+      `takesFalling is true, on the ground beside the player, never in a 1-wide passage); ${then}`
+    );
+  };
+  const craft = (id: string, times: number): string => {
+    const recipe = craftingRecipe(id);
+    if (recipe === null) return `CRAFT_ITEM cannot make ${id} yet: ${whyNotCraftable(id) ?? ''}`;
+    const n = Math.min(times, MAX_CRAFT_TIMES);
+    const more = times > n ? ` (at most ${n} crafts each: the rest in another)` : '';
+    if (!needsCraftingTable(recipe)) {
+      return `CRAFT_ITEM ${JSON.stringify({ recipe: id, times: n, craftingTableId: null })}${more}`;
+    }
+    if (tableId === null) {
+      return `CRAFT_ITEM with recipe ${id}, times ${n}, at a crafting table once one is placed`;
+    }
+    return `CRAFT_ITEM ${JSON.stringify({ recipe: id, times: n, craftingTableId: tableId })}${more}`;
+  };
+  const hints = new Map<string, string>();
+  for (const s of route.stationNeeds) {
+    if (s.item === null || s.status === 'available' || s.status === 'unknown') continue;
+    const line = lines.find((l) => l.startsWith(`station: ${s.station}: `));
+    if (line === undefined) continue;
+    if (s.status === 'held') hints.set(line, place(s.item));
+    else if (s.make !== null) {
+      const id = s.make.slice(0, s.make.indexOf(': '));
+      hints.set(line, `make it: ${craft(id, 1)}; then ${place(s.item)}`);
+    }
+  }
+  route.legs.forEach((leg, i) => {
+    if (leg.kind !== 'craft' || leg.station === 'furnace') return;
+    const line = lines.find((l) => l.startsWith(`${i + 1}. craft ${leg.recipe} x${leg.times} `));
+    if (line !== undefined) hints.set(line, craft(leg.recipe, leg.times));
+  });
+  return lines.flatMap((l) => {
+    const hint = hints.get(l);
+    if (hint === undefined) return [l];
+    const joined = `${l} => ${hint}`;
+    return joined.length <= MAX_STEP_LINE ? [joined] : [l, `  => ${hint}`.slice(0, MAX_STEP_LINE)];
+  });
 }
 
 /**

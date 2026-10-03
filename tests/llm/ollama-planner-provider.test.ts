@@ -67,6 +67,21 @@ describe('OllamaPlannerProvider', () => {
     expect(PLANNER_SYSTEM_PROMPT).toMatch(/never sand or gravel above the player's own head/);
   });
 
+  it("lets the model craft by a route step's recipe id and place a crafting table or furnace", () => {
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      'recipe is a known recipe below, or the recipe id a route step names (GTNH\'s own recipes, e.g. "minecraft:wooden_pickaxe#1"; the step ends with the exact CRAFT_ITEM to use)',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toContain(
+      'A minecraft:crafting_table or minecraft:furnace goes only into a cell whose takesFalling is true (on the ground beside the player), never into a 1-wide passage',
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(
+      /\n10\. Crafting: CRAFT_ITEM only with a known recipe or a route step's recipe id/,
+    );
+    expect(PLANNER_SYSTEM_PROMPT).toMatch(/\n14\. Placing: .*place it as its station step says/);
+    // The output schema no longer pins recipe to the hand-verified ids.
+    expect(JSON.stringify(plannerFormat(8))).not.toContain('"planks_oak","planks_spruce"');
+  });
+
   it('tells the model what a tool saves, from the verified tables, and the tool recipes', () => {
     // Dig times come from src/domain/dig-time.ts and tools.ts, not from the model's memory.
     expect(PLANNER_SYSTEM_PROMPT).toContain(

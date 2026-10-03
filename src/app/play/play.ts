@@ -5,7 +5,7 @@ import {
   type QuestBookStep,
   type QuestProgress,
 } from '../../goals/quest-goals.ts';
-import { needsCraftingTable, RECIPE_IDS, RECIPES } from '../../domain/recipes.ts';
+import { craftableFrom } from '../../domain/recipes.ts';
 import type { GameState, WorldTime } from '../../domain/game-state.ts';
 import type { ShelterStatus } from '../../goals/shelter.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
@@ -237,16 +237,27 @@ export const MOB_WAIT_MS = 30_000;
 export const MAX_MOB_WAITS = 6;
 
 /**
- * What the live agent can obtain: everything digging gathers, and the results of the
- * recipes it can craft (2x2 always; 3x3 only when a crafting table is configured). The
- * crafting table itself is never counted: the agent cannot place it, so making one (from
- * GTNH's flint recipe) would only spend flint.
+ * What the live agent can obtain: everything digging gathers, and what the recipes CRAFT_ITEM
+ * makes (the hand-verified table's and the knowledge base's) make of it, step by step: a
+ * recipe counts once each of its ingredients can be had (craftableFrom). 2x2 recipes always;
+ * 3x3 ones when a crafting table can be used:
+ *  - one is configured (`tables.configured`); or
+ *  - the agent may place one (`tables.placing`: MC_ENABLE_PLACING) and holds one or can make
+ *    one (GTNH's 2x2 recipe: flint above logs): play's route then says "is held: place it"
+ *    or "make one, then place it", with the exact PLACE_BLOCK, and the crafts that follow use
+ *    the table it placed, which it then sees.
+ * A table the agent merely sees nearby is no ability: play chooses its quest before a session
+ * looks around, and the table may be out of reach by then; the route uses one it sees
+ * (stations available). Inputs are judged by item name (`@damage` ignored), like the
+ * abilities themselves.
  */
-export function liveAbilities(hasCraftingTable: boolean): Abilities {
-  const craft = RECIPE_IDS.map((id) => RECIPES[id])
-    .filter((r) => hasCraftingTable || !needsCraftingTable(r))
-    .map((r) => r.result.item.replace(/@\d+$/, ''));
-  return { gather: BASE_ABILITIES.gather, craft: new Set(craft) };
+export function liveAbilities(tables: { configured: boolean; placing: boolean }): Abilities {
+  const handGrid = craftableFrom(BASE_ABILITIES.gather, { table: false });
+  const table = tables.configured || (tables.placing && handGrid.has('minecraft:crafting_table'));
+  return {
+    gather: BASE_ABILITIES.gather,
+    craft: table ? craftableFrom(BASE_ABILITIES.gather, { table: true }) : handGrid,
+  };
 }
 
 /**

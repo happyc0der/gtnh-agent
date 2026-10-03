@@ -135,7 +135,10 @@ export async function playCommand(cli: Cli): Promise<number> {
         {
           limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, minutesLeft)) },
           ...providers,
-          abilities: liveAbilities(Object.keys(config.minecraft.crafting.tables).length > 0),
+          abilities: liveAbilities({
+            configured: Object.keys(config.minecraft.crafting.tables).length > 0,
+            placing: config.minecraft.placing.enabled,
+          }),
           ...(freeGoal === null ? {} : { goal: freeGoal }),
           onEvent: (e) => {
             if (e.kind === 'session-end' && e.system1 !== undefined) {
