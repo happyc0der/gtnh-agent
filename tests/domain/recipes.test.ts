@@ -40,6 +40,7 @@ describe('the recipe table', () => {
     expect(RECIPE_IDS.filter((id) => needsCraftingTable(RECIPES[id]))).toEqual([
       'chest',
       'wooden_shovel',
+      'wooden_pickaxe',
       'wooden_axe',
     ]);
   });
@@ -72,6 +73,15 @@ describe('the recipe table', () => {
     expect(RECIPES.wooden_axe.pattern).toEqual(['PP', 'PS', ' S']);
     expect(RECIPES.wooden_shovel.key['P']).toEqual(RECIPES.sticks.key['P']);
     expect(RECIPES.wooden_axe.evidence).toMatch(/verified.*RecipesTools/);
+    // The wooden pickaxe: the only craftable pickaxe that digs (stone, level-0 ores).
+    expect(RECIPES.wooden_pickaxe).toMatchObject({
+      pattern: ['PPP', ' S ', ' S '],
+      result: { item: 'minecraft:wooden_pickaxe', count: 1 },
+    });
+    expect(ingredientRequirements(RECIPES.wooden_pickaxe).map((r) => [r.key, r.perCraft])).toEqual([
+      ['P', 3],
+      ['S', 2],
+    ]);
   });
 
   it('derives what a craft uses and makes', () => {

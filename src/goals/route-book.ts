@@ -234,40 +234,8 @@ function killSources(): RouteSource[] {
 }
 
 /**
- * Blocks that need a tool, with what one dig drops (vanilla 1.7.10: stone drops cobblestone,
- * the others drop themselves; NOT checked against GTNH's drop handlers). The tool and level
- * come from the knowledge base's harvest table (IguanaTweaks), so they stay data.
- */
-export const TOOL_DIG_YIELDS: ReadonlyArray<{
-  block: string;
-  hardness: number;
-  drops: ReadonlyArray<{ item: string; perDig: number }>;
-}> = [
-  {
-    block: 'minecraft:stone',
-    hardness: 1.5,
-    drops: [{ item: 'minecraft:cobblestone', perDig: 1 }],
-  },
-  {
-    block: 'minecraft:cobblestone',
-    hardness: 2,
-    drops: [{ item: 'minecraft:cobblestone', perDig: 1 }],
-  },
-  {
-    block: 'minecraft:mossy_cobblestone',
-    hardness: 2,
-    drops: [{ item: 'minecraft:mossy_cobblestone', perDig: 1 }],
-  },
-  {
-    block: 'minecraft:sandstone',
-    hardness: 0.8,
-    drops: [{ item: 'minecraft:sandstone', perDig: 1 }],
-  },
-  { block: 'minecraft:obsidian', hardness: 50, drops: [{ item: 'minecraft:obsidian', perDig: 1 }] },
-];
-
-/**
- * Where a player looks for each block (general Minecraft knowledge, any modpack's overworld).
+ * Where a player looks for each block (general Minecraft knowledge, any modpack's overworld,
+ * and GTNH's own generation where it says so).
  */
 export const FIND_HINTS: Readonly<Record<string, string>> = {
   'minecraft:sand': 'deserts, beaches, river beds and lake shores',
@@ -279,10 +247,19 @@ export const FIND_HINTS: Readonly<Record<string, string>> = {
   'minecraft:log2': 'savannas (acacia) and roofed forests (dark oak)',
   'minecraft:leaves': 'trees',
   'minecraft:leaves2': 'acacia and dark oak trees',
-  'minecraft:stone': 'under the surface almost everywhere, cliffs and caves',
+  'minecraft:stone': 'under the surface almost everywhere: cliffs, hillsides, caves',
   'minecraft:cobblestone': 'dungeons and villages (or dig stone)',
+  'minecraft:mossy_cobblestone': 'dungeons',
   'minecraft:sandstone': 'under desert sand',
-  'minecraft:obsidian': 'where lava meets water, deep underground',
+  'minecraft:netherrack': 'the Nether',
+  'minecraft:hardened_clay': 'mesa biomes',
+  'minecraft:stained_hardened_clay': 'the coloured bands of mesa biomes',
+  // GTStones: blobs in the Overworld's stone, y 0-180 (GregTech 5.09.51.482 WorldgenStone).
+  'gregtech:gt.blockgranites': 'blobs in the stone underground (y 0-180): cliffs and caves',
+  'gregtech:gt.blockstones': 'blobs in the stone underground (y 0-180): cliffs and caves',
+  'gregtech:gt.blockores': 'GT ore veins in the stone (by height: see generates)',
+  // BiomeGenHills.decorate (and Biomes O' Plenty's mountains): single blocks in stone.
+  'minecraft:emerald_ore': 'Extreme Hills and mountains, single blocks in stone at y 4-31',
   // HarvestCraft's gardens, by where its generator puts them (food.ts GARDEN_BIOMES), and the
   // farm animals (they spawn on grass, in grassy biomes).
   ...Object.fromEntries(GARDEN_BLOCKS.map((g) => [g, `HarvestCraft gardens: ${GARDEN_BIOMES[g]}`])),
@@ -495,7 +472,7 @@ export function buildRouteBook(data: KnowledgeData): RouteBook {
 
   return {
     recipes: [...hand, ...generated.filter((g) => !replaced.has(g))],
-    sources: [...digSources(), ...killSources(), ...toolDigSources(data), ...oreSources(data)],
+    sources: [...digSources(), ...killSources(), ...toolDigSources(), ...oreSources(data)],
     hints: FIND_HINTS,
     tools: toolsOf(data),
     stationItems: STATION_ITEMS,
@@ -513,29 +490,51 @@ export function harvestRequirement(
   return exact === undefined ? null : { kind: exact[0], level: exact[1] };
 }
 
-function toolDigSources(data: KnowledgeData): RouteSource[] {
+/**
+ * Stone and the vanilla ore as dig sources: what one dig drops (STONE_DIG_YIELDS) and the
+ * tool that harvests the block (its harvest rule, src/domain/dig-time.ts, verified in the
+ * jars and IguanaTweaks' configs; a test keeps it equal to the knowledge base's harvest
+ * table). Only blocks DIG_BLOCK may dig: a route never sends the agent to one it cannot.
+ */
+function toolDigSources(): RouteSource[] {
   const out: RouteSource[] = [];
-  for (const t of TOOL_DIG_YIELDS) {
-    const tool = harvestRequirement(data, t.block);
-    for (const d of t.drops) {
+  for (const [block, drops] of Object.entries(STONE_DIG_YIELDS) as Array<
+    [ToolDiggableBlock, ReadonlyArray<{ item: string; perDig: number }>]
+  >) {
+    const info = diggableInfo(block);
+    const rule = info.harvest;
+    for (const d of drops) {
       out.push({
         item: d.item,
         via: 'dig',
-        blocks: [t.block],
+        blocks: [block],
         perAction: d.perDig,
-        secondsPerAction: secondsPerToolDig(t.hardness),
-        ...(tool === null ? {} : { tool }),
+        secondsPerAction: secondsPerToolDig(info.hardness),
+        ...(rule === null ? {} : { tool: { kind: rule.tool, level: rule.level } }),
       });
     }
   }
   return out;
 }
 
-/** GT ores that generate in the Overworld: vein ores (raw ore drops) and small ores. */
+/** Longest "generates" text of a GT ore source (a route line holds at most 500 characters). */
+const MAX_ORE_WHERE = 260;
+
+/**
+ * GT ores that generate in the Overworld: vein ores (raw ore drops) and small ores. Each is
+ * dug as gregtech:gt.blockores, the block the observation and world memory see: an ore's
+ * material is in its tile entity, so the block does not say which ore it is, only its level
+ * (its metadata). The source names the ore item (gregtech:gt.blockores@<material>) and where
+ * it generates; a GATHER of the block with `item` digs ores until enough of that one drop is
+ * held.
+ */
 function oreSources(data: KnowledgeData): RouteSource[] {
   // drop|block -> the veins (and their roles in each) that hold the ore.
   type VeinRoles = Map<string, { roles: string[]; y: string }>;
-  const veinOres = new Map<string, { block: string; level: number; veins: VeinRoles }>();
+  const veinOres = new Map<
+    string,
+    { block: string; material: string; level: number; veins: VeinRoles }
+  >();
   for (const v of data.veins) {
     if (!v.dims.includes('Overworld')) continue;
     for (const [role, o] of [
@@ -548,6 +547,7 @@ function oreSources(data: KnowledgeData): RouteSource[] {
       const key = `${o.drop}|${o.block}`;
       const entry = veinOres.get(key) ?? {
         block: o.block,
+        material: o.material,
         level: o.level,
         veins: new Map() as VeinRoles,
       };
@@ -559,19 +559,27 @@ function oreSources(data: KnowledgeData): RouteSource[] {
   }
   const out: RouteSource[] = [];
   for (const [key, e] of veinOres) {
-    const veins = [...e.veins];
-    const shown = veins
-      .slice(0, 3)
-      .map(([name, v]) => `GT vein ${name} (${v.roles.join(', ')}): ${v.y}`);
-    const more = veins.length > 3 ? `; and ${veins.length - 3} more veins` : '';
+    const drop = key.slice(0, key.indexOf('|'));
+    const veins = [...e.veins].map(
+      ([name, v]) => `GT vein ${name} (${v.roles.join(', ')}): ${v.y}`,
+    );
+    const head = `${e.material} ore (${e.block}): `;
+    const gather = `; GATHER {"block":"${GT_ORE_BLOCK}","item":"${drop}"}`;
+    const generates = (shown: number): string =>
+      veins.slice(0, shown).join('; ') +
+      (veins.length > shown ? `; and ${veins.length - shown} more veins` : '') +
+      ' (Overworld)';
+    // Up to three veins, fewer when they would not fit: the GATHER is never cut.
+    let shown = Math.min(3, veins.length);
+    while (shown > 1 && (head + generates(shown) + gather).length > MAX_ORE_WHERE) shown -= 1;
     out.push({
-      item: key.slice(0, key.indexOf('|')),
+      item: drop,
       via: 'dig',
-      blocks: [e.block],
+      blocks: [GT_ORE_BLOCK],
       perAction: 1,
       secondsPerAction: VEIN_ORE_SECONDS,
       tool: { kind: 'pickaxe', level: e.level },
-      where: `${shown.join('; ')}${more} (Overworld)`,
+      where: head + generates(shown) + gather,
     });
   }
   for (const s of data.smallOres) {
@@ -581,11 +589,13 @@ function oreSources(data: KnowledgeData): RouteSource[] {
       out.push({
         item,
         via: 'dig',
-        blocks: [s.block],
+        blocks: [GT_ORE_BLOCK],
         perAction: perDig,
         secondsPerAction: SMALL_ORE_SECONDS,
         tool: { kind: 'pickaxe', level: s.level },
-        where: `GT small ore ${s.key}: y ${s.minY}-${s.maxY}, ~${s.amount} per chunk (Overworld)`,
+        where:
+          `GT small ore ${s.key} (${s.block}): y ${s.minY}-${s.maxY}, ~${s.amount} per chunk ` +
+          `(Overworld); GATHER {"block":"${GT_ORE_BLOCK}","item":"${item}"}`,
       });
     }
   }

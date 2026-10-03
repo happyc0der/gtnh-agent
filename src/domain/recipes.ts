@@ -45,6 +45,7 @@ export const RECIPE_IDS = [
   'crafting_table',
   'chest',
   'wooden_shovel',
+  'wooden_pickaxe',
   'wooden_axe',
   'flint',
 ] as const;
@@ -149,6 +150,16 @@ export const RECIPES: Readonly<Record<RecipeId, CraftingRecipe>> = {
     key: { P: PLANKS, S: ['minecraft:stick'] },
     result: { item: 'minecraft:wooden_shovel', count: 1 },
     evidence: WOODEN_TOOL('X / # / #'),
+  },
+  // The only pickaxe GTNH's crafting grid makes that digs: IguanaTweaks disables the stone,
+  // iron, golden and diamond ones (src/domain/tools.ts). The server's recipe dump lists it as
+  // vanilla's (plankWood x3 above stickWood x2).
+  wooden_pickaxe: {
+    id: 'wooden_pickaxe',
+    pattern: ['PPP', ' S ', ' S '],
+    key: { P: PLANKS, S: ['minecraft:stick'] },
+    result: { item: 'minecraft:wooden_pickaxe', count: 1 },
+    evidence: WOODEN_TOOL('XXX / _#_ / _#_'),
   },
   wooden_axe: {
     id: 'wooden_axe',
