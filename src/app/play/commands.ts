@@ -1,0 +1,972 @@
+import type { WorldTime } from '../../domain/game-state.ts';
+import type { Position } from '../../domain/common.ts';
+import {
+  describeCommand,
+  HELP_TEXT,
+  isActionCommand,
+  isStructured,
+  isTravelCommand,
+  parseOwnerCommand,
+  type ActionCommand,
+  type GoalCommand,
+  type HeardCommand,
+  type InstantCommand,
+  type OwnerCommand,
+  type TravelCommand,
+} from '../../domain/owner-commands.ts';
+import type { Boundary, NamedLocation } from '../../domain/safety.ts';
+import type { CommandTranslation } from '../../llm/ollama-command-provider.ts';
+import {
+  CURRENT_TASK_KEY,
+  OWNER_PAUSED_KEY,
+  QUESTS_OFF_KEY,
+} from '../../persistence/memory-repository.ts';
+import type { OwnerCommandRecord } from '../../persistence/owner-command-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
+import { checkWithinBoundary } from '../../safety/coordinate-boundaries.ts';
+import { setKnownSteps } from '../loop/known-steps.ts';
+import { starving, type FoodStatus } from './food.ts';
+import { freeRoundGoal, missingFor, reachGoal, runGoalSession, total } from './goal-round.ts';
+import { cycleEvent } from './narration.ts';
+import { blueprintSession, isDark, nightReason, nightSoon } from './night.ts';
+import type { TravelStep, TravelTarget } from './owner-travel.ts';
+import {
+  autonomyOff,
+  commandWaiting,
+  done,
+  mobPause,
+  waitOutMob,
+  type CommandRun,
+  type PlayState,
+  type RoundEnd,
+} from './play-state.ts';
+import type { FreeGoal, PlayResult } from './play.ts';
+
+/**
+ * Owners' commands in play (src/domain/owner-commands.ts): the command round, and the idle
+ * round of `cli play --listen`.
+ *
+ * Each round, after the night shelter and the morning (night.ts), the command round hears
+ * the commands that came (chat, and `cli command` through the database), answers the ones
+ * done at once (stop, pause, status, waypoints...), and runs the action command, one at a
+ * time (the newest replaces any other): a travel command as code-made steps, a goal as a
+ * FreeGoal. Owners' commands come before food trips and quests: a new one ends the session
+ * running at its next cycle (commandWaiting, in each session's stopRequested), and a stop also
+ * stops the action in progress (the client's interrupt). Only the night shelter and a food bar
+ * nearly empty (food.ts starving) keep priority; travel and goals wait for them, and say so.
+ *
+ * Nothing here acts by itself: a travel step is a MOVE_TO, EXPLORE or WAIT that code
+ * proposes as the command task's known step (known-steps.ts), so System 1 still decides first
+ * (a mob, low health, a meal) and the executor validates, executes and verifies the step like
+ * any other; a goal is pursued by the planner and GATHER exactly as `cli play --needs`.
+ */
+
+/** What the command round needs of the live game (live-play.ts: the client; tests: fakes). */
+export interface CommandDeps {
+  /** The owners' commands heard in chat since the last call (the client's queue). */
+  take: () => readonly HeardCommand[];
+  /** Whether owners' commands are waiting in chat (without taking them). */
+  waiting: () => boolean;
+  /** Whispers to an owner (the client makes it plain, cuts it into lines and paces it). */
+  reply: (owner: string, text: string) => void;
+  /** Ends the interrupt an owner's stop set: the session it stopped is over. */
+  clearInterrupt: () => void;
+  /** An owner's natural language as a command (the local model); absent: not understood. */
+  translate?: (text: string) => Promise<CommandTranslation>;
+  /** What the bot knows now (live: the client's world model). */
+  view: () => CommandView;
+  /** The next step toward a target, with the client's walk rules (owner-travel.ts). */
+  step: (target: TravelTarget) => TravelStep;
+  /** The owners (MC_OWNERS): `follow` follows only them. */
+  owners: readonly string[];
+  /** The named location `home` and `sethome` mean (routing.homeLocationName). */
+  homeName: string;
+  /** Named locations from agent.config.json: they win over saved ones, and chat never changes them. */
+  configLocations: ReadonlyMap<string, NamedLocation>;
+  /** The safety boundary: no command goes beyond it. */
+  boundary: Boundary;
+  /** While idle: why System 1 should act now (a mob, low health, a meal), or null. */
+  standby?: () => Promise<string | null>;
+}
+
+/** What the bot knows now, for commands. */
+export interface CommandView {
+  position: Position | null;
+  dimension: string | null;
+  health: number | null;
+  food: number | null;
+  inventory: Readonly<Record<string, number>> | null;
+  /** Where a player is (its feet), by exact name, when the bot sees it. */
+  playerAt: (name: string) => Position | null;
+}
+
+export const NOT_UNDERSTOOD = 'I did not understand; say !help';
+/** Travel steps, or goal sessions, that may fail in a row before the command fails. */
+export const MAX_COMMAND_FAILURES = 3;
+/** How near `come` and `follow` go to the player. */
+const COME_WITHIN = 2.5;
+const FOLLOW_WITHIN = 3;
+/** Following a player already near: wait this long, then look again. */
+export const FOLLOW_WAIT_MS = 1_000;
+/** A long trip says how far it has left every this many blocks. */
+const PROGRESS_EVERY = 64;
+/** A travel step that failed is planned again after this long. */
+const TRAVEL_RETRY_MS = 1_000;
+/** Idle: commands are looked for this often, this many times, before play looks around again. */
+export const IDLE_POLL_MS = 500;
+const IDLE_POLLS = 20;
+/** Idle with nothing to do: play looks for something to do again after this long. */
+export const IDLE_RETRY_MS = 120_000;
+/** The task the idle bot stands by under, when System 1 must act (standby). */
+export const STANDBY_TASK_ID = 'owner-standby';
+
+/** The task an action command's steps (or its goal) run under. */
+export const commandTaskId = (id: number): string => `command-${id}`;
+
+const fmt = (p: { x: number; y: number | null; z: number }): string =>
+  [p.x, p.y, p.z]
+    .filter((v): v is number => v !== null)
+    .map((v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)))
+    .join(' ');
+
+function runOf(play: PlayState, id: number): CommandRun {
+  let run = play.commandRuns.get(id);
+  if (run === undefined) {
+    run = {
+      failures: 0,
+      lastFailure: null,
+      said: new Set(),
+      reportedDistance: null,
+      missing: null,
+      stuck: 0,
+    };
+    play.commandRuns.set(id, run);
+  }
+  return run;
+}
+
+// ---------------------------------------------------------------------------
+// Replies
+// ---------------------------------------------------------------------------
+
+/** Tells the command's sender (a whisper), and keeps it as the command's latest reply. */
+function say(play: PlayState, cmd: OwnerCommandRecord, text: string): void {
+  play.deps.commands?.reply(cmd.sender, text);
+  play.deps.repos.commands.setReply(cmd.id, text);
+  play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: text });
+}
+
+/** Says `text` about the command once (a deferral, a milestone). */
+function sayOnce(play: PlayState, cmd: OwnerCommandRecord, key: string, text: string): void {
+  const run = runOf(play, cmd.id);
+  if (run.said.has(key)) return;
+  run.said.add(key);
+  say(play, cmd, text);
+}
+
+/** The command is over: its status and the reply that says so; its task, if any, ends. */
+function finish(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  status: 'done' | 'failed' | 'cancelled',
+  text: string,
+): void {
+  play.deps.commands?.reply(cmd.sender, text);
+  play.deps.repos.commands.finish(cmd.id, status, text);
+  play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: text });
+  play.commandRuns.delete(cmd.id);
+  endCommandTask(play.deps.repos, cmd.id, status);
+}
+
+/** An action command's task ends with it: no longer current, its blueprint and plan closed. */
+function endCommandTask(repos: Repositories, id: number, status: string): void {
+  const taskId = commandTaskId(id);
+  repos.transaction(() => {
+    setKnownSteps(repos, taskId, null);
+    const task = repos.tasks.get(taskId);
+    if (task !== null && task.status !== 'completed') {
+      repos.tasks.setStatus(taskId, status === 'done' ? 'completed' : 'failed');
+    }
+    const open = repos.plans.openForTask(taskId);
+    if (open !== null) {
+      repos.plans.setStatus(
+        open.id,
+        status === 'done' ? 'completed' : 'failed',
+        `the command is ${status}`,
+      );
+    }
+    if (repos.memory.getValue(CURRENT_TASK_KEY) === taskId) {
+      repos.memory.setValue(CURRENT_TASK_KEY, null);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Hearing commands
+// ---------------------------------------------------------------------------
+
+/**
+ * The owners' commands heard in chat are stored, queued: parsed when they are of the
+ * structured form. The structured form is code's alone, so a typo in it (or natural language
+ * without a translator) is answered at once, never sent to a model.
+ */
+function intake(play: PlayState): void {
+  const commands = play.deps.commands;
+  if (commands === undefined) return;
+  for (const heard of commands.take()) {
+    const parsed = parseOwnerCommand(heard.text);
+    const record = play.deps.repos.commands.add({
+      source: 'chat',
+      sender: heard.sender,
+      rawText: heard.text,
+      command: parsed.ok ? parsed.command : null,
+    });
+    play.emit({
+      kind: 'command',
+      id: record.id,
+      sender: heard.sender,
+      message: `heard (${heard.via}): ${heard.text}`,
+    });
+    if (parsed.ok) continue;
+    if (parsed.kind === 'usage') finish(play, record, 'failed', parsed.usage);
+    else if (isStructured(heard.text) || commands.translate === undefined) {
+      finish(play, record, 'failed', NOT_UNDERSTOOD);
+    }
+  }
+}
+
+/**
+ * Hears the commands that came and handles the queued ones, oldest first: natural language
+ * translated, instant commands done, an action command started (acknowledged), or at night
+ * left queued until the morning (said once).
+ */
+export async function takeCommands(play: PlayState, mode: 'day' | 'night'): Promise<void> {
+  if (play.deps.commands === undefined) return;
+  intake(play);
+  for (const cmd of play.deps.repos.commands.queued()) await handleQueued(play, cmd, mode);
+}
+
+async function handleQueued(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  mode: 'day' | 'night',
+): Promise<void> {
+  const commands = play.deps.commands as CommandDeps;
+  const { repos } = play.deps;
+  play.commandsSeen = Math.max(play.commandsSeen, cmd.id);
+  let command = cmd.command;
+  if (command === null) {
+    const t = commands.translate === undefined ? null : await commands.translate(cmd.rawText);
+    if (t === null || !t.ok) {
+      if (t !== null) {
+        play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: t.reason });
+      }
+      finish(play, cmd, 'failed', NOT_UNDERSTOOD);
+      return;
+    }
+    command = t.command;
+    repos.commands.setCommand(cmd.id, command);
+    play.emit({
+      kind: 'command',
+      id: cmd.id,
+      sender: cmd.sender,
+      message: `understood as: ${describeCommand(command)}`,
+    });
+  }
+  if (!isActionCommand(command)) {
+    instant(play, cmd, command);
+    return;
+  }
+  // One action command at a time: the newest replaces the others.
+  const replaced = replaceOthers(play, cmd.id);
+  if (mode === 'night') {
+    sayOnce(play, cmd, 'night', nightNote(command));
+    return;
+  }
+  const problem = checkAction(play, command);
+  if (problem !== null) {
+    finish(play, cmd, 'failed', `Failed: ${problem}`);
+    return;
+  }
+  const ack =
+    `OK: ${acknowledge(play, cmd, command)}` +
+    (replaced.length === 0 ? '' : ` (instead of: ${replaced.join('; ')})`);
+  repos.commands.start(cmd.id, ack);
+  commands.reply(cmd.sender, ack);
+  play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: ack });
+}
+
+const nightNote = (c: OwnerCommand): string =>
+  `It is night: I stay in my shelter until morning, then I ${describeCommand(c)}`;
+
+/**
+ * In the shelter at night (night.ts): commands are heard and answered; travel and goals wait
+ * for the morning, and their sender is told so once.
+ */
+export async function commandsAtNight(play: PlayState): Promise<void> {
+  if (play.deps.commands === undefined) return;
+  await takeCommands(play, 'night');
+  const running = play.deps.repos.commands.running();
+  if (running?.command != null && isActionCommand(running.command)) {
+    sayOnce(play, running, 'night', nightNote(running.command));
+  }
+}
+
+/** Cancels the running action command and the queued ones before `newId`; what they were. */
+function replaceOthers(play: PlayState, newId: number): string[] {
+  const { repos } = play.deps;
+  const others = [
+    repos.commands.running(),
+    ...repos.commands.queued().filter((q) => q.id < newId),
+  ].filter(
+    (c): c is OwnerCommandRecord =>
+      c !== null && c.id !== newId && c.command !== null && isActionCommand(c.command),
+  );
+  for (const c of others) {
+    repos.commands.finish(c.id, 'cancelled', `Replaced by command #${newId}`);
+    play.commandRuns.delete(c.id);
+    endCommandTask(repos, c.id, 'cancelled');
+  }
+  return others.map((c) => describeCommand(c.command as OwnerCommand));
+}
+
+/** The named locations: the saved ones, and agent.config.json's over them. */
+function locations(play: PlayState): Map<string, NamedLocation> {
+  const commands = play.deps.commands as CommandDeps;
+  return new Map([...play.deps.repos.locations.all(), ...commands.configLocations]);
+}
+
+function outsideBoundary(
+  b: Boundary,
+  p: { x: number; y: number | null; z: number },
+): string | null {
+  const out =
+    p.x < b.min.x ||
+    p.x > b.max.x ||
+    p.z < b.min.z ||
+    p.z > b.max.z ||
+    (p.y !== null && (p.y < b.min.y || p.y > b.max.y));
+  return out
+    ? `${fmt(p)} is outside my safety boundary (x ${b.min.x}..${b.max.x}, z ${b.min.z}..${b.max.z})`
+    : null;
+}
+
+/** Why an action command cannot even start, or null. */
+function checkAction(play: PlayState, command: ActionCommand): string | null {
+  const commands = play.deps.commands as CommandDeps;
+  switch (command.verb) {
+    case 'follow':
+      return command.player !== null && !commands.owners.includes(command.player)
+        ? `I follow only my owners (${commands.owners.join(', ')})`
+        : null;
+    case 'goto':
+      return outsideBoundary(commands.boundary, command);
+    case 'goto-waypoint':
+    case 'home': {
+      const name = command.verb === 'home' ? commands.homeName : command.name;
+      const at = locations(play).get(name);
+      if (at === undefined) {
+        return command.verb === 'home'
+          ? 'I have no home yet: say !sethome where it should be'
+          : `I know no waypoint ${name}: say !waypoints`;
+      }
+      const here = commands.view().dimension;
+      if (here !== null && at.dimension !== here) return `${name} is in ${at.dimension}`;
+      return outsideBoundary(commands.boundary, at.position);
+    }
+    case 'come':
+    case 'get':
+    case 'mine':
+      return null;
+  }
+}
+
+/** What an action command's acknowledgement says it will do. */
+function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand): string {
+  const view = (play.deps.commands as CommandDeps).view();
+  switch (c.verb) {
+    case 'come':
+      return 'coming to you';
+    case 'follow':
+      return c.player === null || c.player === cmd.sender
+        ? 'following you'
+        : `following ${c.player}`;
+    case 'goto':
+      return `going to ${fmt(c)}`;
+    case 'goto-waypoint':
+    case 'home': {
+      const name = c.verb === 'home' ? (play.deps.commands as CommandDeps).homeName : c.name;
+      const at = locations(play).get(name);
+      const where = at === undefined ? '' : ` (${fmt(at.position)})`;
+      return c.verb === 'home' ? `going home${where}` : `going to ${name}${where}`;
+    }
+    case 'get':
+    case 'mine': {
+      const have = view.inventory?.[c.item] ?? 0;
+      const what =
+        c.verb === 'get' || c.block === c.item
+          ? `${c.verb === 'get' ? 'getting' : 'mining'} ${c.verb === 'get' ? c.item : c.block} until I have ${c.count}`
+          : `mining ${c.block} until I have ${c.count} ${c.item}`;
+      return `${what} (I have ${have})`;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Instant commands
+// ---------------------------------------------------------------------------
+
+/** Cancels every action command (running or queued); what they were. */
+function cancelActions(play: PlayState, why: string): string[] {
+  const { repos } = play.deps;
+  const actions = [repos.commands.running(), ...repos.commands.queued()].filter(
+    (c): c is OwnerCommandRecord => c !== null && c.command !== null && isActionCommand(c.command),
+  );
+  for (const c of actions) {
+    repos.commands.finish(c.id, 'cancelled', why);
+    play.commandRuns.delete(c.id);
+    endCommandTask(repos, c.id, 'cancelled');
+  }
+  return actions.map((c) => describeCommand(c.command as OwnerCommand));
+}
+
+function instant(play: PlayState, cmd: OwnerCommandRecord, c: InstantCommand): void {
+  const { repos } = play.deps;
+  const commands = play.deps.commands as CommandDeps;
+  switch (c.verb) {
+    case 'stop': {
+      // The client stopped the action in progress already (a stop in chat), or a stop from
+      // the command line did (live-play.ts): what is left is the command, and play's own goals.
+      const stopped = cancelActions(play, `Stopped by ${cmd.sender}`);
+      repos.memory.setValue(OWNER_PAUSED_KEY, `${cmd.sender} said stop`);
+      finish(
+        play,
+        cmd,
+        'done',
+        `OK: stopped${stopped.length === 0 ? '' : ` (${stopped.join('; ')})`}. ` +
+          'I wait for !resume or a new command',
+      );
+      return;
+    }
+    case 'pause':
+      repos.memory.setValue(OWNER_PAUSED_KEY, `${cmd.sender} said pause`);
+      finish(
+        play,
+        cmd,
+        'done',
+        'OK: paused my own play; commands still work. Say !resume to go on',
+      );
+      return;
+    case 'resume': {
+      repos.memory.setValue(OWNER_PAUSED_KEY, null);
+      play.idle = null;
+      const off = repos.memory.getValue(QUESTS_OFF_KEY) !== null;
+      finish(
+        play,
+        cmd,
+        'done',
+        off ? 'OK: resumed, but quests are off: say !quests on' : 'OK: resuming my own play',
+      );
+      return;
+    }
+    case 'quests':
+      if (c.on) {
+        repos.memory.setValue(QUESTS_OFF_KEY, null);
+        repos.memory.setValue(OWNER_PAUSED_KEY, null);
+        play.idle = null;
+        finish(play, cmd, 'done', 'OK: quests on');
+      } else {
+        repos.memory.setValue(QUESTS_OFF_KEY, `${cmd.sender} said quests off`);
+        finish(play, cmd, 'done', 'OK: quests off: I only take commands now');
+      }
+      return;
+    case 'status':
+      finish(play, cmd, 'done', statusText(play));
+      return;
+    case 'help':
+      finish(play, cmd, 'done', HELP_TEXT);
+      return;
+    case 'sethome':
+      saveLocation(play, cmd, commands.homeName);
+      return;
+    case 'waypoint':
+      saveLocation(play, cmd, c.name);
+      return;
+    case 'waypoint-delete':
+      deleteLocation(play, cmd, c.name);
+      return;
+    case 'waypoints': {
+      const all = [...locations(play)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+      finish(
+        play,
+        cmd,
+        'done',
+        all.length === 0
+          ? 'No waypoints yet: say !waypoint <name> where you want one'
+          : `Waypoints: ${all.map(([n, l]) => `${n} (${fmt(roundPoint(l.position))})`).join(', ')}`,
+      );
+      return;
+    }
+  }
+}
+
+const roundPoint = (p: Position): Position => ({
+  x: Math.floor(p.x),
+  y: Math.floor(p.y),
+  z: Math.floor(p.z),
+});
+
+/** Where the bot stands, as `name` (home: the safe location retreats go to; else a waypoint). */
+function saveLocation(play: PlayState, cmd: OwnerCommandRecord, name: string): void {
+  const commands = play.deps.commands as CommandDeps;
+  const home = name === commands.homeName;
+  const view = commands.view();
+  const fail = (why: string): void => finish(play, cmd, 'failed', `Failed: ${why}`);
+  if (view.position === null || view.dimension === null) return fail('my position is not known');
+  if (commands.configLocations.has(name)) {
+    return fail(`${name} is set in agent.config.json (locations): change it there`);
+  }
+  if (checkWithinBoundary(view.position, view.dimension, commands.boundary, 'here').length > 0) {
+    return fail('here is outside my safety boundary');
+  }
+  play.deps.repos.locations.upsert(name, {
+    dimension: view.dimension,
+    position: { ...view.position },
+    kind: home ? 'safe' : 'other',
+    note: `set by ${cmd.sender}`,
+  });
+  finish(
+    play,
+    cmd,
+    'done',
+    `OK: ${home ? 'home' : `waypoint ${name}`} is at ${fmt(roundPoint(view.position))}`,
+  );
+}
+
+function deleteLocation(play: PlayState, cmd: OwnerCommandRecord, name: string): void {
+  const commands = play.deps.commands as CommandDeps;
+  const fail = (why: string): void => finish(play, cmd, 'failed', `Failed: ${why}`);
+  if (name === commands.homeName) {
+    return fail('home is where I retreat to: move it with !sethome, it is never deleted');
+  }
+  if (commands.configLocations.has(name)) {
+    return fail(`${name} is set in agent.config.json (locations): change it there`);
+  }
+  if (!play.deps.repos.locations.delete(name)) return fail(`I know no waypoint ${name}`);
+  finish(play, cmd, 'done', `OK: waypoint ${name} deleted`);
+}
+
+/** Position, health, food, what it is doing, and a few items it carries. */
+function statusText(play: PlayState): string {
+  const { repos } = play.deps;
+  const view = (play.deps.commands as CommandDeps).view();
+  const p = view.position;
+  const where = p === null ? 'position unknown' : `at ${fmt(roundPoint(p))}`;
+  const vitals = `health ${view.health ?? '?'}/20, food ${view.food ?? '?'}/20`;
+  const running = repos.commands.running();
+  const off = autonomyOff(repos);
+  const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
+  const task = taskId === null ? null : repos.tasks.get(taskId);
+  const doing =
+    running?.command != null
+      ? `doing: ${describeCommand(running.command)}`
+      : off !== null
+        ? off
+        : task !== null && task.status === 'active'
+          ? `working on: ${task.goal.slice(0, 80)}`
+          : 'idle';
+  const items = Object.entries(view.inventory ?? {})
+    .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1))
+    .slice(0, 4)
+    .map(([item, n]) => `${n} ${item.replace(/^minecraft:/, '')}`);
+  return `${where}, ${vitals}; ${doing}${items.length === 0 ? '' : `; carrying ${items.join(', ')}`}`;
+}
+
+// ---------------------------------------------------------------------------
+// The command round: the running action command
+// ---------------------------------------------------------------------------
+
+/**
+ * Hears and handles the commands that came, then runs one session of the running action
+ * command: a travel command's steps (travelRound), or its goal (goalRound). Null when there
+ * is no action command to run (or it waits for food): the next kind of round goes on.
+ */
+export async function commandRound(play: PlayState): Promise<RoundEnd> {
+  if (play.deps.commands === undefined) return null;
+  await takeCommands(play, 'day');
+  const running = play.deps.repos.commands.running();
+  const command = running?.command ?? null;
+  if (running === null || command === null || !isActionCommand(command)) return null;
+  // A food bar nearly empty keeps priority (food.ts): the command waits for the food trip.
+  const fed = play.deps.food === undefined ? null : await play.deps.food.now();
+  if (fed !== null && starving(fed)) {
+    sayOnce(
+      play,
+      running,
+      'food',
+      `My food bar is nearly empty (food ${fed.hunger}/20): I get food first, then I ${describeCommand(command)}`,
+    );
+    return null;
+  }
+  return isTravelCommand(command)
+    ? travelRound(play, running, command)
+    : goalCommandRound(play, running, command);
+}
+
+/** Where a travel command goes now (a player may have moved), or why it cannot go. */
+function travelTarget(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  c: TravelCommand,
+): { target: TravelTarget } | { problem: string } {
+  const commands = play.deps.commands as CommandDeps;
+  switch (c.verb) {
+    case 'come':
+    case 'follow': {
+      const who = c.verb === 'follow' && c.player !== null ? c.player : cmd.sender;
+      const at = commands.view().playerAt(who);
+      if (at === null) {
+        return { problem: `I cannot see ${who === cmd.sender ? 'you' : who} from here` };
+      }
+      return {
+        target: {
+          kind: 'near',
+          point: at,
+          within: c.verb === 'come' ? COME_WITHIN : FOLLOW_WITHIN,
+        },
+      };
+    }
+    case 'goto':
+      return { target: { kind: 'point', point: { x: c.x, y: c.y, z: c.z } } };
+    case 'goto-waypoint':
+    case 'home': {
+      const name = c.verb === 'home' ? commands.homeName : c.name;
+      const at = locations(play).get(name);
+      return at === undefined
+        ? { problem: `the waypoint ${name} is gone` }
+        : { target: { kind: 'point', point: at.position } };
+    }
+  }
+}
+
+const blocks = (n: number): string => `${n} block${n === 1 ? '' : 's'}`;
+
+function arrivedText(play: PlayState, c: TravelCommand, distance: number): string {
+  switch (c.verb) {
+    case 'come':
+    case 'follow':
+      return `Done: here, ${blocks(distance)} from you`;
+    case 'goto':
+      return `Done: at ${fmt(c)}`;
+    case 'goto-waypoint':
+      return `Done: at ${c.name}`;
+    case 'home':
+      return `Done: home (${(play.deps.commands as CommandDeps).homeName})`;
+  }
+}
+
+/** Following a player already near: a moment's wait (System 1 still decides first). */
+const waitStep = (distance: number): TravelStep & { kind: 'step' } => ({
+  kind: 'step',
+  spec: { type: 'WAIT', args: { durationMs: FOLLOW_WAIT_MS } },
+  text: 'wait a moment: near enough',
+  distance,
+});
+
+/**
+ * Makes `step` the command task's one known step (and the task active and current): System 1's
+ * rule 6 runs it as EXECUTE_KNOWN_SAFE_STEP after its reflexes, the executor checks it.
+ */
+function armStep(
+  repos: Repositories,
+  taskId: string,
+  goal: string,
+  step: TravelStep & { kind: 'step' },
+): void {
+  repos.transaction(() => {
+    repos.tasks.ensure({
+      id: taskId,
+      goal: goal.slice(0, 300),
+      subgoal: step.text.slice(0, 300),
+      status: 'active',
+    });
+    repos.tasks.setStatus(taskId, 'active');
+    repos.memory.setTaskRequirements(taskId, null);
+    repos.memory.setTaskBlueprint(taskId, [step.text.slice(0, 300)]);
+    setKnownSteps(repos, taskId, [{ spec: step.spec, text: step.text }]);
+    repos.memory.setValue(CURRENT_TASK_KEY, taskId);
+  });
+}
+
+/**
+ * One session of a travel command: its next step, re-planned from what the bot knows after
+ * every cycle (follow keeps on doing so: a step toward the player, or a moment's wait near
+ * it), until it arrives, a step cannot be planned or fails, a new command comes, the night or
+ * a nearly empty food bar takes over, or the session's limits.
+ */
+async function travelRound(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  command: TravelCommand,
+): Promise<PlayResult | 'next-round'> {
+  const { deps, limits, hooks } = play;
+  const commands = deps.commands as CommandDeps;
+  const run = runOf(play, cmd.id);
+  const follow = command.verb === 'follow';
+  const plan = (): TravelStep => {
+    const t = travelTarget(play, cmd, command);
+    return 'problem' in t ? { kind: 'refused', reason: t.problem } : commands.step(t.target);
+  };
+  const first = plan();
+  if (first.kind === 'arrived' && !follow) {
+    finish(play, cmd, 'done', arrivedText(play, command, first.distance));
+    return 'next-round';
+  }
+  if (first.kind === 'refused') return travelFailed(play, cmd, first.reason);
+  const taskId = commandTaskId(cmd.id);
+  const goal = `Owner command #${cmd.id} from ${cmd.sender}: ${describeCommand(command)}`;
+  armStep(deps.repos, taskId, goal, first.kind === 'step' ? first : waitStep(first.distance));
+
+  let ended: TravelStep | null = null;
+  let dark: WorldTime | null = null;
+  let hungry: FoodStatus | null = null;
+  let preempted: string | null = null;
+  let distance = first.distance;
+  const session = play.sessions + 1;
+  const result = await deps.session(limits.session, {
+    stopRequested: () =>
+      dark !== null
+        ? nightReason(dark)
+        : hungry !== null
+          ? 'the food bar is nearly empty'
+          : ((preempted ??= commandWaiting(play)) ?? hooks.stopRequested()),
+    onCycle: (r, index) => {
+      play.lastDecision = r.decision ?? null;
+      play.emit(cycleEvent(deps.repos, session, r, index));
+      const after = r.outcome?.stateAfter;
+      if (
+        after?.time.known === true &&
+        (deps.shelter === undefined ? isDark(after.time.value) : nightSoon(after.time.value))
+      ) {
+        dark = after.time.value;
+      }
+      const fed = after === undefined || after === null ? null : (deps.food?.of(after) ?? null);
+      if (fed !== null && starving(fed)) hungry = fed;
+      // The next step, from what the bot knows now: the player may have moved.
+      const next = plan();
+      if (next.kind === 'step' || (next.kind === 'arrived' && follow)) {
+        distance = next.distance;
+        armStep(deps.repos, taskId, goal, next.kind === 'step' ? next : waitStep(next.distance));
+      } else {
+        ended = next;
+        // No step left: the session ends at its next check.
+        setKnownSteps(deps.repos, taskId, null);
+        const task = deps.repos.tasks.get(taskId);
+        if (task !== null && task.status === 'active')
+          deps.repos.tasks.setStatus(taskId, 'completed');
+      }
+    },
+  });
+  play.sessions = session;
+  play.lastStop = result.stopReason;
+  play.emit({
+    kind: 'session-end',
+    session,
+    stopKind: result.stopKind,
+    stopReason: result.stopReason,
+    cycles: result.cycles.length,
+    system1: result.system1,
+  });
+
+  const end = ended as TravelStep | null;
+  if (end?.kind === 'arrived') {
+    finish(play, cmd, 'done', arrivedText(play, command, end.distance));
+    return 'next-round';
+  }
+  if (end?.kind === 'refused') return travelFailed(play, cmd, end.reason);
+  if (dark !== null) {
+    sayOnce(
+      play,
+      cmd,
+      'dusk',
+      `It is getting dark: I shelter for the night, then I ${describeCommand(command)}`,
+    );
+    return 'next-round';
+  }
+  const mob = mobPause(result.stopKind, play.lastDecision);
+  if (mob !== null) return waitOutMob(play, taskId, mob);
+  if (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') {
+    return travelFailed(play, cmd, result.stopReason);
+  }
+  // A step went: the failures in a row are over. A long trip says how far is left.
+  run.failures = 0;
+  if (!follow && command.verb !== 'come') {
+    if (run.reportedDistance === null) run.reportedDistance = distance;
+    else if (run.reportedDistance - distance >= PROGRESS_EVERY) {
+      run.reportedDistance = distance;
+      say(play, cmd, `On my way: ${blocks(Math.round(distance))} to go`);
+    }
+  }
+  return 'next-round';
+}
+
+/**
+ * A travel step failed or could not be planned. Not seeing the player ends come and follow
+ * at once; anything else fails the command after MAX_COMMAND_FAILURES in a row, and is
+ * planned again a moment later (the world may have changed: a mob gone, a chunk arrived).
+ */
+async function travelFailed(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  reason: string,
+): Promise<'next-round'> {
+  const run = runOf(play, cmd.id);
+  run.failures += 1;
+  run.lastFailure = reason;
+  if (/^I cannot see /.test(reason) || run.failures >= MAX_COMMAND_FAILURES) {
+    finish(play, cmd, 'failed', `Failed: ${reason}`);
+  } else {
+    await play.sleep(TRAVEL_RETRY_MS);
+  }
+  return 'next-round';
+}
+
+/** A get or mine command as a goal of items to have, under the command's own task. */
+function freeGoalOf(cmd: OwnerCommandRecord, c: GoalCommand): FreeGoal {
+  return {
+    taskId: commandTaskId(cmd.id),
+    name: `${describeCommand(c)} (owner command #${cmd.id} from ${cmd.sender})`.slice(0, 300),
+    requirements: { [c.item]: c.count },
+  };
+}
+
+/**
+ * One session of a get or mine command: its goal pursued exactly like `cli play --needs`'s
+ * (the planner plans from its route, GATHER digs). Done once the inventory holds the items;
+ * halfway is told once; it fails after maxStuckSessions sessions with no fewer items missing
+ * (new ground seen counts as progress), or when its task needs a person.
+ */
+async function goalCommandRound(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  command: GoalCommand,
+): Promise<PlayResult | 'next-round'> {
+  const { deps, limits } = play;
+  const run = runOf(play, cmd.id);
+  const free = freeGoalOf(cmd, command);
+  const inventory = await deps.inventory();
+  if (inventory === null) {
+    run.failures += 1;
+    if (run.failures >= MAX_COMMAND_FAILURES) {
+      finish(play, cmd, 'failed', 'Failed: my inventory is not known');
+    }
+    return 'next-round';
+  }
+  const have = inventory[command.item] ?? 0;
+  if (have >= command.count) {
+    reachGoal(deps.repos, free);
+    finish(play, cmd, 'done', `Done: I have ${have} ${command.item}`);
+    return 'next-round';
+  }
+  if (have * 2 >= command.count) {
+    sayOnce(play, cmd, 'half', `Halfway: ${have}/${command.count} ${command.item}`);
+  }
+  const missing = missingFor(free.requirements, inventory);
+  const left = total(missing);
+  run.stuck = run.missing !== null && left >= run.missing && !play.explored ? run.stuck + 1 : 0;
+  run.missing = left;
+  if (run.stuck >= limits.maxStuckSessions) {
+    finish(play, cmd, 'failed', `Failed: no progress in ${run.stuck} sessions (${play.lastStop})`);
+    return 'next-round';
+  }
+  const current = freeRoundGoal(deps.repos, free, missing);
+  const adopted = current.adopt();
+  if (adopted.status !== 'active') {
+    finish(play, cmd, 'failed', `Failed: its task is ${adopted.status} (${play.lastStop})`);
+    return 'next-round';
+  }
+  play.emit({
+    kind: 'goal',
+    quest: current.name,
+    goal: current.text,
+    missing,
+    taskId: adopted.taskId,
+    created: adopted.created,
+  });
+  // Only a food bar nearly empty ends an owner's goal for food: hunger alone waits for it.
+  const ended = await runGoalSession(play, current, starving);
+  if (ended.dark !== null) {
+    sayOnce(
+      play,
+      cmd,
+      'dusk',
+      `It is getting dark: I shelter for the night, then I ${describeCommand(command)}`,
+    );
+    return 'next-round';
+  }
+  if (ended.met || ended.preempted !== null || ended.hungry !== null) return 'next-round';
+  const mob = mobPause(ended.result.stopKind, play.lastDecision);
+  if (mob !== null) return waitOutMob(play, adopted.taskId, mob);
+  if (ended.result.stopKind === 'needs-attention' || ended.result.stopKind === 'task-halted') {
+    finish(play, cmd, 'failed', `Failed: ${ended.result.stopReason}`);
+  }
+  return 'next-round';
+}
+
+// ---------------------------------------------------------------------------
+// Idle (cli play --listen)
+// ---------------------------------------------------------------------------
+
+/** The idle bot's one step: a moment's wait, after System 1's reflexes. */
+const STANDBY_STEP = {
+  spec: { type: 'WAIT' as const, args: { durationMs: 1_000 } },
+  text: 'stand by: System 1 acts first (a retreat, a fight, a meal, a rest)',
+};
+
+/**
+ * Play has nothing of its own to do: an owner paused it (or turned quests off), or with
+ * --listen, nothing is left (play.idle). With --listen it waits for commands (and looks for
+ * something to do again after IDLE_RETRY_MS); without, play ends and says why. Null when play
+ * is not idle.
+ */
+export async function idleRound(play: PlayState): Promise<RoundEnd> {
+  if (play.idle !== null && play.now() - play.idle.since >= IDLE_RETRY_MS) play.idle = null;
+  const off = autonomyOff(play.deps.repos);
+  const why = off ?? play.idle?.reason ?? null;
+  if (why === null) return null;
+  if (play.deps.listen !== true) {
+    return done(play, `${why}: nothing else to do (cli play --listen stays online for commands)`);
+  }
+  await idleFor(play, why);
+  return 'next-round';
+}
+
+/**
+ * Waits up to IDLE_POLLS x IDLE_POLL_MS for a command (or the stop file), then lets System 1
+ * act if it must (standby): a mob near, low health, a meal. A bot standing idle is still
+ * defended, fed and rested like a playing one.
+ */
+export async function idleFor(play: PlayState, why: string): Promise<void> {
+  if (play.idleNote !== why) {
+    play.idleNote = why;
+    play.emit({ kind: 'idle', message: `${why}; waiting for commands` });
+  }
+  for (let i = 0; i < IDLE_POLLS; i++) {
+    if (play.hooks.stopRequested() !== null || commandWaiting(play) !== null) return;
+    await play.sleep(IDLE_POLL_MS);
+  }
+  const reflex = (await play.deps.commands?.standby?.()) ?? null;
+  if (reflex === null) return;
+  play.emit({ kind: 'idle', message: `standing by: ${reflex}` });
+  await blueprintSession(play, {
+    taskId: STANDBY_TASK_ID,
+    goal: 'Stand by for owner commands: System 1 acts first (a retreat, a fight, a meal, a rest)',
+    subgoal: reflex.slice(0, 300),
+    steps: [STANDBY_STEP.text],
+    known: [STANDBY_STEP],
+    label: 'stand by',
+    text: reflex,
+    missing: {},
+    maxCycles: 3,
+  });
+}

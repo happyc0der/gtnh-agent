@@ -38,7 +38,9 @@ export const nightSoon = (t: WorldTime): boolean =>
 
 /**
  * Inside the shelter: waits until it is day again, checking the stop file / Ctrl+C and the
- * time limit every few seconds. Returns why play must stop, or null at sunrise.
+ * time limit every few seconds, and meanwhile hearing and answering owners' commands
+ * (`between`: travel and goals wait for the morning). Returns why play must stop, or null at
+ * sunrise.
  */
 async function waitForMorning(
   deps: PlayDeps,
@@ -46,6 +48,7 @@ async function waitForMorning(
   limits: PlayLimits,
   started: number,
   now: () => number,
+  between: () => Promise<void>,
 ): Promise<string | null> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   for (;;) {
@@ -57,6 +60,7 @@ async function waitForMorning(
     const t = (await deps.time?.()) ?? null;
     if (t === null) return 'the clock is unknown, so the morning cannot be awaited';
     if (t.phase === 'day' && !nightSoon(t)) return null;
+    await between();
     await sleep(5000);
   }
 }
@@ -70,11 +74,12 @@ export function nightReason(t: WorldTime): string {
 
 /**
  * One bounded session on a task whose route is a code-made blueprint (the night shelter,
- * the way out of it in the morning). Its steps run as known safe steps (known-steps.ts):
- * code proposes each, the executor validates, executes and verifies it, and the planner is
- * not asked. The last verified step completes the task, which ends the session.
+ * the way out of it in the morning, standing by for commands). Its steps run as known safe
+ * steps (known-steps.ts): code proposes each, the executor validates, executes and verifies
+ * it, and the planner is not asked. The last verified step completes the task, which ends
+ * the session.
  */
-async function blueprintSession(
+export async function blueprintSession(
   play: PlayState,
   b: {
     taskId: string;
@@ -159,7 +164,7 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
           kind: 'night',
           message: `sheltered: waiting for the morning (${untilSunrise(clock)} min)`,
         });
-        const stop = await waitForMorning(deps, hooks, limits, started, now);
+        const stop = await waitForMorning(deps, hooks, limits, started, now, play.whileSheltered);
         if (stop !== null) return done(play, stop);
         emit({ kind: 'night', message: 'morning: leaving the shelter' });
         play.wakeNote =

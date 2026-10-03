@@ -1028,13 +1028,19 @@ describe('food trips', () => {
   /** The food dependency over the test world: its food level, and the foods it holds. */
   const foodDeps = (world: World, hunger: { level: number }): NonNullable<PlayDeps['food']> => ({
     now: () =>
-      Promise.resolve({ hunger: hunger.level, carried: carriedIn(world.inventory), eatBelow: 14 }),
+      Promise.resolve({
+        hunger: hunger.level,
+        carried: carriedIn(world.inventory),
+        eatBelow: 14,
+        starveBelow: 6,
+      }),
     of: (state) =>
       state.player.hunger.known && state.inventory.known
         ? {
             hunger: state.player.hunger.value,
             carried: carriedIn(state.inventory.value.items),
             eatBelow: 14,
+            starveBelow: 6,
           }
         : null,
   });

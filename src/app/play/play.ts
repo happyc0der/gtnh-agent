@@ -19,6 +19,7 @@ import {
   type SessionStopKind,
 } from '../loop/live-session.ts';
 import { scoutingRound, type Scouting } from './scouting.ts';
+import { commandRound, commandsAtNight, idleFor, idleRound, type CommandDeps } from './commands.ts';
 import { foodRound, type FoodStatus } from './food.ts';
 import { morningRound, nightRound } from './night.ts';
 import { goalRound } from './goal-round.ts';
@@ -145,6 +146,16 @@ export interface PlayDeps {
     now: () => Promise<FoodStatus | null>;
     of: (state: GameState) => FoodStatus | null;
   };
+  /**
+   * The owners' commands (MC_OWNERS; commands.ts): heard in chat or queued with `cli
+   * command`, answered with whispers, run before food trips and quests.
+   */
+  commands?: CommandDeps;
+  /**
+   * Stay online for commands when play has nothing of its own to do (no quest left, paused):
+   * wait for them instead of ending (cli play --listen).
+   */
+  listen?: boolean;
 }
 
 export interface FreeGoal {
@@ -202,7 +213,11 @@ export type PlayEvent =
       cycles: number;
       /** How System 1 decided the session's cycles (model, continuing, binding). */
       system1?: System1Stats | undefined;
-    };
+    }
+  /** An owner's command: heard, understood, acknowledged, a reply, done or failed. */
+  | { kind: 'command'; id: number; sender: string; message: string }
+  /** Nothing of its own to do: waiting for commands (cli play --listen), or standing by. */
+  | { kind: 'idle'; message: string };
 
 export interface PlayResult {
   stopReason: string;
@@ -253,9 +268,11 @@ export function liveAbilities(hasCraftingTable: boolean): Abilities {
  * Plays, round after round, after scouting the area first when that is due (scouting.ts).
  * Each round, unless the stop file or a limit ends play, runs the first of these with
  * something to do: the night shelter at dusk, the way out of it in the morning (night.ts),
- * food when hungry with none (food.ts); else the goal: a quest-book click, or a session on
- * the player's own goal or the next quest (goal-round.ts). They share play-state.ts's
- * PlayState.
+ * the owners' commands (commands.ts), food when hungry with none (food.ts), waiting while an
+ * owner paused play (commands.ts idleRound); else the goal: a quest-book click, or a session
+ * on the player's own goal or the next quest (goal-round.ts). They share play-state.ts's
+ * PlayState. With `listen`, play ends only for the stop file, Ctrl+C, the limits, the night
+ * and a mob (offline waits): anything else that would end it makes it wait for commands.
  */
 export async function runPlay(
   deps: PlayDeps,
@@ -265,20 +282,61 @@ export async function runPlay(
   const problem = checkPlayLimits(limits);
   if (problem !== null) throw new Error(problem);
   const play = startPlay(deps, limits, hooks);
+  play.whileSheltered = () => commandsAtNight(play);
 
   // GTNH start: look around once before settling (scouting.ts), when the agent can explore.
   const scouted = await scoutingRound(play);
-  if (scouted !== null) return scouted;
+  if (scouted !== null && (await endsPlay(play, scouted))) return leave(play, scouted);
 
   for (;;) {
+    // An owner's stop has stopped the session it interrupted: actions may run again.
+    deps.commands?.clearInterrupt();
     const round =
       stopOrLimit(play) ??
       (await nightRound(play)) ??
       (await morningRound(play)) ??
+      (await commandRound(play)) ??
       (await foodRound(play)) ??
+      (await idleRound(play)) ??
       (await goalRound(play));
-    if (round !== 'next-round') return round;
+    if (round !== 'next-round' && (await endsPlay(play, round))) return leave(play, round);
   }
+}
+
+/**
+ * Whether `round` ends play. Without --listen it always does. With --listen only the stop
+ * file, Ctrl+C, the limits (stopOrLimit), the night and a mob (offline waits) end play;
+ * anything else (no quest left, a task that needs a person) makes play wait for commands, and
+ * look again later (commands.ts idleRound).
+ */
+async function endsPlay(play: PlayState, round: PlayResult): Promise<boolean> {
+  if (play.deps.listen !== true || round.night !== null || round.mobNearby !== null) return true;
+  if (stopOrLimit(play) !== null) return true;
+  if (play.idle?.reason !== round.stopReason) {
+    play.idle = { reason: round.stopReason, since: play.now() };
+  }
+  await idleFor(play, round.stopReason);
+  return false;
+}
+
+/**
+ * Play ends: its result, or the stop that ended it meanwhile. An owner whose command waits is
+ * told when the agent goes offline (the night with no shelter, a mob near home).
+ */
+function leave(play: PlayState, round: PlayResult): PlayResult {
+  const result = play.deps.listen === true ? (stopOrLimit(play) ?? round) : round;
+  if (result.night !== null || result.mobNearby !== null) {
+    const running = play.deps.repos.commands.running();
+    if (running !== null && play.deps.commands !== undefined) {
+      play.deps.commands.reply(
+        running.sender,
+        result.night !== null
+          ? 'It is getting dark and I have no shelter here: I go offline until sunrise'
+          : 'A mob is near: I go offline a moment for it to leave',
+      );
+    }
+  }
+  return result;
 }
 
 /** Before every round: the stop file / Ctrl+C, and the time and session limits. */

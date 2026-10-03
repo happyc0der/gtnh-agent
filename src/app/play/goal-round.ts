@@ -13,7 +13,14 @@ import type { SessionResult } from '../loop/live-session.ts';
 import { foodDue, type FoodStatus } from './food.ts';
 import { planOf } from './narration.ts';
 import { isDark, nightReason, nightSoon } from './night.ts';
-import { CONTINUE_AFTER, done, mobPause, waitOutMob, type PlayState } from './play-state.ts';
+import {
+  commandWaiting,
+  CONTINUE_AFTER,
+  done,
+  mobPause,
+  waitOutMob,
+  type PlayState,
+} from './play-state.ts';
 import type { FreeGoal, PlayResult } from './play.ts';
 import {
   adoptGoal,
@@ -30,7 +37,7 @@ import {
  */
 
 /** What `requirements` still needs beyond `inventory` (item -> missing count). */
-function missingFor(
+export function missingFor(
   requirements: Readonly<Record<string, number>>,
   inventory: Readonly<Record<string, number>>,
 ): Record<string, number> {
@@ -64,7 +71,7 @@ function adoptFreeGoal(
 }
 
 /** The goal is held: its task completes and stops being current. */
-function reachGoal(repos: Repositories, goal: FreeGoal): void {
+export function reachGoal(repos: Repositories, goal: FreeGoal): void {
   repos.transaction(() => {
     if (repos.tasks.get(goal.taskId) !== null) repos.tasks.setStatus(goal.taskId, 'completed');
     if (repos.memory.getValue(CURRENT_TASK_KEY) === goal.taskId) {
@@ -78,7 +85,7 @@ function hungerReason(s: FoodStatus): string {
   return `hungry (food ${s.hunger}/20) with nothing to eat: getting food first`;
 }
 
-const total = (missing: Record<string, number>): number =>
+export const total = (missing: Record<string, number>): number =>
   Object.values(missing).reduce((n, c) => n + c, 0);
 
 /**
@@ -113,7 +120,7 @@ function questMet(quest: Quest, after: GameState, abilities: Abilities): boolean
 }
 
 /** What play works on this round: the player's own goal, or the next quest. */
-interface RoundGoal {
+export interface RoundGoal {
   id: string;
   name: string;
   text: string;
@@ -146,6 +153,18 @@ async function freeGoal(play: PlayState, free: FreeGoal): Promise<RoundGoal | Pl
     reachGoal(deps.repos, free);
     return done(play, `the goal "${free.name}" is reached`);
   }
+  return freeRoundGoal(deps.repos, free, missing);
+}
+
+/**
+ * A goal of items to have as a round's goal (`cli play --needs`, an owner's `get` or `mine`):
+ * met once the inventory holds them; its task is adopted with the items as requirements.
+ */
+export function freeRoundGoal(
+  repos: Repositories,
+  free: FreeGoal,
+  missing: Record<string, number>,
+): RoundGoal {
   return {
     id: free.taskId,
     name: free.name,
@@ -155,7 +174,7 @@ async function freeGoal(play: PlayState, free: FreeGoal): Promise<RoundGoal | Pl
       after.inventory.known
         ? total(missingFor(free.requirements, after.inventory.value.items)) === 0
         : null,
-    adopt: () => adoptFreeGoal(deps.repos, free, missing),
+    adopt: () => adoptFreeGoal(repos, free, missing),
   };
 }
 
@@ -306,7 +325,6 @@ async function goalSession(
   play: PlayState,
   current: RoundGoal,
 ): Promise<PlayResult | 'next-round'> {
-  const { deps, limits, hooks, emit } = play;
   const adopted = current.adopt();
   if (adopted.status !== 'active') {
     return done(
@@ -315,7 +333,7 @@ async function goalSession(
         'it needs you (plan-approve, task-resume) before play goes on',
     );
   }
-  emit({
+  play.emit({
     kind: 'goal',
     quest: current.name,
     goal: current.text,
@@ -324,13 +342,43 @@ async function goalSession(
     created: adopted.created,
   });
   if (play.wakeNote !== null) {
-    deps.repos.memory.appendJournal(adopted.taskId, play.wakeNote);
+    play.deps.repos.memory.appendJournal(adopted.taskId, play.wakeNote);
     play.wakeNote = null;
   }
+  const ended = await runGoalSession(play, current, foodDue);
+  return afterGoalSession(play, adopted.taskId, ended);
+}
 
+/** How a goal's session ended (runGoalSession). */
+export interface GoalSessionEnd {
+  result: SessionResult;
+  /** An observation showed the goal met. */
+  met: boolean;
+  /** Shelter time (or dark, without shelters) ended it. */
+  dark: WorldTime | null;
+  /** Hunger with nothing to eat ended it (`hungerEnds`). */
+  hungry: FoodStatus | null;
+  /** An owner's new command ended it: commands come before the goal (commands.ts). */
+  preempted: string | null;
+}
+
+/**
+ * One bounded session on a goal whose task is adopted and current. It ends as soon as an
+ * observation shows the goal met (so the planner is never asked to do what is already done),
+ * at shelter time, when `hungerEnds` says the agent must get food first (a quest: hungry with
+ * nothing to eat, foodDue; an owner's goal: only a food bar nearly empty, starving), or when
+ * an owner's new command is waiting.
+ */
+export async function runGoalSession(
+  play: PlayState,
+  current: RoundGoal,
+  hungerEnds: (s: FoodStatus) => boolean,
+): Promise<GoalSessionEnd> {
+  const { deps, limits, hooks, emit } = play;
   let met = false;
   let dark: WorldTime | null = null;
   let hungry: FoodStatus | null = null;
+  let preempted: string | null = null;
   const session = play.sessions + 1;
   const seenBefore = deps.scouting?.chunksSeen() ?? null;
   const result = await deps.session(limits.session, {
@@ -341,7 +389,7 @@ async function goalSession(
           ? nightReason(dark)
           : hungry !== null
             ? hungerReason(hungry)
-            : hooks.stopRequested(),
+            : ((preempted ??= commandWaiting(play)) ?? hooks.stopRequested()),
     // A cycle's own observation too, before anyone decides: the server completes a
     // crafting task on the craft and sends it a moment after the craft's own observation
     // (seen live: the third flint crafted, the next cycle asked the planner, which said
@@ -382,7 +430,7 @@ async function goalSession(
       }
       // So does food time (by day: at dusk the shelter comes first).
       const fedNow = after === undefined || after === null ? null : (deps.food?.of(after) ?? null);
-      if (fedNow !== null && dark === null && foodDue(fedNow)) hungry = fedNow;
+      if (fedNow !== null && dark === null && hungerEnds(fedNow)) hungry = fedNow;
     },
   });
   play.sessions = session;
@@ -398,7 +446,7 @@ async function goalSession(
     cycles: result.cycles.length,
     system1: result.system1,
   });
-  return afterGoalSession(play, adopted.taskId, result, { met, dark, hungry });
+  return { result, met, dark, hungry, preempted };
 }
 
 /**
@@ -409,11 +457,10 @@ async function goalSession(
 function afterGoalSession(
   play: PlayState,
   taskId: string,
-  result: SessionResult,
-  ended: { met: boolean; dark: WorldTime | null; hungry: FoodStatus | null },
+  ended: GoalSessionEnd,
 ): PlayResult | 'next-round' {
   const { deps } = play;
-  const { met, dark, hungry } = ended;
+  const { result, met, dark, hungry, preempted } = ended;
   // Interruptions are checkpoints too: the planner reads them in the task's journal.
   if (dark !== null || !['limit', 'task-finished'].includes(result.stopKind)) {
     deps.repos.memory.appendJournal(
@@ -426,6 +473,8 @@ function afterGoalSession(
     return 'next-round'; // the next round builds the shelter
   }
   if (hungry !== null && result.stopKind === 'stop-requested') return 'next-round'; // the next round gets food
+  // An owner's command comes first; the goal goes on after it.
+  if (preempted !== null && result.stopKind === 'stop-requested') return 'next-round';
   if (result.stopKind === 'stop-requested' && !met) return done(play, result.stopReason);
   const mob = mobPause(result.stopKind, play.lastDecision);
   if (mob !== null) return waitOutMob(play, taskId, mob);
