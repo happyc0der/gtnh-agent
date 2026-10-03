@@ -1,5 +1,6 @@
 import type { AgentConfig } from '../config/env.ts';
 import { OllamaClient, type OllamaClientDeps } from '../llm/ollama-client.ts';
+import { OllamaCommandProvider, type CommandTranslator } from '../llm/ollama-command-provider.ts';
 import { OllamaDecisionProvider } from '../llm/ollama-decision-provider.ts';
 import { OllamaPlannerProvider } from '../llm/ollama-planner-provider.ts';
 import { MockPlannerProvider, type PlannerFixture } from '../planner/mock-planner-provider.ts';
@@ -56,4 +57,18 @@ export function createProviders(config: AgentConfig, options: ProviderOptions = 
       break;
   }
   return { decisionProvider, planner };
+}
+
+/**
+ * Who translates an owner's natural-language command into the fixed command schema
+ * (commands.translator): a local model (llm.commandModel), or nobody (only the structured
+ * form, `!come`, is understood). Nothing here contacts a model.
+ */
+export function createCommandTranslator(
+  config: AgentConfig,
+  options: ProviderOptions = {},
+): CommandTranslator | null {
+  return config.commands.translator === 'ollama'
+    ? new OllamaCommandProvider(new OllamaClient(config.llm, options.llm), config.llm.commandModel)
+    : null;
 }
