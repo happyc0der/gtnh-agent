@@ -95,8 +95,8 @@ export class DropActions {
    * pickup waited for. A drop with no spot to fetch it from, no way there, or past the walks
    * is left; a walk stopped on the way (a threat, a correction) ends the fetching. Then, with
    * the walks left, it sweeps up the same way what earlier digs and kills of this client left
-   * lying near (drops.ts leftovers: of an item this action dropped or picked up too). The note
-   * says what was picked up where, and what of the action's drops was left there and why.
+   * lying near (drops.ts leftovers). The note says what was picked up where, and what of the
+   * action's drops was left there and why.
    */
   async collect(req: DropRequest): Promise<DropOutcome> {
     const clock = this.#opts.clock;
@@ -130,14 +130,10 @@ export class DropActions {
       return outcome();
     }
     for (const i of first) this.#own.add(i.entityId);
-    // What it wants swept up with them: the items it dropped, and what of them arrived.
-    const wanted = new Set<string>([
-      ...first.flatMap((i) => (i.item === null ? [] : [i.item])),
-      ...gainSince(req.itemsBefore).map(([item]) => item),
-    ]);
-    if (first.length === 0 && wanted.size === 0) {
+    // None seen and nothing arrived: it dropped nothing (leaves), or its drop merged into one
+    // lying near, which the sweep below picks up.
+    if (first.length === 0 && gainSince(req.itemsBefore).length === 0) {
       notes.push('no drop of it was seen');
-      return outcome();
     }
     // Each comes to rest (or is picked up) first: until then, where it will lie is not known.
     await this.#core.waitFor(() => {
@@ -172,7 +168,7 @@ export class DropActions {
       // The action's own drops first; then what earlier ones left lying near.
       const sweeping = mine.length === 0;
       const next = sweeping
-        ? leftovers(near.value, this.#own, wanted, req.origin).find(
+        ? leftovers(near.value, this.#own, req.origin).find(
             (i) => !tried.has(i.entityId) && !now.some((d) => d.entityId === i.entityId),
           )
         : mine[0];

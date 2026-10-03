@@ -280,7 +280,7 @@ describe('fetching a drop', () => {
     expect(cellText({ x: -2.5, y: 106, z: -7.5 })).toBe('(-3, 106, -8)');
   });
 
-  it("sweeps up only the client's own earlier drops of an item it wants, lying still near", () => {
+  it("sweeps up only the client's own earlier drops, lying still near", () => {
     const lying = (id: number, item: string | null, x: number, z: number, settled = true) =>
       ({
         entityId: id,
@@ -296,16 +296,14 @@ describe('fetching a drop', () => {
     const items = [
       lying(1, 'minecraft:log', 6.5, 0.5), // 3 away
       lying(2, 'minecraft:log', 4.5, 0.5), // 1 away: the nearest first
-      lying(3, 'minecraft:sapling', 4.5, 1.5), // not an item this dig wants
+      lying(3, 'minecraft:beef', 4.5, 1.5), // an earlier kill's: its own too
       lying(4, 'minecraft:log', 8.5, 0.5), // 5 away: beyond SWEEP_RADIUS
       lying(5, 'minecraft:log', 3.5, 1.5, false), // still moving
-      lying(6, null, 3.5, -0.5), // what it is is not known
+      lying(6, null, 3.5, -0.5), // its stack not known, but its own drop all the same
       lying(7, 'minecraft:log', 2.5, 0.5), // another player's: never
     ];
     const own = new Set([1, 2, 3, 4, 5, 6]);
-    expect(
-      leftovers(items, own, new Set(['minecraft:log']), origin).map((i) => i.entityId),
-    ).toEqual([2, 1]);
+    expect(leftovers(items, own, origin).map((i) => i.entityId)).toEqual([2, 6, 3, 1]);
     expect(SWEEP_RADIUS).toBe(4);
   });
 });

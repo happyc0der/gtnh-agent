@@ -62,25 +62,19 @@ export function actionDrops(
 
 /**
  * What an action sweeps up besides its own drops: the client's own earlier drops (`own`: ids
- * of items earlier digs and kills dropped) still lying within SWEEP_RADIUS of `origin`, lying
- * still, of an item it wants (`wanted`: what this action dropped or picked up), nearest to
- * `origin` first. Another player's items are never among them.
+ * of the items its earlier digs and kills dropped, which it dug and killed for) still lying
+ * within SWEEP_RADIUS of `origin`, lying still, nearest to `origin` first. Another player's
+ * items are never among them. A drop that lands within half a block of an older one of the
+ * same item merges into it (EntityItem.combineItems) and is gone: the older one, swept up,
+ * holds both.
  */
 export function leftovers(
   items: readonly ItemEntity[],
   own: ReadonlySet<number>,
-  wanted: ReadonlySet<string>,
   origin: Vec3,
 ): ItemEntity[] {
   return items
-    .filter(
-      (i) =>
-        own.has(i.entityId) &&
-        i.settled &&
-        i.item !== null &&
-        wanted.has(i.item) &&
-        distance(i.position, origin) <= SWEEP_RADIUS,
-    )
+    .filter((i) => own.has(i.entityId) && i.settled && distance(i.position, origin) <= SWEEP_RADIUS)
     .sort((a, b) => distance(a.position, origin) - distance(b.position, origin));
 }
 
