@@ -438,6 +438,7 @@ before the take-off. It has run on the fake server only so far (which checks eve
 | `MC_PATH_PARKOUR_DEEP_GAPS` | `false` | Parkour over deeper gaps too                                                                                                                                                     |
 | `MC_PATH_ALLOW_SPRINT`      | `false` | Sprint on walks to a goal at least 16 blocks away while food is above 10 (HungerOverhaul makes sprinting cost food)                                                              |
 | `MC_PATH_ALLOW_WATER`       | `false` | Wade through calm one-deep water                                                                                                                                                 |
+| `MC_PATH_ALLOW_DOORS`       | `true`  | Walk through doorways: open a wooden door or fence gate in the way, close it again behind                                                                                        |
 | `MC_PATH_THROWAWAY_RESERVE` | `4`     | Dirt a walk never places: the night shelter's roof                                                                                                                               |
 
 How it stays safe:

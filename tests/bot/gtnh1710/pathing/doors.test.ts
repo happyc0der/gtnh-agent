@@ -10,7 +10,7 @@ import { area, B, centre, TestWorld } from '../fixtures/path-worlds.ts';
  * Doors and fence gates (cells.ts doorways, movements.ts door): a wall of stone along x = 3
  * with one doorway in it at (3, 64, 0), between the player at (0, 64, 0) and the goal at
  * (6, 64, 0). Door metadata (1.7.10 BlockDoor): the lower half holds the facing (bits 0-1) and
- * the open bit (4); the upper half has bit 8 (and the hinge in bit 1).
+ * the open bit (4); the upper half has bit 8 (and the hinge in bit 0).
  */
 const FROM = centre(0, 64, 0);
 const GOAL = goalBlock(6, 64, 0);

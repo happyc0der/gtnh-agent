@@ -58,6 +58,11 @@ export const PathConfigSchema = z.strictObject({
   allowSprint: z.boolean().default(false),
   /** Wade through calm one-deep water, and drop into it from a height that does not hurt. */
   allowWater: z.boolean().default(false),
+  /**
+   * Walk through doorways: open a wooden door or fence gate in the way with a right-click,
+   * and close it again once through (it is left as it was found). Never an iron door.
+   */
+  allowDoors: z.boolean().default(true),
   /** Dirt never placed on a walk: kept for the night shelter's roof. */
   throwawayReserve: z.int().min(0).max(64).default(4),
 });
@@ -502,6 +507,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   path('MC_PATH_PARKOUR_DEEP_GAPS', 'parkourOverDeepGaps');
   path('MC_PATH_ALLOW_SPRINT', 'allowSprint');
   path('MC_PATH_ALLOW_WATER', 'allowWater');
+  path('MC_PATH_ALLOW_DOORS', 'allowDoors');
   if ((v = e('MC_PATH_THROWAWAY_RESERVE'))) {
     set(['minecraft', 'movement', 'path', 'throwawayReserve'], num('MC_PATH_THROWAWAY_RESERVE', v));
   }

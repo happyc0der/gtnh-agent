@@ -509,6 +509,21 @@ export class FakeGtnhServer {
         blockAt: world,
         setBlock: (x, y, z, id) => this.#put(x, y, z, id, 0),
         blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
+        blockMeta: (x, y, z) => this.#metas.get(`${x},${y},${z}`) ?? 0,
+        toggle: (x, y, z) => {
+          const id = world(x, y, z);
+          const name = blockNames.get(id);
+          const metaOf = (by: number): number => this.#metas.get(`${x},${by},${z}`) ?? 0;
+          if (name === 'minecraft:fence_gate') {
+            this.setBlock(x, y, z, id, metaOf(y) ^ 4);
+            return true;
+          }
+          if (name !== 'minecraft:wooden_door') return false;
+          // The upper half (bit 8) turns its lower half.
+          const lower = (metaOf(y) & 8) !== 0 ? y - 1 : y;
+          this.setBlock(x, lower, z, id, metaOf(lower) ^ 4);
+          return true;
+        },
         playerFeet: () => {
           const p = this.confirmedPositions.at(-1);
           return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
@@ -526,6 +541,7 @@ export class FakeGtnhServer {
     this.moveSim = new FakeMoveSim({
       blockAt: world,
       blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
+      blockMeta: (x, y, z) => this.#metas.get(`${x},${y},${z}`) ?? 0,
     });
     this.questBookSim =
       options.questBook === undefined

@@ -77,6 +77,14 @@ export interface FakePlaceWorld {
   playerFeet(): { x: number; y: number; z: number } | null;
   /** The living entities the client was told about (the placing player is never one). */
   entities(): FakeBody[];
+  /** A block's metadata (0 where none is kept). */
+  blockMeta?(x: number, y: number, z: number): number;
+  /**
+   * A right-click on a wooden door or a fence gate turns it (BlockDoor and BlockFenceGate's
+   * onBlockActivated: bit 2, open, of the door's lower half or the gate), sending the change;
+   * true when the block was one.
+   */
+  toggle?(x: number, y: number, z: number): boolean;
 }
 
 export interface RecordedPlacement {
@@ -197,9 +205,17 @@ export class FakePlaceSim {
     }
     // Either way (face 255 aside), both blocks are sent as they are now.
     const [dx, dy, dz] = FACE_OFFSETS[face] ?? [0, 0, 0];
-    this.#send(blockChangeFrame(x, y, z, this.#world.blockAt(x, y, z)));
+    const meta = (bx: number, by: number, bz: number): number =>
+      this.#world.blockMeta?.(bx, by, bz) ?? 0;
+    this.#send(blockChangeFrame(x, y, z, this.#world.blockAt(x, y, z), meta(x, y, z)));
     this.#send(
-      blockChangeFrame(x + dx, y + dy, z + dz, this.#world.blockAt(x + dx, y + dy, z + dz)),
+      blockChangeFrame(
+        x + dx,
+        y + dy,
+        z + dz,
+        this.#world.blockAt(x + dx, y + dy, z + dz),
+        meta(x + dx, y + dy, z + dz),
+      ),
     );
     const now = this.#chests.heldStack;
     if (!sameStack(now, claimed) || !placeResult) this.#chests.sendHeldSlot();
@@ -213,6 +229,7 @@ export class FakePlaceSim {
     face: number,
     record: RecordedPlacement,
   ): boolean {
+    if (this.#world.toggle?.(x, y, z) === true) return true;
     if (this.#chests.activate(x, y, z)) return true;
     const held = record.held;
     if (held === null) return false;

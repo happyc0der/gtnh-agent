@@ -22,6 +22,7 @@ const SETTINGS: WalkSettings = {
   parkourOverDeepGaps: false,
   allowSprint: false,
   allowWater: false,
+  allowDoors: true,
   throwawayReserve: 4,
 };
 const NO_ONE = { boundary: null, players: [] };
@@ -50,11 +51,12 @@ describe('the walk policy (path-policy.ts)', () => {
       pillar: true,
       bridge: true,
       water: false,
+      doors: true,
       maxFall: 3,
       maxBreaks: MAX_PATH_BREAKS,
       throwaway: { count: 8, block: 'minecraft:cobblestone' },
     });
-    expect(all.summary).toBe('breaking, placing up to 8 minecraft:cobblestone, parkour');
+    expect(all.summary).toBe('breaking, placing up to 8 minecraft:cobblestone, parkour, doors');
     // Each needs its ability, a throwaway block, and digging's heights for an ascend's room.
     expect(walkPolicy(input({ breaking: false })).options.canBreak).toBeUndefined();
     expect(walkPolicy(input({ digHeight: 1 })).options.canBreak).toBeUndefined();
@@ -62,10 +64,16 @@ describe('the walk policy (path-policy.ts)', () => {
     expect(walkPolicy(input({ throwaway: null })).options.bridge).toBeUndefined();
     const off = walkPolicy(
       input({
-        settings: { ...SETTINGS, allowBreak: false, allowPlace: false, allowParkour: false },
+        settings: {
+          ...SETTINGS,
+          allowBreak: false,
+          allowPlace: false,
+          allowParkour: false,
+          allowDoors: false,
+        },
       }),
     );
-    expect(off.options).toMatchObject({ parkour: false });
+    expect(off.options).toMatchObject({ parkour: false, doors: false });
     expect(off.options.canBreak).toBeUndefined();
     expect(off.options.canPlace).toBeUndefined();
     expect(off.summary).toBe('no breaking, no placing');

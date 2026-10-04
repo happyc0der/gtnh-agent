@@ -18,6 +18,9 @@ import { PASSABLE_BLOCKS, PASSABLE_BY_METADATA } from '../../../../src/bot/gtnh1
  *    whose last position was in water has it reset first.
  * Blocks with a collision box: every block but air, the plants the walker passes (passable.ts,
  * which lists blocks with no box), fluids, fire and thin snow. Unloaded columns are solid.
+ * Doors and fence gates have vanilla's own boxes (BlockDoor.func_150011_b: a 3/16 panel along
+ * one edge, by the facing, the open bit and the upper half's hinge bit; BlockFenceGate: a bar
+ * 1.5 high across the middle when closed, nothing when open).
  * Not modelled: the step-up assist (no block here is a slab), the "moved too quickly" check
  * (no walk comes near it) and the floating kick (the test server allows flight).
  */
@@ -25,6 +28,23 @@ import { PASSABLE_BLOCKS, PASSABLE_BY_METADATA } from '../../../../src/bot/gtnh1
 export interface FakeMoveWorld {
   blockAt(x: number, y: number, z: number): number;
   blockName(id: number): string | undefined;
+  /** A block's metadata (0 where none is kept): doors' and gates' boxes depend on it. */
+  blockMeta?(x: number, y: number, z: number): number;
+}
+
+const DOOR_THICKNESS = 0.1875;
+const DOORS: ReadonlySet<string> = new Set(['minecraft:wooden_door', 'minecraft:iron_door']);
+
+/** BlockDoor.func_150011_b: the panel [minX, minZ, maxX, maxZ] in its cell, from the halves' metadata. */
+function doorPanel(lower: number, upper: number): [number, number, number, number] {
+  const f = DOOR_THICKNESS;
+  const j = lower & 3;
+  const open = (lower & 4) !== 0;
+  const hinge = (upper & 1) !== 0;
+  if (j === 0) return open ? (hinge ? [0, 1 - f, 1, 1] : [0, 0, 1, f]) : [0, 0, f, 1];
+  if (j === 1) return open ? (hinge ? [0, 0, f, 1] : [1 - f, 0, 1, 1]) : [0, 0, 1, f];
+  if (j === 2) return open ? (hinge ? [0, 0, 1, f] : [0, 1 - f, 1, 1]) : [1 - f, 0, 1, 1];
+  return open ? (hinge ? [1 - f, 0, 1, 1] : [0, 0, f, 1]) : [0, 1 - f, 1, 1];
 }
 
 export interface FakeMovePacket {
@@ -109,7 +129,35 @@ export class FakeMoveSim {
     return name !== undefined && WATER.has(name);
   }
 
-  /** The block boxes (unit cubes) that overlap `b` grown by the move (dx, dy, dz). */
+  /** The collision boxes of the block at (x, y, z): a unit cube, a door's panel, a gate's bar, none. */
+  #boxesOf(x: number, y: number, z: number): Box[] {
+    const id = this.#world.blockAt(x, y, z);
+    const name = id === 0 ? 'minecraft:air' : this.#world.blockName(id);
+    const meta = (by: number): number => this.#world.blockMeta?.(x, by, z) ?? 0;
+    const at = (b: [number, number, number, number], h: number): Box => ({
+      minX: x + b[0],
+      minY: y,
+      minZ: z + b[1],
+      maxX: x + b[2],
+      maxY: y + h,
+      maxZ: z + b[3],
+    });
+    if (name !== undefined && DOORS.has(name)) {
+      const upper = (meta(y) & 8) !== 0;
+      const lower = upper ? meta(y - 1) : meta(y);
+      const top = upper ? meta(y) : meta(y + 1);
+      return [at(doorPanel(lower, top), 1)];
+    }
+    if (name === 'minecraft:fence_gate') {
+      const m = meta(y);
+      if ((m & 4) !== 0) return [];
+      return [at(m === 0 || m === 2 ? [0, 0.375, 1, 0.625] : [0.375, 0, 0.625, 1], 1.5)];
+    }
+    if (!this.#solid(x, y, z)) return [];
+    return [{ minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }];
+  }
+
+  /** The block boxes that overlap `b` grown by the move (dx, dy, dz). */
   #boxesAround(b: Box, dx: number, dy: number, dz: number): Box[] {
     const out: Box[] = [];
     const x0 = Math.floor(Math.min(b.minX, b.minX + dx));
@@ -121,9 +169,7 @@ export class FakeMoveSim {
     for (let x = x0; x <= x1; x++) {
       for (let y = y0; y <= y1; y++) {
         for (let z = z0; z <= z1; z++) {
-          if (this.#solid(x, y, z)) {
-            out.push({ minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 });
-          }
+          out.push(...this.#boxesOf(x, y, z));
         }
       }
     }
@@ -169,10 +215,22 @@ export class FakeMoveSim {
     const maxY = b.maxY - CONTRACT;
     const minZ = b.minZ + CONTRACT;
     const maxZ = b.maxZ - CONTRACT;
+    // A gate's bar reaches half a block above its cell.
     for (let cx = Math.floor(minX); cx <= Math.floor(maxX); cx++) {
-      for (let cy = Math.floor(minY); cy <= Math.floor(maxY); cy++) {
+      for (let cy = Math.floor(minY) - 1; cy <= Math.floor(maxY); cy++) {
         for (let cz = Math.floor(minZ); cz <= Math.floor(maxZ); cz++) {
-          if (this.#solid(cx, cy, cz)) return true;
+          for (const o of this.#boxesOf(cx, cy, cz)) {
+            if (
+              maxX > o.minX &&
+              minX < o.maxX &&
+              maxY > o.minY &&
+              minY < o.maxY &&
+              maxZ > o.minZ &&
+              minZ < o.maxZ
+            ) {
+              return true;
+            }
+          }
         }
       }
     }

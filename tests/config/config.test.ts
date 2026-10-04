@@ -104,6 +104,7 @@ describe('configuration', () => {
       parkourOverDeepGaps: false,
       allowSprint: false,
       allowWater: false,
+      allowDoors: true,
       throwawayReserve: 4,
     });
     const { config } = loadConfig({
@@ -115,6 +116,7 @@ describe('configuration', () => {
         MC_PATH_PARKOUR_DEEP_GAPS: 'true',
         MC_PATH_ALLOW_SPRINT: 'true',
         MC_PATH_ALLOW_WATER: 'true',
+        MC_PATH_ALLOW_DOORS: 'false',
         MC_PATH_THROWAWAY_RESERVE: '8',
       },
     });
@@ -125,6 +127,7 @@ describe('configuration', () => {
       parkourOverDeepGaps: true,
       allowSprint: true,
       allowWater: true,
+      allowDoors: false,
       throwawayReserve: 8,
     });
     expect(() =>

@@ -186,6 +186,7 @@ describe('owner travel on the pathfinder', () => {
       parkourOverDeepGaps: false,
       allowSprint: false,
       allowWater: false,
+      allowDoors: true,
       throwawayReserve: 4,
     };
     const policy = (players: Array<{ x: number; y: number; z: number }>) =>

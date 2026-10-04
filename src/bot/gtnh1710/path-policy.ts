@@ -43,6 +43,8 @@ import type { Vec3, WalkWorld } from './walking.ts';
  *    neighbour rule), never within PLAYER_PLACE_DISTANCE of another player, never outside the
  *    safety boundary; clicking only a plain full block (placing.ts CLICKABLE_SUPPORTS) or a
  *    block the same walk placed.
+ *  - Doors (allowDoors): wooden doors and fence gates in the way are opened with a right-click
+ *    and closed again once the walk is through (pathing/movements.ts door); never an iron one.
  *  - Parkour (allowParkour): only over gaps that falling into would not hurt, unless
  *    parkourOverDeepGaps; sprinting (allowSprint) only when the caller says the walk is long
  *    and the food bar high enough (client/path-actions.ts); wading (allowWater) in calm
@@ -85,6 +87,8 @@ export interface WalkSettings {
   readonly parkourOverDeepGaps: boolean;
   readonly allowSprint: boolean;
   readonly allowWater: boolean;
+  /** Through doorways, opening and closing wooden doors and fence gates. */
+  readonly allowDoors: boolean;
   /** Dirt never placed on a walk: kept for the night shelter's roof. */
   readonly throwawayReserve: number;
 }
@@ -356,6 +360,8 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
     parkour: s.allowParkour,
     parkourOverDeepGaps: s.parkourOverDeepGaps,
     water: s.allowWater,
+    // Doors and gates are opened (and closed again) on any walk: an escape into a house too.
+    doors: s.allowDoors,
     maxFall: 3,
     ...(breaking
       ? {
@@ -384,6 +390,7 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
     s.allowParkour ? (s.parkourOverDeepGaps ? 'parkour (deep gaps too)' : 'parkour') : null,
     input.sprint ? 'sprinting' : null,
     s.allowWater ? 'wading' : null,
+    s.allowDoors ? 'doors' : null,
   ].filter((w) => w !== null);
   return { options, summary: words.join(', '), water: s.allowWater };
 }

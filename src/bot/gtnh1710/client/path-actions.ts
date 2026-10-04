@@ -1,5 +1,6 @@
 import type { BlockPosition } from '../../../domain/common.ts';
 import { TICK_MS } from '../../../domain/dig-time.ts';
+import { toolInfo } from '../../../domain/tools.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import { eyesOf, type DigArea } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
@@ -16,6 +17,7 @@ import {
 import { WALK_ONE_BLOCK } from '../pathing/costs.ts';
 import {
   planExecution,
+  type DoorClick,
   type ExecutionPlan,
   type PathStep,
   type StepPlace,
@@ -104,6 +106,8 @@ const FLOOD_MAX_NODES = 40_000;
 const FLOOD_MAX_MS = 250;
 /** Sprinting only on walks at least this long (blocks, straight), with food above this. */
 export const SPRINT_MIN_DISTANCE = 16;
+/** How long a door's click waits for the server to turn it (a tick or two on a quiet server). */
+const DOOR_CLICK_MS = 1_000;
 export const SPRINT_MIN_FOOD = 10;
 /** A bridge's block: how long the walk stands at the edge waiting for the server's change. */
 const BRIDGE_CONFIRM_TICKS = 20;
@@ -399,6 +403,8 @@ export class PathActions {
     const placeArea: PlaceArea = { fence, maxHeightAboveFence: cfg.placing.maxHeightAboveFence };
     const broken: Array<{ cell: BlockPosition; block: string }> = [];
     const placed: BlockPosition[] = [];
+    /** Doors and gates the walk opened (or closed) to pass. */
+    let doors = 0;
     const ownPlaced = new Set<string>();
     const clicks = new Map<StepPlace, Click>();
     let lastBreakAt: number | null = null;
@@ -492,6 +498,15 @@ export class PathActions {
     this.#core.movement.stopIdle();
     try {
       for (const seg of exec.segments) {
+        if (seg.toggle != null) {
+          // A door or gate in the way: opened standing still, as a player uses it.
+          setSprint(false);
+          const why = await this.#clickDoor(seg.toggle);
+          if (why !== null) {
+            return stopped(`not through the doorway at ${fmt(seg.toggle.cell)}: ${why}`);
+          }
+          doors += 1;
+        }
         if (seg.breaks.length > 0) {
           setSprint(false);
           const before = broken.length;
@@ -595,6 +610,15 @@ export class PathActions {
           }
           await delay(WALK_TICK_MS);
         }
+        if (seg.restore != null) {
+          // Through: the door is left as it was found (closed behind, as a player does).
+          const why = await this.#clickDoor(seg.restore);
+          if (why !== null) {
+            this.#core.log(
+              `left the ${seg.restore.block} at ${fmt(seg.restore.cell)} as it is: ${why}`,
+            );
+          }
+        }
       }
       setSprint(false);
       // A correction (S08) or a kick arrives within a few ticks of a move the server rejects.
@@ -630,6 +654,7 @@ export class PathActions {
             ? ''
             : `; placed ${placed.length} block(s): ${placed.map(fmt).join(', ')}`) +
           (gained.length === 0 ? '' : `; picked up ${drops}`) +
+          (doors === 0 ? '' : `; went through ${doors} door(s) or gate(s), left as found`) +
           (sprinted === 0 ? '' : `; sprinted ${sprinted} of the steps`)
         ).slice(0, 500),
         {
@@ -659,6 +684,66 @@ export class PathActions {
    * Why step `i` (from `at`), and when it leaves the ground every step until the landing,
    * would take the body where it must not be, on the blocks as they are now, or null.
    */
+  /**
+   * Opens (or closes) a door or gate on the walk's way with a right-click, standing still, as a
+   * player uses one: a hand that places nothing harmful if the click were not taken by the door
+   * (an empty slot, else a vanilla tool, else a plain block item; never a stack with NBT data:
+   * a Tinkers' tool puts down blocks on a right-click), C08 on the face toward the player, then
+   * the server's update of its open bit (BlockDoor and BlockFenceGate.onBlockActivated turn
+   * it; the door's lower half holds the bit). Null when it turned (or already was so).
+   */
+  async #clickDoor(click: DoorClick): Promise<string | null> {
+    const world = this.#world.walkWorld();
+    if (world === null) return 'the block data became unknown';
+    const { x, y, z } = click.cell;
+    const id = world.blockAt(x, y, z);
+    const name = id === undefined ? undefined : id === 0 ? 'minecraft:air' : world.blockName(id);
+    if (name !== click.block) {
+      return `the ${click.block} at ${fmt(click.cell)} is ${name ?? 'not loaded'} now`;
+    }
+    const want = (click.meta & 4) !== 0;
+    const isOpen = (): boolean | null => {
+      const m = this.#world.walkWorld()?.metaAt?.(x, y, z);
+      return m === undefined ? null : (m & 4) !== 0;
+    };
+    if (isOpen() === want) return null;
+    const hand = this.#doorHand();
+    if (hand === null) {
+      return 'no hand to click it with (no empty hotbar slot, tool or plain block in the hotbar)';
+    }
+    if (hand !== this.#world.heldSlot) {
+      this.#core.send(outbound.selectHotbarSlot(hand));
+      this.#world.setHeldSlot(hand);
+    }
+    this.#core.log(`${want ? 'opening' : 'closing'} the ${click.block} at ${fmt(click.cell)}`);
+    this.#core.send(outbound.activateBlock(x, y, z, click.face));
+    await this.#core.waitFor(() => isOpen() === want, DOOR_CLICK_MS);
+    return isOpen() === want
+      ? null
+      : `the ${click.block} did not ${want ? 'open' : 'close'} within ${DOOR_CLICK_MS} ms`;
+  }
+
+  /** The hotbar slot to click a door with (#clickDoor), or null. */
+  #doorHand(): number | null {
+    const empty = this.#core.inventory.emptyHotbarSlot();
+    if (empty !== null) return empty;
+    const registry = this.#world.registry;
+    if (registry === null) return null;
+    const blocks = new Set(registry.blocks.values());
+    const held = this.#world.heldSlot;
+    const order = [held, ...[0, 1, 2, 3, 4, 5, 6, 7, 8].filter((j) => j !== held)];
+    let block: number | null = null;
+    for (const j of order) {
+      const s = this.#core.inventory.hotbar(j);
+      if (s == null || s.hasNbt) continue;
+      const item = registry.items.get(s.id) ?? registry.blocks.get(s.id);
+      if (item === undefined) continue;
+      if (toolInfo(item) !== null) return j;
+      if (blocks.has(item)) block ??= j;
+    }
+    return block;
+  }
+
   #flightProblem(
     fence: Fence,
     at: Vec3,
