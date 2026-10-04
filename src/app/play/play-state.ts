@@ -98,6 +98,8 @@ export interface CommandRun {
   exploreTo: { x: number; z: number; direction: string } | null;
   /** A goal: its last session left more of something in the inventory (work on the way). */
   worked: boolean;
+  /** A goal: its last session ended with one of System 1's reflexes (a retreat, a meal...). */
+  interrupted: boolean;
   /** Tunnel: its first cell (where the bot stood when it began), and the cells dug then. */
   tunnelFrom: BlockPosition | null;
   tunnelDone: number | null;

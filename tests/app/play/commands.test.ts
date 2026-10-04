@@ -419,6 +419,55 @@ describe("owners' commands in play", () => {
     expect(said(sim).some((l) => l.includes('no progress'))).toBe(false);
   });
 
+  it('sessions that end with a retreat from a mob are interruptions, not stalls', async () => {
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!mine 4 sand')] });
+    const base = deps(repos, sim);
+    let sessions = 0;
+    await runPlay(
+      {
+        ...base,
+        session: (_limits, hooks) => {
+          sessions += 1;
+          hooks.onCycle(
+            {
+              summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> succeeded',
+              status: 'succeeded',
+              decision: {
+                decision: 'RETREAT_HOME',
+                confidence: 0.95,
+                reasonCodes: ['HOSTILES_NEARBY'],
+                factsUsed: {},
+                requiresHumanConfirmation: false,
+                provider: 'test',
+              },
+              outcome: null,
+            } as unknown as CycleResult,
+            1,
+          );
+          sim.clock.t += 60_000;
+          return Promise.resolve({
+            cycles: [
+              {
+                cycleId: `c${sessions}`,
+                summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> succeeded',
+              },
+            ],
+            stopReason: 'stopped after a non-task decision',
+            stopKind: 'non-task-decision',
+            taskId: repos.memory.getValue(CURRENT_TASK_KEY),
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(sessions).toBeGreaterThan(3);
+    expect(said(sim).some((l) => l.includes('no progress'))).toBe(false);
+  });
+
   it('a goal that makes no progress fails after maxStuckSessions sessions', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!mine 4 sand')] });

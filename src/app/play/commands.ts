@@ -131,6 +131,8 @@ export const IDLE_POLL_MS = 500;
 const IDLE_POLLS = 20;
 /** Idle with nothing to do: play looks for something to do again after this long. */
 export const IDLE_RETRY_MS = 120_000;
+/** System 1's reflexes: a session one of them ended was interrupted, not stuck. */
+const REFLEXES: ReadonlySet<string> = new Set(['RETREAT_HOME', 'DEFEND', 'EAT', 'REST']);
 /** A tunnel whose next steps cannot be planned yet (blocks not known) tries again after this. */
 const TUNNEL_RETRY_MS = 3_000;
 /** The task the idle bot stands by under, when System 1 must act (standby). */
@@ -160,6 +162,7 @@ function runOf(play: PlayState, id: number): CommandRun {
       tunnelFrom: null,
       tunnelDone: null,
       worked: false,
+      interrupted: false,
     };
     play.commandRuns.set(id, run);
   }
@@ -1126,12 +1129,18 @@ async function goalCommandRound(
   const left = total(missing);
   // Progress: fewer missing, new ground seen, or work on the way there (more of anything: a
   // pickaxe from nothing takes logs, flint, a table... before the pickaxe itself; seen live
-  // 2026-10-04, such sessions counted as none and the command failed).
-  run.stuck =
-    run.missing !== null && left >= run.missing && !play.explored && !run.worked
-      ? run.stuck + 1
-      : 0;
+  // 2026-10-04, such sessions counted as none and the command failed). A session System 1
+  // ended with a reflex (a retreat from a mob, a fight, a meal, a rest) was interrupted, not
+  // stuck: it counts neither way (seen live the same day: three retreats from mobs failed a
+  // pickaxe command for "no progress").
+  if (!run.interrupted) {
+    run.stuck =
+      run.missing !== null && left >= run.missing && !play.explored && !run.worked
+        ? run.stuck + 1
+        : 0;
+  }
   run.worked = false;
+  run.interrupted = false;
   run.missing = left;
   if (run.stuck >= limits.maxStuckSessions) {
     finish(play, cmd, 'failed', `Failed: no progress in ${run.stuck} sessions (${play.lastStop})`);
@@ -1157,6 +1166,7 @@ async function goalCommandRound(
   const after = await deps.inventory();
   run.worked =
     after !== null && Object.entries(after).some(([item, n]) => n > (inventory[item] ?? 0));
+  run.interrupted = play.lastDecision !== null && REFLEXES.has(play.lastDecision.decision);
   if (ended.dark !== null) {
     sayOnce(
       play,
