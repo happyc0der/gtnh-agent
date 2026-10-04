@@ -72,7 +72,7 @@ describe('OllamaPlannerProvider', () => {
       'recipe is a known recipe below, or the recipe id a route step names (GTNH\'s own recipes, e.g. "minecraft:wooden_pickaxe#1"; the step ends with the exact CRAFT_ITEM to use)',
     );
     expect(PLANNER_SYSTEM_PROMPT).toContain(
-      'A minecraft:crafting_table or minecraft:furnace goes only into a cell whose takesFalling is true (on the ground beside the player), never into a 1-wide passage',
+      'A minecraft:crafting_table or minecraft:furnace goes only into a cell whose station is true (code checked it: on the ground beside the player, out of its way; with none, MOVE_TO more open ground first)',
     );
     expect(PLANNER_SYSTEM_PROMPT).toMatch(
       /\n10\. Crafting: CRAFT_ITEM only with a known recipe or a route step's recipe id/,

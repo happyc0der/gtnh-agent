@@ -213,6 +213,13 @@ export const PlaceableCellSchema = z.strictObject({
    * otherwise) and it is not in a column the player's body stands in.
    */
   takesFalling: z.boolean(),
+  /**
+   * A crafting table or furnace may go here: the client's own check (placing.ts checkStation:
+   * on a solid floor beside the player, never in its way: not a 1-wide passage, nor the only
+   * way on). Looked at only while the player carries a station, for the nearest cells on a
+   * solid floor; absent where not looked at.
+   */
+  station: z.boolean().optional(),
 });
 export type PlaceableCell = z.infer<typeof PlaceableCellSchema>;
 

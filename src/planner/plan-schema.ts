@@ -164,6 +164,8 @@ export const CompactStateSchema = z.strictObject({
         position: BlockPositionSchema,
         reach: z.number().min(0).nullable(),
         takesFalling: z.boolean(),
+        /** A crafting table or furnace may go here (the client checked: out of the way). */
+        station: z.boolean().optional(),
       }),
     )
     .max(MAX_COMPACT_PLACEABLE),

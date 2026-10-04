@@ -190,6 +190,7 @@ export function sanitizeStateForPlanner(
       position: { ...c.position },
       reach: position === null ? null : Number(eyeDistanceToBlock(position, c.position).toFixed(2)),
       takesFalling: c.takesFalling,
+      ...(c.station === undefined ? {} : { station: c.station }),
     })),
     machines: state.machines.slice(0, 32).map((m) => ({
       id: m.id,
@@ -775,8 +776,8 @@ function usableStations(state: GameState): string[] {
  * Where a crafting table or furnace the agent holds would go: a cell the planner is offered
  * (state.placeableCells) that the policy lets a station take (takesFalling: a plain full block
  * under it, out of the player's own columns), at the feet level first (on the ground beside the
- * player), nearest first; null when none. The client still refuses one in the player's way
- * (a 1-wide passage: placing.ts checkStation), and the planner then picks another.
+ * player), nearest first; null when none. Where the client looked (station: placing.ts
+ * checkStation, never in the player's way), only a cell it allows.
  */
 function stationCell(state: GameState): BlockPosition | null {
   const at = state.player.position.known ? state.player.position.value : null;
@@ -784,8 +785,10 @@ function stationCell(state: GameState): BlockPosition | null {
   const feetY = Math.floor(at.y + 1e-6);
   const cells = state.nearbyBlocks.value.placeable
     .slice(0, MAX_COMPACT_PLACEABLE)
-    .filter((c) => c.takesFalling);
-  return (cells.find((c) => c.position.y === feetY) ?? cells[0])?.position ?? null;
+    .filter((c) => c.takesFalling && c.station !== false);
+  const checked = cells.filter((c) => c.station === true);
+  const pool = checked.length > 0 ? checked : cells;
+  return (pool.find((c) => c.position.y === feetY) ?? pool[0])?.position ?? null;
 }
 
 /** Longest route line the planner request takes (PlannerRequestSchema: route.steps). */
@@ -821,8 +824,8 @@ function withActionArgs(lines: readonly string[], route: Route, state: GameState
   const place = (item: string): string => {
     if (cell === null) {
       return (
-        'no listed placeable cell takes it here (one whose takesFalling is true, on the ground ' +
-        'beside the player): MOVE_TO open, flat ground first'
+        'no listed placeable cell takes it here (one whose station is true: on the ground ' +
+        'beside the player, out of its way): MOVE_TO open, flat ground first'
       );
     }
     const then =
@@ -830,8 +833,8 @@ function withActionArgs(lines: readonly string[], route: Route, state: GameState
         ? `it is then the table ${tableAt(cell)}`
         : `it is then the furnace at (${cell.x}, ${cell.y}, ${cell.z})`;
     return (
-      `PLACE_BLOCK ${JSON.stringify({ position: cell, item })} (a listed cell whose ` +
-      `takesFalling is true, on the ground beside the player, never in a 1-wide passage); ${then}`
+      `PLACE_BLOCK ${JSON.stringify({ position: cell, item })} (a listed cell a station may ` +
+      `take: on the ground beside the player, out of its way); ${then}`
     );
   };
   const craft = (id: string, times: number): string => {

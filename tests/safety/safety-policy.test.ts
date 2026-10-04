@@ -927,6 +927,34 @@ describe('PLACE_BLOCK: only observed placeable cells, never the body, nothing th
     expect(r.violations[0]?.message).toMatch(/would not stand on a solid floor beside the player/);
   });
 
+  it('places a station only where the client allows one (station), when it looked', () => {
+    // The client checked the cell on the dirt and found it in the player's way.
+    const base = makeState();
+    if (!base.nearbyBlocks.known) throw new Error('no blocks observed');
+    const blocks = base.nearbyBlocks.value;
+    const inTheWay = {
+      ...base,
+      nearbyBlocks: known({
+        ...blocks,
+        placeable: blocks.placeable.map((c) =>
+          c.position.x === 2 && c.position.y === 65 && c.position.z === 1
+            ? { ...c, station: false }
+            : c,
+        ),
+      }),
+    };
+    const r = evaluateAction(
+      action(place(2, 65, 1, 'minecraft:crafting_table')),
+      inTheWay,
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['UNSAFE_PLACE']);
+    expect(r.violations[0]?.message).toMatch(/in the player's way/);
+    // Dirt is no station: the flag does not matter for it.
+    expect(codes(place(2, 65, 1), inTheWay)).toEqual([]);
+  });
+
   it('never places a protected item, and is not allowed during danger', () => {
     const ctx = safetyCtx(
       defaultConfig({ ...MOCK_CONFIG, safety: { protectedItems: ['minecraft:planks'] } }),

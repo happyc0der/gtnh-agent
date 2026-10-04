@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import { routeForPlanner } from '../../src/planner/planner-provider.ts';
+import { known } from '../../src/domain/known.ts';
 import { makeState } from '../fixtures/index.ts';
 import { routeActions } from '../fixtures/route-actions.ts';
 
@@ -25,6 +26,45 @@ describe(
   'the route names the exact PLACE_BLOCK and CRAFT_ITEM for its steps',
   { timeout: 30_000 },
   () => {
+    it('puts a held table only where the client allows a station (seen live: one in the way)', () => {
+      const base = needing(
+        { 'minecraft:wooden_sword': 1 },
+        { 'minecraft:log': 2, 'minecraft:crafting_table': 1 },
+        (w) => {
+          w.craftingTables = [];
+        },
+      );
+      if (!base.nearbyBlocks.known) throw new Error('no blocks observed');
+      const blocks = base.nearbyBlocks.value;
+      const floors = blocks.placeable.filter((c) => c.takesFalling);
+      const [first, second] = floors;
+      if (first === undefined || second === undefined) throw new Error('two floor cells needed');
+      const key = (c: { position: { x: number; y: number; z: number } }): string =>
+        `${c.position.x},${c.position.y},${c.position.z}`;
+      const flagged = (station: (k: string) => boolean | undefined) => ({
+        ...base,
+        nearbyBlocks: known({
+          ...blocks,
+          placeable: blocks.placeable.map((c) => {
+            const v = station(key(c));
+            return v === undefined ? c : { ...c, station: v };
+          }),
+        }),
+      });
+      // The client found the cell the route would take in the way, and the next one fine.
+      const line = (state: ReturnType<typeof makeState>): string | undefined =>
+        steps(state).find((l) => l.startsWith('station:'));
+      const placed = flagged((k) =>
+        k === key(first) ? false : k === key(second) ? true : undefined,
+      );
+      expect(line(placed)).toContain(
+        JSON.stringify({ position: second.position, item: 'minecraft:crafting_table' }),
+      );
+      // Every floor cell in the way: walk to open ground first.
+      const none = flagged((k) => (floors.some((c) => key(c) === k) ? false : undefined));
+      expect(line(none)).toContain('MOVE_TO open, flat ground first');
+    });
+
     it('a held table: placed on the floor beside the player, then the 3x3 crafts at it', () => {
       const lines = steps(
         needing(
@@ -37,8 +77,8 @@ describe(
       );
       expect(lines.find((l) => l.startsWith('station:'))).toBe(
         'station: crafting_table: minecraft:crafting_table is held: place it => PLACE_BLOCK ' +
-          '{"position":{"x":2,"y":65,"z":1},"item":"minecraft:crafting_table"} (a listed cell whose ' +
-          'takesFalling is true, on the ground beside the player, never in a 1-wide passage); it is ' +
+          '{"position":{"x":2,"y":65,"z":1},"item":"minecraft:crafting_table"} (a listed cell a ' +
+          'station may take: on the ground beside the player, out of its way); it is ' +
           'then the table crafting_table:2.65.1',
       );
       expect(routeActions(lines)).toEqual([

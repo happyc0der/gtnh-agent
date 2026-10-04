@@ -239,6 +239,25 @@ describe('Gtnh1710Client placing', () => {
     ]);
   }, 10_000);
 
+  it('carrying a station, says which floor cells take one (placing.ts checkStation)', async () => {
+    // Without a crafting table or furnace, the cells are not looked at.
+    const plain = await start();
+    expect(blocksOf(await plain.client.observe()).placeable.some((c) => 'station' in c)).toBe(
+      false,
+    );
+    const { client } = await start({
+      inventory: [...INVENTORY, { slot: 38, id: BLOCK.craftingTable, count: 1, damage: 0 }],
+    });
+    const cells = blocksOf(await client.observe()).placeable;
+    const looked = cells.filter((c) => c.station !== undefined);
+    expect(looked.length).toBeGreaterThan(0);
+    expect(looked.length).toBeLessThanOrEqual(8);
+    // Only cells on a solid floor are looked at (the nearest); open floor beside the player
+    // takes one.
+    expect(looked.every((c) => c.takesFalling)).toBe(true);
+    expect(looked.some((c) => c.station === true)).toBe(true);
+  }, 10_000);
+
   it('moves a stack from the main inventory into an empty hotbar slot first', async () => {
     const { server, client } = await start();
     const result = await perform(client, place(AT.floor, 'minecraft:planks@2'));

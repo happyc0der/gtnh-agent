@@ -1,3 +1,4 @@
+import { STATION_ITEMS } from '../../../domain/blocks.ts';
 import type { GameState } from '../../../domain/game-state.ts';
 import { parseObservedStorageId } from '../../../domain/interactions.ts';
 import { known } from '../../../domain/known.ts';
@@ -6,11 +7,14 @@ import { errorMessage } from '../../../util/json.ts';
 import { standSpotFor, underFeetOf, type DigArea } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { interactAreaProblem, interactStandSpot } from '../interact.ts';
-import { placeAreaProblem, type PlaceArea } from '../placing.ts';
+import { checkStation, placeAreaProblem, type PlaceArea } from '../placing.ts';
 import { standSpotOnPath } from '../stand-spots.ts';
 import { parseObservedTableId, type WorldModel } from '../world-model.ts';
 import { SurveyTracker } from '../world-survey.ts';
 import type { ClientCore } from './core.ts';
+
+/** Placeable cells on a solid floor looked at for a station, nearest first (two small walks each). */
+const STATION_LOOKS = 8;
 
 /** The server sends at least a time update every second; within this window the state is current. */
 const FRESHNESS_WINDOW_MS = 3_000;
@@ -157,11 +161,21 @@ export class Observation {
         fence,
         maxHeightAboveFence: cfg.placing.maxHeightAboveFence,
       };
+      const allowed = blocks.placeable.filter(
+        (c) => placeAreaProblem(area, feet, c.position) === null,
+      );
+      // Carrying a crafting table or furnace: where one may go, by the client's own rule (seen
+      // live: the planner put a table where it cut the way off, again and again).
+      const items = state.inventory.known ? state.inventory.value.items : {};
+      const carries = STATION_ITEMS.some((s) => (items[s] ?? 0) > 0);
+      let looked = 0;
       blocks = {
         ...blocks,
-        placeable: blocks.placeable.filter(
-          (c) => placeAreaProblem(area, feet, c.position) === null,
-        ),
+        placeable: allowed.map((c) => {
+          if (!carries || !c.takesFalling || looked >= STATION_LOOKS) return c;
+          looked += 1;
+          return { ...c, station: checkStation(world, fence, feet, c.position) === null };
+        }),
       };
     }
     return { ...state, nearbyBlocks: known(blocks) };

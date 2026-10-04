@@ -80,6 +80,16 @@ export function placeChecks(
       details,
     });
   }
+  if (isStationItem(item) && cell.station === false && v.length === 0) {
+    v.push({
+      code: 'UNSAFE_PLACE',
+      severity: 'pause',
+      message:
+        `${item} at ${where} would be in the player's way (a 1-wide passage or the only way ` +
+        'on): the client checked; a listed cell whose station is true takes one',
+      details,
+    });
+  }
   if (isStationItem(item) && !cell.takesFalling && v.length === 0) {
     v.push({
       code: 'UNSAFE_PLACE',
