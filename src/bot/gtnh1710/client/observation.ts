@@ -7,7 +7,7 @@ import { standSpotFor, underFeetOf, type DigArea } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { interactAreaProblem, interactStandSpot } from '../interact.ts';
 import { placeAreaProblem, type PlaceArea } from '../placing.ts';
-import { reachableFeet } from '../terrain.ts';
+import { standSpotOnPath } from '../stand-spots.ts';
 import { parseObservedTableId, type WorldModel } from '../world-model.ts';
 import { SurveyTracker } from '../world-survey.ts';
 import type { ClientCore } from './core.ts';
@@ -132,27 +132,21 @@ export class Observation {
         maxHeightAboveFence: cfg.digging.maxHeightAboveFence,
       };
       // Only stand spots a walk from here reaches (seen live: logs walled in by leaves,
-      // cactus and foliage were offered, and every walk to them failed). Terrain fences only:
-      // a one-level fence (the pen) walks by planWalk, which the flood does not model. When
-      // the player cannot walk at all, blocks in reach stay diggable where it stands. A
-      // walk may break leaves on its way (movement-actions.ts walkBreaks), as a MOVE_TO
-      // there then does.
-      const reachable =
-        fence.min.y === fence.max.y
-          ? undefined
-          : reachableFeet(
-              world,
-              fence,
-              feet,
-              cfg.movement.maxPathLength,
-              this.#core.movement.walkBreaks(fence),
-            );
-      const walkable = reachable !== undefined && reachable.size > 0 ? reachable : undefined;
+      // cactus and foliage were offered, and every walk to them failed): the pathfinder's
+      // flood with MOVE_TO's own walk policy (path-actions.ts reachable), so a spot behind
+      // leaves it breaks, or up a ledge it pillars, is offered, and a MOVE_TO there plans the
+      // same way. Terrain fences only: a one-level fence (the pen) walks by planWalk. When the
+      // player cannot walk at all, blocks in reach stay diggable where it stands.
+      const flood = fence.min.y === fence.max.y ? null : this.#core.paths.reachable(fence);
+      const walkable = flood !== null && flood.refused === null && flood.size > 0 ? flood : null;
       blocks = {
         ...blocks,
         resources: blocks.resources.map((r) => ({
           ...r,
-          standAt: standSpotFor(world, area, r.position, feet, walkable),
+          standAt:
+            walkable === null
+              ? standSpotFor(world, area, r.position, feet)
+              : standSpotOnPath(world, area, r.position, walkable),
         })),
         // The ground in the player's own column (DIG_DOWN, the night pit only).
         underFeet: underFeetOf(world, feet),

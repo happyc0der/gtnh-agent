@@ -87,6 +87,9 @@ export interface PathWalk {
   readonly protectedItems: ReadonlySet<string>;
 }
 
+/** How a refusal starts when the blocks left to walk are fewer than the next movement takes. */
+export const OVER_BUDGET = 'fewer blocks are left to walk';
+
 /** Nodes and time a walk's search may take (it runs between packets). */
 const WALK_MAX_NODES = 60_000;
 const WALK_MAX_MS = 500;
@@ -275,6 +278,11 @@ export class PathActions {
       const budget = request.maxLength;
       while (movements.length > 0 && pathLength(from, start, movements) > budget + 1e-6) {
         movements.pop();
+      }
+      if (movements.length === 0 && found.movements.length > 0) {
+        return refuse(
+          `${OVER_BUDGET} (${budget.toFixed(1)}) than the next movement toward ${request.what} takes`,
+        );
       }
     }
     if (request.maxTicks !== undefined) {

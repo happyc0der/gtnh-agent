@@ -201,7 +201,8 @@ export class Gtnh1710Client implements MinecraftClient {
           protectedItems: new Set(validated.protectedItems),
         });
       case 'EXPLORE':
-        return this.#core.travel.explore(action.args);
+        // In segments on the pathfinder, breaking and placing as the walk policy allows.
+        return this.#core.travel.explore(action.args, new Set(validated.protectedItems));
       case 'RETURN_TO_SAFE_LOCATION':
         // A retreat is how the agent gets away from a threat, so threats do not stop it.
         return this.#core.travel.retreat(validated.resolvedTarget);

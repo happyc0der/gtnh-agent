@@ -2,19 +2,11 @@ import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import type { Position } from '../../../domain/common.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
-import { walkBreaks } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { outbound } from '../packets.ts';
 import { goalBlock } from '../pathing/goals.ts';
 import { fenceHolds } from '../play-area.ts';
-import {
-  checkSupport,
-  fallDistances,
-  landingHazard,
-  MAX_SAFE_FALL,
-  restingY,
-  type WalkBreaks,
-} from '../terrain.ts';
+import { checkSupport, fallDistances, landingHazard, MAX_SAFE_FALL, restingY } from '../terrain.ts';
 import {
   planWalk,
   renderWalkMap,
@@ -143,24 +135,6 @@ export class MovementActions {
       return 'items are on the cursor or in a crafting grid';
     }
     return null;
-  }
-
-  /**
-   * The leaves the terrain walker's flood may break on its way (digging.ts walkBreaks), or
-   * undefined: only with digging enabled (and presence ticks, which digging needs), on a fence
-   * with a height range, and with an empty hotbar slot to break them with. observation.ts
-   * #withWorkAreas offers stand spots with it.
-   */
-  walkBreaks(fence: Fence): WalkBreaks | undefined {
-    const cfg = this.#opts.config;
-    if (!cfg.digging.enabled || !cfg.presenceTicks || fence.min.y === fence.max.y) {
-      return undefined;
-    }
-    if (this.#core.inventory.emptyHotbarSlot() === null) return undefined;
-    return walkBreaks(
-      { fence, maxHeightAboveFence: cfg.digging.maxHeightAboveFence },
-      this.#opts.explorationBoundary ?? null,
-    );
   }
 
   /**

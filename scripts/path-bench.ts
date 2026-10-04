@@ -4,14 +4,19 @@
  * a river and a lake. For each spot, a path across a play area of 64 x 64 columns and 32
  * levels around it (from near one corner to near the opposite one): the search, the execution
  * plan and its validation, as medians of warm runs. Then a search that expands 100,000 nodes
- * (a goal far outside a larger area). Offline: nothing connects.
+ * (a goal far outside a larger area), and the flood behind GATHER's stand spots (every feet
+ * block a walk reaches within about 64 blocks of walking, with MOVE_TO's breaks: the natural
+ * blocks a hand digs, at a hand's dig time), once per observation. Offline: nothing connects.
  *
  * Usage: node scripts/path-bench.ts [--runs 11]
  */
 import { parseArgs } from 'node:util';
 import { planExecution } from '../src/bot/gtnh1710/pathing/execute.ts';
 import { goalBlock } from '../src/bot/gtnh1710/pathing/goals.ts';
-import { planPath, type PathOptions } from '../src/bot/gtnh1710/pathing/search.ts';
+import { floodPath, planPath, type PathOptions } from '../src/bot/gtnh1710/pathing/search.ts';
+import { WALK_ONE_BLOCK } from '../src/bot/gtnh1710/pathing/costs.ts';
+import { digWaitTicks } from '../src/domain/dig-time.ts';
+import { isDiggableBlock } from '../src/domain/blocks.ts';
 import { validatePlan } from '../src/bot/gtnh1710/pathing/validate.ts';
 import type { Fence, Vec3 } from '../src/bot/gtnh1710/walking.ts';
 import { benchWalkWorld } from '../tests/bot/gtnh1710/fixtures/path-worlds.ts';
@@ -119,6 +124,54 @@ if (start !== null) {
     process.stdout.write(
       `100k nodes, ${label}: ${many.last.nodesExpanded} expanded, ${many.last.nodesOpened} opened, ` +
         `${many.last.stop}: ${many.text}\n`,
+    );
+  }
+}
+
+// The stand spots' flood, as observation.ts makes it every observation: a 64 x 64 x 32 play
+// area around each spot, MOVE_TO's walk policy (breaking what a hand digs, at its dig time;
+// placing with 32 throwaway blocks), at most 32 x 2 blocks of walking (path-actions.ts).
+const HAND_BREAK: PathOptions['canBreak'] = (c) => {
+  const name = world.blockName(world.blockAt(c.x, c.y, c.z) ?? -1);
+  if (name === undefined || !isDiggableBlock(name)) return null;
+  if (/stone|ore|granite|netherrack|clay/.test(name) && name !== 'minecraft:clay') return null;
+  return digWaitTicks(name);
+};
+for (const [name, cx, cz] of SPOTS) {
+  const at = feetNear(cx, cz);
+  if (at === null) continue;
+  const g = column(cx, cz).ground;
+  const playArea: Fence = {
+    min: { x: cx - 32, y: g - 15, z: cz - 32 },
+    max: { x: cx + 31, y: g + 16, z: cz + 31 },
+  };
+  for (const [label, extra] of [
+    ['breaking', {}],
+    [
+      'breaking and placing',
+      {
+        bridge: true,
+        pillar: true,
+        canPlace: () => true,
+        throwaway: { count: 32, block: 'minecraft:dirt' },
+      },
+    ],
+  ] as const) {
+    const flood = time(() =>
+      floodPath(world, playArea, at, {
+        parkour: true,
+        maxFall: 3,
+        canBreak: HAND_BREAK,
+        maxBreaks: 24,
+        ...extra,
+        maxCost: 32 * WALK_ONE_BLOCK * 2,
+        maxNodes: 40_000,
+        maxTimeMs: 10_000,
+      }),
+    );
+    process.stdout.write(
+      `stand-spot flood, ${name}, ${label}: ${flood.last.size} feet blocks, ${flood.last.nodesExpanded} expanded${flood.last.cut ? ' (cut)' : ''}: ${flood.text}
+`,
     );
   }
 }

@@ -37,9 +37,10 @@ describe('EXPLORE', { timeout: 30_000 }, () => {
     expect(r.data['progress']).toBeGreaterThan(16);
     expect((await positionOf(client)).z).toBeGreaterThan(SPAWN.z + 16);
     expect(r.message).toMatch(/Hot Forest/);
-    // Open ground ahead: it stopped because maxDistance was spent, not for want of a way (seen
-    // live: "no way further" a few blocks short, remembered as a dead end each time).
-    expect(String(r.data['stoppedBecause'])).toMatch(/^walked (nearly )?the whole maxDistance/);
+    // Open ground ahead: on the pathfinder it walks all the way to the point 24 blocks south
+    // (seen live, with the hops: "no way further" a few blocks short, remembered as a dead end
+    // each time).
+    expect(r.data['stoppedBecause']).toBe('went 24 blocks south');
     // Every step was an ordinary walking step: on the pathfinder, at most vanilla's walking
     // pace (0.216 blocks a tick) from the one before.
     let prev = { x: SPAWN.x, z: SPAWN.z };
