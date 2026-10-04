@@ -4,12 +4,14 @@ import { checkDigDown, underFeetOf, type DigArea } from '../../../src/bot/gtnh17
 import {
   continueNightPit,
   enclosedIn,
+  planClimbOut,
   planNightPit,
   planShelterExit,
   PlannedWorld,
   walledIn,
   type PitOptions,
 } from '../../../src/bot/gtnh1710/night-pit.ts';
+import type { PathOptions } from '../../../src/bot/gtnh1710/pathing/search.ts';
 import type { Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 import type { ShelterStep } from '../../../src/domain/night-shelter.ts';
 
@@ -97,6 +99,9 @@ const UNDER = { x: 0, y: 63, z: 0 };
 const specs = (steps: readonly ShelterStep[]) => steps.map((s) => s.spec);
 const reasonOf = (r: { ok: boolean; reason?: string }): string =>
   r.ok ? 'ok' : (r.reason ?? 'no reason');
+/** No pickaxe: cobblestone cannot be harvested. */
+const noCobble = (b: string): string | null =>
+  b === 'minecraft:cobblestone' ? 'it needs a pickaxe, and the player carries none' : null;
 
 describe('checkDigDown: the block under the feet, exactly one block down', () => {
   it('allows dirt or grass under a centred player, over a plain full block', () => {
@@ -370,6 +375,8 @@ describe('the way out in the morning', () => {
   const pit = (extra: Record<string, number> = {}) =>
     land({ [k(0, 62, 0)]: ID.air, [k(0, 61, 0)]: ID.air, ...extra });
   const BOTTOM: Vec3 = { x: 0.5, y: 61, z: 0.5 };
+  /** The pit's site: its column, and its ground layer (the roof's level). */
+  const SITE = { x: 0, z: 0, groundY: 63 };
 
   it('knows a walled-in, roofed player', () => {
     expect(walledIn(pit(), BOTTOM)).toBe(true);
@@ -471,5 +478,55 @@ describe('the way out in the morning', () => {
     expect(w.blockName(id)).toBe('minecraft:dirt');
     expect(w.hazardCode(id)).toBe(BLOCK_CODE.safe);
     expect(w.blockAt(5, 63, 5)).toBe(ID.grass);
+  });
+
+  it('climbs out through the roof on a pillar when no wall may be dug (planClimbOut)', () => {
+    // Seen live 2026-10-03: cobblestone on three sides and no pickaxe, bamboo on the fourth.
+    const walls: Record<string, number> = {};
+    for (const [dx, dz] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      walls[k(dx, 63, dz)] = ID.cobblestone;
+      walls[k(dx, 62, dz)] = ID.cobblestone;
+    }
+    const walled = pit(walls);
+    expect(planShelterExit(walled, BOTTOM, { ...OPTS, canHarvest: noCobble }).ok).toBe(false);
+    const options = (world: WalkWorld, count = 5): PathOptions => ({
+      pillar: true,
+      canBreak: (c) => {
+        const id = world.blockAt(c.x, c.y, c.z);
+        return id === ID.grass || id === ID.dirt ? 20 : null;
+      },
+      canPlace: () => true,
+      throwaway: { count, block: 'minecraft:dirt' },
+    });
+    const r = planClimbOut(walled, AREA.fence, BOTTOM, SITE, options(walled));
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.digs).toBe(1);
+    // One walk: through the roof (the one block broken), two blocks up a pillar, onto a wall.
+    expect(r.steps).toHaveLength(1);
+    expect(specs(r.steps)[0]).toMatchObject({
+      type: 'MOVE_TO',
+      args: { target: { y: 64 }, tolerance: 0.5 },
+    });
+    expect(r.steps[0]?.text).toMatch(
+      /^climb out to \(-?\d+, 64, -?\d+\) \(breaking 1 block\(s\), placing 2\)$/,
+    );
+    // Seen live: the ground north of the pit lies a block lower (its top at the pit's
+    // second level), so one block up the pillar and a step north is out.
+    const lower = pit({ ...walls, [k(0, 63, -1)]: ID.air, [k(0, 62, -1)]: ID.grass });
+    const low = planClimbOut(lower, AREA.fence, BOTTOM, SITE, options(lower));
+    if (!low.ok) throw new Error(low.reason);
+    expect(specs(low.steps)).toEqual([
+      { type: 'MOVE_TO', args: { target: { x: 0.5, y: 63, z: -0.5 }, tolerance: 0.5 } },
+    ]);
+    expect(low.steps[0]?.text).toBe('climb out to (0, 63, -1) (breaking 1 block(s), placing 1)');
+    // Too few blocks to pillar with: no climb.
+    expect(reasonOf(planClimbOut(walled, AREA.fence, BOTTOM, SITE, options(walled, 1)))).toMatch(
+      /^no climb out of the pit: /,
+    );
   });
 });

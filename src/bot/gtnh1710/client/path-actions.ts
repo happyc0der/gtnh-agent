@@ -873,6 +873,10 @@ export function goalDistance(goal: Goal, from: Vec3): number {
       return Math.abs(goal.y - from.y);
     case 'any':
       return Math.min(...goal.goals.map((g) => goalDistance(g, from)));
+    case 'out': {
+      const inColumn = Math.floor(from.x) === goal.x && Math.floor(from.z) === goal.z;
+      return Math.max(inColumn ? 1 : 0, goal.minY - from.y);
+    }
     case 'away': {
       let need = 0;
       for (const p of goal.from)

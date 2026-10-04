@@ -6,6 +6,7 @@ import type { ConnectionInfo, Gtnh1710Client } from '../../bot/gtnh1710/gtnh-cli
 import {
   continueNightPit,
   enclosedIn,
+  planClimbOut,
   planNightPit,
   planShelterExit,
   walledIn,
@@ -129,7 +130,17 @@ export function liveShelter(
       const stuck = { ...base, walled: true };
       if (opts === null) return { ...stuck, problem: 'there is no fence to dig or walk in' };
       const exit = planShelterExit(world, feet, opts);
-      return exit.ok ? { ...stuck, exit: exit.steps } : { ...stuck, problem: exit.reason };
+      if (exit.ok) return { ...stuck, exit: exit.steps };
+      // No wall or staircase it may dig: out of the pit as Baritone leaves a hole, through
+      // the roof and up a pillar, on MOVE_TO's own path rules.
+      const walk = inPit && site !== null && fence !== null ? client.walkOptions() : null;
+      if (walk === null || site === null || fence === null) {
+        return { ...stuck, problem: exit.reason };
+      }
+      const climb = planClimbOut(world, fence, feet, site, walk);
+      return climb.ok
+        ? { ...stuck, exit: climb.steps }
+        : { ...stuck, problem: `${exit.reason}; ${climb.reason}` };
     }
     if (enclosedIn(world, feet) === true) return { ...base, sheltered: true };
     if (opts === null) return { ...base, problem: 'there is no fence to dig or build in' };

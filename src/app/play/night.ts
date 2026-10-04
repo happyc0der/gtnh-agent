@@ -241,11 +241,11 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
       const result = await blueprintSession(play, {
         taskId: LEAVE_SHELTER_TASK_ID,
         goal: 'Morning: dig your way out of the night shelter (code does it), then carry on',
-        subgoal: `dig ${digs} block(s), then walk out`,
+        subgoal: digs === 0 ? 'climb out' : `dig ${digs} block(s), then walk out`,
         steps: describeShelterExit(status),
         known: status.exit,
         label: 'leave the shelter',
-        text: `dig ${digs} blocks`,
+        text: digs === 0 ? 'climb out' : `dig ${digs} blocks`,
         missing: {},
         maxCycles: status.exit.length * 2 + 2,
       });

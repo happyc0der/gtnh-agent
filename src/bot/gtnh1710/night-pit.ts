@@ -16,9 +16,11 @@ import {
   type DigArea,
 } from './digging.ts';
 import { passProblem } from './passable.ts';
+import { goalOut } from './pathing/goals.ts';
+import { planPath, type PathOptions } from './pathing/search.ts';
 import { checkPlace } from './placing.ts';
 import { planTerrainWalk, reachableFeet, standProblem } from './terrain.ts';
-import { WALKABLE_SURFACES, type Vec3, type WalkWorld } from './walking.ts';
+import { WALKABLE_SURFACES, type Fence, type Vec3, type WalkWorld } from './walking.ts';
 
 /**
  * The night pit and the way out of a shelter in the morning, planned by code with the live
@@ -614,4 +616,51 @@ function stairExit(
     y = ny;
   }
   return { ok: false, reason: `no open ground within ${MAX_EXIT_STEPS} steps up` };
+}
+
+/** Nodes and milliseconds a climb out of the pit may search (a few blocks around it). */
+const CLIMB_MAX_NODES = 20_000;
+const CLIMB_MAX_MS = 300;
+
+/**
+ * The way out of the night pit when no wall or staircase can be dug (planShelterExit; seen
+ * live 2026-10-03: cobblestone on three sides and no pickaxe, bamboo on the fourth): the
+ * pathfinder, with MOVE_TO's own walk policy (`options`: what a walk may break, and the
+ * throwaway blocks it may pillar with), to any feet block out of the pit's column no lower
+ * than its ground layer (the ground beside a pit may lie a block lower: seen live), as
+ * Baritone climbs out of a hole: through the roof, a pillar up, a step out. One MOVE_TO to
+ * where the path ends; the walk plans its own path there with the same rules, and checks every
+ * break and placement again just before it.
+ */
+export function planClimbOut(
+  world: WalkWorld,
+  fence: Fence,
+  feet: Vec3,
+  site: PitSite,
+  options: PathOptions,
+): ExitPlan {
+  const found = planPath(world, fence, feet, goalOut(site.x, site.z, site.groundY), {
+    ...options,
+    maxNodes: CLIMB_MAX_NODES,
+    maxTimeMs: CLIMB_MAX_MS,
+  });
+  if (found.status !== 'reached' || found.end === null) {
+    return { ok: false, reason: `no climb out of the pit: ${found.reason}` };
+  }
+  const end = found.end;
+  const breaks = found.movements.reduce((n, m) => n + m.breaks.length, 0);
+  const places = found.movements.filter((m) => m.place !== null).length;
+  return {
+    ok: true,
+    digs: breaks,
+    steps: [
+      {
+        spec: {
+          type: 'MOVE_TO',
+          args: { target: centreOf(end.x, end.y, end.z), tolerance: 0.5 },
+        },
+        text: `climb out to ${fmt(end)} (breaking ${breaks} block(s), placing ${places})`,
+      },
+    ],
+  };
 }
