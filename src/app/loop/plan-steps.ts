@@ -1,4 +1,10 @@
-import { createAction, isAllowlistedActionType, type ActionSpec } from '../../domain/actions.ts';
+import {
+  createAction,
+  isAllowlistedActionType,
+  MIN_EXPLORE_DISTANCE,
+  type ActionSpec,
+} from '../../domain/actions.ts';
+import { wanderTarget } from '../../domain/world-memory.ts';
 import type { BlockPosition } from '../../domain/common.ts';
 import type { GameState } from '../../domain/game-state.ts';
 import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
@@ -108,6 +114,19 @@ function rememberedFor(
   );
 }
 
+/** Where a GATHER of a block looks on with none of it known (world-memory.ts wanderTarget). */
+function wanderFor(
+  deps: AgentDeps,
+  gather: GatherStep,
+  state: GameState,
+  now: Date,
+): NonNullable<GatherOptions['wander']> | null {
+  if (!('block' in gather.args) || !state.player.position.known) return null;
+  const summary = explorationFor(deps.config, deps.repos, state, now);
+  if (summary === undefined) return null;
+  return wanderTarget(summary, state.player.position.value, MIN_EXPLORE_DISTANCE);
+}
+
 function stepOf(
   deps: AgentDeps,
   stored: StoredPlan,
@@ -149,6 +168,7 @@ function stepOf(
       state,
       ctx,
       rememberedFor(deps, step.action, state, ctx.now),
+      wanderFor(deps, step.action, state, ctx.now),
     );
     if (turn.kind === 'end') return gatherEnded(deps.repos, stored, turn, outcome);
     return {
@@ -492,6 +512,7 @@ function refusedFirstStep(
         now: ctx.now,
         check: previewCheck(deps.repos.actions, taskId, state, ctx),
         remembered: rememberedFor(deps, s.action, state, ctx.now),
+        wander: wanderFor(deps, s.action, state, ctx.now),
       },
     );
     if (choice.kind === 'act') return null;

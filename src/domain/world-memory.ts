@@ -120,6 +120,41 @@ export const COMPASS: Readonly<Record<ExploreDirection, { x: number; z: number }
   north_west: { x: -D, z: -D },
 };
 
+/** The farthest an EXPLORE that looks for more of something goes in one go (blocks). */
+export const WANDER_DISTANCE = 48;
+
+/**
+ * Where to look for more of something when none is in view and none is remembered: toward
+ * the compass direction seen least (the summary's `seen`), with room left to explore that way
+ * (at least `minRoom` blocks), as a person walks on into ground not yet seen to find more
+ * trees; ties go to more room. A point up to WANDER_DISTANCE from `from`, or null when every
+ * direction is out of room.
+ */
+export function wanderTarget(
+  summary: ExplorationSummary,
+  from: { x: number; z: number },
+  minRoom: number,
+): { x: number; z: number; direction: ExploreDirection; distance: number } | null {
+  let best: { d: ExploreDirection; seen: number; room: number } | null = null;
+  for (const [d, v] of Object.entries(summary.directions) as Array<
+    [ExploreDirection, { seen: number; room: number }]
+  >) {
+    if (v.room < minRoom) continue;
+    if (best === null || v.seen < best.seen || (v.seen === best.seen && v.room > best.room)) {
+      best = { d, seen: v.seen, room: v.room };
+    }
+  }
+  if (best === null) return null;
+  const distance = Math.min(best.room, WANDER_DISTANCE);
+  const u = COMPASS[best.d];
+  return {
+    x: Math.round(from.x + u.x * distance),
+    z: Math.round(from.z + u.z * distance),
+    direction: best.d,
+    distance,
+  };
+}
+
 /** Clockwise from east, 45 degrees apart (atan2 over x east, z south). */
 const BY_ANGLE: readonly ExploreDirection[] = [
   'east',

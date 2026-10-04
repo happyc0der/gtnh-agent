@@ -461,7 +461,7 @@ describe('world memory and exploring', () => {
     expect(result.action).toMatchObject({ type: 'EXPLORE', args: { toward: { x: -30, z: 20 } } });
   });
 
-  it('asks once more when every GATHER in the plan would find nothing to dig', async () => {
+  it('a GATHER with nothing to dig, in view or remembered, explores on by itself', async () => {
     const clock = testClock();
     const { client } = makeWorld((w) => {
       if (w.task !== null) w.task.requirements = { 'minecraft:gravel': 8 };
@@ -506,12 +506,59 @@ describe('world memory and exploring', () => {
       clock,
       newId: sequentialIds(),
     });
+    // The step explores on by itself toward the ground seen least: no second ask.
+    expect(requests).toHaveLength(1);
+    expect(result.action).toMatchObject({ type: 'EXPLORE' });
+  });
+
+  it('asks once more when a GATHER would find nothing and cannot explore on either', async () => {
+    const clock = testClock();
+    const { client } = makeWorld((w) => {
+      if (w.task !== null) w.task.requirements = { 'minecraft:gravel': 8 };
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    // Exploring is only offered in mode 'follow': with a fixed fence there is no wandering on.
+    const config = defaultConfig({
+      ...MOCK_CONFIG,
+      minecraft: { movement: { enabled: true, mode: 'fixed' } },
+    });
+    syncConfigToDatabase(config, repos);
+    const gatherGravel: PlannerResponse = {
+      kind: 'plan',
+      plan: {
+        ...(explorePlan as Extract<PlannerResponse, { kind: 'plan' }>).plan,
+        steps: [
+          {
+            step: 1,
+            action: { type: 'GATHER', args: { block: 'minecraft:gravel', count: 8 } },
+            rationale: 'gravel is needed',
+          },
+        ],
+      },
+    };
+    const requests: PlannerRequest[] = [];
+    const planner: PlannerProvider = {
+      name: 'hopeful',
+      plan: (request) => {
+        requests.push(request);
+        return Promise.resolve(gatherGravel);
+      },
+    };
+    await runSingleCycle({
+      config,
+      client,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    });
     expect(requests).toHaveLength(2);
     expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
     expect(requests[1]?.journal.at(-1)).toMatch(
       /^Your plan would dig nothing \(GATHER minecraft:gravel: no minecraft:gravel left in view to dig\)\. Plan something else: EXPLORE/,
     );
-    expect(result.action).toMatchObject({ type: 'EXPLORE' });
   });
 
   it('keeps remembering, but offers no EXPLORE, with a fixed fence', async () => {

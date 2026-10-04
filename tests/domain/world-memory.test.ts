@@ -6,6 +6,9 @@ import {
   roomToEdge,
   SeenChunkSchema,
   summarizeExploration,
+  wanderTarget,
+  WANDER_DISTANCE,
+  type ExplorationSummary,
   type SeenChunk,
 } from '../../src/domain/world-memory.ts';
 
@@ -158,5 +161,36 @@ describe('world memory', () => {
     expect(summary).toMatchObject({ chunksSeen: 0, places: [], biomes: [] });
     expect(Object.keys(summary.directions)).toHaveLength(8);
     expect(summary.directions.north).toEqual({ seen: 0, room: 256 });
+  });
+});
+
+describe('wanderTarget: where to look on for more of something', () => {
+  const dirs = (seen: Partial<Record<string, number>>, room = 200) =>
+    Object.fromEntries(
+      [
+        'north',
+        'north_east',
+        'east',
+        'south_east',
+        'south',
+        'south_west',
+        'west',
+        'north_west',
+      ].map((d) => [d, { seen: seen[d] ?? 100, room }]),
+    ) as ExplorationSummary['directions'];
+  const summary = (directions: ExplorationSummary['directions']): ExplorationSummary => ({
+    chunksSeen: 40,
+    directions,
+    places: [],
+    biomes: [],
+  });
+
+  it('heads the way seen least, at most WANDER_DISTANCE, with room left', () => {
+    const t = wanderTarget(summary(dirs({ east: 10 })), { x: 0.5, z: 0.5 }, 8);
+    expect(t).toEqual({ x: 49, z: 1, direction: 'east', distance: WANDER_DISTANCE });
+    // Less room than that: as far as the room goes; none anywhere: nowhere.
+    const close = wanderTarget(summary(dirs({ south: 0 }, 20)), { x: 0, z: 0 }, 8);
+    expect(close).toEqual({ x: 0, z: 20, direction: 'south', distance: 20 });
+    expect(wanderTarget(summary(dirs({}, 5)), { x: 0, z: 0 }, 8)).toBeNull();
   });
 });

@@ -162,6 +162,7 @@ export function gatherTurn(
   state: GameState,
   ctx: SafetyContext,
   remembered: GatherOptions['remembered'] = [],
+  wander: NonNullable<GatherOptions['wander']> | null = null,
 ): GatherTurn {
   const saved = loadProgress(repos, ref);
   const started = saved ?? startGather(ref.planId, ref.stepIndex, ref.gather, state, ctx.now);
@@ -170,6 +171,7 @@ export function gatherTurn(
     now: ctx.now,
     check: previewCheck(repos.actions, ref.taskId, state, ctx),
     remembered,
+    wander,
   });
   const p = {
     ...started,

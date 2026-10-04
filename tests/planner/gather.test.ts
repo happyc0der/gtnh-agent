@@ -181,6 +181,33 @@ describe('GATHER chooses each action in code, from the observation', () => {
     });
   });
 
+  it('with none in view and none remembered, explores on toward the least-seen ground', () => {
+    // Seen live: "GATHER 5 logs" ended "none left in view" plan after plan, and play idled.
+    const { state, progress } = setup([]);
+    const wander = { x: 1, z: -47, distance: 48 };
+    expect(chooseGatherAction(gather(), progress, state, { ...opts(), wander })).toEqual({
+      kind: 'act',
+      spec: { type: 'EXPLORE', args: { toward: { x: 1.5, z: -46.5 }, maxDistance: 56 } },
+      target: { x: 1, y: 64, z: -47 },
+      walk: true,
+      entity: null,
+      travel: true,
+      skip: [],
+      skipEntities: [],
+    });
+    // Remembered places come first; an EXPLORE the policy refuses ends the step, saying why.
+    const far = { x: 28, y: 104, z: 107, distance: 106 };
+    expect(
+      chooseGatherAction(gather(), progress, state, { ...opts(), remembered: [far], wander }),
+    ).toMatchObject({ kind: 'act', spec: { args: { toward: { x: 28.5, z: 107.5 } } } });
+    const night = opts((spec) => (spec.type === 'EXPLORE' ? 'it is night' : null));
+    expect(chooseGatherAction(gather(), progress, state, { ...night, wander })).toMatchObject({
+      kind: 'end',
+      end: 'no-target',
+      why: 'no minecraft:sand left in view to dig (exploring on toward (1, -47): it is night)',
+    });
+  });
+
   it('with none in view, heads for the nearest place world memory remembers it at', () => {
     // Seen live: GATHER gravel ended "no gravel left in view" with gravel remembered 92 blocks
     // south, and the planner, asked again, planned the same GATHER.

@@ -402,6 +402,14 @@ export interface GatherOptions {
    * remembered 92 blocks south, and the planner, asked again, planned the same.
    */
   remembered?: ReadonlyArray<{ x: number; y: number; z: number; distance: number }>;
+  /**
+   * Where to look on with none of it in view and none remembered (world-memory.ts
+   * wanderTarget: toward the direction seen least): the step explores there by itself, as
+   * Baritone's mine process wanders on for blocks it knows of none of. Seen live: "GATHER 5
+   * logs" ended "none left in view" plan after plan, the planner never exploring, and play
+   * went idle. Absent: the step ends.
+   */
+  wander?: { x: number; z: number; distance: number } | null;
 }
 
 /** Within this far (blocks, level) of a remembered place, none of it in view: it is gone. */
@@ -648,6 +656,34 @@ export function chooseGatherAction(
         };
       }
       travelRefusal ??= `the one remembered at ${formatPosition(target)}: ${why}`;
+    }
+    // Nothing remembered either: on into ground not seen yet.
+    const w = opts.wander;
+    if (w != null && travelRefusal === null && (opts.remembered ?? []).length === 0) {
+      const explore: ActionSpec = {
+        type: 'EXPLORE',
+        args: {
+          toward: { x: w.x + 0.5, z: w.z + 0.5 },
+          maxDistance: Math.min(
+            MAX_EXPLORE_DISTANCE,
+            Math.max(MIN_EXPLORE_DISTANCE, Math.ceil(w.distance) + 8),
+          ),
+        },
+      };
+      const why = opts.check(explore, feet);
+      if (why === null) {
+        return {
+          kind: 'act',
+          spec: explore,
+          target: { x: w.x, y: Math.floor(feet.y), z: w.z },
+          walk: true,
+          entity: null,
+          travel: true,
+          skip,
+          skipEntities: [],
+        };
+      }
+      travelRefusal = `exploring on toward (${w.x}, ${w.z}): ${why}`;
     }
   }
   return {
