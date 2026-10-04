@@ -843,6 +843,7 @@ below and the client's waits:
 | bridge   | place a block in the gap ahead against the side of the block underfoot, walk on            | 32.63 (with the placement penalty 20)                      |
 | downward | dig the block underfoot, drop one block (only when the caller enables it)                  | 17 + the dig                                               |
 | wading   | a traverse or diagonal in calm one-deep water (into it, out of it, within it)              | 10.20, 14.43                                               |
+| (ascend) | out of calm one-deep water onto a bank one higher, the cells 3 above open                  | 20 (about 18 ticks, + jump penalty 2)                      |
 
 A break costs its dig ticks (the caller's `canBreak`, with the tool the player would hold), the
 client's wait for the server's verdict (6) and a penalty (4), plus 2 once for stopping first, so
@@ -889,8 +890,9 @@ position the click goes (`afterStep`) and the first step that stands on it (`nee
 - The vertical motion is the game's own; each tick's move across is one the keys can make from
   the motion carried over, so walking reaches the vanilla 0.216 blocks per tick, turns slow down
   (a run brakes just in time to reach a turn exactly at the block centre at a speed the next
-  direction can take), and jumps carry only as far as real ones. No step collides with a block,
-  so the server's own move from the last position lands exactly where the client says.
+  direction can take), and jumps carry only as far as real ones. No step moves into a block, so
+  the server's own move from the last position lands exactly where the client says; only
+  climbing out of water presses against one (below).
 - Walking and wading run as fast as allowed, flowing on from one straight movement to the next.
   An ascend jumps from the start block's centre and keeps off the step until the feet are above
   it. A descend or fall walks off the edge, then steers in the air to land inside the column,
@@ -904,18 +906,27 @@ position the click goes (`afterStep`) and the first step that stands on it (`nee
 - A bridge walks to 0.6 past the centre (the eyes beyond the edge, so the side of the block
   underfoot faces them), stops for a tick, places against that side, and walks on once the server
   confirms (`neededBy` is the next step).
+- Out of water onto a bank one higher, as a player climbs out: forward held, and jump held while
+  in the water (swimming up, +0.04 a tick: `jump` on those steps), the box pressed against the
+  bank (`bump` on those steps: the box ends touching the bank's face, which the server's move
+  reproduces); once the space 0.6 higher holds no water, the game pushes the player up (motionY
+  0.3), the feet clear the bank's top and the box moves over it, about 18 ticks in all. So a fall
+  into one-deep water has a way out wherever a bank one block higher has room above it.
 - A movement that breaks, pillars or digs down starts at rest; when a movement cannot be driven
   from the way the one before it ends, the plan is made again with that one stopping.
 
 **The step validator** (`validate.ts`) replays a plan tick by tick and says where it breaks a
-rule: the vertical move and onGround must be the game's; the change of motion across at most
-what the keys add in that mode (no faster than walking or sprinting, no jump longer than a real
-one, no hovering); the server's Y-X-Z move from the last position never stopped by a block; every
-cell the box touches (and the Y move sweeps) open and away from hazards, inside the fence; no
-fall damage by the server's accounting; blocks broken only standing still and never the one
-underfoot (but digging down); placed only into an empty cell outside the body, against a solid
-block touching the face clicked. Every test plan goes through it, and the fuzz tests plan,
-execute and validate several hundred random paths on rough terrain and mazes.
+rule: the vertical move and onGround must be the game's (a jump only off the ground, swimming up
+only in water, water's push up only right after a bump with the space above free); the change
+of motion across at most what the keys add in that mode (no faster than walking or sprinting, no
+jump longer than a real one, no hovering), and a bump only against a block the box ends touching
+(it then takes that axis's motion); the server's Y-X-Z move from the last position never stopped
+by a block; every cell the box touches (and the Y move sweeps) open and away from hazards,
+inside the fence; no fall damage by the server's accounting; blocks broken only standing still
+and never the one underfoot (but digging down); placed only into an empty cell outside the body,
+against a solid block touching the face clicked. Every test plan goes through it, and the fuzz
+tests plan, execute and validate several hundred random paths on rough terrain and mazes (a
+larger run of the same, done once, validated about 70,000 movements).
 
 **What the executor must still do** (the plan cannot check it):
 
@@ -946,9 +957,8 @@ checks that, with time bounds loose enough for a busy test run.
 
 **Not covered yet:**
 
-- swimming, and climbing out of water onto a bank one block higher (vanilla's push up against
-  the bank in water): a fall into one-deep water needs a dry way out at the same level, which
-  natural water rarely has;
+- swimming: water deeper than one block is never entered, and water that flows (it pushes) is
+  never waded;
 - vines and ladders (the body never has its feet in one), slabs, stairs, soul sand, ice and other
   partial or slippery blocks (not surfaces), doors and fence gates;
 - falling blocks are avoided, not handled (Baritone breaks a falling column again and again);

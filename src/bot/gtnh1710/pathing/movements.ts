@@ -432,7 +432,16 @@ const ascend: Evaluate = (ctx, x, y, z, d, detail) => {
   ctx.begin(KIND.ascend, nx, y + 1, nz, 0);
   if (!ctx.inFence(nx, y + 1, nz)) return Infinity;
   const c = ctx.cells;
-  if (c.has(x, y, z, CELL.WATER) || !c.has(nx, y, nz, CELL.SURFACE)) return Infinity;
+  if (!c.has(nx, y, nz, CELL.SURFACE)) return Infinity;
+  if (c.has(x, y, z, CELL.WATER)) {
+    // Out of the water onto a bank one higher: swimming up against it until the water pushes
+    // the player up (execute.ts waterExit). The body rises to 1.5 above the water's floor:
+    // the cells up to 3 above it must be open. Nothing is broken.
+    if (!ctx.options.water || !c.standable(nx, y + 1, nz)) return Infinity;
+    if (!c.open(x, y + 2, z) || !c.open(x, y + 3, z) || !c.open(nx, y + 3, nz)) return Infinity;
+    if (detail !== null) detail.water = true;
+    return ctx.costs.waterExit;
+  }
   const above = ctx.open(x, y + 2, z, detail);
   if (above < 0) return Infinity;
   const head = ctx.open(nx, y + 2, nz, detail);

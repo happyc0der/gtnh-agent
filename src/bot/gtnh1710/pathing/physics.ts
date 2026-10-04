@@ -210,6 +210,8 @@ export interface PhysicsWorld {
   solid(x: number, y: number, z: number): boolean;
   /** Water (still or flowing). */
   water(x: number, y: number, z: number): boolean;
+  /** Any liquid (water, lava, modded fluids). */
+  liquid(x: number, y: number, z: number): boolean;
 }
 
 /** Cells c with c + 1 > lo and c < hi: those a span overlaps (vanilla's strict overlap). */
@@ -232,11 +234,12 @@ export function moveY(world: PhysicsWorld, x: number, y: number, z: number, dy: 
   const z1 = last(z + HALF_WIDTH);
   let out = dy;
   if (dy < 0) {
-    // Block tops at or below the feet and above where the move would take them.
-    for (let cy = Math.floor(y) - 1; cy + 1 > y + dy; cy--) {
+    // Block tops at or below the feet (or a hair above: see clipX) and above where the move
+    // would take them.
+    for (let cy = Math.floor(y + TOUCH) - 1; cy + 1 > y + dy; cy--) {
       for (let cx = x0; cx <= x1; cx++) {
         for (let cz = z0; cz <= z1; cz++) {
-          if (world.solid(cx, cy, cz)) out = Math.max(out, cy + 1 - y);
+          if (world.solid(cx, cy, cz)) out = Math.max(out, Math.min(0, cy + 1 - y));
         }
       }
       if (out > dy) return out;
@@ -245,10 +248,10 @@ export function moveY(world: PhysicsWorld, x: number, y: number, z: number, dy: 
   }
   // Block bottoms at or above the head and below where the move would take it.
   const top = y + HEIGHT;
-  for (let cy = Math.ceil(top); cy < top + dy; cy++) {
+  for (let cy = Math.ceil(top - TOUCH); cy < top + dy; cy++) {
     for (let cx = x0; cx <= x1; cx++) {
       for (let cz = z0; cz <= z1; cz++) {
-        if (world.solid(cx, cy, cz)) out = Math.min(out, cy - top);
+        if (world.solid(cx, cy, cz)) out = Math.min(out, Math.max(0, cy - top));
       }
     }
     if (out < dy) return out;
@@ -257,37 +260,107 @@ export function moveY(world: PhysicsWorld, x: number, y: number, z: number, dy: 
 }
 
 /**
- * Whether vanilla's X move of the box at (x, y, z) by `dx` would be stopped by a block
- * (calculateXOffset): a block box overlapping its y and z span lies ahead within the move.
+ * Vanilla's X move of the box at (x, y, z) by `dx` (calculateXOffset against every block box
+ * overlapping its y and z span and lying ahead of it): how far it really moves.
  */
-export function blocksX(world: PhysicsWorld, x: number, y: number, z: number, dx: number): boolean {
-  if (dx === 0) return false;
+export function clipX(world: PhysicsWorld, x: number, y: number, z: number, dx: number): number {
+  if (dx === 0) return 0;
   const y0 = first(y);
   const y1 = last(y + HEIGHT);
   const z0 = first(z - HALF_WIDTH);
   const z1 = last(z + HALF_WIDTH);
   const face = dx > 0 ? x + HALF_WIDTH : x - HALF_WIDTH;
-  const lo = dx > 0 ? Math.ceil(face) : Math.floor(face + dx);
-  const hi = dx > 0 ? Math.ceil(face + dx) - 1 : Math.floor(face) - 1;
-  for (let cx = lo; cx <= hi; cx++) {
-    // Only cells wholly ahead of the box's face: the box does not already overlap them.
-    if (dx > 0 ? cx < face : cx + 1 > face) continue;
+  // The cells ahead of the face within the move, nearest first. A face that rounding left a
+  // hair inside a block still counts as touching it (vanilla keeps the box itself between
+  // ticks, exactly on the face; a position rebuilt from doubles can land 1e-16 past it).
+  const step = dx > 0 ? 1 : -1;
+  const near = dx > 0 ? Math.ceil(face - TOUCH) : Math.floor(face + TOUCH) - 1;
+  const far = dx > 0 ? Math.ceil(face + dx) - 1 : Math.floor(face + dx);
+  for (let cx = near; dx > 0 ? cx <= far : cx >= far; cx += step) {
     for (let cy = y0; cy <= y1; cy++) {
-      for (let cz = z0; cz <= z1; cz++) if (world.solid(cx, cy, cz)) return true;
+      for (let cz = z0; cz <= z1; cz++) {
+        if (world.solid(cx, cy, cz)) {
+          const allowed = dx > 0 ? cx - face : cx + 1 - face;
+          return dx > 0 ? Math.max(0, allowed) : Math.min(0, allowed);
+        }
+      }
     }
   }
-  return false;
+  return dx;
+}
+
+/** Faces this close count as touching (rounding of positions rebuilt from doubles). */
+const TOUCH = 1e-9;
+
+/** As clipX, for the Z move. */
+export function clipZ(world: PhysicsWorld, x: number, y: number, z: number, dz: number): number {
+  if (dz === 0) return 0;
+  return clipX(swap(world), z, y, x, dz);
+}
+
+/** The world with x and z exchanged (the Z move is the X move of it). */
+function swap(world: PhysicsWorld): PhysicsWorld {
+  return {
+    solid: (a, b, c) => world.solid(c, b, a),
+    water: (a, b, c) => world.water(c, b, a),
+    liquid: (a, b, c) => world.liquid(c, b, a),
+  };
+}
+
+/** Whether the X move of the box at (x, y, z) by `dx` would be stopped by a block. */
+export function blocksX(world: PhysicsWorld, x: number, y: number, z: number, dx: number): boolean {
+  return clipX(world, x, y, z, dx) !== dx;
 }
 
 /** As blocksX, for the Z move. */
 export function blocksZ(world: PhysicsWorld, x: number, y: number, z: number, dz: number): boolean {
-  if (dz === 0) return false;
-  const swapped: PhysicsWorld = {
-    solid: (a, b, c) => world.solid(c, b, a),
-    water: (a, b, c) => world.water(c, b, a),
-  };
-  return blocksX(swapped, z, y, x, dz);
+  return clipZ(world, x, y, z, dz) !== dz;
 }
+
+/**
+ * Entity.isOffsetPositionInLiquid: the box at (x, y, z) moved by (dx, dy, dz) overlaps no
+ * block (strictly) and touches no liquid (World.isAnyLiquid, which reaches one more cell down
+ * and west and north below 0). In water, a player pushing against a block gets motionY 0.3 when
+ * this holds 0.6 higher: how it climbs out onto a bank.
+ */
+export function freeOfBlocksAndLiquid(
+  world: PhysicsWorld,
+  x: number,
+  y: number,
+  z: number,
+  dx: number,
+  dy: number,
+  dz: number,
+): boolean {
+  const minX = x - HALF_WIDTH + dx;
+  const maxX = x + HALF_WIDTH + dx;
+  const minY = y + dy;
+  const maxY = y + HEIGHT + dy;
+  const minZ = z - HALF_WIDTH + dz;
+  const maxZ = z + HALF_WIDTH + dz;
+  for (let cx = first(minX); cx <= last(maxX); cx++) {
+    for (let cy = first(minY); cy <= last(maxY); cy++) {
+      for (let cz = first(minZ); cz <= last(maxZ); cz++) {
+        if (world.solid(cx, cy, cz)) return false;
+      }
+    }
+  }
+  const x0 = Math.floor(minX) - (minX < 0 ? 1 : 0);
+  const y0 = Math.floor(minY) - (minY < 0 ? 1 : 0);
+  const z0 = Math.floor(minZ) - (minZ < 0 ? 1 : 0);
+  for (let cx = x0; cx < Math.floor(maxX + 1); cx++) {
+    for (let cy = y0; cy < Math.floor(maxY + 1); cy++) {
+      for (let cz = z0; cz < Math.floor(maxZ + 1); cz++) {
+        if (world.liquid(cx, cy, cz)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** motionY a player in water gets per tick holding jump (it swims up), and from a push up a bank. */
+export const SWIM_UP = 0.03999999910593033;
+export const WATER_POP = f32(0.3);
 
 /**
  * Whether a player with its feet at (x, y, z) is in water (Entity.handleWaterMovement): its box

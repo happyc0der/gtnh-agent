@@ -44,6 +44,12 @@ export const BREAK_VERDICT_TICKS = 1 + DIG_SETTLE_TICKS;
 export const PLACE_VERDICT_TICKS = 1 + 5;
 /** Where a running jump takes off: about this far past the centre (the body leaves the block at 0.8). */
 const TAKE_OFF = 0.6;
+/**
+ * Climbing out of one-deep water onto the bank one higher, from the water block's centre: about
+ * 8 ticks swimming up against the bank, the push up, 8 in the air, then a little to the centre
+ * (execute.ts waterExit; the tests compare).
+ */
+export const WATER_EXIT_TICKS = 18;
 
 /** Penalties on top of the time, in ticks: so going round wins unless breaking or placing is clearly cheaper. */
 export interface Penalties {
@@ -123,6 +129,8 @@ export interface PathCosts {
   readonly wade: number;
   readonly wadeDiagonal: number;
   readonly ascend: number;
+  /** Out of one-deep water onto a bank one higher. */
+  readonly waterExit: number;
   /** A fall onto dry ground, by height (index 1 is a descend); Infinity where not allowed. */
   readonly fall: readonly number[];
   /** A fall into calm one-deep water, by height; Infinity where the landing hurts. */
@@ -177,6 +185,7 @@ export function pathCosts(o: CostOptions): PathCosts {
     wade: WADE_ONE_BLOCK,
     wadeDiagonal: WADE_ONE_BLOCK * Math.SQRT2,
     ascend: ASCEND_TICKS + 1 + o.jumpPenalty,
+    waterExit: WATER_EXIT_TICKS + o.jumpPenalty,
     fall,
     waterFall,
     parkour,
@@ -210,8 +219,8 @@ export function heuristicRates(
     across = Math.min(across, (c.parkour[gap] as number) / (gap + 1));
   }
   // Ascend, descend and falls move one block across too.
-  across = Math.min(across, c.ascend);
-  let up = c.ascend;
+  across = Math.min(across, c.ascend, c.waterExit);
+  let up = Math.min(c.ascend, c.waterExit);
   if (o.pillar) up = Math.min(up, c.pillar);
   let down = Infinity;
   for (let h = 1; h < c.fall.length; h++) down = Math.min(down, (c.fall[h] as number) / h);

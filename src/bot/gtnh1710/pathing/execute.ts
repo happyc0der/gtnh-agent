@@ -7,6 +7,9 @@ import {
   AIR_DRAG,
   blocksX,
   blocksZ,
+  clipX,
+  clipZ,
+  freeOfBlocksAndLiquid,
   GROUND_DRAG,
   GROUND_MOTION_Y,
   HALF_WIDTH,
@@ -21,9 +24,12 @@ import {
   overlappedCells,
   SPRINT_JUMP_BOOST,
   SPRINT_SPEED,
+  SWIM_UP,
   WADE_SPEED,
   WALK_SPEED,
   WATER_DRAG,
+  WATER_GRAVITY,
+  WATER_POP,
   type MoveMode,
 } from './physics.ts';
 
@@ -68,8 +74,13 @@ export interface PathStep {
   readonly onGround: boolean;
   /** Sprinting this tick (the client sends START_SPRINTING when this turns on, STOP when off). */
   readonly sprint: boolean;
-  /** The tick a jump starts (informational: the server sees the rise). */
+  /** Holding jump: a jump off the ground, or swimming up in water. */
   readonly jump: boolean;
+  /**
+   * The keys pushed the box against a block this tick (it stopped touching that block's face),
+   * along x and/or z (-1 or 1): only climbing out of water does that (the push up a bank).
+   */
+  readonly bump?: { readonly x: number; readonly z: number };
 }
 
 /** A block placed during a segment. */
@@ -392,6 +403,63 @@ class StepBuilder {
   }
 
   /**
+   * One tick exactly as a vanilla client runs it with one key held toward `l` (and, in water,
+   * jump held: swimming up): the keys' acceleration added to the carried motion, the Y, X and Z
+   * moves stopped by blocks (a stopped axis loses its motion), the drag, and in water the push
+   * up a block the box is pressed against when the space 0.6 higher is free of blocks and
+   * water (EntityLivingBase.moveEntityWithHeading). Used to climb out of water, where the box
+   * must press against the bank: the only steps that touch a block.
+   */
+  vanillaTick(l: Line, swim: boolean): void {
+    const b = this.body;
+    const v = this.view;
+    const mode = modeOf(v, b);
+    const a = keyAccel(mode, false);
+    const rx = b.cx + a * l.ux;
+    const rz = b.cz + a * l.uz;
+    let vy = b.vy;
+    if (swim && mode === 'water') vy += SWIM_UP;
+    const moved = moveY(v, b.x, b.y, b.z, vy);
+    const clippedY = moved !== vy;
+    const down = clippedY && vy < 0;
+    const y = down ? Math.round(b.y + moved) : b.y + moved;
+    const dx = clipX(v, b.x, y, b.z, rx);
+    const x = b.x + dx;
+    const dz = clipZ(v, x, y, b.z, rz);
+    const z = b.z + dz;
+    let mx = dx === rx ? rx : 0;
+    let mz = dz === rz ? rz : 0;
+    let my = clippedY ? 0 : vy;
+    if (mode === 'water') {
+      mx *= WATER_DRAG;
+      mz *= WATER_DRAG;
+      my = my * WATER_DRAG - WATER_GRAVITY;
+      const pushed = dx !== rx || dz !== rz;
+      if (pushed && freeOfBlocksAndLiquid(v, x, y, z, mx, my + 0.6 - (y - b.y), mz)) {
+        my = WATER_POP;
+      }
+    } else {
+      const drag = horizontalDrag(mode);
+      mx *= drag;
+      mz *= drag;
+      my = nextMotionY(my, mode);
+    }
+    const next: Body = { x, y, z, cx: mx, cz: mz, vy: my, onGround: down };
+    const problem = this.unsafe(b, next);
+    if (problem !== null) throw new Fail(problem);
+    this.body = next;
+    const step: PathStep = {
+      pos: { x, y, z },
+      onGround: down,
+      sprint: false,
+      jump: swim && mode === 'water',
+    };
+    const bx = dx === rx ? 0 : Math.sign(rx);
+    const bz = dz === rz ? 0 : Math.sign(rz);
+    this.steps.push(bx === 0 && bz === 0 ? step : { ...step, bump: { x: bx, z: bz } });
+  }
+
+  /**
    * Why the box going from `a` to `b` would touch a cell it must not (not passable, or
    * next to a hazard, or outside the fence), or null. The Y move's sweep (at a's x and z) and
    * the end are checked; the X and Z moves are shorter than the box, so their sweeps lie
@@ -706,7 +774,8 @@ function drive(
     case 'bridge':
       return bridge(b, m, l, exit);
     case 'ascend':
-      ascend(b, m, l, exit);
+      if (b.view.has(m.from.x, m.from.y, m.from.z, CELL.WATER)) waterExit(b, m, l, exit);
+      else ascend(b, m, l, exit);
       return { places: [], fallback: null };
     case 'descend':
     case 'fall':
@@ -870,6 +939,25 @@ function ascend(b: StepBuilder, m: Movement, l: Line, exit: Exit): void {
     }
   }
   throw new Fail(`no jump onto the step works: ${lastError}`);
+}
+
+/**
+ * Out of water onto the bank one block higher, as a player climbs out: forward held, and jump
+ * held while in the water (swimming up), the box pressed against the bank; once the space 0.6
+ * higher holds no water, the game pushes the player up (0.3), the feet clear the bank's top and
+ * the box moves over it; then it lands and walks on to the centre.
+ */
+function waterExit(b: StepBuilder, m: Movement, l: Line, exit: Exit): void {
+  const top = m.to.y;
+  for (let t = 0; t < 80; t++) {
+    const body = b.body;
+    if (body.onGround && Math.abs(body.y - top) <= 1e-9) break;
+    b.vanillaTick(l, modeOf(b.view, body) === 'water');
+  }
+  if (!b.body.onGround || Math.abs(b.body.y - top) > 1e-9) {
+    throw new Fail('did not climb out onto the bank');
+  }
+  b.run(l, 1, exit, WALK_RUN);
 }
 
 /**

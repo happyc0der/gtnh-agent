@@ -13,7 +13,7 @@ import { goalBlock } from '../../../../src/bot/gtnh1710/pathing/goals.ts';
 import { cacheBox, planPath } from '../../../../src/bot/gtnh1710/pathing/search.ts';
 import { validatePlan } from '../../../../src/bot/gtnh1710/pathing/validate.ts';
 import type { Fence, Vec3 } from '../../../../src/bot/gtnh1710/walking.ts';
-import { area, B, centre, TestWorld } from '../fixtures/path-worlds.ts';
+import { area, B, centre, poolWorld, TestWorld } from '../fixtures/path-worlds.ts';
 
 const FENCE: Fence = area(10, 50, 72);
 const FROM = centre(0, 64, 0);
@@ -189,6 +189,40 @@ describe('the step validator', () => {
       ],
     });
     expect(reasonOf(w, inBody)).toMatch(/inside the body/);
+  });
+
+  it('checks climbing out of water: a bump needs a block, the push up needs the bump', () => {
+    const w = poolWorld();
+    const fence: Fence = { min: { x: -8, y: 50, z: 0 }, max: { x: 12, y: 72, z: 0 } };
+    const r = planPath(w, fence, FROM, goalBlock(6, 55, 0), { water: true });
+    const p = planExecution(w, fence, FROM, r.movements, { water: true });
+    expect(validatePlan(w, fence, FROM, p, { water: true })).toMatchObject({ ok: true });
+    if (!p.ok) throw new Error(p.reason);
+    const k = p.segments.findIndex((s) => s.movement?.kind === 'ascend');
+    const exit = p.segments[k]!;
+    const i = exit.steps.findIndex((s) => s.bump !== undefined);
+    const alter = (steps: PathStep[]): ExecutionPlan => ({
+      ...p,
+      segments: p.segments.map((s, j) => (j === k ? { ...s, steps } : s)),
+    });
+    // The same step without its bump: the push up that follows has no cause.
+    const bumped = exit.steps[i]!;
+    const plain: PathStep = {
+      pos: bumped.pos,
+      onGround: bumped.onGround,
+      sprint: bumped.sprint,
+      jump: bumped.jump,
+    };
+    const noBump = exit.steps.map((s, j) => (j === i ? plain : s));
+    expect(validatePlan(w, fence, FROM, alter(noBump), { water: true })).toMatchObject({
+      ok: false,
+    });
+    // A bump claimed away from the bank.
+    const wrongWay = exit.steps.map((s, j) => (j === i ? { ...s, bump: { x: -1, z: 0 } } : s));
+    expect(validatePlan(w, fence, FROM, alter(wrongWay), { water: true })).toMatchObject({
+      ok: false,
+      reason: 'a bump against no block (X)',
+    });
   });
 
   it('passes what the planner makes, and fails it on a world that changed since', () => {

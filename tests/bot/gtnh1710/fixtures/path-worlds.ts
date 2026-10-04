@@ -161,6 +161,18 @@ export function benchWalkWorld(): {
   };
 }
 
+/**
+ * A 10-block cliff (ground 63 for x <= 0, feet 64) over a pool one deep (floor 53, water 54) at
+ * x 1..3, and a bank one higher (ground 54, feet 55) from x = 4.
+ */
+export function poolWorld(): TestWorld {
+  return new TestWorld((x) => (x <= 0 ? 63 : x <= 3 ? 53 : 54)).fill(
+    { x: 1, y: 54, z: -3 },
+    { x: 3, y: 54, z: 3 },
+    B.water,
+  );
+}
+
 /** A search area: x and z from -r to r around (cx, cz), feet levels y0..y1. */
 export function area(r: number, y0: number, y1: number, cx = 0, cz = 0): Fence {
   return { min: { x: cx - r, y: y0, z: cz - r }, max: { x: cx + r, y: y1, z: cz + r } };

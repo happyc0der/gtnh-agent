@@ -17,7 +17,7 @@ import { toTerrainMoves } from '../../../../src/bot/gtnh1710/pathing/terrain-mov
 import { validatePlan } from '../../../../src/bot/gtnh1710/pathing/validate.ts';
 import { bodyProblem, terrainSteps } from '../../../../src/bot/gtnh1710/terrain.ts';
 import type { Fence, Vec3 } from '../../../../src/bot/gtnh1710/walking.ts';
-import { area, B, centre, TestWorld } from '../fixtures/path-worlds.ts';
+import { area, B, centre, poolWorld, TestWorld } from '../fixtures/path-worlds.ts';
 
 const FROM = centre(0, 64, 0);
 const STRIP: Fence = { min: { x: -8, y: 50, z: 0 }, max: { x: 12, y: 72, z: 0 } };
@@ -134,6 +134,23 @@ describe('execution plans', () => {
     expect(fall.steps.at(-1)?.pos.y).toBe(54);
   });
 
+  it('climbs out of one-deep water as a player does: swimming up against the bank until pushed up', () => {
+    const { segments } = walk(poolWorld(), STRIP, FROM, [6, 55, 0], { water: true });
+    const out = seg(segments, 'ascend');
+    // Swimming up (jump held) while in the water, pressed against the bank (x = 4).
+    expect(out.steps.some((s) => s.jump)).toBe(true);
+    const bumps = out.steps.filter((s) => s.bump !== undefined);
+    expect(bumps.length).toBeGreaterThan(0);
+    for (const s of bumps) expect(s.pos.x + 0.3).toBeCloseTo(4, 9);
+    // The water's push: a rise of about 0.3 (+ 0.04 swimming) in one tick after a bump.
+    const rises = out.steps.map((s, i) => (i === 0 ? 0 : s.pos.y - out.steps[i - 1]!.pos.y));
+    expect(Math.max(...rises)).toBeGreaterThan(0.3);
+    expect(out.steps.at(-1)).toMatchObject({ onGround: true, pos: { y: 55 } });
+    // About as long as it costs.
+    expect(out.steps.length).toBeGreaterThan(12);
+    expect(out.steps.length).toBeLessThan(26);
+  });
+
   it('jumps gaps with the arc of a real jump, from the last tick on the edge', () => {
     for (const [gap, sprint] of [
       [1, false],
@@ -224,6 +241,43 @@ describe('execution plans', () => {
     const d = seg(segments, 'downward');
     expect(d.breaks).toEqual([{ cell: { x: 0, y: 63, z: 0 }, ticks: 8 }]);
     expect(d.steps.at(-1)).toMatchObject({ onGround: true, pos: { x: 0.5, y: 63, z: 0.5 } });
+  });
+
+  it('a block above the head cuts a jump short, and it still lands on the step', () => {
+    // A ceiling 3 above the start's feet, over the start and the step.
+    const w = new TestWorld((x) => (x >= 2 ? 64 : 63)).fill(
+      { x: -8, y: 67, z: 0 },
+      { x: 12, y: 67, z: 0 },
+      B.stone,
+    );
+    const { segments } = walk(w, STRIP, centre(1, 64, 0), [4, 65, 0]);
+    const up = seg(segments, 'ascend');
+    const heights = up.steps.map((s) => s.pos.y);
+    expect(Math.max(...heights)).toBeCloseTo(67 - 1.8, 9); // the head against the ceiling
+    // A pillar under a ceiling: the head bumps, the feet still clear the cell, it lands.
+    const pit = new TestWorld((x, z) => (x === 0 && z === 0 ? 61 : 63)).set(0, 65, 0, B.stone);
+    const p = walk(pit, area(5, 56, 70), centre(0, 62, 0), [0, 63, 0], {
+      pillar: true,
+      canPlace: () => true,
+      throwaway: { count: 4, block: 'minecraft:dirt' },
+    });
+    const pillar = seg(p.segments, 'pillar');
+    expect(Math.max(...pillar.steps.map((s) => s.pos.y))).toBeCloseTo(65 - 1.8, 9);
+    expect(pillar.steps.at(-1)).toMatchObject({ onGround: true, pos: { y: 63 } });
+  });
+
+  it('flows from one movement into the next: a ditch is crossed without stopping', () => {
+    const ditch = new TestWorld((x) => (x === 2 ? 62 : 63));
+    const { steps } = walk(ditch, STRIP, FROM, [5, 64, 0]);
+    // Never standing still on the way (only at the end).
+    const moving = steps.slice(0, -2).every((s, i, a) => i === 0 || s.pos.x > a[i - 1]!.pos.x);
+    expect(moving).toBe(true);
+  });
+
+  it('sprints round corners, slowing just enough for each turn', () => {
+    const w = new TestWorld().fill({ x: 1, y: 64, z: 1 }, { x: 8, y: 65, z: 8 }, B.stone);
+    const { steps } = walk(w, area(10, 60, 70), FROM, [6, 64, 9], { sprint: true });
+    expect(steps.some((s) => s.sprint)).toBe(true);
   });
 
   it('takes about as many ticks as the path costs', () => {

@@ -4,7 +4,10 @@ import type { ExecutionPlan, PathStep, Segment } from './execute.ts';
 import {
   blocksX,
   blocksZ,
+  clipX,
+  clipZ,
   FallAccount,
+  freeOfBlocksAndLiquid,
   GROUND_MOTION_Y,
   HALF_WIDTH,
   HEIGHT,
@@ -16,6 +19,10 @@ import {
   nextMotionY,
   overlappedCells,
   SPRINT_JUMP_BOOST,
+  SWIM_UP,
+  WATER_DRAG,
+  WATER_GRAVITY,
+  WATER_POP,
   type MoveMode,
 } from './physics.ts';
 
@@ -23,8 +30,9 @@ import {
  * The step validator: replays an execution plan (execute.ts) tick by tick against Minecraft
  * 1.7.10's rules and the server's checks, independently of how the plan was made, and says
  * where it breaks one. For every step:
- *  - the vertical move is the game's: a jump only from the ground (motionY 0.42), otherwise
- *    the motion carried over (gravity and drag, or water's), stopped by blocks, which sets
+ *  - the vertical move is the game's: a jump only from the ground (motionY 0.42), swimming up
+ *    in water (+0.04), otherwise the motion carried over (gravity and drag, or water's, and
+ *    water's push up a block the box was pressed against), stopped by blocks, which sets
  *    onGround exactly when a move down is stopped: falls land exactly on block tops, and
  *    nothing hovers;
  *  - the horizontal move differs from the motion carried over (the last move after the drag
@@ -118,10 +126,10 @@ class Replay {
     const v = this.view;
     const p = step.pos;
     const mode = this.mode(s);
-    if (step.jump && mode !== 'ground')
-      return `a jump from ${mode === 'air' ? 'the air' : 'water'}`;
+    // Holding jump: off the ground a jump, in water swimming up, in the air nothing at all.
+    if (step.jump && mode === 'air') return 'a jump from the air';
     // Vertical: the game's own move.
-    const vy = step.jump ? JUMP_VELOCITY : s.vy;
+    const vy = !step.jump ? s.vy : mode === 'water' ? s.vy + SWIM_UP : JUMP_VELOCITY;
     const moved = moveY(v, s.x, s.y, s.z, vy);
     const clipped = moved !== vy;
     const down = clipped && vy < 0;
@@ -137,17 +145,33 @@ class Replay {
     const mz = p.z - s.z;
     const len = Math.hypot(mx, mz);
     if (len > 10) return 'more than 10 blocks in one tick';
-    let ax = mx - s.cx;
-    let az = mz - s.cz;
-    if (step.jump && step.sprint && len > 1e-12) {
-      ax -= (SPRINT_JUMP_BOOST * mx) / len;
-      az -= (SPRINT_JUMP_BOOST * mz) / len;
+    // A bump: the keys pushed the box against a block, so it ends touching that block's face
+    // and the move asked for went further (the block stopped it, and took that axis's motion).
+    const bump = step.bump ?? { x: 0, z: 0 };
+    if (bump.x !== 0 && (Math.abs(bump.x) !== 1 || clipX(v, p.x, y, s.z, bump.x * 1e-6) !== 0)) {
+      return 'a bump against no block (X)';
     }
+    if (bump.z !== 0 && (Math.abs(bump.z) !== 1 || clipZ(v, p.x, y, p.z, bump.z * 1e-6) !== 0)) {
+      return 'a bump against no block (Z)';
+    }
+    let cx = s.cx;
+    let cz = s.cz;
+    if (step.jump && step.sprint && mode === 'ground' && len > 1e-12) {
+      cx += (SPRINT_JUMP_BOOST * mx) / len;
+      cz += (SPRINT_JUMP_BOOST * mz) / len;
+    }
+    // The least change of motion that explains the move: on a bumped axis any request going at
+    // least as far that way.
+    const need = (m: number, c: number, b: number): number =>
+      b !== 0 && b * (c - m) > 0 ? 0 : m - c;
+    const ax = need(mx, cx, bump.x);
+    const az = need(mz, cz, bump.z);
     const allowed = maxAccel(mode, step.sprint);
     if (Math.hypot(ax, az) > allowed + 1e-9) {
       return `the move across changes by ${Math.hypot(ax, az).toFixed(4)} (at most ${allowed.toFixed(4)} ${mode === 'ground' ? 'on the ground' : `in ${mode === 'air' ? 'the air' : 'water'}`})`;
     }
-    // The server's move from the last position: Y, then X, then Z, never stopped.
+    // The server's move from the last position: Y, then X, then Z, never stopped (a bumped
+    // move ends just touching the block).
     if (blocksX(v, s.x, y, s.z, mx)) return 'the move across runs into a block (X)';
     if (blocksZ(v, s.x + mx, y, s.z, mz)) return 'the move across runs into a block (Z)';
     const problem =
@@ -156,13 +180,30 @@ class Replay {
     // The server's fall accounting.
     const damage = this.fall.packet(inWater(v, s.x, s.y, s.z), p.y - s.y, step.onGround);
     if (damage > 0) return `the landing deals ${damage} fall damage`;
-    const drag = horizontalDrag(mode);
+    let ncx = bump.x !== 0 ? 0 : mx;
+    let ncz = bump.z !== 0 ? 0 : mz;
+    let nvy = clipped ? 0 : vy;
+    if (mode === 'water') {
+      ncx *= WATER_DRAG;
+      ncz *= WATER_DRAG;
+      nvy = nvy * WATER_DRAG - WATER_GRAVITY;
+      // Pressed against a block with the space 0.6 higher free of blocks and water: pushed up.
+      const pushed = bump.x !== 0 || bump.z !== 0;
+      if (pushed && freeOfBlocksAndLiquid(v, p.x, p.y, p.z, ncx, nvy + 0.6 - (p.y - s.y), ncz)) {
+        nvy = WATER_POP;
+      }
+    } else {
+      const drag = horizontalDrag(mode);
+      ncx *= drag;
+      ncz *= drag;
+      nvy = nextMotionY(nvy, mode);
+    }
     s.x = p.x;
     s.y = p.y;
     s.z = p.z;
-    s.cx = mx * drag;
-    s.cz = mz * drag;
-    s.vy = nextMotionY(clipped ? 0 : vy, mode);
+    s.cx = ncx;
+    s.cz = ncz;
+    s.vy = nvy;
     s.onGround = down;
     return null;
   }

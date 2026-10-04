@@ -14,7 +14,7 @@ import {
   type PathOptions,
   type PathResult,
 } from '../../../../src/bot/gtnh1710/pathing/search.ts';
-import { area, B, centre, TestWorld } from '../fixtures/path-worlds.ts';
+import { area, B, centre, poolWorld, TestWorld } from '../fixtures/path-worlds.ts';
 
 const kinds = (r: PathResult): string[] => r.movements.map((m) => m.kind);
 const breaks = (r: PathResult) => r.movements.flatMap((m) => m.breaks.map((b) => b.cell));
@@ -325,5 +325,20 @@ describe('the search', () => {
     const wet = planPath(w, area(8, 60, 70), FROM, goalBlock(6, 64, 0), { water: true });
     expect(wet.status).toBe('reached');
     expect(wet.movements.filter((m: Movement) => m.water).length).toBeGreaterThan(0);
+  });
+
+  it('falls into one-deep water and climbs out onto a bank one block higher', () => {
+    // A 10-block cliff over a pool one deep (floor 53, water 54), a bank at 54 beyond it.
+    const w = poolWorld();
+    const r = planPath(w, STRIP, FROM, goalBlock(6, 55, 0), { water: true });
+    expect(r.status).toBe('reached');
+    expect(kinds(r)).toEqual(['fall', 'traverse', 'traverse', 'ascend', 'traverse', 'traverse']);
+    expect(r.movements[0]).toMatchObject({ drop: 10, water: true });
+    expect(r.movements[3]).toMatchObject({ water: true, to: { x: 4, y: 55, z: 0 } });
+    // Without room above the water, no climbing out (and so no falling in).
+    const low = poolWorld().set(3, 57, 0, B.stone);
+    expect(planPath(low, STRIP, FROM, goalBlock(6, 55, 0), { water: true }).status).not.toBe(
+      'reached',
+    );
   });
 });

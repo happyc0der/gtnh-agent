@@ -33,6 +33,7 @@ function cells(solid: string[], water: string[] = []): PhysicsWorld {
   return {
     solid: (x, y, z) => s.has(`${x},${y},${z}`),
     water: (x, y, z) => w.has(`${x},${y},${z}`),
+    liquid: (x, y, z) => w.has(`${x},${y},${z}`),
   };
 }
 

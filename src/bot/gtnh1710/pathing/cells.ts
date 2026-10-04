@@ -216,6 +216,10 @@ export class CellCache implements PhysicsWorld {
     return (this.flags(x, y, z) & CELL.WATER) !== 0;
   }
 
+  liquid(x: number, y: number, z: number): boolean {
+    return (this.flags(x, y, z) & CELL.LIQUID) !== 0;
+  }
+
   /**
    * A derived fact, kept: the value under bit `value` once bit `known` is set. (Written out in
    * each predicate below, without closures: they are the search's innermost calls.)
