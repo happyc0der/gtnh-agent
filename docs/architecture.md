@@ -1092,10 +1092,15 @@ same time.
 
 `PLACE_BLOCK` places ONE block the player carries, from a fixed allowlist of plain vanilla
 blocks: `dirt`, `cobblestone`, `sand`, `gravel`, `sandstone`, `planks` (every wood type) and
-`log`/`log2` (`src/domain/blocks.ts`). It needs `MC_ENABLE_PLACING=true` **and** the movement
-fence. `src/bot/gtnh1710/placing.ts` holds the checks; `Gtnh1710Client` sends. The server-side
-rules it relies on are in [GTNH compatibility: placing](gtnh-compatibility.md#placing-2026-09-30).
-In layers:
+`log`/`log2`, and two stations the agent places to use them (approved 2026-09-30):
+`crafting_table` and `furnace` (`src/domain/blocks.ts` `STATION_ITEMS`). It needs
+`MC_ENABLE_PLACING=true` **and** the movement fence. `src/bot/gtnh1710/placing.ts` holds the
+checks; `Gtnh1710Client` sends. The server-side rules it relies on are in
+[GTNH compatibility: placing](gtnh-compatibility.md#placing-2026-09-30). A table or furnace is
+placed like any block: an `ItemBlock` placed by a click on the floor's top face (the furnace turns
+its front to the player; its later metadata updates keep its block id, which is what the verdict
+compares). Once placed it stays: the agent never breaks either, so it goes only where it is out
+of the way. In layers:
 
 1. **Observation.** `nearbyBlocks.placeable` lists the cells a block could go into, nearest to
    the eyes first (at most 32; the planner gets 16): air, tall grass or a dead bush within 4.5
@@ -1112,6 +1117,10 @@ In layers:
      invented.
    - Never a cell the player's body is in; never sand or gravel in a column the player stands
      in, or where `takesFalling` is false (`UNSAFE_PLACE`, pause).
+   - A crafting table or furnace only on a solid floor beside the player: a cell whose
+     `takesFalling` is true (a plain full block under it, out of the player's own columns;
+     `UNSAFE_PLACE`, pause). Whether it would be in the way the player walks the observation
+     cannot tell; the client checks that.
    - It must clear known hazards by `hazardAvoidanceRadius`.
    - Preconditions: within `interactionReach` of the eyes, and the item in the inventory.
    - Like any world action it is refused during danger. Placing is deliberately not an escape:
@@ -1132,7 +1141,15 @@ In layers:
      5.5 of the feet and of the point 2 above them. Never a chest, crafting table, machine or
      modded block: the server activates the clicked block first, and those would open;
    - no hostile (but a calm spider) or unidentified entity within `threatRadius`, no health
-     drop or server correction since it started, and neither `halt()` nor the stop file.
+     drop or server correction since it started, and neither `halt()` nor the stop file;
+   - a crafting table or furnace (`checkStation`): a plain full block the walker stands on under
+     the cell, never in a column the player's body is in, and never where the player walks.
+     In a small box around the cell and the player (2 columns beyond both, 3 levels below and
+     2 above), the walker's own moves (`reachableFeet` in `terrain.ts`: level moves, steps up,
+     drops) must still reach every feet block they reach now, but the cell itself, on a what-if
+     copy of the world with the block in it. A 1-wide passage, a doorway, a staircase's only
+     step or the way out of a hole fail; a 2-wide corridor, a dead end or open ground pass.
+     The player not standing on walkable ground (nothing to compare) refuses.
 4. **The hand.** The selected hotbar slot if it holds the item, else the first hotbar slot
    that does, else a stack from the main inventory goes into the first empty hotbar slot with
    two confirmed window-0 clicks (a failed click puts the stack back). With neither, or only
@@ -1149,9 +1166,19 @@ In layers:
 7. **Verification:** `BLOCK_PLACED` passes only if the new observation lists the cell in
    `nearbyBlocks.placed` with the expected block, and the inventory holds exactly one of the
    item fewer.
+8. **A station in use.** A placed crafting table is then a table the scan finds (the
+   interactables, `crafting_table:<x>.<y>.<z>` in `craftingTables`), which `CRAFT_ITEM` uses
+   like any found one; a placed furnace is a furnace in the interactables, for `SMELT` and
+   `TAKE_OUTPUT`. The mock world and the fake server do the same.
 
 Walking, chests, crafting, digging and placing never run at the same time. `halt()` and the
 stop file stop them all.
+
+**The planner** gets the cell to use: when a route needs a crafting table or furnace the player
+holds, its station line ends with the exact `PLACE_BLOCK` (`src/planner/planner-provider.ts`
+`withActionArgs`): a listed cell whose `takesFalling` is true, at the feet level first, and the
+table's id it will have. Should the client find that cell in the way, the step fails and the
+next plan picks another.
 
 **Not covered yet:**
 
@@ -1159,14 +1186,71 @@ stop file stop them all.
   plank's wood type and a log's axis are not checked.
 - Paintings are not tracked, so one hanging where the block goes pops off. Item frames are
   tracked entities and refuse the cell.
-- Blocks with a GUI or that need support (torches, crafting tables, furnaces, the coke oven)
-  are not on the allowlist; each will need its own checks.
+- Blocks that need support (torches) and the coke oven (a multiblock of bricks) are not on the
+  allowlist; each will need its own checks. A placed table or furnace is never broken again.
+- The observation does not say which listed cells are in the way; the planner learns it from a
+  refused placement.
 
 ## Crafting
 
-`CRAFT_ITEM` crafts with a recipe from the agent's table (`src/domain/recipes.ts`): 2x2 recipes in
-the player's own grid (window 0), 3x3 at a configured crafting table. `src/bot/gtnh1710/crafting.ts`
-plans; `Gtnh1710Client` sends. On top of the chest facts, 1.7.10 has three more
+`CRAFT_ITEM` crafts with a recipe it makes (`src/domain/recipes.ts`): 2x2 recipes in the
+player's own grid (window 0), 3x3 at a crafting table that is configured, seen inside the fence
+(`crafting_table:<x>.<y>.<z>`), or placed by the agent itself (see [Placing](#placing)).
+`src/bot/gtnh1710/crafting.ts` plans; `Gtnh1710Client` sends.
+
+**The recipes.** The hand-verified table (planks, sticks, torches, crafting table, chest, wooden
+shovel and axe, flint; `RECIPES`, ids like `planks_oak`), and GTNH's own crafting recipes from
+the [knowledge base](#knowledge-base), by the ids the route book gives them, so a route's craft
+step names a recipe `CRAFT_ITEM` takes (`minecraft:wooden_pickaxe#1`; one function,
+`knowledgeRecipeIds`, names them for both). `CraftRecipeIdSchema` accepts exactly these ids, so a
+plan with any other fails its schema. Built once, on first use (about 0.2 s):
+
+- **Hand-verified recipes win.** A dumped recipe a hand-verified one matches (its item, the
+  hand-verified kinds among the dump's with the same counts: the route book's own rule) is not
+  taken; the route shows the hand-verified id instead.
+- **The exact pattern the server checks.** A shaped recipe keeps its dumped layout, empty cells
+  included (trailing empty rows and columns trimmed, so a padded 2x2 recipe fits the 2x2 grid);
+  the client places it at the grid's corner, where the server always matches it (shaped recipes
+  also match at other offsets, and vanilla's and Forge's ore recipes mirrored, but the corner
+  needs neither). A shapeless recipe's cells go in reading order, two columns while they fit
+  2x2. CraftTweaker reads an ore recipe's width as the square root of its cell count, so a
+  dumped 1x2, 1x3 or 2x3 shape may really be 2x1, 3x1 or 3x2 (`SHAPE_UNCERTAIN`): such a shape is
+  taken only when vanilla's own recipe for the item (the jar's layer) has that layout or its
+  mirror, with the same ingredients: Forge's ore dictionary keeps a vanilla recipe's width and
+  height when it swaps planks and sticks for `plankWood` and `stickWood` (the wooden hoe and
+  sword).
+- **Ingredients as the dump gives them:** an item, a list, or an ore-dictionary entry with
+  every kind it lists (650 for `ore:plankWood`); the recipe keeps the entry's name as a label for
+  messages. Kinds that may give something back (a bucket, a cell, a bottle, a phial, a potion, a
+  GT or GT++ tool, HarvestCraft's cookware: by name, since the dump does not say) are never
+  used; an ingredient with no other kind leaves the recipe out.
+- **Counts.** A count the dump lacks (most: only 1,844 of the recipes taken have one, from the
+  coremod's scripts, GT's code, the hand-verified table or vanilla's) is expected to be 1, as the
+  route assumes; the server's result must still match exactly, so a wrong guess fails with
+  nothing taken. Play's abilities count only recipes with a known count.
+- **Left out** (`LEFT_OUT_REASONS`; `whyNotCraftable` says why, and the route says it after the
+  step): of the 52,400 distinct recipes (53,821 dumped rows), 14 are the hand-verified ones and
+  19,786 are taken. The other 32,600 are left out: results with NBT data (a GT tool's
+  material: 16,066), a crafting tool in the grid (`ore:craftingTool*`, `ore:tool*`: the worn
+  tool stays in the grid, which the client would have to predict: 11,998), unknown items
+  (1,138), a shape the dump may have scrambled (1,120), ingredients with specific NBT data
+  (1,029), two ingredients (or one and the result) sharing an item, which the verifier could not
+  tell apart (943), and ingredients only in kinds that give something back (306).
+- **Without the data** (a build that did not copy it), only the hand-verified recipes.
+
+**Play and the planner.** Play counts a quest's 3x3 crafts as doable (`liveAbilities` in
+`src/app/play/play.ts`) when a table is configured, or when it may place one (placing on): the
+table it holds, or one it makes from GTNH's 2x2 recipe. Its craft set is what the recipes make,
+step by step, from what digging gathers (`craftableFrom`), not every recipe's output: no torches
+while coal is not gathered, no furnace while cobblestone is not. "Tools" and "Monster Hunter"
+are doable so; seen live (2026-10-03), with a table only configurable, play stopped after
+"Crafting Time" with no quest left. The planner's route counts the stations the agent can use
+(a configured or seen table, a seen furnace) and ends each craft step with the exact
+`CRAFT_ITEM` (the recipe id, the times, and the table: the nearest known one, else the one the
+route places), or with why `CRAFT_ITEM` cannot make it yet. A table it sees nearby is used by the
+route, but is no ability: play picks its quest before a session looks around.
+
+On top of the chest facts, 1.7.10 has three more
 ([evidence](gtnh-compatibility.md#crafting-2026-09-30)):
 
 - The server never sends the crafting result slot as a slot update. Only a full window sync shows
@@ -1175,16 +1259,19 @@ plans; `Gtnh1710Client` sends. On top of the chest facts, 1.7.10 has three more
 - Closing a window, closing the inventory itself, or leaving the server DROPS whatever is in the
   grid, like the cursor.
 
-GTNH changes many vanilla recipes, so the table is never trusted blindly. In layers:
+GTNH changes many vanilla recipes, so no recipe is ever trusted blindly. In layers:
 
-1. The executor validates as usual. Every ingredient kind the recipe may use must be unprotected,
-   the inventory must hold enough, and a 3x3 recipe needs a known table within `interactionReach`.
-   The postcondition is derived from the table: the result +count × times, each ingredient group
+1. The executor validates as usual. Every ingredient kind the recipe may use (an ore entry's
+   every kind) must be unprotected, the inventory must hold enough of each ingredient in any mix
+   of its kinds, by the same recipe data the client fills the grid from, and a 3x3 recipe needs
+   a known table within `interactionReach`. The postcondition is derived from the recipe: the
+   result +count × times, each ingredient group (all its kinds, up to `MAX_INGREDIENT_KINDS`)
    −cells × times, and nothing else changed.
 2. The client plans the whole action on its view of the inventory and refuses before anything is
    opened or clicked when it cannot finish exactly. Window 0 is clicked only with no other window
-   open. A table opens only if it is configured and its block is a `minecraft:crafting_table`, with
-   an empty hand.
+   open. A table opens only if it is configured or found inside the fence and its block is a
+   `minecraft:crafting_table`, with an empty hand. Recipe names resolve to registry ids through an
+   index built once per world's registry (an ore entry may list hundreds of names).
 3. Each craft:
    - **Fill:** one item into every pattern cell, with predictable clicks (pick up a stack, place one
      item per empty cell, put the rest back).
