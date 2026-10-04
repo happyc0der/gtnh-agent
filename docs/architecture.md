@@ -311,7 +311,10 @@ journal says the walls are open again. Walled in with no way out, play stops and
 unless an owner's command is running or queued: that goes first, since it may be the way out
 (`!surface` and `!home` pillar and dig; seen live 2026-10-04 at the bottom of an 8-deep shaft the
 bot had dug down to stone, play ended every round before the command round and spun at 100%
-CPU with `!surface` waiting).
+CPU with `!surface` waiting). With no wall or staircase it may dig, the way out is a climb on
+MOVE_TO's own path rules (`planClimbOut`): through the roof and up a pillar, from the night pit
+or from a shaft the bot dug down by walking (`shaftSite`: its column, and the rim a side column
+offers within 16 blocks up).
 
 **Sealed in with mobs near.** The live observation reports whether the player is sealed in
 (`player.sealed`, `sealedIn` in `night-pit.ts`): the cells beside its feet and head, above its
@@ -1110,7 +1113,10 @@ bound: at most 2^21 feet blocks, a 64 x 64 x 32 play area is 131,072).
 - The world changes along a path. Like Baritone's, the search checks movements against the
   world as it is; the found path is then replayed over the blocks it breaks and places, each
   movement checked again, and cut where one no longer holds. A pillar or bridge after another
-  clicks the block the one before placed.
+  clicks the block the one before placed. A pillar breaks the block over the head, which two
+  pillars on is the feet block the next pillar fills: a node whose feet block is solid in the
+  world can only be one the path broke (`feetBroken`), and the pillar may place there, so a walk
+  pillars up through a roof or solid ground (until 2026-10-04 it stopped two blocks up).
 
 **The flood** (`floodPath`, `search.ts`): the same search with no goal (Dijkstra), within a cost:
 every feet block a walk reaches, what it costs, and its breaks and places on the way, with the
