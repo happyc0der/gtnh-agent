@@ -158,6 +158,23 @@ describe('GATHER chooses each action in code, from the observation', () => {
     });
   });
 
+  it('with only such blocks in view, explores on (seen live: one log reached, the rest up the trees)', () => {
+    const { state, progress } = setup([sand(8, 64, 1, null), sand(9, 64, 1, null)]);
+    const wander = { x: 1, z: -47, distance: 48 };
+    expect(chooseGatherAction(gather(), progress, state, { ...opts(), wander })).toMatchObject({
+      kind: 'act',
+      spec: { type: 'EXPLORE', args: { toward: { x: 1.5, z: -46.5 } } },
+      travel: true,
+    });
+    // One refused for another reason (here: unsafe), not for the way there: the step ends.
+    const refused = setup([sand(3, 64, 1)]);
+    const unsafe = (spec: ActionSpec): string | null =>
+      spec.type === 'DIG_BLOCK' ? 'UNSAFE_DIG' : null;
+    expect(
+      chooseGatherAction(gather(), refused.progress, refused.state, { ...opts(unsafe), wander }),
+    ).toMatchObject({ kind: 'end', end: 'no-target' });
+  });
+
   it('a walk that did not bring its block within reach is not repeated: the block is skipped', () => {
     const block = sand(8, 64, 1, { x: 7.5, y: 64, z: 1.5 });
     const { state, progress } = setup([block]);

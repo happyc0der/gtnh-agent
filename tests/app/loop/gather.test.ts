@@ -238,6 +238,27 @@ describe('GATHER: one plan step, many checked actions', () => {
     expect(g.requests).toHaveLength(1);
   });
 
+  it('a GATHER with nothing to dig before a craft ends the plan: the craft would need it', async () => {
+    // Seen live 2026-10-04: one log of three gathered, then planks from three logs, refused
+    // plan after plan.
+    const gravelThenCraft: PlannerResponse = {
+      kind: 'plan',
+      plan: plan(
+        [
+          { type: 'GATHER', args: { block: 'minecraft:gravel', count: 9 } },
+          { type: 'CRAFT_ITEM', args: { recipe: 'flint', times: 3, craftingTableId: null } },
+        ],
+        'Flint',
+      ),
+    };
+    const g = await gathering(sandRows(2), gravelThenCraft);
+    const first = await g.cycle();
+    expect(first.summary).toBe('REQUEST_PLANNER -> GATHER:no-target -> rejected');
+    expect(g.repos.plans.get(1)?.status).toBe('failed');
+    // Nothing was crafted.
+    expect(g.performed().filter((a) => a.type === 'CRAFT_ITEM')).toHaveLength(0);
+  });
+
   it('ends at 64 actions for a checkpoint: the next cycle asks the planner with fresh stock', async () => {
     const g = await gathering(
       sandRows(60),

@@ -622,9 +622,13 @@ export function chooseGatherAction(
     }
     nearestRefusal ??= `${formatPosition(c.position)}: ${why}`;
   }
-  // None of it in view at all: head for the nearest place it is remembered at.
+  // None of it in view, or only blocks no walk from here reaches (logs high in the trees,
+  // behind water: seen live 2026-10-04, "!get 1 wooden pickaxe" got one log and stopped):
+  // head for the nearest place it is remembered at, else on into ground not seen yet, as
+  // Baritone's mine process goes on to blocks it can get to. A block refused for another
+  // reason (no tool that harvests it, a hazard) ends the step: the next plan sees why.
   let travelRefusal: string | null = null;
-  if (candidates.length === 0 && unreachable === 0) {
+  if (nearestRefusal === null) {
     for (const place of opts.remembered ?? []) {
       const target = { x: place.x, y: place.y, z: place.z };
       if (skipped.has(key(target))) continue;

@@ -312,10 +312,12 @@ function gatherEnded(
   outcome: PlannerOutcome,
 ): Consulted {
   const step = stored.nextStep + 1;
-  if (turn.end === 'no-target' && step < stored.plan.steps.length) {
-    // Nothing of it to dig here, but the plan goes on: skip to its next step (seen live:
+  if (turn.end === 'no-target' && stored.plan.steps[step]?.action.type === GATHER) {
+    // Nothing of it to dig here, but another GATHER comes next: skip to it (seen live:
     // GATHER gravel with none in view, before GATHER logs with 66 in view). The next plan
-    // sees the item still missing in the route, and can EXPLORE for it.
+    // sees the item still missing in the route, and can EXPLORE for it. Before any other
+    // step (a craft that needs what was not gathered: seen live 2026-10-04, planks from one
+    // log of three, refused plan after plan) the plan ends instead, and is planned again.
     repos.memory.appendJournal(
       stored.taskId,
       `plan #${stored.id} step ${step} GATHER skipped (${turn.why}); on to step ${step + 1}`.slice(
