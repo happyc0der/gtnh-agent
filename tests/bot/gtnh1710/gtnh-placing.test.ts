@@ -256,9 +256,9 @@ describe('Gtnh1710Client placing', () => {
     expect(items(await client.observe())).toMatchObject({ 'minecraft:planks@2': 6 });
   }, 10_000);
 
-  it('refuses without a stack it could hold', async () => {
-    // Planks only in the main inventory, and no empty hotbar slot to move them into.
-    const full = Array.from({ length: 9 }, (_, j): FakeItem => ({
+  it('swaps a stack into a full hotbar, with a plain stack there (seen live: a table)', async () => {
+    // Planks only in the main inventory, and bread in every hotbar slot (the held one is 0).
+    const bread = Array.from({ length: 9 }, (_, j): FakeItem => ({
       slot: 36 + j,
       id: 297,
       count: 1,
@@ -266,11 +266,41 @@ describe('Gtnh1710Client placing', () => {
     }));
     const { server, client } = await start({
       items: [[297, 'minecraft:bread']],
-      inventory: [...full, { slot: 20, id: BLOCK.planks, count: 7, damage: 2 }],
+      inventory: [...bread, { slot: 20, id: BLOCK.planks, count: 7, damage: 2 }],
+    });
+    const r = await perform(client, place(AT.floor, 'minecraft:planks@2'));
+    expect(r).toMatchObject({ ok: true, data: { stackBefore: 7, stackAfter: 6 } });
+    expect(r.message).toMatch(
+      /swapped minecraft:planks@2 from inventory slot 20 with hotbar slot 1/,
+    );
+    // Pick the planks up, swap them with the bread in hotbar slot 1, put the bread down.
+    expect(server.chestSim.clicks.map((c) => [c.windowId, c.slot, c.button, c.accepted])).toEqual([
+      [0, 20, 0, true],
+      [0, 37, 0, true],
+      [0, 20, 0, true],
+    ]);
+    expect(server.chestSim.cursor).toBeNull();
+    expect(items(await client.observe())).toMatchObject({
+      'minecraft:planks@2': 6,
+      'minecraft:bread': 9,
+    });
+  }, 10_000);
+
+  it('refuses without a stack it could hold', async () => {
+    // Planks only in the main inventory, and a tool in every hotbar slot: none is given up.
+    const tools = Array.from({ length: 9 }, (_, j): FakeItem => ({
+      slot: 36 + j,
+      id: 270,
+      count: 1,
+      damage: 0,
+    }));
+    const { server, client } = await start({
+      items: [[270, 'minecraft:wooden_pickaxe']],
+      inventory: [...tools, { slot: 20, id: BLOCK.planks, count: 7, damage: 2 }],
     });
     const r = await perform(client, place(AT.floor, 'minecraft:planks@2'));
     expect(r).toMatchObject({ ok: false, code: 'REFUSED' });
-    expect(r.message).toMatch(/no minecraft:planks@2 in the hotbar, and no empty hotbar slot/);
+    expect(r.message).toMatch(/no minecraft:planks@2 in the hotbar, and no hotbar slot/);
     expect((await perform(client, place(AT.floor, 'minecraft:log'))).message).toMatch(
       /no minecraft:log without NBT data in the inventory/,
     );

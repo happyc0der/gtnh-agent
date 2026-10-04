@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { parseObservedStorageId } from '../../../domain/interactions.ts';
+import { toolInfo } from '../../../domain/tools.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import {
   applyClick,
@@ -239,6 +240,57 @@ export class InventoryActions {
     return null;
   }
 
+  /**
+   * With no empty hotbar slot, the one to give up for another stack (swapIntoHotbar): a stack
+   * with no NBT data that is no tool and no weapon (a tool or a weapon stays where the agent
+   * uses it), a block item first (sand, dirt, logs: what fills a hotbar), the held slot last.
+   * Null when every hotbar slot holds something to keep.
+   */
+  evictableHotbarSlot(): number | null {
+    const registry = this.#world.registry;
+    if (registry === null) return null;
+    const blocks = new Set(registry.blocks.values());
+    const held = this.#world.heldSlot;
+    let other: number | null = null;
+    for (const j of [...[0, 1, 2, 3, 4, 5, 6, 7, 8].filter((k) => k !== held), held]) {
+      const s = this.hotbar(j);
+      if (s == null || s.hasNbt) continue;
+      const name = registry.items.get(s.id) ?? registry.blocks.get(s.id);
+      if (name === undefined || toolInfo(name) !== null || /sword|bow|shield/i.test(name)) continue;
+      if (blocks.has(name)) return j;
+      other ??= j;
+    }
+    return other;
+  }
+
+  /**
+   * Swaps the stack in window-0 slot `from` (the main inventory) with the one in hotbar slot
+   * `hotbar` (container.ts: pick it up, a swap click on the hotbar slot, put the other stack
+   * down where it was), each click confirmed by the server. After a click that is not
+   * accepted, the cursor goes back into the inventory. Null when swapped, else why not
+   * ("ITEMS MAY BE ON THE CURSOR..." when that failed too).
+   */
+  async swapIntoHotbar(from: number, hotbar: number): Promise<string | null> {
+    if (this.#world.openWindow !== null) return 'a window is open';
+    if (this.clickTarget() === null) return 'the inventory window is not known';
+    const clicks: Click[] = [
+      { slot: from, button: 0 },
+      { slot: 36 + hotbar, button: 0, swap: true },
+      { slot: from, button: 0 },
+    ];
+    for (const [i, click] of clicks.entries()) {
+      const outcome = await this.click(click);
+      if (outcome === 'accepted') continue;
+      if (i === 0) return `picking up the stack was ${outcome}`;
+      const left = await this.emptyPlayerCursor(from);
+      return left === null
+        ? `a click was ${outcome}`
+        : `ITEMS MAY BE ON THE CURSOR (${left}): a click was ${outcome}`;
+    }
+    this.#core.log(`swapped inventory slot ${from} with hotbar slot ${hotbar}`);
+    return null;
+  }
+
   /** Moves exactly `quantity` of `item` with confirmed clicks; the cursor ends empty. */
   async #transfer(t: {
     direction: TransferDirection;
@@ -368,6 +420,25 @@ export class InventoryActions {
       return `ITEMS MAY BE ON THE CURSOR (${w.cursor.count} of id ${w.cursor.id}); the window was left open`;
     }
     return emptied > 0 ? 'the cursor was emptied' : 'nothing was on the cursor';
+  }
+
+  /**
+   * With the player's own inventory (window 0) the click target: whatever is on the cursor
+   * goes into an empty slot, `preferred` first. Null when nothing is left on it, else what is.
+   */
+  async emptyPlayerCursor(preferred: number): Promise<string | null> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const target = this.clickTarget();
+      if (target === null || target.windowId !== 0 || target.window.cursor === null) break;
+      const slots = target.window.slots;
+      const empty = [preferred, ...Array.from({ length: 36 }, (_, i) => 9 + i)].find(
+        (i) => slots[i] === null,
+      );
+      if (empty === undefined) break;
+      await this.click({ slot: empty, button: 0 });
+    }
+    const cursor = this.clickTarget()?.window.cursor ?? null;
+    return cursor === null ? null : `${cursor.count} of id ${cursor.id}`;
   }
 
   /**

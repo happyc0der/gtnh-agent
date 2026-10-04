@@ -831,13 +831,42 @@ describe('Gtnh1710Client digging with tools', () => {
     expect(digPackets(server)).toEqual([]);
   }, 10_000);
 
-  it('refuses when the tool cannot reach the hotbar and there is no empty hand either', async () => {
+  it('swaps the tool into a full hotbar, with a plain stack there (three confirmed clicks)', async () => {
     const { server, client } = await start({
       items: TOOL_ITEMS,
       inventory: [
         ...Array.from({ length: 9 }, (_, j) => ({
           slot: 36 + j,
           id: TOOL.bread,
+          count: 1,
+          damage: 0,
+        })),
+        { slot: 9, id: TOOL.shovel, count: 1, damage: 0 },
+      ],
+    });
+    const result = await perform(client, dig(AT.dirt));
+    expect(result).toMatchObject({ ok: true, data: { tool: 'minecraft:wooden_shovel' } });
+    const sim = server.chestSim;
+    // Pick the shovel up, swap it with the bread in hotbar slot 1 (the held slot 0 is given
+    // up last), put the bread down where the shovel was.
+    expect(sim.clicks.map((c) => [c.windowId, c.slot, c.button, c.accepted])).toEqual([
+      [0, 9, 0, true],
+      [0, 37, 0, true],
+      [0, 9, 0, true],
+    ]);
+    expect(sim.playerSlots()[9]).toMatchObject({ id: TOOL.bread });
+    expect(sim.cursor).toBeNull();
+    expect(server.digSim.digs[0]?.held).toBe('minecraft:wooden_shovel@0');
+  }, 10_000);
+
+  it('refuses when the tool cannot reach the hotbar and there is no empty hand either', async () => {
+    // A tool in every hotbar slot (axes, which do not dig dirt faster): none is given up.
+    const { server, client } = await start({
+      items: TOOL_ITEMS,
+      inventory: [
+        ...Array.from({ length: 9 }, (_, j) => ({
+          slot: 36 + j,
+          id: TOOL.axe,
           count: 1,
           damage: 0,
         })),

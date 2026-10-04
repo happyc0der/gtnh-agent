@@ -70,6 +70,33 @@ describe('predictable clicks', () => {
   });
 });
 
+describe('swapping a stack into a full hotbar', () => {
+  it('swaps two different items only when the click asks for it, never the same item', () => {
+    // The player's main slot 3 holds the table; hotbar slot 0 (window slot 27 + 27) sand.
+    const table: Stack = { id: 58, damage: 0, count: 1, hasNbt: false };
+    const sand: Stack = { id: 12, damage: 0, count: 64, hasNbt: false };
+    const start = win({}, { 3: table, 27: sand });
+    const picked = applyClick(start, { slot: 30, button: 0 });
+    if (!picked.ok) throw new Error(picked.reason);
+    // Without `swap`, a stack is never put down onto another.
+    expect(applyClick(picked.window, { slot: 54, button: 0 })).toMatchObject({ ok: false });
+    const swapped = applyClick(picked.window, { slot: 54, button: 0, swap: true });
+    expect(swapped).toMatchObject({ ok: true, claimed: sand });
+    if (!swapped.ok) throw new Error(swapped.reason);
+    expect([swapped.window.slots[54], swapped.window.cursor]).toEqual([table, sand]);
+    const done = applyClick(swapped.window, { slot: 30, button: 0 });
+    if (!done.ok) throw new Error(done.reason);
+    expect([done.window.slots[30], done.window.slots[54], done.window.cursor]).toEqual([
+      sand,
+      table,
+      null,
+    ]);
+    // The same item would merge (stack limits): refused even with `swap`.
+    const merging = win({}, { 27: cobble(10) }, cobble(5));
+    expect(applyClick(merging, { slot: 54, button: 0, swap: true })).toMatchObject({ ok: false });
+  });
+});
+
 describe('transfer plans', () => {
   it('takes a partial amount: pick up, place one at a time, put the rest back', () => {
     const w = win({ 0: cobble(64) });

@@ -563,7 +563,10 @@ export class DigActions {
     if (plan.kind === 'refuse') return { ok: false, reason: plan.reason, code: 'REFUSED' };
     if (plan.kind === 'hand') return plan.hand;
     const { from, to, hand } = plan;
-    const moved = await this.#core.inventory.moveToHotbar(9 + from.index, to, from.stack);
+    const moved =
+      plan.kind === 'swap'
+        ? await this.#core.inventory.swapIntoHotbar(9 + from.index, to)
+        : await this.#core.inventory.moveToHotbar(9 + from.index, to, from.stack);
     if (moved === null) return hand;
     return {
       ok: false,
@@ -575,14 +578,14 @@ export class DigActions {
   /**
    * What #chooseHand would hold for the checked block, without doing anything: a hotbar slot
    * (a tool, an empty hand or a plain block item), a tool to move into an empty hotbar slot
-   * first, or why there is nothing to dig it with.
+   * (or to swap with a plain stack there) first, or why there is nothing to dig it with.
    */
   #planHand(
     target: { block: DiggableBlock; harvest: HarvestRule | null; hardness: number },
     protectedItems: ReadonlySet<string>,
   ):
     | { kind: 'hand'; hand: Hand }
-    | { kind: 'move'; from: HandCandidate; to: number; hand: Hand }
+    | { kind: 'move' | 'swap'; from: HandCandidate; to: number; hand: Hand }
     | { kind: 'refuse'; reason: string } {
     const { block, harvest } = target;
     const storage = this.#world.playerStorage();
@@ -618,6 +621,10 @@ export class DigActions {
     if (best !== null) {
       const free = this.#core.inventory.emptyHotbarSlot();
       if (free !== null) return { kind: 'move', from: best, to: free, hand: use(best, free) };
+      // A full hotbar: the tool swaps places with a plain stack there (a wooden pickaxe
+      // crafted into the main inventory is used all the same).
+      const evict = this.#core.inventory.evictableHotbarSlot();
+      if (evict !== null) return { kind: 'swap', from: best, to: evict, hand: use(best, evict) };
       // No room to move it: a slower tool already in the hotbar, else nothing to dig with.
       const slower = bestTool(block, candidates.filter(inHotbar), () => true);
       if (slower !== null) return { kind: 'hand', hand: use(slower, slower.index - 27) };

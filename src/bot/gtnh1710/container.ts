@@ -11,7 +11,11 @@ import type { ItemStackData } from './packets.ts';
  *  - left-click a slot with an empty cursor: pick up the whole stack;
  *  - left-click an EMPTY slot with a stack on the cursor: put the whole stack down;
  *  - right-click an empty slot, or a slot holding the cursor's item that it filled itself,
- *    with a stack on the cursor: put ONE item down (never past the stack it came from).
+ *    with a stack on the cursor: put ONE item down (never past the stack it came from);
+ *  - only when the click asks for it (`swap`), left-click a player inventory slot holding
+ *    ANOTHER item with a stack on the cursor: the two swap (Container.slotClick: the slot
+ *    takes any item and holds 64, more than any cursor stack; the same item would merge,
+ *    which needs the maximum stack size, and is refused).
  *
  * Stacks with NBT data are never touched (their exact data would have to be echoed).
  * The cursor must be empty whenever a window closes: the server drops cursor items into
@@ -33,6 +37,11 @@ export interface Click {
   slot: number;
   /** 0 = left, 1 = right (mode 0, a normal click). */
   button: ClickButton;
+  /**
+   * A left-click on a slot holding another item swaps it with the cursor's stack. Only for
+   * the player's main inventory and hotbar slots, which take any item.
+   */
+  swap?: boolean;
 }
 
 const sameItem = (a: Stack, b: Stack): boolean =>
@@ -59,6 +68,10 @@ export function applyClick(
     return { ok: true, window: { ...w, slots, cursor: slot }, claimed };
   }
   if (click.button === 0) {
+    if (slot !== null && click.swap === true && !sameItem(slot, w.cursor)) {
+      slots[click.slot] = w.cursor;
+      return { ok: true, window: { ...w, slots, cursor: slot }, claimed };
+    }
     if (slot !== null) return { ok: false, reason: 'a stack is only put down into an empty slot' };
     slots[click.slot] = w.cursor;
     return { ok: true, window: { ...w, slots, cursor: null }, claimed };

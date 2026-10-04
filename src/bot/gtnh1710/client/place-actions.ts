@@ -278,11 +278,17 @@ export class PlaceActions {
     if (slot === null) {
       const from = storage.slice(0, 27).findIndex(holds);
       if (from === -1) return refuse(`no ${name} without NBT data in the inventory`);
-      const to = [0, 1, 2, 3, 4, 5, 6, 7, 8].find((j) => hotbar(j) === null);
-      if (to === undefined) {
-        return refuse(`no ${name} in the hotbar, and no empty hotbar slot to move one into`);
+      const empty = [0, 1, 2, 3, 4, 5, 6, 7, 8].find((j) => hotbar(j) === null);
+      // A full hotbar: the stack swaps places with a plain one there (seen live: the crafting
+      // table could not be placed, every hotbar slot holding sand, dirt or saplings).
+      const to = empty ?? this.#core.inventory.evictableHotbarSlot();
+      if (to === undefined || to === null) {
+        return refuse(`no ${name} in the hotbar, and no hotbar slot to move one into`);
       }
-      const problem = await this.#moveStackToSlot(9 + from, 36 + to);
+      const problem =
+        empty === undefined
+          ? await this.#core.inventory.swapIntoHotbar(9 + from, to)
+          : await this.#moveStackToSlot(9 + from, 36 + to);
       if (problem !== null) {
         return {
           ok: false,
@@ -293,7 +299,10 @@ export class PlaceActions {
         };
       }
       slot = to;
-      moved = `moved ${name} from inventory slot ${9 + from} to hotbar slot ${to}`;
+      moved =
+        empty === undefined
+          ? `swapped ${name} from inventory slot ${9 + from} with hotbar slot ${to}`
+          : `moved ${name} from inventory slot ${9 + from} to hotbar slot ${to}`;
     }
     if (slot !== this.#world.heldSlot) {
       this.#core.send(outbound.selectHotbarSlot(slot));
@@ -322,21 +331,10 @@ export class PlaceActions {
 
   /** After a failed window-0 click: whatever is on the cursor goes into an empty player slot. */
   async #emptyInventoryCursor(preferred: number): Promise<string> {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const target = this.#core.inventory.clickTarget();
-      if (target === null || target.windowId !== 0 || target.window.cursor === null) break;
-      const slots = target.window.slots;
-      const empty = [preferred, ...Array.from({ length: 36 }, (_, i) => 9 + i)].find(
-        (i) => slots[i] === null,
-      );
-      if (empty === undefined) break;
-      await this.#core.inventory.click({ slot: empty, button: 0 });
-    }
-    const cursor = this.#core.inventory.clickTarget()?.window.cursor ?? null;
-    if (cursor !== null) {
-      return `; ITEMS MAY BE ON THE CURSOR (${cursor.count} of id ${cursor.id})`;
-    }
-    return '; nothing was left on the cursor';
+    const left = await this.#core.inventory.emptyPlayerCursor(preferred);
+    return left === null
+      ? '; nothing was left on the cursor'
+      : `; ITEMS MAY BE ON THE CURSOR (${left})`;
   }
 
   /**
