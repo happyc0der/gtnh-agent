@@ -146,6 +146,19 @@ export class MemoryRepository {
       .run(containerId, JSON.stringify(ItemCountsSchema.parse(items)), observedAt);
   }
 
+  /** Containers whose contents were seen at or after `since` (an ISO time), newest first. */
+  containersSeenSince(since: string): Array<{ id: string; items: Record<string, number> }> {
+    const rows = this.#db
+      .prepare(
+        'SELECT container_id, items_json FROM container_contents WHERE observed_at >= ? ORDER BY observed_at DESC',
+      )
+      .all(since) as Array<{ container_id: string; items_json: string }>;
+    return rows.map((r) => ({
+      id: r.container_id,
+      items: ItemCountsSchema.parse(JSON.parse(r.items_json)),
+    }));
+  }
+
   recallContainer(
     containerId: string,
   ): { items: Record<string, number>; observedAt: string } | null {

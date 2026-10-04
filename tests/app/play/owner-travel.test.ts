@@ -191,6 +191,24 @@ describe('the surface (Baritone #surface)', () => {
     expect(found).toEqual({ point: { x: 3.5, y: 61, z: 0.5 }, here: false });
   });
 
+  it('is at the surface only in the cell found: one block across and up is under the roof', () => {
+    const stairs: Record<string, number> = {};
+    for (let x = 1; x <= 8; x++) {
+      for (let dy = 0; dy <= 2; dy++) stairs[`${x},${64 - x + dy},0`] = ID.air;
+    }
+    const target = { x: 3.5, y: 61, z: 0.5 };
+    const feet = { x: 4.5, y: 60, z: 0.5 };
+    const at = (exact: boolean) =>
+      planTravelStep({
+        ...base,
+        world: flat(stairs),
+        feet,
+        target: exact ? { kind: 'point', point: target, exact } : { kind: 'point', point: target },
+      }).kind;
+    expect(at(false)).toBe('arrived');
+    expect(at(true)).toBe('step');
+  });
+
   it('says so when no natural ground under open sky is near', () => {
     const canopy: Record<string, number> = {};
     for (let x = -20; x <= 20; x++) {

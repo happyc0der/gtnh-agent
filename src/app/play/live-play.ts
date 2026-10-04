@@ -335,8 +335,19 @@ export function liveCommands(
     surface: () => surfaceTarget(travelInput()),
     findBlock: (names) => client.world.findBlocks(names),
     gtOres: () => client.world.gtOresInView(),
+    // With the containers whose contents it remembers: an item only a chest holds can be had.
     goalProblem: (item, count, anyKind) =>
-      cannotGet(item, count, client.world.inventoryItems() ?? {}, anyKind),
+      cannotGet(
+        item,
+        count,
+        client.world.inventoryItems() ?? {},
+        anyKind,
+        repos.memory
+          .containersSeenSince(
+            new Date(Date.now() - config.memory.containerContentsMaxAgeMs).toISOString(),
+          )
+          .map((c) => ({ ...c, where: null, distance: null })),
+      ),
     owners: config.minecraft.owners,
     homeName: config.routing.homeLocationName,
     configLocations: new Map(Object.entries(config.locations)),

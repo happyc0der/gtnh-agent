@@ -635,7 +635,12 @@ function instant(play: PlayState, cmd: OwnerCommandRecord, c: InstantCommand): v
       finish(play, cmd, 'done', HELP_TEXT);
       return;
     case 'find':
-      finish(play, cmd, 'done', findText(play, c.block));
+      finish(
+        play,
+        cmd,
+        'done',
+        c.item === undefined ? findText(play, c.block) : findOreText(play, c.item),
+      );
       return;
     case 'sethome':
       saveLocation(play, cmd, commands.homeName);
@@ -908,11 +913,25 @@ async function digSession(
   }
   const mob = mobPause(result.stopKind, play.lastDecision);
   if (mob !== null) return waitOutMob(play, taskId, mob);
+  if (result.stopKind === 'cycle-failed' && reflexEnded(play)) {
+    // One of System 1's reflexes failed (a retreat with no way home, seen live 2026-10-04: a
+    // stairs command failed with 0 blocks dug): the dig was interrupted, not refused. It goes
+    // on next round, MAX_COMMAND_FAILURES times in a row at most.
+    run.failures += 1;
+    if (run.failures >= MAX_COMMAND_FAILURES) return fail(`${result.stopReason} (${dug})`);
+    await play.sleep(TUNNEL_RETRY_MS);
+    return 'next-round';
+  }
   if (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') {
     return fail(`${result.stopReason} (${dug})`);
   }
   run.failures = 0;
   return 'next-round';
+}
+
+/** Whether the session's last decision was one of System 1's reflexes (REFLEXES). */
+function reflexEnded(play: PlayState): boolean {
+  return play.lastDecision !== null && REFLEXES.has(play.lastDecision.decision);
 }
 
 /** Where a travel command goes now (a player may have moved), or why it cannot go. */
@@ -949,8 +968,9 @@ function travelTarget(
         : { target: { kind: 'point', point: { x: to.x, y: null, z: to.z } } };
     }
     case 'surface': {
+      // Arrived only in that very cell: one block across and up is still under the roof.
       const to = surfaceTarget(play, cmd);
-      return 'problem' in to ? to : { target: { kind: 'point', point: to } };
+      return 'problem' in to ? to : { target: { kind: 'point', point: to, exact: true } };
     }
     case 'goto-block': {
       const to = blockTarget(play, cmd, c.block);
@@ -960,8 +980,13 @@ function travelTarget(
     case 'home': {
       const name = c.verb === 'home' ? commands.homeName : c.name;
       const at = locations(play).get(name);
-      const block = runOf(play, cmd.id).blockTo;
-      if (at === undefined && block !== null) return { target: blockTravel(block) };
+      if (at === undefined && c.verb === 'goto-waypoint') {
+        // No waypoint of that name: the block it names, found again after a restart of play
+        // (the run that held it is gone, the command is not).
+        const block = blockName([name]);
+        const to = block === null ? null : blockTarget(play, cmd, block);
+        if (to !== null && !('problem' in to)) return { target: blockTravel(to) };
+      }
       return at === undefined
         ? { problem: `the waypoint ${name} is gone` }
         : { target: { kind: 'point', point: at.position } };
@@ -1063,6 +1088,42 @@ const blockTravel = (to: BlockTo): TravelTarget =>
     : { kind: 'point', point: { ...to.position } };
 
 /** What `!find` says: the nearest blocks of a kind in view, else a remembered place. */
+/**
+ * What `!find <material> ore` says: the GregTech ores of that material in view. GregTech tells
+ * a client an ore's material only once a face of it is open, so only those are known.
+ */
+function findOreText(play: PlayState, item: string): string {
+  const ore = gtOreByItem(item);
+  const name =
+    ore === null ? item : `${ore.material.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} ore`;
+  const at = (play.deps.commands as CommandDeps).view().position;
+  const found = oresFor(play, item, new Set())
+    .map((o) => ({
+      position: o.position,
+      distance:
+        at === null
+          ? 0
+          : Math.hypot(
+              o.position.x + 0.5 - at.x,
+              o.position.y + 0.5 - at.y,
+              o.position.z + 0.5 - at.z,
+            ),
+    }))
+    .sort((a, b) => a.distance - b.distance);
+  const [first, ...rest] = found;
+  if (first === undefined) {
+    return `I see no ${name} near here (an ore shows its kind only once a face of it is open: !mine digs for it)`;
+  }
+  const also = rest
+    .slice(0, 3)
+    .map((f) => `${fmt(f.position)} (${Math.round(f.distance)})`)
+    .join(', ');
+  return (
+    `${name}: the nearest at ${fmt(first.position)}, ${blocks(Math.round(first.distance))} away` +
+    (also === '' ? '' : `; also ${also}`)
+  );
+}
+
 function findText(play: PlayState, block: string): string {
   const commands = play.deps.commands as CommandDeps;
   if (commands.findBlock === undefined) return 'I cannot look for blocks here';
@@ -1429,7 +1490,7 @@ async function goalCommandRound(
   const after = await deps.inventory();
   run.worked =
     after !== null && Object.entries(after).some(([item, n]) => n > (inventory[item] ?? 0));
-  run.interrupted = play.lastDecision !== null && REFLEXES.has(play.lastDecision.decision);
+  run.interrupted = reflexEnded(play);
   if (strip && after !== null && (after[command.item] ?? 0) <= (inventory[command.item] ?? 0)) {
     // The ores in view gave none (out of reach, refused): passed over, and the strip mine
     // goes on past them.

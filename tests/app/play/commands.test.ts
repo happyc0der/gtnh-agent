@@ -694,6 +694,39 @@ describe("owners' commands in play", () => {
       'Done: at chest',
     ]);
     expect(sim.steps).toEqual(['MOVE_TO 5.5 0.5']);
+    // After play restarts (a wait offline for a mob, a reconnect), the run that held the
+    // block is gone but the command is not: the block is found again.
+    const later = newSim({ heard: [whisper('!goto chest')] });
+    const laterRepos = open();
+    const laterBase = deps(laterRepos, later);
+    const withChests = {
+      ...laterBase,
+      commands: { ...(laterBase.commands as CommandDeps), findBlock: () => chests },
+    };
+    await runPlay(withChests, LIMITS, {
+      stopRequested: () => (later.replies.length > 0 ? 'a restart' : null),
+    });
+    expect(said(later)).toEqual(['OK: going to the minecraft:chest at 6 64 0']);
+    await runPlay(withChests, LIMITS, noStop);
+    expect(said(later)).toEqual(['OK: going to the minecraft:chest at 6 64 0', 'Done: at chest']);
+    // A GregTech ore by its material: only exposed ones show what they are.
+    const ores = newSim({ heard: [whisper('!find copper ore'), whisper('!find tin ore')] });
+    const oresBase = deps(open(), ores);
+    await runPlay(
+      {
+        ...oresBase,
+        commands: {
+          ...(oresBase.commands as CommandDeps),
+          gtOres: () => [{ position: { x: 3, y: 60, z: 0 }, ore: 35 }],
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(ores)).toEqual([
+      'copper ore: the nearest at 3 60 0, 5 blocks away',
+      'I see no tin ore near here (an ore shows its kind only once a face of it is open: !mine digs for it)',
+    ]);
     // A word for a block, not its name: "!goto lake" is water.
     const lake = newSim({ heard: [whisper('!goto lake')] });
     const lakeBase = deps(open(), lake);
@@ -919,6 +952,76 @@ describe("owners' commands in play", () => {
     expect(requests.every((r) => r.start.x === 0 && r.start.z === 0)).toBe(true);
     expect(sim.steps).toEqual(['MOVE_TO 1.5 0.5', 'MOVE_TO 2.5 0.5', 'MOVE_TO 3.5 0.5']);
     expect(repos.tasks.get('command-1')?.status).toBe('completed');
+
+    // A retreat from a mob that fails (no way home) interrupts it; it goes on after (seen live:
+    // a stairs command failed with 0 blocks dug).
+    const fled = newSim({ heard: [whisper('!tunnel east 2')] });
+    const fledTunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
+      const done = Math.floor(fled.position.x) - req.start.x;
+      if (done >= req.length) {
+        return Promise.resolve({ ok: true, done: req.length, steps: [], problem: null });
+      }
+      const x = req.start.x + done + 1;
+      return Promise.resolve({
+        ok: true,
+        done,
+        steps: [
+          {
+            spec: {
+              type: 'MOVE_TO',
+              args: {
+                target: { x: x + 0.5, y: req.start.y, z: req.start.z + 0.5 },
+                tolerance: 0.5,
+              },
+            },
+            text: `step into (${x}, ${req.start.y}, ${req.start.z})`,
+          },
+        ],
+        problem: null,
+      });
+    };
+    const fledBase = deps(open(), fled, { tunnel: fledTunnel });
+    let retreated = false;
+    await runPlay(
+      {
+        ...fledBase,
+        session: (limits, hooks) => {
+          if (retreated) return fledBase.session(limits, hooks);
+          retreated = true;
+          hooks.onCycle(
+            {
+              summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> failed',
+              status: 'failed',
+              decision: {
+                decision: 'RETREAT_HOME',
+                confidence: 0.95,
+                reasonCodes: ['HOSTILES_NEARBY'],
+                factsUsed: {},
+                requiresHumanConfirmation: false,
+                provider: 'test',
+              },
+              outcome: null,
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [
+              { cycleId: 'c1', summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> failed' },
+            ],
+            stopReason: 'stopped after: RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> failed',
+            stopKind: 'cycle-failed',
+            taskId: 'command-1',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(retreated).toBe(true);
+    expect(said(fled).at(-1)).toBe('Done: dug a tunnel 2 blocks east');
+    expect(fled.steps).toEqual(['MOVE_TO 1.5 0.5', 'MOVE_TO 2.5 0.5']);
 
     // One it may not dig: it says why, and how far it got.
     const blocked = newSim({ heard: [whisper('!tunnel west')] });

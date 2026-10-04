@@ -220,6 +220,15 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
       /^digging gregtech:gt\.blockores \(Copper ore .*\) needs a pickaxe level >= 1: none held, none known to make$/,
     );
     expect(cannotGet('minecraft:log', 16, {}, true)).toBeNull();
+    // An item only a known chest holds can be had.
+    const chest = {
+      id: 'chest_1',
+      where: null,
+      distance: null,
+      items: { 'minecraft:ender_pearl': 10 },
+    };
+    expect(cannotGet('minecraft:ender_pearl', 4, {})).toBe('no recipe or source known');
+    expect(cannotGet('minecraft:ender_pearl', 4, {}, false, [chest])).toBeNull();
     expect(cannotGet('minecraft:wooden_pickaxe', 1, {}, true)).toBeNull();
   });
 

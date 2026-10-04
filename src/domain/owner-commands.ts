@@ -88,6 +88,10 @@ export const DEFAULT_GOAL_COUNT = 16;
 const DEFAULT_ONE = /_(pickaxe|axe|shovel|spade|hoe|sword|helmet|chestplate|leggings|boots)$/;
 /** Words before a get's item that mean nothing to it: "get me some logs". */
 const GOAL_FILLER: ReadonlySet<string> = new Set(['me', 'a', 'an', 'some', 'the']);
+/** Words that, before an item with no count, mean one: "get a furnace". */
+const ONE: ReadonlySet<string> = new Set(['a', 'an', 'one']);
+/** Words before a block's name that mean nothing to it: "the chest", "the nearest tree". */
+const BLOCK_FILLER: ReadonlySet<string> = new Set(['the', 'a', 'an', 'nearest', 'closest', 'some']);
 
 /**
  * A waypoint's name: lowercase letters, digits, - and _, at most 32, starting with a letter or
@@ -147,7 +151,12 @@ export const OwnerCommandSchema = z.discriminatedUnion('verb', [
   /** Travel to the nearest block of a kind it sees or remembers, as Baritone's #goto <block>. */
   z.strictObject({ verb: z.literal('goto-block'), block: ItemNameSchema }),
   /** Say where the nearest blocks of a kind are, as Baritone's #find. */
-  z.strictObject({ verb: z.literal('find'), block: ItemNameSchema }),
+  z.strictObject({
+    verb: z.literal('find'),
+    block: ItemNameSchema,
+    /** A GregTech ore's raw ore: only ores of that material ("!find iron ore"). */
+    item: ItemNameSchema.optional(),
+  }),
   /**
    * Explore `distance` blocks toward a compass direction (null: the one seen least), as
    * Baritone's #explore: a travel to the point that far that way from where it starts.
@@ -382,6 +391,10 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
       return none ? ok({ verb: 'surface' }) : usage(verb);
     case 'find':
     case 'locate': {
+      // "iron ore": a GregTech ore of that material (the caller's names), as for !mine.
+      const text = args.join(' ');
+      const ore = /\sores?$/i.test(text) ? (names.ore?.(text) ?? null) : null;
+      if (ore !== null) return ok({ verb: 'find', block: ore.block, item: ore.item });
       const block = none ? null : blockName(args);
       return block === null ? usage('find') : ok({ verb: 'find', block });
     }
@@ -452,6 +465,11 @@ const BLOCK_ALIASES: Readonly<Record<string, string>> = {
  * it is none of these.
  */
 export function blockName(words: readonly string[]): string | null {
+  let rest = words;
+  while (rest.length > 1 && BLOCK_FILLER.has((rest[0] ?? '').toLowerCase())) rest = rest.slice(1);
+  // Numbers are coordinates (a mistyped goto), never a block's name.
+  if (rest.length === 0 || rest.some((w) => /\d/.test(w) && !w.includes(':'))) return null;
+  words = rest;
   const text = words.join(' ');
   return (
     BLOCK_ALIASES[text.toLowerCase()] ?? resolveItemName(text) ?? resolveItemName(words.join('_'))
@@ -523,7 +541,12 @@ function goalCommand(
   // "get 20 logs", "get logs 20", "get me some logs" (DEFAULT_GOAL_COUNT); an item name may
   // hold spaces ("Natura:N Crops").
   let rest = args;
-  while (rest.length > 0 && GOAL_FILLER.has((rest[0] ?? '').toLowerCase())) rest = rest.slice(1);
+  // "a" or "an" with no count is one: "get a furnace" (16 furnaces would be 128 cobblestone).
+  let one = false;
+  while (rest.length > 0 && GOAL_FILLER.has((rest[0] ?? '').toLowerCase())) {
+    one ||= ONE.has((rest[0] ?? '').toLowerCase());
+    rest = rest.slice(1);
+  }
   let count: string | undefined;
   let words: readonly string[];
   if (NUMBER.test(rest[0] ?? '')) [count, words] = [rest[0], rest.slice(1)];
@@ -539,7 +562,11 @@ function goalCommand(
   const name = ore === null ? resolveItemName(text) : ore.item;
   if (name === null) return usage(verb);
   const n =
-    count !== undefined ? Number(count) : DEFAULT_ONE.test(itemBase(name)) ? 1 : DEFAULT_GOAL_COUNT;
+    count !== undefined
+      ? Number(count)
+      : one || DEFAULT_ONE.test(itemBase(name))
+        ? 1
+        : DEFAULT_GOAL_COUNT;
   if (!Number.isInteger(n)) return usage(verb);
   if (n < 1 || n > MAX_GOAL_COUNT) {
     return { ok: false, kind: 'usage', usage: `the count must be 1-${MAX_GOAL_COUNT}` };
@@ -611,7 +638,7 @@ export function describeCommand(c: OwnerCommand): string {
     case 'goto-block':
       return `go to the nearest ${c.block}`;
     case 'find':
-      return `find ${c.block}`;
+      return `find ${c.item ?? c.block}`;
     case 'explore':
       return `explore ${c.distance} blocks ${c.direction === null ? 'the way I have seen least' : c.direction.replace('_', '-')}`;
     case 'tunnel':

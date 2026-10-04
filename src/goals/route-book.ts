@@ -33,6 +33,7 @@ import {
   type RouteRecipe,
   type RouteSource,
   type RouteTool,
+  type StoredContainer,
 } from './route.ts';
 
 /**
@@ -657,7 +658,8 @@ export function knowledgeFailure(): string | null {
 /**
  * Why `count` of `item` cannot be got at all from `inventory`, by the book's route: an item
  * it knows no way to get, or one that needs a tool none held is and none can be made (a
- * GregTech ore and its pickaxe level); `anyKind`: every kind of it counts. Null when the
+ * GregTech ore and its pickaxe level); `anyKind`: every kind of it counts; `storage`: the
+ * containers whose contents are known (an item only a chest holds can be had). Null when the
  * route gets it, and when the knowledge base did not load (nothing is known then).
  */
 export function cannotGet(
@@ -665,6 +667,7 @@ export function cannotGet(
   count: number,
   inventory: Readonly<Record<string, number>>,
   anyKind = false,
+  storage: readonly StoredContainer[] = [],
 ): string | null {
   if (knowledgeFailure() !== null) return null;
   const route = planRoute(
@@ -672,7 +675,7 @@ export function cannotGet(
     inventory,
     ROUTE_BOOK,
     () => [],
-    [],
+    storage,
     undefined,
     new Set(anyKind ? [item] : []),
   );

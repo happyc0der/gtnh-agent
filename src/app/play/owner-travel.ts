@@ -40,7 +40,12 @@ export type TravelTarget =
       /** Follow: walk about a second of the path at a time, then plan again. */
       step?: boolean;
     }
-  | { kind: 'point'; point: { x: number; y: number | null; z: number } };
+  | {
+      kind: 'point';
+      point: { x: number; y: number | null; z: number };
+      /** Arrived only with the feet in the point's own block (else within AT_POINT). */
+      exact?: boolean;
+    };
 
 export type TravelStep =
   /** There already: `distance` blocks across from the target. */
@@ -196,10 +201,16 @@ export function planTravelStep(input: TravelInput): TravelStep {
   const goalPoint = target.point;
   const across = Math.hypot(goalPoint.x - feet.x, goalPoint.z - feet.z);
   const dy = goalPoint.y === null ? 0 : Math.abs(goalPoint.y - feet.y);
+  const sameBlock =
+    Math.floor(feet.x) === Math.floor(goalPoint.x) &&
+    Math.floor(feet.z) === Math.floor(goalPoint.z) &&
+    (goalPoint.y === null || Math.floor(feet.y + 1e-6) === Math.floor(goalPoint.y + 1e-6));
   const arrived =
     target.kind === 'near'
       ? across <= target.within && dy <= NEAR_DY
-      : across <= AT_POINT && dy <= AT_POINT;
+      : target.exact === true
+        ? sameBlock
+        : across <= AT_POINT && dy <= AT_POINT;
   if (arrived) return { kind: 'arrived', distance: Number(across.toFixed(1)) };
   if (!input.movement.enabled) return refused('walking is off (MC_ENABLE_MOVEMENT)');
   const fence = input.area.fence;

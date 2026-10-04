@@ -52,6 +52,16 @@ describe('find and goto a block', () => {
       ok: true,
       command: { verb: 'goto-block', block: 'minecraft:crafting_table' },
     });
+    // "the", "nearest" mean nothing; numbers are a mistyped goto, never a block.
+    expect(parseOwnerCommand('!goto the chest')).toEqual({
+      ok: true,
+      command: { verb: 'goto-block', block: 'minecraft:chest' },
+    });
+    expect(parseOwnerCommand('!find the nearest crafting table')).toEqual({
+      ok: true,
+      command: { verb: 'find', block: 'minecraft:crafting_table' },
+    });
+    expect(parseOwnerCommand('!goto 10 64 x')).toMatchObject({ ok: false, kind: 'usage' });
     // One plain word may be a waypoint: play looks for a block only when it is none.
     expect(parseOwnerCommand('!goto chest')).toEqual({
       ok: true,
@@ -60,6 +70,15 @@ describe('find and goto a block', () => {
     expect(describeCommand({ verb: 'goto-block', block: 'minecraft:chest' })).toBe(
       'go to the nearest minecraft:chest',
     );
+    // A GregTech ore by its material, as !mine names one.
+    expect(parseOwnerCommand('!find iron ore', { ore: gtOreByName })).toEqual({
+      ok: true,
+      command: {
+        verb: 'find',
+        block: 'gregtech:gt.blockores',
+        item: 'gregtech:gt.metaitem.03@5032',
+      },
+    });
   });
 });
 
@@ -227,6 +246,9 @@ describe('the structured form', () => {
       ['!get me 20 logs', { verb: 'get', count: 20, item: 'minecraft:log' }],
       ['!get wooden_pickaxe', { verb: 'get', count: 1, item: 'minecraft:wooden_pickaxe' }],
       ['!get a stone_axe', { verb: 'get', count: 1, item: 'minecraft:stone_axe' }],
+      ['!get a furnace', { verb: 'get', count: 1, item: 'minecraft:furnace' }],
+      ['!get me an iron_ingot', { verb: 'get', count: 1, item: 'minecraft:iron_ingot' }],
+      ['!get some logs', { verb: 'get', count: 16, item: 'minecraft:log' }],
       ['!mine sand', { verb: 'mine', count: 16, block: 'minecraft:sand', item: 'minecraft:sand' }],
     ];
     for (const [text, command] of cases) {
