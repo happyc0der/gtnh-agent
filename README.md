@@ -30,7 +30,7 @@ the play area that moves with the player) and within the safety boundary.
 | Ability                                                                                    | Switch                                          | Run live                          |
 | ------------------------------------------------------------------------------------------ | ----------------------------------------------- | --------------------------------- |
 | Observe position, health, food, inventory, mobs, hazards, light, GregTech machines, quests | `MC_ENABLE_LIVE_CONNECTION`                     | yes                               |
-| Walk over terrain, retreat or flee from threats, explore and remember what it saw          | `MC_ENABLE_MOVEMENT`, `MC_MOVEMENT_MODE=follow` | yes                               |
+| Walk over terrain like Baritone, retreat or flee, explore and remember what it saw         | `MC_ENABLE_MOVEMENT`, `MC_MOVEMENT_MODE=follow` | yes; the pathfinder: fake server  |
 | Dig allowlisted blocks (stone and ores with a pickaxe) with the best tool; a night pit     | `MC_ENABLE_DIGGING`                             | yes; stone, ores: fake server     |
 | Place allowlisted plain blocks (night shelters); a crafting table or furnace to use        | `MC_ENABLE_PLACING`                             | plain yes; stations fake server   |
 | Eat approved food; go and get food when it has none                                        | `MC_ENABLE_EATING`                              | yes                               |
@@ -204,10 +204,10 @@ nearly empty food bar (below `minHunger`, 6, with nothing to eat) keep priority:
 gathering wait for them, and it says so ("It is night: I stay in my shelter until morning, then I
 come to you"), while `!status` and the like are answered meanwhile. Nothing a command asks for
 bypasses the safety rules: travel is MOVE_TO, EXPLORE and WAIT steps that code plans with the
-client's own walk rules and the executor validates, executes and verifies like any other, with
-System 1 deciding first (a mob still makes it retreat, EXPLORE only by day); `!get` and `!mine` are
-goals for the planner and GATHER, as `--needs`. Idle with `--listen`, the bot still retreats, eats
-and rests when System 1 would.
+client's own pathfinder and walk policy and the executor validates, executes and verifies like
+any other, with System 1 deciding first (a mob still makes it retreat, EXPLORE only by day);
+`!get` and `!mine` are goals for the planner and GATHER, as `--needs`. Idle with `--listen`, the
+bot still retreats, eats and rests when System 1 would.
 
 **How chat stays narrow.**
 
@@ -251,14 +251,20 @@ and [docs/action-contract.md](docs/action-contract.md).
   emerald ore) (`DIG_DOWN`: dirt, grass, sand, gravel or clay under the feet); the
   one that places blocks, `PLACE_BLOCK`, only places vanilla dirt, cobblestone, sand, gravel,
   sandstone, planks and logs, and a crafting table or furnace on a solid floor out of the way the
-  player walks; `EXPLORE` only walks, in hops, inside the boundary and only in
-  daylight. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT`, and only
-  blocks with an interaction profile or on the observe-only list. The only combat is
-  `ATTACK_ENTITY`, on one listed hostile or farm animal.
-- Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays on one level
-  inside the fence and stops at the first sign of trouble (see below). With digging on too, a
-  `MOVE_TO` over terrain may break up to 4 leaves in its way, each checked and dug like
-  `DIG_BLOCK`; nothing else is ever broken by a walk.
+  player walks; `EXPLORE` walks in hops inside the boundary, only in daylight, breaking and
+  placing on its way as `MOVE_TO` does. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and
+  `TAKE_OUTPUT`, and only blocks with an interaction profile or on the observe-only list. The
+  only combat is `ATTACK_ENTITY`, on one listed hostile or farm animal.
+- Walking is off unless `MC_ENABLE_MOVEMENT=true` **and** a fence is set; it stays inside the
+  fence (one level in the pen, terrain in the play area) and stops at the first sign of trouble
+  (see below). Over terrain it plans on a pathfinder (see
+  [Movement like Baritone](#movement-like-baritone)): with digging on, a `MOVE_TO` or `EXPLORE`
+  may break natural blocks in its way, each checked and dug like `DIG_BLOCK` (never an ore, a
+  block a player built, or one within 4 blocks of another player); with placing on, it may
+  pillar up or bridge a gap with cobblestone, netherrack or dirt it carries, each checked and
+  placed like `PLACE_BLOCK` (never within 3 blocks of another player; 4 dirt are kept for the
+  night shelter). Retreats, flights from a threat and the walk to a drop break and place
+  nothing.
 - Exploring is off unless walking is on **and** `MC_MOVEMENT_MODE=follow`; it never leaves the
   safety boundary (at most 2048 blocks per side in that mode), walks at most 96 blocks per
   `EXPLORE`, only in daylight, and stops for threats like any walk.
@@ -272,8 +278,9 @@ and [docs/action-contract.md](docs/action-contract.md).
   doors, drawers, barrels and ender chests are never right-clicked. Furnaces get only approved
   fuels, never lava (see below).
 - Digging is off unless `MC_ENABLE_DIGGING=true` **and** the fence is set. It only breaks
-  allowlisted blocks inside the fence, never the floor, and never anything touching water, a
-  chest, a machine or any other non-plain block (see below).
+  allowlisted blocks inside the fence, never the floor, never anything touching water, a chest,
+  a machine or any other non-plain block, and never a block it saw a player put down (see
+  below).
 - The one dig of the ground under the player, `DIG_DOWN` (approved 2026-10-01), is for the night
   pit only. The safety policy allows it only as code's own next step of the night-shelter
   task's blueprint, in the evening, at night or in the last 4 minutes before night; never from
@@ -376,8 +383,10 @@ ground is within range, and mobs cannot spawn on glass).
    Coordinates starting with `-` need the `=` form: `--to=-0.5,200,-11.5`.
 
 A walk is ONE user-requested action through the same executor as the agent's own: validated
-(schema, safety policy, preconditions), executed, re-observed and verified. The walker plans with
-A* inside the fence and re-checks every 0.2-block step just before sending it. A walk stops on:
+(schema, safety policy, preconditions), executed, re-observed and verified. In the pen (a fence
+on one level) the walker plans with A* inside the fence and re-checks every 0.2-block step just
+before sending it; over terrain, walks plan on the pathfinder instead (see
+[Movement like Baritone](#movement-like-baritone)). A walk stops on:
 
 - a server correction (the server moved the player back);
 - a health drop;
@@ -393,6 +402,58 @@ a steam macerator, and a macerator that is switched off. `observe` lists them wi
 
 `pnpm cli observe --live` and `move` draw a top-down map of the fence. To watch in-game, join
 `127.0.0.1:25570` with a GTNH 2.8.4 client as a whitelisted player.
+
+### Movement like Baritone
+
+Over terrain (a fence with a height range, or the play area of `MC_MOVEMENT_MODE=follow`) every
+walk plans on a pathfinder modelled on Baritone's (`src/bot/gtnh1710/pathing/`; Baritone is
+LGPL-3.0, so its ideas only, none of its code): A* over the blocks the server sent, with
+movements whose costs are ticks of vanilla 1.7.10 physics. It walks straight and diagonally,
+jumps up one block, drops and falls up to 3 blocks (no damage), takes running jumps over gaps,
+and breaks, pillars and bridges its way where the settings below allow. The path becomes one
+position packet per tick at the vanilla walking pace (4.3 blocks a second), each checked just
+before it is sent; a jump's steps go without a pause, so every cell of the flight is checked
+before the take-off. It has run on the fake server only so far (which checks every move as the
+1.7.10 server does); the live test is next.
+
+- `MOVE_TO` walks to the target's block. `GATHER` goes to stand spots the same walk reaches
+  (beside the block, as a person stands to dig it), so a log walled in by leaves is reached by
+  breaking them.
+- `EXPLORE` walks in hops: each the best partial path toward the point inside the play area, the
+  next planned from where it ended, with the chunks that came meanwhile.
+- A retreat (`RETURN_TO_SAFE_LOCATION`) in mode `follow` travels in the same hops to the safe
+  location's block. It breaks and places nothing: a dig or a placement stops for a threat, and a
+  retreat runs from one. When it cannot get on and a threat is near, it flees instead: a walk of
+  at most 32 blocks to a spot at least 6 blocks farther from every threat.
+- `!follow` plans about a second of the way toward its owner (to within 3 blocks), walks it and
+  plans again.
+
+| Setting                     | Default | What                                                                                                                                                                             |
+| --------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MC_PATH_ALLOW_BREAK`       | `true`  | With `MC_ENABLE_DIGGING`: break natural blocks in the way that `DIG_BLOCK` may dig, with the best tool carried (stone only with a pickaxe that harvests it), at most 24 per walk |
+| `MC_PATH_ALLOW_PLACE`       | `true`  | With `MC_ENABLE_PLACING`: pillar up and bridge gaps with cobblestone, netherrack or dirt carried (never a protected item)                                                        |
+| `MC_PATH_ALLOW_PARKOUR`     | `true`  | Running jumps over gaps of 1-2 blocks (3 sprinting), only over gaps that would not hurt to fall into                                                                             |
+| `MC_PATH_PARKOUR_DEEP_GAPS` | `false` | Parkour over deeper gaps too                                                                                                                                                     |
+| `MC_PATH_ALLOW_SPRINT`      | `false` | Sprint on walks to a goal at least 16 blocks away while food is above 10 (HungerOverhaul makes sprinting cost food)                                                              |
+| `MC_PATH_ALLOW_WATER`       | `false` | Wade through calm one-deep water                                                                                                                                                 |
+| `MC_PATH_THROWAWAY_RESERVE` | `4`     | Dirt a walk never places: the night shelter's roof                                                                                                                               |
+
+How it stays safe:
+
+- Every break is checked and dug as `DIG_BLOCK` digs (the dig rules from where the player
+  stands, the dig time, every tick re-checked, the server's change to air), and every block
+  placed is checked and clicked as `PLACE_BLOCK` places (only a plain full block clicked, the
+  server's block change awaited). A refusal, or a confirmation that does not come, ends the walk
+  with why, and the agent plans again.
+- Never an ore (ores are mined), a block a player built (see [Digging](#digging)), anything
+  within 4 blocks (breaking) or 3 blocks (placing) of another player, or outside the safety
+  boundary.
+- A pillar's block must be confirmed before the jump comes down on it; otherwise the jump comes
+  back down where it began and the walk stops (should the block still come, the player jumps
+  onto it). A bridge waits at the edge, a second at most, for its block.
+- Vanilla physics only: no step moves into a block, no jump is longer than a real one, nothing
+  hovers, and falls land only where they do no damage. Sprinting stops before every dig and
+  placement and at the end; a sprinting walk stops when food falls to 10.
 
 ### Chests
 
@@ -599,12 +660,18 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
   sweeps up what an earlier one of its own left lying within 4 blocks (never anyone else's).
 - A `GATHER` of logs fells each tree from its base, standing beside the trunk, so every drop
   falls down the emptied column to the player.
-- A `MOVE_TO` over terrain may break up to 4 leaves in its way, the same way: before a move
-  that needs it, the walk stops and digs each one with these checks (leaves only), the dig time
-  and the server's confirmation, the upper block first. A break refused or not confirmed stops
-  the walk, and the agent re-plans. Each costs the walker its dig time (3.2 blocks of walking),
-  so a way round that is not much longer wins. The result says what it broke and what the
-  leaves dropped. Retreats, `EXPLORE` and the walk to a drop never break anything.
+- A walk over terrain (`MOVE_TO`, `EXPLORE`) may break what is in its way, the same way: before
+  a movement that needs it, the walk stops and digs each block with these checks and the walk
+  policy's ([Movement like Baritone](#movement-like-baritone)), the dig time and the server's
+  confirmation, the upper block first. A break refused or not confirmed stops the walk, and the
+  agent re-plans. Each costs the pathfinder its dig time, so a way round that is not much longer
+  wins. The result says what it broke and what the blocks dropped. Retreats and the walk to a
+  drop never break anything.
+- Never a block a player built: a cell that turned from air (or a plant) into a solid block
+  while another player stood within 8 blocks, and that the agent did not fill itself, is that
+  player's build. The agent keeps them in its database (`player_builds`), so a restart keeps
+  them; they are never listed as diggable, the safety policy and the client refuse to dig one,
+  and no walk breaks one. One that turns back into air is forgotten.
 
 ### Placing
 
@@ -703,9 +770,13 @@ it saw.
 
 How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and-world-memory)):
 
-- Every hop is an ordinary walk: planned on the server's blocks, every 0.2-block step re-checked
-  just before it is sent, never into water, lava, unloaded chunks or next to a hazard, drops of at
-  most 2 blocks; a hostile (not a calm spider) or unidentified entity within 10 blocks stops it.
+- Every hop is an ordinary walk on the pathfinder (see
+  [Movement like Baritone](#movement-like-baritone)): planned on the server's blocks toward the
+  point (the best partial path when the point lies beyond the play area), every step re-checked
+  just before it is sent, never into water (but calm one-deep water with wading on), lava,
+  unloaded chunks or next to a hazard, falls of at most 3 blocks. It breaks and places on its
+  way as `MOVE_TO` does, and a hostile (not a calm spider) or unidentified entity within 10
+  blocks stops it.
 - The body passes only through air and plants checked in the code the server runs (2026-10-01):
   vanilla grass, flowers, sugar cane, vines and a single snow layer; Biomes O' Plenty's
   foliage, flowers, plants, mushrooms and vines; Natura's wild crops; HarvestCraft's gardens.
@@ -713,11 +784,12 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and
   apart by block metadata and never entered; anything else, or a plant whose metadata is not
   known, is a wall ([evidence](docs/gtnh-compatibility.md#walking-through-plants-2026-10-01)).
 - At most 96 blocks walked per EXPLORE, 12 hops and 3 minutes; it stops when stuck, at the
-  boundary, at water or cliffs it cannot route around, and when it gets dark. It is refused in the
-  evening, at night and when the time is unknown.
-- The way back: a retreat (`RETURN_TO_SAFE_LOCATION`, e.g. `move --to home`) to a location
-  beyond the play area travels in the same checked hops. Threats do not stop a retreat, at any
-  time of day: it is the escape.
+  boundary, at water or cliffs it can neither go round, climb nor bridge, and when it gets dark.
+  It is refused in the evening, at night and when the time is unknown.
+- The way back: a retreat (`RETURN_TO_SAFE_LOCATION`, e.g. `move --to home`) travels in the
+  same checked hops to the location's block, however far (at most 768 blocks walked), breaking
+  and placing nothing. Threats do not stop a retreat, at any time of day: it is the escape. When
+  it cannot get on and a threat is near, it flees from the threat instead.
 - World memory records only what a player could see: blocks near the surface with a face
   touching air, in a clear line of sight from the eyes, within 40 blocks, in daylight; and out
   to 112 blocks, by far sight, what stands out from afar on the top blocks (water, lava, sand,
