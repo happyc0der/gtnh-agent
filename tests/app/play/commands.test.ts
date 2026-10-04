@@ -1317,6 +1317,53 @@ describe("owners' commands in play", () => {
     expect(result.mobNearby).toBe('HOSTILES_NEARBY');
   });
 
+  it('idle, a retreat refused as a repeated failure (a pause) is waited out offline too', async () => {
+    const sim = newSim({ heard: [whisper('!pause')] });
+    const base = deps(open(), sim, { listen: true });
+    let sessions = 0;
+    const result = await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          standby: () =>
+            Promise.resolve({ kind: 'reflex', text: 'RETREAT_HOME [HOSTILES_NEARBY]' }),
+        },
+        session: (_limits, hooks) => {
+          sessions += 1;
+          hooks.onCycle(
+            {
+              summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> rejected [REPEATED_FAILURE]',
+              status: 'rejected',
+              decision: {
+                decision: 'RETREAT_HOME',
+                confidence: 0.95,
+                reasonCodes: ['HOSTILES_NEARBY'],
+                factsUsed: {},
+                requiresHumanConfirmation: false,
+                provider: 'test',
+              },
+              outcome: null,
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'rejected' }],
+            stopReason: 'needs attention',
+            stopKind: 'needs-attention',
+            taskId: 'owner-standby',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(sessions).toBe(1);
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY');
+  });
+
   it('a food bar nearly empty keeps priority: the food trip first, then the command', async () => {
     const repos = open();
     const sim = newSim({

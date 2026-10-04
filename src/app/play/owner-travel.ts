@@ -78,6 +78,8 @@ export interface TravelInput {
    * plans as its walk will; walking only (no breaks or places) when absent.
    */
   path?: PathOptions;
+  /** The step's search time (default STEP_MAX_MS; tests on a loaded machine allow more). */
+  searchMs?: number;
 }
 
 /** At a point: this close across (blocks), and up or down. */
@@ -236,7 +238,7 @@ export function planTravelStep(input: TravelInput): TravelStep {
   const found = planPath(world, fence, feet, goal, {
     ...input.path,
     maxNodes: STEP_MAX_NODES,
-    maxTimeMs: STEP_MAX_MS,
+    maxTimeMs: input.searchMs ?? STEP_MAX_MS,
   });
 
   const explore = (): TravelStep => ({

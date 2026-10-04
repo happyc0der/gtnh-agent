@@ -198,6 +198,7 @@ describe('a target below', () => {
         path: policy,
         movement: { enabled: true, canExplore: false, maxPathLength: 32 },
         target: { kind: 'near', point: { x: 2.5, y: 55, z: 0.5 }, within: 2.5 },
+        searchMs: 5_000, // the test is about the result, not the time on a busy machine
       }),
     );
     if (step.kind !== 'step' || step.spec.type !== 'MOVE_TO') throw new Error(JSON.stringify(step));

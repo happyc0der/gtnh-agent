@@ -642,8 +642,10 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
   // seconds (seen live 2026-10-04: 37 refused retreats in a row, from a pit the morning had
   // opened).
   const last = play.lastDecision;
+  // A retreat that failed ends the session 'cycle-failed'; one refused as a repeated failure
+  // (a pause) 'needs-attention' (seen live: the loop went on after the first fix).
   if (
-    result.stopKind === 'cycle-failed' &&
+    (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') &&
     last !== null &&
     last.decision === 'RETREAT_HOME' &&
     (last.reasonCodes.includes('HOSTILES_NEARBY') ||
