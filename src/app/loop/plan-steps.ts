@@ -1,13 +1,15 @@
 import {
   createAction,
   isAllowlistedActionType,
+  MAX_EXPLORE_DISTANCE,
   MIN_EXPLORE_DISTANCE,
   type ActionSpec,
 } from '../../domain/actions.ts';
-import { wanderTarget } from '../../domain/world-memory.ts';
 import type { BlockPosition } from '../../domain/common.ts';
 import type { GameState } from '../../domain/game-state.ts';
 import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
+import { eyeDistanceToBlock } from '../../domain/geometry.ts';
+import { wanderTarget } from '../../domain/world-memory.ts';
 import { validateCandidate, type ExecutionOutcome } from '../../executor/action-executor.ts';
 import type { StoredPlan } from '../../persistence/plan-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
@@ -81,6 +83,11 @@ export interface PlanStepRef {
     entity: number | null;
     travel?: boolean;
   };
+  /**
+   * The action only gets the player to the step's target (a crafting table out of reach:
+   * tableApproach); the step itself is still to do, so a success does not advance the plan.
+   */
+  approach?: boolean;
 }
 
 const reviewHint = (taskId: string, planId: number): string =>
@@ -190,6 +197,24 @@ function stepOf(
       },
     };
   }
+  if (step.action.type === 'CRAFT_ITEM') {
+    const walk = tableApproach(
+      state,
+      step.action.args.craftingTableId,
+      ctx.config.interactionReach,
+    );
+    if (walk !== null) {
+      return {
+        chosen: {
+          spec: walk.spec,
+          reason: `${head}: ${walk.why}`.slice(0, 500),
+          origin: 'planner',
+        },
+        outcome,
+        planStep: { ...planStep, approach: true },
+      };
+    }
+  }
   return {
     chosen: {
       spec: step.action,
@@ -198,6 +223,55 @@ function stepOf(
     },
     outcome,
     planStep,
+  };
+}
+
+/** An observed table's id (crafting_table:<x>.<y>.<z>): where it stands. */
+const OBSERVED_TABLE = /^crafting_table:(-?\d+)\.(-?\d+)\.(-?\d+)$/;
+
+/**
+ * The walk back to a crafting table a plan's CRAFT_ITEM uses, when it is out of reach: seen
+ * live, "GATHER 5 logs" explored 56 blocks for trees, and the craft at the table placed
+ * before was refused ("crafting table ... is not known": out of the scan). In view: MOVE_TO
+ * the spot to use it from; out of view: EXPLORE toward it. Null when the craft can go ahead
+ * (in reach, a configured table, a 2x2 craft) or there is no way to it (no stand spot).
+ */
+export function tableApproach(
+  state: GameState,
+  tableId: string | null,
+  reach: number,
+): { spec: ActionSpec; why: string } | null {
+  const m = tableId === null ? null : OBSERVED_TABLE.exec(tableId);
+  const at = state.player.position.known ? state.player.position.value : null;
+  if (m === null || at === null) return null;
+  const table = { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) };
+  if (eyeDistanceToBlock(at, table) <= reach) return null;
+  const where = `(${table.x}, ${table.y}, ${table.z})`;
+  const seen = state.interactables.known
+    ? state.interactables.value.blocks.find(
+        (b) => b.position.x === table.x && b.position.y === table.y && b.position.z === table.z,
+      )
+    : undefined;
+  if (seen !== undefined) {
+    if (seen.standAt == null) return null;
+    return {
+      spec: { type: 'MOVE_TO', args: { target: { ...seen.standAt }, tolerance: 0.5 } },
+      why: `walking back to the crafting table at ${where} to craft there`,
+    };
+  }
+  const across = Math.hypot(table.x + 0.5 - at.x, table.z + 0.5 - at.z);
+  return {
+    spec: {
+      type: 'EXPLORE',
+      args: {
+        toward: { x: table.x + 0.5, z: table.z + 0.5 },
+        maxDistance: Math.min(
+          MAX_EXPLORE_DISTANCE,
+          Math.max(MIN_EXPLORE_DISTANCE, Math.ceil(across) + 4),
+        ),
+      },
+    },
+    why: `heading back toward the crafting table at ${where} (${Math.round(across)} blocks away) to craft there`,
   };
 }
 
@@ -346,6 +420,11 @@ export function updatePlanProgress(
     const plan = repos.plans.get(ref.planId);
     if (plan !== null) repos.memory.appendJournal(plan.taskId, text);
   };
+  // On the way to the step's target: the step itself is still to do.
+  if (ref.approach === true && outcome.status === 'succeeded') {
+    repos.plans.resetStepFailures(ref.planId);
+    return false;
+  }
   const gather = ref.gather;
   if (gather !== undefined) {
     const after = gatherAfterAction(repos, gather.ref, gather, outcome, now);
