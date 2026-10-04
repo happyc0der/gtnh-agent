@@ -60,6 +60,16 @@ describe('the raised box (the night shelter where a pit cannot be dug)', () => {
     expect(shelterStatus(ground(['0,67,0']), FEET, s.needs).problem).toBeNull();
   });
 
+  it('cannot be walled up in the air: a wall cell with nothing beside, below or above it', () => {
+    // Seen live: the player on its own pillar in a tree; every wall placement was refused.
+    const pillar: SolidLookup = {
+      solidAt: (x, y, z) => (x === 0 && z === 0 && y <= 81) || (x === 1 && y === 84 && z === 0),
+    };
+    const s = shelterStatus(pillar, { x: 0.5, y: 82, z: 0.5 }, { 'minecraft:dirt': 20 });
+    expect(s).toMatchObject({ kind: 'box', sheltered: false, steps: [] });
+    expect(s.problem).toMatch(/^nothing solid beside, below or above the box's wall cell/);
+  });
+
   it('needs a roof block that does not fall, and enough wall blocks', () => {
     expect(shelterStatus(ground([TRUNK]), FEET, { 'minecraft:sand': 64 }).problem).toMatch(
       /no block for the roof/,

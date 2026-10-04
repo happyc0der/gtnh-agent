@@ -195,6 +195,30 @@ export function shelterStatus(
     const p = cell.position;
     const below =
       world.solidAt(p.x, p.y - 1, p.z) === true || willBeSolid.has(key({ ...p, y: p.y - 1 }));
+    // A wall block is placed against a solid face beside, below or above its cell (the
+    // player's own cell is open): with none, the box cannot be built (seen live 2026-10-04: the
+    // player on its own pillar in a tree, three nights' sessions refused NOT_PLACEABLE).
+    const faces: Array<[number, number, number]> = [
+      [p.x + 1, p.y, p.z],
+      [p.x - 1, p.y, p.z],
+      [p.x, p.y, p.z + 1],
+      [p.x, p.y, p.z - 1],
+      [p.x, p.y - 1, p.z],
+      [p.x, p.y + 1, p.z],
+    ];
+    const against = faces.some(
+      ([x, y, z]) => world.solidAt(x, y, z) === true || willBeSolid.has(key({ x, y, z })),
+    );
+    if (cell.role !== 'roof' && !against) {
+      return {
+        ...base,
+        sheltered: false,
+        steps: [],
+        needs: {},
+        problem: `nothing solid beside, below or above the box's wall cell ${at(p)} to place it against`,
+        walled,
+      };
+    }
     const choices =
       cell.role === 'roof'
         ? SHELTER_ROOF_ITEMS
