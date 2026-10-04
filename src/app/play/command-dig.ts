@@ -239,6 +239,8 @@ async function digSession(
   let dark: WorldTime | null = null;
   let hungry: FoodStatus | null = null;
   let preempted: string | null = null;
+  /** The last step's failure, in the client's words (the reply says why, not just "failed"). */
+  let stepFailure: string | null = null;
   const result = await blueprintSession(play, {
     taskId: taskId,
     goal: `Owner command #${cmd.id} from ${cmd.sender}: ${describeCommand(command)} (code digs it)`,
@@ -256,6 +258,10 @@ async function digSession(
           ? 'the food bar is nearly empty'
           : ((preempted ??= commandWaiting(play)) ?? hooks.stopRequested()),
     onCycle: (r) => {
+      const execution = r.outcome?.execution;
+      if (execution !== null && execution !== undefined && !execution.ok) {
+        stepFailure = execution.message;
+      }
       const after = r.outcome?.stateAfter;
       if (
         after?.time.known === true &&
@@ -279,18 +285,23 @@ async function digSession(
   }
   const mob = mobPause(result.stopKind, play.lastDecision);
   if (mob !== null) return waitOutMob(play, taskId, mob);
-  if (result.stopKind === 'cycle-failed' && reflexEnded(play)) {
-    // One of System 1's reflexes failed (a retreat with no way home, seen live 2026-10-04: a
-    // stairs command failed with 0 blocks dug): the dig was interrupted, not refused. It goes
-    // on next round, MAX_COMMAND_FAILURES times in a row at most.
+  // A reflex's own failure says more in the session's words; a step's in the client's.
+  const why = (reflexEnded(play) ? result.stopReason : (stepFailure ?? result.stopReason)).slice(
+    0,
+    300,
+  );
+  if (result.stopKind === 'cycle-failed') {
+    // A step failed: one of System 1's reflexes (a retreat with no way home, seen live
+    // 2026-10-04: a stairs command failed with 0 blocks dug), or a walk a hostile stopped (a
+    // Mirage Enderman 4 blocks off, the same day). The dig was interrupted: it is planned
+    // again from the world as it is next round, as a trip is, MAX_COMMAND_FAILURES times in a
+    // row at most; a cell that may not be dug then says so.
     run.failures += 1;
-    if (run.failures >= MAX_COMMAND_FAILURES) return fail(`${result.stopReason} (${dug})`);
+    if (run.failures >= MAX_COMMAND_FAILURES) return fail(`${why} (${dug})`);
     await play.sleep(TUNNEL_RETRY_MS);
     return 'next-round';
   }
-  if (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') {
-    return fail(`${result.stopReason} (${dug})`);
-  }
+  if (result.stopKind === 'needs-attention') return fail(`${why} (${dug})`);
   run.failures = 0;
   return 'next-round';
 }

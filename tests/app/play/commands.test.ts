@@ -1290,6 +1290,72 @@ describe("owners' commands in play", () => {
     );
   });
 
+  it('tries a dig step a hostile stopped again; three in a row fail it, in the walk’s own words', async () => {
+    // Seen live 2026-10-04: a Mirage Enderman 4 blocks off stopped the stairs' first step, and
+    // the command failed at once with "MOVE_TO -> failed".
+    const walkStopped =
+      'walk stopped after 5 of 11 steps: hostile entity SpecialMobs.MirageEnderman 4.0 blocks away';
+    const run = async (failures: number): Promise<Sim> => {
+      const sim = newSim({ heard: [whisper('!tunnel east 2')] });
+      const tunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
+        const done = Math.floor(sim.position.x) - req.start.x;
+        if (done >= req.length) {
+          return Promise.resolve({ ok: true, done: req.length, steps: [], problem: null });
+        }
+        const x = req.start.x + done + 1;
+        const target = { x: x + 0.5, y: req.start.y, z: req.start.z + 0.5 };
+        return Promise.resolve({
+          ok: true,
+          done,
+          steps: [{ spec: { type: 'MOVE_TO', args: { target, tolerance: 0.5 } }, text: 'step' }],
+          problem: null,
+        });
+      };
+      const base = deps(open(), sim, { tunnel });
+      let failed = 0;
+      await runPlay(
+        {
+          ...base,
+          session: (limits, hooks) => {
+            if (failed >= failures) return base.session(limits, hooks);
+            failed += 1;
+            hooks.onCycle(
+              {
+                summary: 'EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed',
+                status: 'failed',
+                decision: {
+                  decision: 'EXECUTE_KNOWN_SAFE_STEP',
+                  confidence: 0.95,
+                  reasonCodes: ['KNOWN_SAFE_STEP'],
+                  factsUsed: {},
+                  requiresHumanConfirmation: false,
+                  provider: 'test',
+                },
+                outcome: { execution: { ok: false, message: walkStopped }, stateAfter: null },
+              } as unknown as CycleResult,
+              1,
+            );
+            return Promise.resolve({
+              cycles: [{ cycleId: 'c1', summary: 'EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed' }],
+              stopReason: 'stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed',
+              stopKind: 'cycle-failed',
+              taskId: 'command-1',
+              taskStatus: 'active',
+              elapsedMs: 1,
+            });
+          },
+        },
+        LIMITS,
+        noStop,
+      );
+      return sim;
+    };
+    const once = await run(1);
+    expect(said(once).at(-1)).toBe('Done: dug a tunnel 2 blocks east');
+    const thrice = await run(3);
+    expect(said(thrice).at(-1)).toBe(`Failed: ${walkStopped} (0 of 2 blocks dug)`);
+  });
+
   it('turns where the way it picked is blocked, from where it got to, for the rest of the length', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!tunnel down 3')] });
