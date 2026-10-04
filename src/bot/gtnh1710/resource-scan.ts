@@ -1,9 +1,4 @@
-import {
-  DIGGABLE_BLOCKS,
-  GT_ORE_BLOCK,
-  nearestOfEachKind,
-  type DiggableBlock,
-} from '../../domain/blocks.ts';
+import { DIGGABLE_BLOCKS, GT_ORE_BLOCK, type DiggableBlock } from '../../domain/blocks.ts';
 import { MAX_REPORTED_RESOURCES } from '../../domain/game-state.ts';
 import type { ChunkStore } from './chunk-data.ts';
 import type { Registry } from './registry.ts';
@@ -11,6 +6,15 @@ import { SIGHT, sightOf } from './world-survey.ts';
 
 /** Blocks around the player searched for diggable blocks (a sphere around the feet). */
 export const RESOURCE_SCAN_RADIUS = 16;
+/**
+ * The nearest blocks this close to the feet (about as far as a dig reaches: 4.5 from the eyes,
+ * 1.62 above the feet) fill up to half the list before the fair share between kinds, so a dig
+ * a plan makes next to the player is not refused for a block the list left out. Seen live: in
+ * a night pit's way out, the grass of the next step, 2.5 blocks away, was cut from a list of
+ * 64 full of the pit's walls, and the dig was refused (NOT_DIGGABLE). Half, so that farther
+ * kinds still show (a pit's walls must not crowd the logs out of view either).
+ */
+export const LISTED_FIRST_RADIUS = 5.5;
 
 export interface FoundResource {
   block: DiggableBlock;
@@ -88,9 +92,9 @@ export const GROUND_DIRT_SAMPLE = 8;
  * scan sees only EXPOSED blocks: at least one face touches air (no x-ray through the
  * ground). The blocks under the player itself are left out: they are never dug. Fail
  * closed: any column in range that has not arrived or could not be decoded makes the scan
- * unknown. At most `max` are listed, shared fairly between kinds (nearestOfEachKind): of
- * each kind its nearest, so a kind that is not listed has no visible block within the
- * declared radius. Only when more kinds are found than `max` does that radius shrink, below
+ * unknown. At most `max` are listed: the nearest within LISTED_FIRST_RADIUS (up to half of
+ * them), then the rest shared fairly between kinds (as domain/blocks.ts nearestOfEachKind does): of each kind its
+ * nearest, so a kind that is not listed has no visible block within the declared radius. Only when more kinds are found than `max` does that radius shrink, below
  * the nearest block of the first kind left out.
  */
 export function scanResources(
@@ -192,7 +196,26 @@ export function scanResources(
     a.position.z - b.position.z;
   found.push(...groundDirt.sort(byDistance).slice(0, GROUND_DIRT_SAMPLE));
   found.sort(byDistance);
-  const listed = nearestOfEachKind(found, kindOf, max);
+  // The nearest in reach first (up to half the list), then the rest shared fairly by kind,
+  // those already listed counting for theirs (nearestOfEachKind's ranks, carried on).
+  const inReach = found
+    .filter((f) => f.distance <= LISTED_FIRST_RADIUS)
+    .slice(0, Math.floor(max / 2));
+  const first = new Set(inReach);
+  const shown = new Map<string, number>();
+  for (const f of inReach) shown.set(kindOf(f), (shown.get(kindOf(f)) ?? 0) + 1);
+  const ranked = found
+    .filter((f) => !first.has(f))
+    .map((f, order) => {
+      const kind = kindOf(f);
+      const rank = shown.get(kind) ?? 0;
+      shown.set(kind, rank + 1);
+      return { f, order, rank };
+    })
+    .sort((a, b) => a.rank - b.rank || a.order - b.order)
+    .slice(0, Math.max(0, max - inReach.length))
+    .map((r) => r.f);
+  const listed = [...inReach, ...ranked].sort(byDistance);
   const kinds = new Set(listed.map(kindOf));
   const leftOut = found.find((f) => !kinds.has(kindOf(f)));
   if (leftOut === undefined) return { ok: true, scanRadius: radius, resources: listed };
