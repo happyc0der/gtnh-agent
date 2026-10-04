@@ -320,6 +320,9 @@ waits inside while they are near (the sun burns zombies and skeletons), looking 
 5 s, answering commands as at night and saying so in `!status`; it digs out once they are gone,
 and the wait spends none of the exit's tries (seen live 2026-10-04: zombies about the pit at
 sunrise, the retreat home failed from inside it session after session, and the exit gave up).
+After 5 minutes of it (`MOB_SHELTER_MAX_MS`: a mob in a cave beside the pit, or a creeper, may
+stay all day) play waits offline instead, as for a mob near home; hurt a moment ago, the player
+counts as not sheltered, and the usual rules decide.
 
 **A mob near home.** When System 1 pauses only because a mob is near (`HOSTILES_NEARBY` or
 `UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand
@@ -1299,9 +1302,11 @@ Profiles today:
    for an output.
 4. **The client** re-checks the block itself: loaded, its name, its profile or the observe-only
    list, the never-opened lists, reach and the fence.
-   - It opens the block with an empty hand, else a vanilla tool or block (`clickHand`, as for
-     chests and doors), and accepts only a window the profile knows (opener and exact slot
-     count).
+   - It opens the block with an empty hand, else, for a block with a profile (which always
+     answers the click), a vanilla tool or plain full block (`clickHand`, as for chests and
+     doors); an observe-only block only ever with an empty hand (it may not answer, and the
+     click would then place what is held). It accepts only a window the profile knows (opener
+     and exact slot count).
    - Clicks are the chests' clicks: predictable, all planned before the first one, never onto
      stacks with NBT data, one at a time with the server's verdict. A rejection is followed by the
      re-sync, and the cursor goes back to the inventory.
