@@ -9,8 +9,9 @@ line on a private test server and takes its owners' commands in chat, in `!` for
 English: Baritone's everyday commands (come, follow, goto a point, a waypoint or a block, find,
 explore, tunnel, surface, mine, stop) and goals of items to have (`!get 16 logs`,
 `!get 1 wooden_pickaxe` from nothing). It explores, gathers, digs (stairs down through stone,
-and down or up through the ground on a walk), shelters for the night, eats, crafts, and submits
-quests and claims their rewards. Combat is off, so a hostile in its way is waited out: it says
+and down or up through the ground on a walk), climbs ladders, wades and swims (with
+`MC_PATH_ALLOW_WATER`), shelters for the night, eats, crafts, and submits quests and claims
+their rewards. Combat is off, so a hostile in its way is waited out: it says
 so and tries again, and a follow keeps on as long as its owner is in sight. It has played Age 0 up to
 "Fluffy and Red", which needs wool from sheep, and combat is off. The benchmark is the 92 quests
 of the "Tier 0 - Stone Age" chapter, plus the 14 it needs from other chapters, counted only as
@@ -422,11 +423,11 @@ walk plans on a pathfinder modelled on Baritone's (`src/bot/gtnh1710/pathing/`; 
 LGPL-3.0, so its ideas only, none of its code): A* over the blocks the server sent, with
 movements whose costs are ticks of vanilla 1.7.10 physics. It walks straight and diagonally,
 jumps up one block, drops and falls up to 3 blocks (no damage), takes running jumps over gaps,
-and breaks, pillars and bridges its way where the settings below allow. The path becomes one
-position packet per tick at the vanilla walking pace (4.3 blocks a second), each checked just
-before it is sent; a jump's steps go without a pause, so every cell of the flight is checked
-before the take-off. It has run on the fake server only so far (which checks every move as the
-1.7.10 server does); the live test is next.
+climbs ladders, wades and swims (with water allowed), and breaks, pillars and bridges its way
+where the settings below allow. The path becomes one position packet per tick at the vanilla
+walking pace (4.3 blocks a second), each checked just before it is sent; a jump's steps go
+without a pause, so every cell of the flight is checked before the take-off. It runs live on the
+test server, and the fake server's tests check every move as the 1.7.10 server does.
 
 - `MOVE_TO` walks to the target's block. `GATHER` goes to stand spots the same walk reaches
   (beside the block, as a person stands to dig it), so a log walled in by leaves is reached by
@@ -787,7 +788,7 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#exploring-and
 - Every hop is an ordinary walk on the pathfinder (see
   [Movement like Baritone](#movement-like-baritone)): planned on the server's blocks toward the
   point (the best partial path when the point lies beyond the play area), every step re-checked
-  just before it is sent, never into water (but calm one-deep water with wading on), lava,
+  just before it is sent, never into water (but calm water with `MC_PATH_ALLOW_WATER`), lava,
   unloaded chunks or next to a hazard, falls of at most 3 blocks. It breaks and places on its
   way as `MOVE_TO` does, and a hostile (not a calm spider) or unidentified entity within 10
   blocks stops it.
