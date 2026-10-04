@@ -190,14 +190,58 @@ export function parsePlannerOutput(text: string): PlannerResponse {
   }
   const parsed = PlannerResponseSchema.safeParse(json);
   if (!parsed.success) {
-    return invalidOutput(
-      parsed.error.issues
+    const issues = parsed.error.issues;
+    const describe = (list: typeof issues): string =>
+      list
         .slice(0, 3)
         .map((i) => `${i.path.join('.')}: ${i.message}`)
-        .join('; '),
-    );
+        .join('; ');
+    return validPrefix(json, issues, describe(issues)) ?? invalidOutput(describe(issues));
   }
   return parsed.data;
+}
+
+/**
+ * A plan whose only invalid steps come after its first, cut before the first invalid one: the
+ * steps before it stand on their own, and the next plan starts from what they leave (a plan
+ * is re-planned as it goes anyway). Seen live: a plan for "Tools" began with a valid GATHER of
+ * logs, and its eighth step named a recipe CRAFT_ITEM cannot make; the whole plan was refused,
+ * the agent paused, and the quest's task with it. Null when the first step is invalid, or the
+ * output is wrong outside the steps (the response kind, the goal, failure handling).
+ */
+function validPrefix(
+  json: unknown,
+  issues: ReadonlyArray<{ path: readonly PropertyKey[] }>,
+  detail: string,
+): PlannerResponse | null {
+  if (typeof json !== 'object' || json === null || !('plan' in json)) return null;
+  const plan: unknown = json.plan;
+  if (typeof plan !== 'object' || plan === null || !('steps' in plan)) return null;
+  const steps: unknown = plan.steps;
+  if (!Array.isArray(steps)) return null;
+  let first = Infinity;
+  for (const issue of issues) {
+    const [a, b, n] = issue.path;
+    if (a !== 'plan' || b !== 'steps' || typeof n !== 'number' || n < 1) return null;
+    first = Math.min(first, n);
+  }
+  if (!Number.isFinite(first)) return null;
+  const why = `(Code dropped steps ${first + 1}-${steps.length}: step ${first + 1} was invalid: ${detail})`;
+  const explanation =
+    'explanation' in plan && typeof plan.explanation === 'string' ? plan.explanation : '';
+  const cut = {
+    ...json,
+    plan: {
+      ...plan,
+      steps: steps.slice(0, first),
+      explanation: `${explanation.slice(0, Math.max(0, 1000 - why.length - 1))} ${why}`.slice(
+        0,
+        1000,
+      ),
+    },
+  };
+  const again = PlannerResponseSchema.safeParse(cut);
+  return again.success ? again.data : null;
 }
 
 function invalidOutput(detail: string): PlannerResponse {

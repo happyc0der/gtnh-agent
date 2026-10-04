@@ -170,6 +170,33 @@ describe('parsePlannerOutput (future LLM output path)', () => {
     const r = parsePlannerOutput(text);
     expect(r).toMatchObject({ kind: 'escalation', escalation: { reason: 'INVALID_OUTPUT' } });
   });
+
+  it('keeps the valid steps before the first invalid one after the first step', () => {
+    // Seen live: a "Tools" plan began with a valid GATHER and its eighth step named a recipe
+    // CRAFT_ITEM cannot make; the whole plan was refused and the quest's task paused.
+    const badCraft = {
+      step: 3,
+      action: {
+        type: 'CRAFT_ITEM',
+        args: { recipe: 'not a recipe', times: 1, craftingTableId: null },
+      },
+      rationale: 'make it',
+    };
+    const plan = { ...validPlan, steps: [...validPlan.steps, badCraft] };
+    const r = parsePlannerOutput(JSON.stringify({ kind: 'plan', plan }));
+    if (r.kind !== 'plan') throw new Error(JSON.stringify(r));
+    expect(r.plan.steps.map((st) => st.action.type)).toEqual(['INSPECT_MACHINE', 'WAIT']);
+    expect(r.plan.explanation).toMatch(
+      /^Low-risk\. \(Code dropped steps 3-3: step 3 was invalid: plan\.steps\.2/,
+    );
+  });
+
+  it('refuses a plan whose first step is invalid', () => {
+    const bad = { ...validPlan.steps[0], action: { type: 'CRAFT_ITEM', args: { recipe: 'x' } } };
+    const plan = { ...validPlan, steps: [bad, ...validPlan.steps.slice(1)] };
+    const r = parsePlannerOutput(JSON.stringify({ kind: 'plan', plan }));
+    expect(r).toMatchObject({ kind: 'escalation', escalation: { reason: 'INVALID_OUTPUT' } });
+  });
 });
 
 describe('planner request and mock planner', () => {
