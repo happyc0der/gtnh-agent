@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { gtnhRouteBook, knowledgeFailure, ROUTE_BOOK } from '../../src/goals/route-book.ts';
+import { TOOL_DIGGABLE_BLOCKS } from '../../src/domain/blocks.ts';
+import { diggableInfo } from '../../src/domain/dig-time.ts';
+import { loadKnowledge } from '../../src/goals/knowledge.ts';
+import {
+  gtnhRouteBook,
+  harvestRequirement,
+  knowledgeFailure,
+  ROUTE_BOOK,
+} from '../../src/goals/route-book.ts';
 import { describeRoute, planRoute, type Route, type RouteBook } from '../../src/goals/route.ts';
 
 const steps = (route: Route): string[] =>
@@ -15,7 +23,25 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     expect(knowledgeFailure()).toBeNull();
     const book = gtnhRouteBook();
     expect(book.recipes.length).toBeGreaterThan(50_000);
-    expect(book.sources.some((s) => s.blocks.includes('gregtech:gt.blockores@500'))).toBe(true);
+    // GT ores are dug as the block the world shows (gt.blockores); the source names the ore.
+    expect(
+      book.sources.some(
+        (s) =>
+          s.blocks.join() === 'gregtech:gt.blockores' &&
+          (s.where ?? '').startsWith('Diamond ore (gregtech:gt.blockores@500)'),
+      ),
+    ).toBe(true);
+    // Stone and its kin need a pickaxe (their rules: src/domain/dig-time.ts).
+    expect(book.sources.find((s) => s.blocks.join() === 'minecraft:stone')).toMatchObject({
+      item: 'minecraft:cobblestone',
+      tool: { kind: 'pickaxe', level: 0 },
+    });
+    expect(book.sources.some((s) => s.blocks.includes('minecraft:obsidian'))).toBe(false);
+    // Every GT ore source says where it generates and which GATHER digs it, in a short line.
+    for (const s of book.sources.filter((x) => x.blocks.join() === 'gregtech:gt.blockores')) {
+      expect(s.where).toMatch(/\(Overworld\); GATHER \{"block":"gregtech:gt\.blockores","item":/);
+      expect(s.where?.length).toBeLessThanOrEqual(260);
+    }
     // Tools IguanaTweaks disables (a vanilla iron pickaxe mines nothing here) are no tools.
     expect(book.tools?.some((t) => t.item === 'minecraft:iron_pickaxe')).toBe(false);
     expect(book.tools).toContainEqual({
@@ -40,6 +66,57 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
         )
         .map((r) => r.id),
     ).toEqual(['planks_oak']);
+  });
+
+  it("the dig rules agree with the knowledge base's harvest table wherever it lists the block", () => {
+    // The table (IguanaTweaks' levels, from the jars) has no GT ores (their level is their
+    // metadata) and no hardened clay (no harvest tool set: any pickaxe harvests rock).
+    const data = loadKnowledge();
+    const compared: string[] = [];
+    for (const block of TOOL_DIGGABLE_BLOCKS) {
+      const info = diggableInfo(block);
+      for (const meta of info.naturalMeta ?? [0]) {
+        const key = meta === 0 ? block : `${block}@${meta}`;
+        const listed = harvestRequirement(data, key);
+        if (listed === null) continue;
+        compared.push(key);
+        expect(listed, key).toEqual({ kind: info.harvest?.tool, level: info.harvest?.level });
+      }
+    }
+    expect(compared).toEqual([
+      'minecraft:stone',
+      'minecraft:cobblestone',
+      'minecraft:mossy_cobblestone',
+      'minecraft:sandstone',
+      'minecraft:netherrack',
+      'gregtech:gt.blockgranites',
+      'gregtech:gt.blockgranites@8',
+      'gregtech:gt.blockstones',
+      'gregtech:gt.blockstones@8',
+      'minecraft:emerald_ore',
+    ]);
+  });
+
+  it('64 cobblestone from nothing: logs, planks, sticks, a wooden pickaxe, then stone', () => {
+    const route = planRoute({ 'minecraft:cobblestone': 64 }, {}, ROUTE_BOOK, () => [], [], []);
+    expect(route.unresolved).toEqual({});
+    expect(steps(route)).toEqual([
+      'gather minecraft:log',
+      'craft minecraft:planks',
+      'craft minecraft:stick',
+      'craft minecraft:wooden_pickaxe',
+      'gather minecraft:cobblestone',
+    ]);
+    // The pickaxe is the knowledge base's GTNH recipe, which CRAFT_ITEM makes by this id.
+    expect(
+      route.legs.find((l) => l.kind === 'craft' && l.makes.item.endsWith('pickaxe')),
+    ).toMatchObject({ recipe: 'minecraft:wooden_pickaxe#1', station: 'crafting_table' });
+    expect(route.legs.at(-1)).toMatchObject({
+      kind: 'gather',
+      quantity: 64,
+      blocks: ['minecraft:stone'],
+      tool: { kind: 'pickaxe', level: 0 },
+    });
   });
 
   it('a GregTech mortar: flint, smooth stone from a furnace, a pickaxe to dig the stone', () => {
@@ -100,6 +177,32 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     ]);
   });
 
+  it('a wooden pickaxe worn to its last safe use (damage 59) digs nothing more: a new one', () => {
+    // The agent stops one use before a tool breaks (src/domain/tools.ts usesLeft).
+    const route = planRoute(
+      { 'minecraft:cobblestone': 5 },
+      { 'minecraft:wooden_pickaxe@59': 1, 'minecraft:planks': 6 },
+      ROUTE_BOOK,
+      () => [],
+      [],
+      ['crafting_table'],
+    );
+    expect(route.unresolved).toEqual({});
+    expect(steps(route)).toEqual([
+      'craft minecraft:stick',
+      'craft minecraft:wooden_pickaxe',
+      'gather minecraft:cobblestone',
+    ]);
+    expect(route.tools).toEqual([
+      {
+        for: 'dig minecraft:stone',
+        need: 'pickaxe level >= 0',
+        have: null,
+        get: 'minecraft:wooden_pickaxe',
+      },
+    ]);
+  });
+
   it('a chest: the GTNH recipe, with flint made from gravel', () => {
     const route = planRoute(
       { 'minecraft:chest': 1 },
@@ -132,7 +235,9 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     expect(route.legs.at(-1)).toMatchObject({ recipe: 'torch_coal', times: 2 });
     const coal = route.legs.find((l) => l.kind === 'gather' && l.item === 'minecraft:coal');
     expect(coal).toMatchObject({ tool: { kind: 'pickaxe', level: 0 } });
-    expect(coal?.kind === 'gather' ? coal.where : null).toMatch(/^GT small ore Coal: y 120-250/);
+    expect(coal?.kind === 'gather' ? coal.where : null).toMatch(
+      /^GT small ore Coal \(gregtech:gt\.blockores@16535\): y 120-250/,
+    );
   });
 
   it('an iron pickaxe from nothing: goes as far as it can, and names the missing pickaxe', () => {
@@ -143,20 +248,24 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     const missing = Object.keys(route.unresolved);
     expect(missing).toHaveLength(1);
     expect(route.why[missing[0] ?? '']).toMatch(
-      /GT small ore Iron: y 40-100.*needs a pickaxe level >= 1: none held, none known to make/,
+      /GT small ore Iron \(gregtech:gt\.blockores@16032\): y 40-100.*needs a pickaxe level >= 1: none held, none known to make/,
     );
-    expect(route.tools).toContainEqual({
-      for: 'dig gregtech:gt.blockores@16032',
-      need: 'pickaxe level >= 1',
-      have: null,
-      get: null,
-    });
-    expect(route.tools).toContainEqual({
-      for: 'dig minecraft:stone',
-      need: 'pickaxe level >= 0',
-      have: null,
-      get: 'minecraft:wooden_pickaxe',
-    });
+    // The wooden pickaxe is made to dig stone (cobblestone), then digs the level-0 ores; the
+    // block is listed once, so iron's level-1 need is in the reason above.
+    expect(route.tools.filter((t) => t.for.startsWith('dig '))).toEqual([
+      {
+        for: 'dig minecraft:stone',
+        need: 'pickaxe level >= 0',
+        have: null,
+        get: 'minecraft:wooden_pickaxe',
+      },
+      {
+        for: 'dig gregtech:gt.blockores',
+        need: 'pickaxe level >= 0',
+        have: 'minecraft:wooden_pickaxe',
+        get: null,
+      },
+    ]);
   });
 
   it('an iron pickaxe with a pickaxe of unknown level: ores, smelting, then the crafting tools', () => {
@@ -190,17 +299,19 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     expect(steps(route).filter((s) => s.startsWith('smelt')).length).toBeGreaterThan(0);
   });
 
-  it('100 diamonds with no pickaxe: both pickaxe levels, and where diamonds generate', () => {
+  it('100 diamonds with no pickaxe: the least pickaxe level, and where diamonds generate', () => {
     const route = planRoute({ 'minecraft:diamond': 100 }, {}, ROUTE_BOOK, () => [], [], []);
     expect(route.unresolved).toEqual({ 'minecraft:diamond': 100 });
+    // Both are dug as gt.blockores: the need is the least level (the small ore's, 3).
     expect(route.tools).toEqual([
-      { for: 'dig gregtech:gt.blockores@16500', need: 'pickaxe level >= 3', have: null, get: null },
-      { for: 'dig gregtech:gt.blockores@500', need: 'pickaxe level >= 4', have: null, get: null },
+      { for: 'dig gregtech:gt.blockores', need: 'pickaxe level >= 3', have: null, get: null },
     ]);
+    // The vein's raw ore is dug from the same block, so the reason names that block once:
+    // its least level, where the small ore generates, and the GATHER that digs it.
     const why = route.why['minecraft:diamond'] ?? '';
-    expect(why).toContain('GT small ore Diamond: y 5-15');
-    expect(why).toContain('GT vein Diamond (in-between): y 5-20');
-    expect(why).toContain('furnace:gregtech:gt.metaitem.03@5500');
+    expect(why).toContain('GT small ore Diamond (gregtech:gt.blockores@16500): y 5-15');
+    expect(why).toContain('needs a pickaxe level >= 3: none held, none known to make');
+    expect(why).toContain('GATHER {"block":"gregtech:gt.blockores","item":"minecraft:diamond"}');
   });
 
   it('100 diamonds holding a vanilla iron pickaxe: it mines nothing in GTNH', () => {
@@ -210,7 +321,7 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
       ROUTE_BOOK,
     );
     expect(route.unresolved).toEqual({ 'minecraft:diamond': 100 });
-    expect(route.tools.map((t) => t.have)).toEqual([null, null]);
+    expect(route.tools.map((t) => t.have)).toEqual([null]);
   });
 
   it('100 diamonds with a level-3 pickaxe: small ores (level 3), not the vein (level 4)', () => {
@@ -221,14 +332,14 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
         kind: 'gather',
         item: 'minecraft:diamond',
         quantity: 100,
-        blocks: ['gregtech:gt.blockores@16500'],
+        blocks: ['gregtech:gt.blockores'],
         actions: 375,
         tool: { kind: 'pickaxe', level: 3 },
       },
     ]);
     expect(route.tools).toEqual([
       {
-        for: 'dig gregtech:gt.blockores@16500',
+        for: 'dig gregtech:gt.blockores',
         need: 'pickaxe level >= 3',
         have: 'IC2:itemToolDrill',
         get: null,
@@ -250,9 +361,11 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
       'smelt minecraft:diamond',
     ]);
     expect(route.legs[0]).toMatchObject({
-      blocks: ['gregtech:gt.blockores@500'],
+      blocks: ['gregtech:gt.blockores'],
       tool: { kind: 'pickaxe', level: 4 },
-      where: 'GT vein Diamond (in-between): y 5-20 (Overworld)',
+      where:
+        'Diamond ore (gregtech:gt.blockores@500): GT vein Diamond (in-between): y 5-20 (Overworld); ' +
+        'GATHER {"block":"gregtech:gt.blockores","item":"gregtech:gt.metaitem.03@5500"}',
     });
     expect(route.stationNeeds).toEqual([
       {

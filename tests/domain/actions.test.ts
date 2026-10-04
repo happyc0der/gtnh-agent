@@ -315,16 +315,24 @@ describe('game state schema', () => {
   it('lists only allowlisted blocks as diggable resources', () => {
     const state = makeState();
     if (!state.nearbyBlocks.known) throw new Error('fixture blocks unknown');
-    const withStone = {
+    const blocks = state.nearbyBlocks.value;
+    const listing = (block: string) => ({
       ...state,
       nearbyBlocks: {
         known: true,
-        value: {
-          ...state.nearbyBlocks.value,
-          resources: [{ block: 'minecraft:stone', position: { x: 0, y: 64, z: 0 } }],
-        },
+        value: { ...blocks, resources: [{ block, position: { x: 0, y: 64, z: 0 } }] },
       },
-    };
-    expect(GameStateSchema.safeParse(withStone).success).toBe(false);
+    });
+    // Stone and GT ores are on the list now (dug only with a tool that harvests them)...
+    expect(GameStateSchema.safeParse(listing('minecraft:stone')).success).toBe(true);
+    expect(GameStateSchema.safeParse(listing('gregtech:gt.blockores')).success).toBe(true);
+    // ...never the silverfish's stone, obsidian, or a machine.
+    for (const block of [
+      'minecraft:monster_egg',
+      'minecraft:obsidian',
+      'gregtech:gt.blockmachines',
+    ]) {
+      expect(GameStateSchema.safeParse(listing(block)).success, block).toBe(false);
+    }
   });
 });

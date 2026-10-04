@@ -1,10 +1,14 @@
 import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
-import type { DiggableBlock } from '../../../domain/blocks.ts';
 import type { BlockPosition } from '../../../domain/common.ts';
 import { BARE_HAND_SPEED, digWaitTicks, instantDig, TICK_MS } from '../../../domain/dig-time.ts';
 import {
   bestTool,
+  describeHarvest,
+  isTinkersTool,
+  readTinkersTool,
+  tinkersTool,
+  tinkersWear,
   toolInfo,
   toolProblem,
   toolSpeedOn,
@@ -12,6 +16,7 @@ import {
   type ToolInfo,
 } from '../../../domain/tools.ts';
 import { isProtected } from '../../../safety/protected-items.ts';
+import { errorMessage } from '../../../util/json.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import type { Stack } from '../container.ts';
 import { sameStack } from '../crafting.ts';
@@ -25,8 +30,9 @@ import {
 } from '../digging.ts';
 import { DIG_DROP_SPAWN_RADIUS } from '../drops.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
+import { readNbt } from '../nbt.ts';
 import { DIG_STATUS, outbound } from '../packets.ts';
-import { nameItemStack } from '../registry.ts';
+import { nameItemStack, type Registry } from '../registry.ts';
 import { checkSupport, fallDistances, landingHazard } from '../terrain.ts';
 import type { Vec3, WalkWorld } from '../walking.ts';
 import type { BlockWatch, WorldModel } from '../world-model.ts';
@@ -425,7 +431,7 @@ export class DigActions {
     if (!first.ok) return done(failed(`not ${verb}: ${first.reason}`, 'REFUSED'));
     // What to hold: the best allowlisted tool for this block that one more use cannot
     // break (src/domain/tools.ts), moved into the hotbar if needed; else an empty hand.
-    const hand = await this.#chooseHand(first.block, protectedItems);
+    const hand = await this.#chooseHand(first, protectedItems);
     if (!hand.ok) return done(failed(`not ${verb}: ${hand.reason}`, hand.code));
     if (hand.slot !== this.#world.heldSlot) {
       this.#core.send(outbound.selectHotbarSlot(hand.slot));
@@ -446,7 +452,7 @@ export class DigActions {
     const instant = instantDig(check.block);
     const ticks = instant
       ? 0
-      : digWaitTicks(check.block, tool === null ? BARE_HAND_SPEED : tool.speed);
+      : digWaitTicks(check.block, tool === null ? BARE_HAND_SPEED : tool.speed, check.hardness);
     const holding =
       tool === null ? 'an empty hand' : `${tool.item} (${usesLeft(tool, hand.damage)} uses left)`;
     const guard = callerGuard ?? {
@@ -512,17 +518,27 @@ export class DigActions {
   }
 
   /**
-   * What to dig `block` with. The fastest tool for it from the allowlist (src/domain/tools.ts)
-   * that has no NBT data, is not protected, and that one more use cannot break; at equal
-   * speed the one already in hand, then the hotbar, then the main inventory. A tool in the
-   * main inventory is first moved into an empty hotbar slot (two confirmed clicks in window
-   * 0). With no usable tool, an empty hotbar slot: an empty hand. `note` says which tools
-   * for this block were passed over, and why.
+   * What to dig the checked block with (`target`: checkDig's verdict, with what harvests this
+   * very block: a GT ore's level is its metadata). The fastest usable tool that harvests it:
+   *  - a tool from the allowlist (src/domain/tools.ts) without NBT data, of the block's kind
+   *    and level, that one more use cannot break;
+   *  - a Tinkers' Construct pickaxe, shovel, hatchet or mattock whose NBT data (InfiTool) says
+   *    it harvests the block and digs it faster, is not broken, and takes one more use
+   *    (tools.ts tinkersTool); only from the hotbar: moving a stack with NBT data would need
+   *    its data echoed back exactly in the click, which the client never sends;
+   *  - never a protected item.
+   * At equal speed the one already in hand, then the hotbar, then the main inventory. A tool
+   * in the main inventory is first moved into an empty hotbar slot (two confirmed clicks in
+   * window 0). With no usable tool: for a block a hand harvests, an empty hotbar slot (an
+   * empty hand); stone and ores are refused (a hand or too low a tool digs them at a third of
+   * the speed and the block is gone with nothing dropped). `note` says which tools for this
+   * block were passed over, and why.
    */
   async #chooseHand(
-    block: DiggableBlock,
+    target: Extract<DigCheck, { ok: true }>,
     protectedItems: ReadonlySet<string>,
   ): Promise<Hand | { ok: false; reason: string; code: 'REFUSED' | 'FAILED' | 'ERROR' }> {
+    const { block, harvest } = target;
     const storage = this.#world.playerStorage();
     const registry = this.#world.registry;
     interface Candidate {
@@ -542,17 +558,10 @@ export class DigActions {
       for (const index of order) {
         const s = storage[index];
         if (s == null) continue;
-        const base = registry.items.get(s.id);
-        const tool = base === undefined ? null : toolInfo(base);
-        if (tool === null || toolSpeedOn(tool, block) === null) continue;
-        const naming = nameItemStack(registry, s.id, s.damage);
-        const problem = !naming.ok
-          ? `${tool.item}: ${naming.reason}`
-          : isProtected(naming.name, protectedItems)
-            ? `${tool.item} is a protected item`
-            : toolProblem({ tool, damage: s.damage, count: s.count, hasNbt: s.hasNbt }, block);
-        if (problem === null) candidates.push({ tool, damage: s.damage, index, stack: s });
-        else passedOver.push(problem);
+        const use = this.#toolFor(s, index, target, protectedItems, registry);
+        if (use === null) continue;
+        if ('problem' in use) passedOver.push(use.problem);
+        else candidates.push({ ...use, index, stack: s });
       }
     }
     const note = passedOver.length === 0 ? null : `not used: ${passedOver.slice(0, 2).join('; ')}`;
@@ -583,7 +592,20 @@ export class DigActions {
       if (slower !== null) return use(slower, slower.index - 27);
       return {
         ok: false,
-        reason: `no empty hotbar slot (to move the ${best.tool.item} into, or to dig with an empty hand)`,
+        reason:
+          harvest === null
+            ? `no empty hotbar slot (to move the ${best.tool.item} into, or to dig with an empty hand)`
+            : `no empty hotbar slot to move the ${best.tool.item} into`,
+        code: 'REFUSED',
+      };
+    }
+    if (harvest !== null) {
+      // Stone or an ore: a hand (or a tool that does not harvest it) would leave nothing.
+      return {
+        ok: false,
+        reason:
+          `no carried tool harvests ${block}: it needs ${describeHarvest(harvest)}` +
+          (note === null ? '' : `; ${note}`),
         code: 'REFUSED',
       };
     }
@@ -598,6 +620,63 @@ export class DigActions {
       };
     }
     return { ok: true, slot: empty, tool: null, damage: 0, note };
+  }
+
+  /**
+   * One stack as a tool for the checked block (#chooseHand): the tool and its wear, why it
+   * may not be used, or null when it is no tool made for this block at all (passed over
+   * without a word). A vanilla tool from the allowlist by its registry name and damage
+   * (tools.ts toolProblem: speed, the block's kind and level, NBT data, wear); a Tinkers' tool
+   * by its NBT data (readNbt, then tools.ts readTinkersTool and tinkersTool).
+   */
+  #toolFor(
+    s: Stack,
+    index: number,
+    target: Extract<DigCheck, { ok: true }>,
+    protectedItems: ReadonlySet<string>,
+    registry: Registry,
+  ): { tool: ToolInfo; damage: number } | { problem: string } | null {
+    const base = registry.items.get(s.id);
+    if (base === undefined) return null;
+    const vanilla = toolInfo(base);
+    if (vanilla !== null) {
+      if (toolSpeedOn(vanilla, target.block) === null) return null;
+      const naming = nameItemStack(registry, s.id, s.damage);
+      const problem = !naming.ok
+        ? `${vanilla.item}: ${naming.reason}`
+        : isProtected(naming.name, protectedItems)
+          ? `${vanilla.item} is a protected item`
+          : toolProblem(
+              { tool: vanilla, damage: s.damage, count: s.count, hasNbt: s.hasNbt },
+              target.block,
+              target.harvest,
+            );
+      return problem === null ? { tool: vanilla, damage: s.damage } : { problem };
+    }
+    if (!isTinkersTool(base)) return null;
+    let root: Readonly<Record<string, unknown>>;
+    try {
+      if (s.nbt === undefined) return { problem: `${base} has no NBT data to read it from` };
+      root = readNbt(s.nbt).value;
+    } catch (error) {
+      return { problem: `${base}: its NBT data does not decode (${errorMessage(error)})` };
+    }
+    const read = readTinkersTool(base, root);
+    if (!read.ok) return { problem: read.reason };
+    const held = tinkersTool(read.stats, target.block, target);
+    if (!held.ok) return held.notForBlock ? null : { problem: held.reason };
+    const naming = nameItemStack(registry, s.id, s.damage);
+    if (!naming.ok) return { problem: `${base}: ${naming.reason}` };
+    if (isProtected(naming.name, protectedItems)) return { problem: `${base} is a protected item` };
+    if (s.count !== 1) return { problem: `${s.count} x ${base} in one stack` };
+    if (index < 27) {
+      return {
+        problem:
+          `${base} is in the main inventory: a Tinkers' tool is used only from the hotbar ` +
+          '(moving a stack with NBT data would need its data echoed back exactly)',
+      };
+    }
+    return { tool: held.tool, damage: held.damage };
   }
 
   /**
@@ -624,19 +703,39 @@ export class DigActions {
 
   /**
    * After a dig with a tool: waits (up to 1 s) for the server to re-send its slot with one
-   * more damage, then describes its state.
+   * more damage, then describes its state. A Tinkers' tool wears in its NBT data
+   * (InfiTool.Damage; its damage value is a percentage, ToolCore.getDamage), so a change of
+   * that data counts too, and its uses left are read from it.
    */
   async #toolAfterDig(
     held: { slot: number; stack: Stack | null },
     tool: ToolInfo,
   ): Promise<{ usesLeft: number | null; text: string }> {
-    await this.#core.waitFor(
-      () => !sameStack(this.#core.inventory.hotbar(held.slot) ?? null, held.stack),
-      1_000,
-    );
+    const sameNbt = (a: Stack | null, b: Stack | null): boolean =>
+      a?.nbt === undefined || b?.nbt === undefined ? a?.nbt === b?.nbt : a.nbt.equals(b.nbt);
+    await this.#core.waitFor(() => {
+      const now = this.#core.inventory.hotbar(held.slot) ?? null;
+      return !sameStack(now, held.stack) || !sameNbt(now, held.stack);
+    }, 1_000);
     const now = this.#core.inventory.hotbar(held.slot) ?? null;
     const before = held.stack;
     if (now === null) return { usesLeft: 0, text: 'the tool is gone from its slot' };
+    if (
+      before !== null &&
+      now.id === before.id &&
+      now.nbt !== undefined &&
+      isTinkersTool(tool.item)
+    ) {
+      let left: number | null;
+      try {
+        left = tinkersWear(tool.item, readNbt(now.nbt).value);
+      } catch {
+        left = null;
+      }
+      return left === null
+        ? { usesLeft: null, text: 'its NBT data no longer reads as a Tinkers tool' }
+        : { usesLeft: left, text: `${left} uses left` };
+    }
     if (before === null || now.id !== before.id || now.hasNbt) {
       return { usesLeft: null, text: 'its slot now holds something else' };
     }

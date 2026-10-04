@@ -54,6 +54,8 @@ export interface FakeItem {
   damage: number;
   /** A stack with (trivial) NBT data. */
   nbt?: boolean | undefined;
+  /** Its NBT data, uncompressed (a Tinkers' tool's InfiTool); set `nbt: true` with it. */
+  nbtData?: Buffer | undefined;
 }
 
 /** Ticks a food takes to eat (vanilla ItemFood.getMaxItemUseDuration). */
@@ -462,6 +464,7 @@ export class FakeGtnhServer {
     this.digSim = new FakeDigSim(
       {
         blockAt: world,
+        blockMeta: (x, y, z) => this.#metas.get(`${x},${y},${z}`) ?? 0,
         setBlock: (x, y, z, id) => this.#put(x, y, z, id, 0),
         blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
         itemName: (id) =>

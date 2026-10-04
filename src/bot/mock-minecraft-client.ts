@@ -57,7 +57,19 @@ import {
   ingredientRequirements,
   needsCraftingTable,
 } from '../domain/recipes.ts';
-import { bestTool, parseToolName, toolProblem, usesLeft } from '../domain/tools.ts';
+import { digFacts, diggableInfo } from '../domain/dig-time.ts';
+import {
+  bestTool,
+  describeHarvest,
+  isTinkersTool,
+  parseToolName,
+  readTinkersTool,
+  tinkersTool,
+  toolProblem,
+  usesLeft,
+  type NbtData,
+  type ToolStack,
+} from '../domain/tools.ts';
 import { assertValidatedAction, type ValidatedAction } from '../domain/validated-action.ts';
 import { isProtected } from '../safety/protected-items.ts';
 import { FURNACE_COOK_TICKS, furnaceFuelTicks, type ProfileId } from '../domain/interactions.ts';
@@ -79,10 +91,25 @@ const ACTION_OVERHEAD_MS = 250;
 const MOCK_DIG_MS = 1_000;
 
 /**
- * What a mock dig adds to the inventory (a simplified vanilla drop table). A garden drops 3 of
- * the first food on its list (the server: 3 random ones of the list; food.ts GARDEN_DROPS).
+ * What a mock dig adds to the inventory (a simplified version of the server's drops: the route
+ * book's DIG_YIELDS). A garden drops 3 of the first food on its list (the server: 3 random ones
+ * of the list; food.ts GARDEN_DROPS). A GT ore drops its material's raw ore, which only its tile
+ * entity knows: MockResourceBlock.drop says which; without one, raw lignite (a level-0 ore).
+ * Stone and ores drop only for a tool that harvests them (#dig refuses otherwise, as the live
+ * client does).
  */
 const MOCK_DROPS: Readonly<Record<DiggableBlock, { item: string; count: number } | null>> = {
+  'minecraft:stone': { item: 'minecraft:cobblestone', count: 1 },
+  'minecraft:cobblestone': { item: 'minecraft:cobblestone', count: 1 },
+  'minecraft:mossy_cobblestone': { item: 'minecraft:mossy_cobblestone', count: 1 },
+  'minecraft:sandstone': { item: 'minecraft:sandstone', count: 1 },
+  'minecraft:netherrack': { item: 'minecraft:netherrack', count: 1 },
+  'minecraft:hardened_clay': { item: 'minecraft:hardened_clay', count: 1 },
+  'minecraft:stained_hardened_clay': { item: 'minecraft:stained_hardened_clay', count: 1 },
+  'gregtech:gt.blockgranites': { item: 'gregtech:gt.blockgranites@1', count: 1 },
+  'gregtech:gt.blockstones': { item: 'gregtech:gt.blockstones@1', count: 1 },
+  'gregtech:gt.blockores': { item: 'gregtech:gt.metaitem.03@5538', count: 1 },
+  'minecraft:emerald_ore': { item: 'minecraft:emerald', count: 1 },
   'minecraft:log': { item: 'minecraft:log', count: 1 },
   'minecraft:log2': { item: 'minecraft:log2', count: 1 },
   'minecraft:leaves': null,
@@ -119,6 +146,13 @@ export interface MockResourceBlock {
    * observation says nothing about it, like an adapter that does not compute stand spots.
    */
   standAt?: Position | null;
+  /**
+   * Its world metadata (default: 0, a natural block's). A GT ore's is its harvest level
+   * (dig-time.ts gtOreHarvestLevel). Like the live observation, the mock's does not show it.
+   */
+  meta?: number;
+  /** What a dig drops, instead of MOCK_DROPS (a GT ore's material, from its tile entity). */
+  drop?: { item: string; count: number } | null;
 }
 
 export interface MockPlacedBlock {
@@ -232,6 +266,12 @@ export interface MockWorld {
     lastHurtAt?: string | null;
   };
   inventory: { items: Record<string, number>; capacitySlots: number };
+  /**
+   * NBT data of tools in the inventory, by item name: a Tinkers' Construct tool's stats
+   * (InfiTool), which the mock reads as the live client does; its wear goes up there. The
+   * observation shows names only, as live.
+   */
+  toolNbt?: Record<string, NbtData>;
   hostiles: Position[];
   /** Entities the agent cannot identify (e.g. unclassified modded mobs). */
   unclassified: Position[];
@@ -985,9 +1025,11 @@ export class MockMinecraftClient implements MinecraftClient {
 
   /**
    * Removes the block and adds its drop, like a server would (within reach, if any room).
-   * Like the live client, it holds the best usable tool for the block (src/domain/tools.ts),
-   * found by inventory name, and wears it by one: "minecraft:wooden_shovel" becomes
-   * "minecraft:wooden_shovel@1".
+   * Like the live client, it holds the best usable tool for the block (src/domain/tools.ts):
+   * a vanilla one found by inventory name, which wears by one ("minecraft:wooden_shovel"
+   * becomes "minecraft:wooden_shovel@1"), or a Tinkers' one by its NBT data (toolNbt), whose
+   * InfiTool.Damage goes up by one. Stone and ores only with a tool that harvests this very
+   * block (a GT ore's level is its metadata): without one it refuses, digging nothing.
    */
   #dig(p: BlockPosition, protectedItems: ReadonlySet<string>): ClientActionResult {
     const w = this.world;
@@ -999,18 +1041,45 @@ export class MockMinecraftClient implements MinecraftClient {
     if (eyeDistanceToBlock(w.player.position, p) > w.reach) {
       return failed(`${formatPosition(p)} is out of reach`);
     }
-    const tools = Object.entries(w.inventory.items).flatMap(([name, count]) => {
-      const t = parseToolName(name);
-      return t === null || count <= 0 ? [] : [{ ...t, name }];
-    });
-    const tool = bestTool(
+    const facts = digFacts(
       found.block,
-      tools,
-      (t) =>
-        !isProtected(t.name, protectedItems) &&
-        toolProblem({ ...t, count: 1, hasNbt: false }, found.block) === null,
+      found.meta ?? diggableInfo(found.block).naturalMeta?.[0] ?? 0,
     );
-    if (tool !== null) {
+    if ('problem' in facts) {
+      return failed(`not digging: ${formatPosition(p)}: ${facts.problem}`, 'REFUSED');
+    }
+    type MockTool = ToolStack & { name: string; tinkers: boolean };
+    const tools = Object.entries(w.inventory.items).flatMap(([name, count]): MockTool[] => {
+      if (count <= 0 || isProtected(name, protectedItems)) return [];
+      const t = parseToolName(name);
+      if (t !== null) {
+        const problem = toolProblem({ ...t, count: 1, hasNbt: false }, found.block, facts.harvest);
+        return problem === null ? [{ ...t, name, tinkers: false }] : [];
+      }
+      const base = name.replace(/@\d+$/, '');
+      const nbt = w.toolNbt?.[name];
+      if (nbt === undefined || !isTinkersTool(base)) return [];
+      const read = readTinkersTool(base, nbt);
+      const held = read.ok ? tinkersTool(read.stats, found.block, facts) : null;
+      return held?.ok === true
+        ? [{ tool: held.tool, damage: held.damage, name, tinkers: true }]
+        : [];
+    });
+    const tool = bestTool(found.block, tools, () => true);
+    if (tool === null && facts.harvest !== null) {
+      return failed(
+        `not digging: no carried tool harvests ${found.block} at ${formatPosition(p)}: it needs ${describeHarvest(facts.harvest)}`,
+        'REFUSED',
+      );
+    }
+    if (tool?.tinkers === true) {
+      const nbt = w.toolNbt?.[tool.name] ?? {};
+      const tags = (nbt['InfiTool'] ?? {}) as NbtData;
+      w.toolNbt = {
+        ...w.toolNbt,
+        [tool.name]: { ...nbt, InfiTool: { ...tags, Damage: tool.damage + 1 } },
+      };
+    } else if (tool !== null) {
       const worn = `${tool.tool.item}@${tool.damage + 1}`;
       w.inventory.items[tool.name] = (w.inventory.items[tool.name] ?? 0) - 1;
       w.inventory.items[worn] = (w.inventory.items[worn] ?? 0) + 1;
@@ -1019,7 +1088,7 @@ export class MockMinecraftClient implements MinecraftClient {
     w.resourceBlocks.splice(at, 1);
     w.removedBlocks = [{ ...p }, ...w.removedBlocks];
     w.placedBlocks = w.placedBlocks.filter((b) => !samePosition(b.position, p));
-    const drop = MOCK_DROPS[found.block];
+    const drop = found.drop !== undefined ? found.drop : MOCK_DROPS[found.block];
     let dropCollected = false;
     if (drop !== null) {
       const after = {

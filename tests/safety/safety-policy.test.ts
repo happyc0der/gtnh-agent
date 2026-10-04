@@ -12,6 +12,7 @@ import type { PlaceableItem } from '../../src/domain/blocks.ts';
 import type { GameState, NearbyBlocks } from '../../src/domain/game-state.ts';
 import { known, unknown } from '../../src/domain/known.ts';
 import { sequentialIds } from '../../src/util/ids.ts';
+import { digChecks } from '../../src/safety/dig-checks.ts';
 import { classifyActionType } from '../../src/safety/forbidden-actions.ts';
 import { isProtected } from '../../src/safety/protected-items.ts';
 import {
@@ -605,6 +606,76 @@ describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's suppo
   it('is not allowed during danger', () => {
     const state = makeState((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
     expect(codes(dig(2, 64, 1), state)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+
+  describe('stone and ores: only with a carried tool that harvests them', () => {
+    const at = (items: Record<string, number>) =>
+      makeState((w) => {
+        w.resourceBlocks.push(
+          { block: 'minecraft:stone', position: { x: 2, y: 65, z: 1 } },
+          { block: 'gregtech:gt.blockores', position: { x: 2, y: 66, z: 1 } },
+          { block: 'gregtech:gt.blockgranites', position: { x: 1, y: 66, z: 2 } },
+        );
+        Object.assign(w.inventory.items, items);
+      });
+
+    it('refuses stone with no pickaxe (a hand would leave nothing), as a stale step', () => {
+      const r = evaluateAction(action(dig(2, 65, 1)), at({}), safetyCtx(), emptyFailureHistory);
+      expect(r.violations).toMatchObject([
+        {
+          code: 'NOT_DIGGABLE',
+          message: expect.stringMatching(
+            /\(2, 65, 1\) is minecraft:stone, which only a tool that harvests it may dig: it needs a pickaxe of level 0 or more, and the player carries none/,
+          ) as string,
+          details: { block: 'minecraft:stone', tool: 'pickaxe', level: 0 },
+        },
+      ]);
+      // A shovel or an axe is no pickaxe; a worn-out pickaxe is not used.
+      expect(codes(dig(2, 65, 1), at({ 'minecraft:wooden_shovel': 1 }))).toEqual(['NOT_DIGGABLE']);
+      expect(codes(dig(2, 65, 1), at({ 'minecraft:wooden_pickaxe@59': 1 }))).toEqual([
+        'NOT_DIGGABLE',
+      ]);
+    });
+
+    it('allows stone with a wooden pickaxe, and dirt still with a hand', () => {
+      expect(codes(dig(2, 65, 1), at({ 'minecraft:wooden_pickaxe@12': 1 }))).toEqual([]);
+      expect(codes(dig(2, 64, 1), at({}))).toEqual([]);
+    });
+
+    it("weighs a vanilla pickaxe's level by its name; a GT ore's or a Tinkers' tool's is left to the client", () => {
+      // Granite needs level 3: a wooden pickaxe (0) is too low, and says so.
+      const low = evaluateAction(
+        action(dig(1, 66, 2)),
+        at({ 'minecraft:wooden_pickaxe': 1 }),
+        safetyCtx(),
+        emptyFailureHistory,
+      );
+      expect(low.violations[0]?.message).toMatch(
+        /a pickaxe of level 3 or more, and the player carries none \(too low: minecraft:wooden_pickaxe \(level 0\)\)/,
+      );
+      // A Tinkers' pickaxe's level is in its NBT data: the client checks it before digging.
+      expect(codes(dig(1, 66, 2), at({ 'TConstruct:pickaxe@4': 1 }))).toEqual([]);
+      // A GT ore's level is its metadata, which the observation does not carry: any pickaxe
+      // passes here (the client refuses an ore above its level).
+      expect(codes(dig(2, 66, 1), at({ 'minecraft:wooden_pickaxe': 1 }))).toEqual([]);
+      expect(codes(dig(2, 66, 1), at({}))).toEqual(['NOT_DIGGABLE']);
+    });
+
+    it('refuses when the inventory is not observed (no telling what is carried)', () => {
+      const blind = makeState((w) => {
+        w.resourceBlocks.push({ block: 'minecraft:stone', position: { x: 2, y: 65, z: 1 } });
+        w.unobservable = ['inventory'];
+      });
+      // The state check refuses first (an unobserved inventory is not trusted)...
+      expect(codes(dig(2, 65, 1), blind)).toEqual(['STATE_UNKNOWN']);
+      // ...and the dig check on its own, too.
+      expect(digChecks({ x: 2, y: 65, z: 1 }, blind, safetyCtx().config)).toMatchObject([
+        {
+          code: 'NOT_DIGGABLE',
+          message: expect.stringMatching(/inventory is not observed/) as string,
+        },
+      ]);
+    });
   });
 });
 

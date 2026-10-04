@@ -1,6 +1,8 @@
 import { toSpec, type Action } from '../domain/actions.ts';
 import { FALLING_DIGGABLE_BLOCKS, isGardenBlock } from '../domain/blocks.ts';
 import type { BlockPosition } from '../domain/common.ts';
+import { diggableInfo } from '../domain/dig-time.ts';
+import { carriedHarvester } from '../domain/tools.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { blockCentre, bodyColumns, formatPosition, headBlockY } from '../domain/geometry.ts';
 import {
@@ -20,6 +22,14 @@ import { checkHazardClearance } from './coordinate-boundaries.ts';
  * (and more: fluids, tile entities and anything else touching the block) on the blocks the
  * server sent, just before and during the dig.
  *  - The block must be an allowlisted diggable block the observation lists.
+ *  - Stone and ores only when the player carries a tool that harvests them (NOT_DIGGABLE
+ *    otherwise: a hand, or a tool of another kind or too low a level, digs them at a third of
+ *    the speed and the block is gone with nothing dropped; tools.ts carriedHarvester). A
+ *    vanilla tool counts by its name (kind, level, wear); a Tinkers' tool's level is in its
+ *    NBT data, and a GT ore's in its metadata, neither of which the observation carries, so
+ *    for those any tool of the kind passes here and the client checks the levels before it
+ *    digs (client/dig-actions.ts). Like any NOT_DIGGABLE, a plan's step refused for it is
+ *    stale, not unsafe: the planner is asked again (and can make the tool).
  *  - Never the player's own support: nothing in a column the body overlaps, at or below
  *    the head (the body's own cells are air anyway).
  *  - Never a falling block (sand/gravel) above the player's head, and never a block with a
@@ -55,6 +65,26 @@ export function digChecks(
       details: { ...details, scanRadius: blocks.scanRadius },
     });
     return v;
+  }
+  // A GT ore's table rule is the least any GT ore needs (a pickaxe of level 0).
+  const rule = diggableInfo(listed.block).harvest;
+  if (rule !== null) {
+    const tool = state.inventory.known
+      ? carriedHarvester(state.inventory.value.items, rule)
+      : { ok: false as const, reason: `the inventory is not observed (${state.inventory.reason})` };
+    if (!tool.ok) {
+      v.push({
+        code: 'NOT_DIGGABLE',
+        severity: 'pause',
+        message:
+          `${where} is ${listed.block}, which only a tool that harvests it may dig: ${tool.reason}`.slice(
+            0,
+            500,
+          ),
+        details: { ...details, block: listed.block, tool: rule.tool, level: rule.level },
+      });
+      return v;
+    }
   }
   const position = state.player.position.known ? state.player.position.value : null;
   if (position !== null) {

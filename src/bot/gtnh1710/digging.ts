@@ -3,9 +3,16 @@ import {
   isDiggableBlock,
   isGardenBlock,
   SOLID_DIGGABLE_BLOCKS,
+  TOOL_DIGGABLE_BLOCKS,
   type DiggableBlock,
 } from '../../domain/blocks.ts';
-import { BARE_HAND_SPEED, diggableInfo, digWaitTicks } from '../../domain/dig-time.ts';
+import {
+  BARE_HAND_SPEED,
+  diggableInfo,
+  digFacts,
+  digWaitTicks,
+  type HarvestRule,
+} from '../../domain/dig-time.ts';
 import type { UnderFeet } from '../../domain/game-state.ts';
 import { isBlockInsideBox } from '../../domain/geometry.ts';
 import { isDigDownBlock } from '../../domain/night-shelter.ts';
@@ -49,7 +56,9 @@ import {
  * The block facts and the dig time are in src/domain/dig-time.ts, the tools the agent may
  * hold in src/domain/tools.ts. The agent digs on the ground, with an allowlisted tool made
  * for the block or an empty hand, and waits well past the vanilla time, so the server's 70%
- * rule leaves a wide margin.
+ * rule leaves a wide margin. Stone and ores only with a tool that harvests them: checkDig
+ * reports what harvests this very block (a GT ore's level is its metadata), and the client
+ * picks the tool (client/dig-actions.ts) or refuses.
  */
 
 /** The client digs only blocks whose centre is this close to its eyes (the server allows 6). */
@@ -64,17 +73,19 @@ export const DIG_SETTLE_TICKS = 5;
 /**
  * Blocks that may touch a block the agent digs: plain full blocks with no tile entity that
  * do not fall, flow or hang on their neighbours (the walker's known full blocks), plus the
- * allowlist's solid blocks and air. Anything else next to the target (water, a torch, a
- * flower, a garden, a chest, a machine, any other modded block, an unnamed id) refuses the
- * dig: removing the block could flood the hole, drop an attached block or change a build.
- * Beside it (not on top), the plants the body walks through are fine too (digDoesNotDisturb):
- * they stand on the block under them, not on the dug one. A garden is such a plant: on top of
- * a dug block it would drop, so it is not in this set.
+ * allowlist's solid blocks (natural stone and ores among them: a GT ore keeps its material in
+ * a tile entity, but nothing about it changes when a neighbour goes) and air. Anything else
+ * next to the target (water, a torch, a flower, a garden, a chest, a machine, any other modded
+ * block, an unnamed id) refuses the dig: removing the block could flood the hole, drop an
+ * attached block or change a build. Beside it (not on top), the plants the body walks through
+ * are fine too (digDoesNotDisturb): they stand on the block under them, not on the dug one. A
+ * garden is such a plant: on top of a dug block it would drop, so it is not in this set.
  */
 export const DIG_NEIGHBOURS: ReadonlySet<string> = new Set<string>([
   'minecraft:air',
   ...WALKABLE_SURFACES,
   ...SOLID_DIGGABLE_BLOCKS,
+  ...TOOL_DIGGABLE_BLOCKS,
 ]);
 
 export interface BlockPos {
@@ -95,8 +106,21 @@ export interface DigArea {
   readonly maxHeightAboveFence: number;
 }
 
+/**
+ * A dig's verdict. Allowed: the block, its id, the face to click, the reach, and this very
+ * block's hardness and what harvests it (dig-time.ts digFacts: a GT ore's by its metadata),
+ * for the client's choice of tool and its dig time.
+ */
 export type DigCheck =
-  | { ok: true; block: DiggableBlock; blockId: number; face: number; reach: number }
+  | {
+      ok: true;
+      block: DiggableBlock;
+      blockId: number;
+      face: number;
+      reach: number;
+      hardness: number;
+      harvest: HarvestRule | null;
+    }
   | { ok: false; reason: string };
 
 /**
@@ -164,7 +188,10 @@ export function reachTo(feet: Vec3, target: BlockPos): number {
 /**
  * Whether the player standing at `feet` may dig the block at `target`, and why not.
  * Fail closed: an unloaded block, an unnamed block id or anything not explicitly allowed
- * refuses. Checked before the dig starts and again every tick while digging.
+ * refuses; so does stone or an ore whose metadata is not known or not a natural one (bricks,
+ * chiseled sandstone: dig-time.ts digFacts). Checked before the dig starts and again every
+ * tick while digging. What it does not check is the tool: the client holds one that harvests
+ * the block (`harvest` in the verdict) or refuses (client/dig-actions.ts).
  */
 export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: BlockPos): DigCheck {
   const refuse = (reason: string): DigCheck => ({ ok: false, reason });
@@ -193,6 +220,17 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
     return refuse(`${fmt(target)} holds block id ${id}, which the registry does not name`);
   if (!isDiggableBlock(name))
     return refuse(`${fmt(target)} is ${name}, which is not on the dig allowlist`);
+  const facts = digFacts(name, world.metaAt?.(x, y, z));
+  if ('problem' in facts) return refuse(`${fmt(target)}: ${facts.problem}`);
+  const allowed = (blockId: number, reach: number): DigCheck => ({
+    ok: true,
+    block: name,
+    blockId,
+    face: faceTowards(eyesOf(feet), target),
+    reach,
+    hardness: facts.hardness,
+    harvest: facts.harvest,
+  });
 
   const reach = reachTo(feet, target);
   if (reach > MAX_DIG_REACH + 1e-9) {
@@ -215,7 +253,7 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
     if (plant !== null) return refuse(plant);
     const hazard = hazardNear(world, target);
     if (hazard !== null) return refuse(hazard);
-    return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+    return allowed(id, reach);
   }
 
   // Everything touching it must be known and inert (see DIG_NEIGHBOURS).
@@ -247,7 +285,7 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
   const hazard = hazardNear(world, target);
   if (hazard !== null) return refuse(hazard);
 
-  return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+  return allowed(id, reach);
 }
 
 /** Why the 3 x 3 x 3 cube around `target` holds something dangerous or unloaded, or null. */
@@ -623,7 +661,16 @@ export function checkDigDown(
   }
 
   const reach = reachTo(feet, target);
-  return { ok: true, block: name, blockId: id, face: faceTowards(eyesOf(feet), target), reach };
+  const { hardness, harvest } = diggableInfo(name); // the ground a hand digs: no metadata rules
+  return {
+    ok: true,
+    block: name,
+    blockId: id,
+    face: faceTowards(eyesOf(feet), target),
+    reach,
+    hardness,
+    harvest,
+  };
 }
 
 /**

@@ -31,7 +31,7 @@ the play area that moves with the player) and within the safety boundary.
 | ------------------------------------------------------------------------------------------ | ----------------------------------------------- | --------------------------------- |
 | Observe position, health, food, inventory, mobs, hazards, light, GregTech machines, quests | `MC_ENABLE_LIVE_CONNECTION`                     | yes                               |
 | Walk over terrain, retreat or flee from threats, explore and remember what it saw          | `MC_ENABLE_MOVEMENT`, `MC_MOVEMENT_MODE=follow` | yes                               |
-| Dig allowlisted natural blocks with the best verified tool; dig a pit for the night        | `MC_ENABLE_DIGGING`                             | yes                               |
+| Dig allowlisted blocks (stone and ores with a pickaxe) with the best tool; a night pit     | `MC_ENABLE_DIGGING`                             | yes; stone, ores: fake server     |
 | Place allowlisted plain blocks (night shelters); a crafting table or furnace to use        | `MC_ENABLE_PLACING`                             | plain yes; stations fake server   |
 | Eat approved food; go and get food when it has none                                        | `MC_ENABLE_EATING`                              | yes                               |
 | Craft hand-verified and GTNH's own recipes in the 2x2 grid; at a crafting table            | `MC_ENABLE_CRAFTING`                            | 2x2 yes; table on the fake server |
@@ -245,8 +245,10 @@ and [docs/action-contract.md](docs/action-contract.md).
   `DIG_DOWN`, the night pit's dig under the player's own feet, that only code's night-shelter
   blueprint makes). No dropping, lava, network/multiblock changes or rare-item use. The action
   that breaks blocks, `DIG_BLOCK`, only breaks vanilla logs, leaves, dirt, grass, sand, gravel
-  and clay, Biomes O' Plenty's leaves and HarvestCraft's land gardens (`DIG_DOWN`: dirt, grass,
-  sand, gravel or clay under the feet); the
+  and clay, Biomes O' Plenty's leaves and HarvestCraft's land gardens, and, only with a carried
+  pickaxe that harvests them, natural stone (stone, cobblestone, mossy cobblestone, sandstone,
+  netherrack, hardened clay, GregTech's granite, marble and basalt) and ores (GregTech's, and
+  emerald ore) (`DIG_DOWN`: dirt, grass, sand, gravel or clay under the feet); the
   one that places blocks, `PLACE_BLOCK`, only places vanilla dirt, cobblestone, sand, gravel,
   sandstone, planks and logs, and a crafting table or furnace on a solid floor out of the way the
   player walks; `EXPLORE` only walks, in hops, inside the boundary and only in
@@ -519,10 +521,12 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#interacting-w
 ### Digging
 
 The third world-changing ability: breaking ONE block, for gathering. It only breaks
-`minecraft:log`, `log2`, `leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay`, inside the
-pen. In play it digs anywhere inside the moving play area (see Exploring). Live since
-2026-10-01: logs, leaves, dirt, sand, gravel and garden plants, with the best verified tool or a
-bare hand.
+`minecraft:log`, `log2`, `leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay`,
+Biomes O' Plenty's leaves and HarvestCraft's gardens, inside the pen; and stone and ores, only
+with a pickaxe that harvests them (see below). In play it digs anywhere inside the moving play
+area (see Exploring). Live since 2026-10-01: logs, leaves, dirt, sand, gravel and garden
+plants, with the best verified tool or a bare hand. Stone and ores: on the fake server only so
+far.
 
 - `node scripts/test-server-admin.ts pen resources` places test blocks in the pen, each only where
   there is air:
@@ -553,12 +557,33 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
 - It holds the best verified tool the player carries for the block, or an empty hand
   (`src/domain/tools.ts`, [evidence](docs/gtnh-compatibility.md#tools-2026-09-30)):
   - a wooden shovel for dirt, grass, sand, gravel and clay (sand: 12 ticks instead of 21);
-  - a vanilla axe for logs (77 ticks by hand, 40 with a wooden axe, 21 with a stone one).
-  - The other vanilla shovels dig nothing on GTNH. GregTech and TConstruct tools keep their wear
-    in NBT data the agent does not read, so it never holds them.
-  - It never holds a protected tool, one with NBT data, or one whose next use would break it (a
-    wooden tool: 59 uses). A tool in the main inventory is first moved into the hotbar with two
-    confirmed clicks. The result reports the tool and its uses left.
+  - a vanilla axe for logs (77 ticks by hand, 40 with a wooden axe, 21 with a stone one);
+  - a pickaxe for stone and ores (stone: 31 ticks with a wooden pickaxe);
+  - Tinkers' Construct's pickaxe, shovel, hatchet and mattock, whose level, speed and wear it
+    reads from the tool's NBT data (`InfiTool`), as TConstruct computes them. It uses one only
+    from the hotbar (moving a stack with NBT data would need that data sent back exactly), never
+    a broken one, one with auto-smelt or Silk Touch, or one whose next use would break it.
+  - The other vanilla shovels and pickaxes dig nothing on GTNH (IguanaTweaks), and GregTech's
+    tools are never held (their wear is in NBT data it does not read).
+  - It never holds a protected tool, a vanilla tool with NBT data, or one whose next use would
+    break it (a wooden tool: 59 uses). A vanilla tool in the main inventory is first moved into
+    the hotbar with two confirmed clicks. The result reports the tool and its uses left.
+- Stone and ores ([evidence](docs/gtnh-compatibility.md#pickaxes-stone-and-ores-2026-10-03)):
+  stone, cobblestone, mossy cobblestone, sandstone, netherrack, hardened and stained clay,
+  GregTech's granite, marble and basalt, GregTech's ores (`gregtech:gt.blockores`, small ores
+  too) and emerald ore. Any other dig of these would leave nothing (the server drops a block
+  that needs a tool only for a tool of its kind and level), so:
+  - the safety policy refuses a dig of one unless a carried pickaxe harvests it
+    (`NOT_DIGGABLE`), and a `GATHER` passes such blocks over;
+  - the client reads the block's metadata (a GT ore's level is its metadata) and holds only a
+    tool of that level or above; with none it refuses and sends nothing;
+  - routes get a pickaxe first (a wooden one: planks and sticks at a crafting table) or say which
+    level is missing. Only the wooden pickaxe (level 0: stone, level-0 ores) is craftable in the
+    grid; better ones are Tinkers' Construct's.
+  - A GT ore's material is in its tile entity, which the client does not read: a
+    `GATHER {"block":"gregtech:gt.blockores","item":"<raw ore>","count":16}` digs the GT ores in
+    view (or walks to ores world memory remembers) until 16 of that raw ore are held, and the
+    other ores it digs on the way are kept.
 - It waits 1.25 x the vanilla dig time (at the tool's speed) + 2 ticks: well past the 70% the
   server requires.
 - Every tick it re-checks. It cancels on the stop file, Ctrl+C, a server correction, a health

@@ -1,9 +1,13 @@
 import {
+  DIGGABLE_BLOCKS,
   GARDEN_BLOCKS,
+  GT_ORE_BLOCK,
   isGardenBlock,
+  isToolDiggable,
   type DiggableBlock,
   type GardenBlock,
   type SOLID_DIGGABLE_BLOCKS,
+  type ToolDiggableBlock,
 } from '../domain/blocks.ts';
 import { diggableInfo } from '../domain/dig-time.ts';
 import { ANIMAL_DROPS, GARDEN_BIOMES, GARDEN_DROPS, GARDEN_FOODS } from '../domain/food.ts';
@@ -14,6 +18,7 @@ import {
   RECIPE_IDS,
   RECIPES,
 } from '../domain/recipes.ts';
+import { TOOL_ITEMS, TOOLS } from '../domain/tools.ts';
 import {
   CraftFlag,
   ingredientItems,
@@ -109,15 +114,96 @@ export const GARDEN_DIG_YIELDS: Yields<GardenBlock> = (() => {
   return out;
 })();
 
+/** The 16 colours of stained hardened clay: damageDropped is the block's metadata (BlockColored). */
+const STAINED_CLAY = Array.from({ length: 16 }, (_, m) => ({
+  item: m === 0 ? 'minecraft:stained_hardened_clay' : `minecraft:stained_hardened_clay@${m}`,
+  perDig: 1,
+}));
+
 /**
- * What one bare-hand dig yields on this server: vanilla, with GTNH's changes applied, and the
- * gardens.
+ * What one dig of each allowlisted stone yields, with a tool that harvests it (with any other
+ * the block drops nothing, and the agent never digs it). Checked in the jars:
+ *  - vanilla 1.7.10: BlockStone.getItemDropped is cobblestone; cobblestone, mossy cobblestone,
+ *    netherrack and hardened clay drop themselves; sandstone and stained clay keep their
+ *    metadata (damageDropped); BlockOre gives emerald ore's emerald (1, no fortune);
+ *  - GregTech 5.09.51.482: BlockStonesAbstract.damageDropped turns a smooth stone (metadata
+ *    0 or 8) into its cobblestone (1 or 9);
+ *  - no harvest-drop handler on this server changes them for a vanilla wooden pickaxe or a
+ *    plain Tinkers' one: of the 48 classes in the 210 mod jars that refer to
+ *    HarvestDropsEvent (each read), the ones that act on any block need their own tool,
+ *    enchantment, potion or modifier (GT's tools and Fire Aspect, Thaumcraft's foci,
+ *    auto-smelt enchantments, Avaritia's Tinkers' materials), and Et Futurum's raw ores are
+ *    off (enableRawOres=false).
  */
-export const DIG_YIELDS: Yields = {
-  ...VANILLA_DIG_YIELDS,
-  ...Object.fromEntries(GTNH_DIG_CHANGES.map((c) => [c.block, c.yields])),
-  ...GARDEN_DIG_YIELDS,
+export const STONE_DIG_YIELDS: Yields<Exclude<ToolDiggableBlock, typeof GT_ORE_BLOCK>> = {
+  'minecraft:stone': [{ item: 'minecraft:cobblestone', perDig: 1 }],
+  'minecraft:cobblestone': [{ item: 'minecraft:cobblestone', perDig: 1 }],
+  'minecraft:mossy_cobblestone': [{ item: 'minecraft:mossy_cobblestone', perDig: 1 }],
+  'minecraft:sandstone': [{ item: 'minecraft:sandstone', perDig: 1 }],
+  'minecraft:netherrack': [{ item: 'minecraft:netherrack', perDig: 1 }],
+  'minecraft:hardened_clay': [{ item: 'minecraft:hardened_clay', perDig: 1 }],
+  'minecraft:stained_hardened_clay': STAINED_CLAY,
+  // Black granite (0) drops black granite cobblestone (1), red granite (8) red's (9).
+  'gregtech:gt.blockgranites': [
+    { item: 'gregtech:gt.blockgranites@1', perDig: 1 },
+    { item: 'gregtech:gt.blockgranites@9', perDig: 1 },
+  ],
+  // Marble (0) drops marble cobblestone (1), basalt (8) basalt cobblestone (9).
+  'gregtech:gt.blockstones': [
+    { item: 'gregtech:gt.blockstones@1', perDig: 1 },
+    { item: 'gregtech:gt.blockstones@9', perDig: 1 },
+  ],
+  'minecraft:emerald_ore': [{ item: 'minecraft:emerald', perDig: 1 }],
 };
+
+let gtOreYieldsCache: ReadonlyArray<{ item: string; perDig: number }> | null = null;
+
+/**
+ * What a dig of a GT ore in the Overworld can drop (the knowledge base, loaded on first use):
+ * a vein ore its raw ore (oredropbehavior=FortuneItem, 1 without fortune; TileEntityOres.
+ * getDrops), a small ore the weighted mix of gems, crushed ore and impure dust (per dig on
+ * average). The block does not say which material it is (the tile entity does), so a dig of
+ * an ore can give any of them. Empty without the knowledge base.
+ */
+export function gtOreYields(): ReadonlyArray<{ item: string; perDig: number }> {
+  if (gtOreYieldsCache !== null) return gtOreYieldsCache;
+  const out = new Map<string, number>();
+  try {
+    const data = loadKnowledge();
+    for (const v of data.veins) {
+      if (!v.dims.includes('Overworld')) continue;
+      for (const o of [v.primary, v.secondary, v.between, v.sporadic]) {
+        if (o?.drop != null && o.level >= 0) out.set(o.drop, 1);
+      }
+    }
+    for (const s of data.smallOres) {
+      if (!s.dims.includes('Overworld') || s.level < 0) continue;
+      for (const [item, perDig] of s.drops) {
+        if (perDig > 0) out.set(item, Math.max(out.get(item) ?? 0, perDig));
+      }
+    }
+  } catch {
+    // No knowledge base (e.g. a build that did not copy it): no ore drops are known.
+  }
+  gtOreYieldsCache = [...out].map(([item, perDig]) => ({ item, perDig }));
+  return gtOreYieldsCache;
+}
+
+/**
+ * What one dig yields on this server, with a hand or a tool that harvests the block: vanilla,
+ * with GTNH's changes applied, the gardens, stone, and GT ores. The GT ores' entry is read
+ * from the knowledge base on first use (gtOreYields), so importing this module reads no data.
+ */
+export const DIG_YIELDS: Yields = Object.defineProperty(
+  {
+    ...VANILLA_DIG_YIELDS,
+    ...Object.fromEntries(GTNH_DIG_CHANGES.map((c) => [c.block, c.yields])),
+    ...GARDEN_DIG_YIELDS,
+    ...STONE_DIG_YIELDS,
+  },
+  GT_ORE_BLOCK,
+  { enumerable: true, get: gtOreYields },
+) as Yields;
 
 /**
  * Health of the farm animals (applyEntityAttributes in the vanilla jar: EntityCow and EntityPig
@@ -150,40 +236,8 @@ function killSources(): RouteSource[] {
 }
 
 /**
- * Blocks that need a tool, with what one dig drops (vanilla 1.7.10: stone drops cobblestone,
- * the others drop themselves; NOT checked against GTNH's drop handlers). The tool and level
- * come from the knowledge base's harvest table (IguanaTweaks), so they stay data.
- */
-export const TOOL_DIG_YIELDS: ReadonlyArray<{
-  block: string;
-  hardness: number;
-  drops: ReadonlyArray<{ item: string; perDig: number }>;
-}> = [
-  {
-    block: 'minecraft:stone',
-    hardness: 1.5,
-    drops: [{ item: 'minecraft:cobblestone', perDig: 1 }],
-  },
-  {
-    block: 'minecraft:cobblestone',
-    hardness: 2,
-    drops: [{ item: 'minecraft:cobblestone', perDig: 1 }],
-  },
-  {
-    block: 'minecraft:mossy_cobblestone',
-    hardness: 2,
-    drops: [{ item: 'minecraft:mossy_cobblestone', perDig: 1 }],
-  },
-  {
-    block: 'minecraft:sandstone',
-    hardness: 0.8,
-    drops: [{ item: 'minecraft:sandstone', perDig: 1 }],
-  },
-  { block: 'minecraft:obsidian', hardness: 50, drops: [{ item: 'minecraft:obsidian', perDig: 1 }] },
-];
-
-/**
- * Where a player looks for each block (general Minecraft knowledge, any modpack's overworld).
+ * Where a player looks for each block (general Minecraft knowledge, any modpack's overworld,
+ * and GTNH's own generation where it says so).
  */
 export const FIND_HINTS: Readonly<Record<string, string>> = {
   'minecraft:sand': 'deserts, beaches, river beds and lake shores',
@@ -195,10 +249,19 @@ export const FIND_HINTS: Readonly<Record<string, string>> = {
   'minecraft:log2': 'savannas (acacia) and roofed forests (dark oak)',
   'minecraft:leaves': 'trees',
   'minecraft:leaves2': 'acacia and dark oak trees',
-  'minecraft:stone': 'under the surface almost everywhere, cliffs and caves',
+  'minecraft:stone': 'under the surface almost everywhere: cliffs, hillsides, caves',
   'minecraft:cobblestone': 'dungeons and villages (or dig stone)',
+  'minecraft:mossy_cobblestone': 'dungeons',
   'minecraft:sandstone': 'under desert sand',
-  'minecraft:obsidian': 'where lava meets water, deep underground',
+  'minecraft:netherrack': 'the Nether',
+  'minecraft:hardened_clay': 'mesa biomes',
+  'minecraft:stained_hardened_clay': 'the coloured bands of mesa biomes',
+  // GTStones: blobs in the Overworld's stone, y 0-180 (GregTech 5.09.51.482 WorldgenStone).
+  'gregtech:gt.blockgranites': 'blobs in the stone underground (y 0-180): cliffs and caves',
+  'gregtech:gt.blockstones': 'blobs in the stone underground (y 0-180): cliffs and caves',
+  'gregtech:gt.blockores': 'GT ore veins in the stone (by height: see generates)',
+  // BiomeGenHills.decorate (and Biomes O' Plenty's mountains): single blocks in stone.
+  'minecraft:emerald_ore': 'Extreme Hills and mountains, single blocks in stone at y 4-31',
   // HarvestCraft's gardens, by where its generator puts them (food.ts GARDEN_BIOMES), and the
   // farm animals (they spawn on grass, in grassy biomes).
   ...Object.fromEntries(GARDEN_BLOCKS.map((g) => [g, `HarvestCraft gardens: ${GARDEN_BIOMES[g]}`])),
@@ -243,9 +306,9 @@ const GARDEN_SECONDS = 30;
  */
 function digSources(): RouteSource[] {
   const byItem = new Map<string, { blocks: string[]; perAction: number; seconds: number }>();
-  for (const [block, yields] of Object.entries(DIG_YIELDS) as Array<
-    [DiggableBlock, ReadonlyArray<{ item: string; perDig: number }>]
-  >) {
+  // Stone and ores are tool digs (toolDigSources, oreSources): never by hand.
+  for (const block of DIGGABLE_BLOCKS.filter((b) => !isToolDiggable(b))) {
+    const yields = DIG_YIELDS[block];
     const garden = isGardenBlock(block);
     for (const y of yields) {
       if (garden && !GARDEN_FOODS.includes(y.item)) continue;
@@ -404,7 +467,7 @@ export function buildRouteBook(data: KnowledgeData): RouteBook {
 
   return {
     recipes: [...hand, ...generated.filter((g) => !replaced.has(g))],
-    sources: [...digSources(), ...killSources(), ...toolDigSources(data), ...oreSources(data)],
+    sources: [...digSources(), ...killSources(), ...toolDigSources(), ...oreSources(data)],
     hints: FIND_HINTS,
     tools: toolsOf(data),
     stationItems: STATION_ITEMS,
@@ -422,29 +485,51 @@ export function harvestRequirement(
   return exact === undefined ? null : { kind: exact[0], level: exact[1] };
 }
 
-function toolDigSources(data: KnowledgeData): RouteSource[] {
+/**
+ * Stone and the vanilla ore as dig sources: what one dig drops (STONE_DIG_YIELDS) and the
+ * tool that harvests the block (its harvest rule, src/domain/dig-time.ts, verified in the
+ * jars and IguanaTweaks' configs; a test keeps it equal to the knowledge base's harvest
+ * table). Only blocks DIG_BLOCK may dig: a route never sends the agent to one it cannot.
+ */
+function toolDigSources(): RouteSource[] {
   const out: RouteSource[] = [];
-  for (const t of TOOL_DIG_YIELDS) {
-    const tool = harvestRequirement(data, t.block);
-    for (const d of t.drops) {
+  for (const [block, drops] of Object.entries(STONE_DIG_YIELDS) as Array<
+    [ToolDiggableBlock, ReadonlyArray<{ item: string; perDig: number }>]
+  >) {
+    const info = diggableInfo(block);
+    const rule = info.harvest;
+    for (const d of drops) {
       out.push({
         item: d.item,
         via: 'dig',
-        blocks: [t.block],
+        blocks: [block],
         perAction: d.perDig,
-        secondsPerAction: secondsPerToolDig(t.hardness),
-        ...(tool === null ? {} : { tool }),
+        secondsPerAction: secondsPerToolDig(info.hardness),
+        ...(rule === null ? {} : { tool: { kind: rule.tool, level: rule.level } }),
       });
     }
   }
   return out;
 }
 
-/** GT ores that generate in the Overworld: vein ores (raw ore drops) and small ores. */
+/** Longest "generates" text of a GT ore source (a route line holds at most 500 characters). */
+const MAX_ORE_WHERE = 260;
+
+/**
+ * GT ores that generate in the Overworld: vein ores (raw ore drops) and small ores. Each is
+ * dug as gregtech:gt.blockores, the block the observation and world memory see: an ore's
+ * material is in its tile entity, so the block does not say which ore it is, only its level
+ * (its metadata). The source names the ore item (gregtech:gt.blockores@<material>) and where
+ * it generates; a GATHER of the block with `item` digs ores until enough of that one drop is
+ * held.
+ */
 function oreSources(data: KnowledgeData): RouteSource[] {
   // drop|block -> the veins (and their roles in each) that hold the ore.
   type VeinRoles = Map<string, { roles: string[]; y: string }>;
-  const veinOres = new Map<string, { block: string; level: number; veins: VeinRoles }>();
+  const veinOres = new Map<
+    string,
+    { block: string; material: string; level: number; veins: VeinRoles }
+  >();
   for (const v of data.veins) {
     if (!v.dims.includes('Overworld')) continue;
     for (const [role, o] of [
@@ -457,6 +542,7 @@ function oreSources(data: KnowledgeData): RouteSource[] {
       const key = `${o.drop}|${o.block}`;
       const entry = veinOres.get(key) ?? {
         block: o.block,
+        material: o.material,
         level: o.level,
         veins: new Map() as VeinRoles,
       };
@@ -468,19 +554,27 @@ function oreSources(data: KnowledgeData): RouteSource[] {
   }
   const out: RouteSource[] = [];
   for (const [key, e] of veinOres) {
-    const veins = [...e.veins];
-    const shown = veins
-      .slice(0, 3)
-      .map(([name, v]) => `GT vein ${name} (${v.roles.join(', ')}): ${v.y}`);
-    const more = veins.length > 3 ? `; and ${veins.length - 3} more veins` : '';
+    const drop = key.slice(0, key.indexOf('|'));
+    const veins = [...e.veins].map(
+      ([name, v]) => `GT vein ${name} (${v.roles.join(', ')}): ${v.y}`,
+    );
+    const head = `${e.material} ore (${e.block}): `;
+    const gather = `; GATHER {"block":"${GT_ORE_BLOCK}","item":"${drop}"}`;
+    const generates = (shown: number): string =>
+      veins.slice(0, shown).join('; ') +
+      (veins.length > shown ? `; and ${veins.length - shown} more veins` : '') +
+      ' (Overworld)';
+    // Up to three veins, fewer when they would not fit: the GATHER is never cut.
+    let shown = Math.min(3, veins.length);
+    while (shown > 1 && (head + generates(shown) + gather).length > MAX_ORE_WHERE) shown -= 1;
     out.push({
-      item: key.slice(0, key.indexOf('|')),
+      item: drop,
       via: 'dig',
-      blocks: [e.block],
+      blocks: [GT_ORE_BLOCK],
       perAction: 1,
       secondsPerAction: VEIN_ORE_SECONDS,
       tool: { kind: 'pickaxe', level: e.level },
-      where: `${shown.join('; ')}${more} (Overworld)`,
+      where: head + generates(shown) + gather,
     });
   }
   for (const s of data.smallOres) {
@@ -490,26 +584,42 @@ function oreSources(data: KnowledgeData): RouteSource[] {
       out.push({
         item,
         via: 'dig',
-        blocks: [s.block],
+        blocks: [GT_ORE_BLOCK],
         perAction: perDig,
         secondsPerAction: SMALL_ORE_SECONDS,
         tool: { kind: 'pickaxe', level: s.level },
-        where: `GT small ore ${s.key}: y ${s.minY}-${s.maxY}, ~${s.amount} per chunk (Overworld)`,
+        where:
+          `GT small ore ${s.key} (${s.block}): y ${s.minY}-${s.maxY}, ~${s.amount} per chunk ` +
+          `(Overworld); GATHER {"block":"${GT_ORE_BLOCK}","item":"${item}"}`,
       });
     }
   }
   return out;
 }
 
+/** The kind of a worn-out tool: no requirement asks for it, so it never counts as held. */
+export const WORN_OUT_TOOL = 'worn out';
+
 /**
  * Items that work as tools on this server. Tools IguanaTweaks disables (vanilla stone, iron,
  * gold and diamond pickaxes and shovels, and a few mods' tools) mine nothing, so they are
  * not tools here: a route never makes one to dig, and one in the inventory does not count.
+ * Nor does a vanilla tool the agent has worn to its limit (src/domain/tools.ts: it stops one
+ * use before the tool breaks, at damage maxDamage): listed by that worn name as a worn-out
+ * tool, it never covers a dig, so the route gets a new one (seen in a mock run: the route
+ * counted "minecraft:wooden_pickaxe@59" as held, and the next GATHER of stone had nothing to
+ * dig with).
  */
 function toolsOf(data: KnowledgeData): RouteTool[] {
-  return data.tools
+  const tools = data.tools
     .filter(([item]) => data.disabledTools[item] === undefined)
     .map(([item, kind, level]) => ({ item, kind, level }));
+  const worn = TOOL_ITEMS.filter((t) => tools.some((x) => x.item === t)).map((t) => ({
+    item: `${t}@${TOOLS[t].maxDamage}`,
+    kind: WORN_OUT_TOOL,
+    level: 0,
+  }));
+  return [...tools, ...worn];
 }
 
 let full: RouteBook | null = null;

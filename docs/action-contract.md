@@ -98,19 +98,27 @@ melee mob is coming within 8 blocks. A creeper or a crowd is fled (`CREEPER_NEAR
 DEFEND carries `HOSTILES_NEARBY`, so a model's decision never overrules it.
 
 **`DIG_BLOCK`** breaks one of `minecraft:log`, `log2`, `leaves`, `leaves2`, `dirt`, `grass`,
-`sand`, `gravel` or `clay` (`src/domain/blocks.ts`); nothing else, nothing modded. The block must
-be listed in the observation's `nearbyBlocks.resources`. Only allowlisted blocks at or above the
-player's feet level are listed there, so the ground it stands on is never a target. Its drop is
-reported (`dropCollected`), not required: leaves usually drop nothing, and a drop that lands out
-of pickup range stays where it fell.
+`sand`, `gravel` or `clay`, Biomes O' Plenty's leaves or HarvestCraft's land gardens; or, only
+with a carried pickaxe that harvests it, one of `minecraft:stone`, `cobblestone`,
+`mossy_cobblestone`, `sandstone`, `netherrack`, `hardened_clay`, `stained_hardened_clay`,
+`emerald_ore`, `gregtech:gt.blockgranites`, `gt.blockstones` or `gt.blockores`
+(`src/domain/blocks.ts`); nothing else. The block must be listed in the observation's
+`nearbyBlocks.resources`. Only allowlisted blocks at or above the player's feet level are
+listed there, so the ground it stands on is never a target. Its drop is reported
+(`dropCollected`), not required: leaves usually drop nothing, and a drop that lands out of
+pickup range stays where it fell.
 
 The client chooses what to hold; the action names only the block. It holds the fastest
 allowlisted tool the player carries for that block (`src/domain/tools.ts`): the wooden shovel
-for dirt, grass, sand, gravel and clay, a vanilla axe for logs. Otherwise it digs with an empty
-hand. It never holds a protected tool, one with NBT data, or one that one more use would break.
-The result reports `tool` (null for an empty hand), `toolUsesLeft` and, when tools were passed
-over, `toolNote`. A tool wears by one per block, which renames it in the inventory
-(`minecraft:wooden_shovel@1`).
+for dirt, grass, sand, gravel and clay, a vanilla axe for logs, a pickaxe for stone and ores,
+or a Tinkers' Construct pickaxe, shovel, hatchet or mattock (read from its NBT data, from the
+hotbar only). Otherwise it digs with an empty hand, except stone and ores: it digs those only
+with a tool that harvests that very block (its kind, and its level, a GT ore's from its
+metadata), and refuses otherwise (`REFUSED`, nothing sent). It never holds a protected tool, a
+vanilla tool with NBT data, or one that one more use would break. The result reports `tool`
+(null for an empty hand), `toolUsesLeft` and, when tools were passed over, `toolNote`. A tool
+wears by one per block, which renames a vanilla one in the inventory
+(`minecraft:wooden_shovel@1`); a Tinkers' tool's wear is in its NBT data.
 
 **`PLACE_BLOCK`** places one of `minecraft:dirt`, `cobblestone`, `sand`, `gravel`, `sandstone`,
 `planks` (any of the six wood types, `@1`-`@5`) or `log`/`log2` (any wood type) that the player
@@ -358,9 +366,13 @@ See [architecture: GATHER](architecture.md#gather-gathering-in-one-plan-step).
 
 - **Args:** `block`, one of `DIG_BLOCK`'s allowlisted blocks; `count`, 1 to 256 of what that
   block drops (sand gives sand, grass gives dirt, clay gives 4 clay balls, gravel gives gravel
-  or flint, logs give logs).
-- **Plan validation:** the schema only. GATHER names no position or item to check; every
-  action it becomes is checked when it runs.
+  or flint, logs give logs, stone gives cobblestone, a GT ore its raw ore); optionally `item`,
+  the one drop that counts (only blocks that can drop it are dug). A GT ore's material is in
+  its tile entity, so `{"block":"gregtech:gt.blockores","item":"<raw ore>","count":16}` digs
+  the GT ores in view until 16 of that raw ore are held. An `item` the block never drops ends
+  the step at once.
+- **Plan validation:** the schema only. GATHER names no position to check; every action it
+  becomes is checked when it runs (stone and ores: a carried pickaxe that harvests them).
 - **Each cycle:** the nearest listed block of that kind with a stand spot. Within reach (4.5
   from the eyes) it is dug; otherwise the agent walks to its stand spot (tolerance 0.5). Code
   proposes only an action the executor's validation would accept now (a dry run; for a walk,

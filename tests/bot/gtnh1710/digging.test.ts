@@ -30,12 +30,15 @@ import {
   GARDEN_BLOCKS,
   isGardenBlock,
   SOLID_DIGGABLE_BLOCKS,
+  TOOL_DIGGABLE_BLOCKS,
   type DiggableBlock,
 } from '../../../src/domain/blocks.ts';
 import {
   bareHandProgressPerTick,
   DIGGABLE,
+  digFacts,
   digWaitTicks,
+  gtOreHarvestLevel,
   instantDig,
   serverMinimumTicks,
   vanillaDigTicks,
@@ -48,25 +51,87 @@ import {
 } from './fixtures/chunk-fixtures.ts';
 
 describe('the dig allowlist', () => {
-  it('is exactly the domain allowlist: natural blocks a bare hand harvests, and gardens', () => {
+  it('is exactly the domain allowlist: what a hand harvests, stone and ores, and gardens', () => {
     expect([...DIGGABLE.keys()].sort()).toEqual([...DIGGABLE_BLOCKS].sort());
     expect([...DIGGABLE_BLOCKS].sort()).toEqual(
-      [...SOLID_DIGGABLE_BLOCKS, ...GARDEN_BLOCKS].sort(),
+      [...SOLID_DIGGABLE_BLOCKS, ...TOOL_DIGGABLE_BLOCKS, ...GARDEN_BLOCKS].sort(),
     );
+    const byTool = new Set<string>(TOOL_DIGGABLE_BLOCKS);
     for (const [name, info] of DIGGABLE) {
-      // Vanilla, or a modded block read in its mod's code: Biomes O' Plenty's leaves, and
-      // HarvestCraft's land gardens.
+      // Vanilla, or a modded block read in its mod's code: Biomes O' Plenty's leaves,
+      // HarvestCraft's land gardens, and GregTech's ores and Overworld stones.
       expect(
         name.startsWith('minecraft:') ||
           /^BiomesOPlenty:\w*[Ll]eaves\d?$/.test(name) ||
+          /^gregtech:gt\.block(ores|granites|stones)$/.test(name) ||
           isGardenBlock(name),
         name,
       ).toBe(true);
-      expect(info.bareHandHarvests, name).toBe(true);
+      // A hand harvests exactly the ones whose material needs no tool; stone and ores are
+      // rock, and only a pickaxe harvests them.
+      expect(info.bareHandHarvests, name).toBe(!byTool.has(name));
+      expect(info.harvest === null, name).toBe(info.bareHandHarvests);
+      if (byTool.has(name)) {
+        expect(info, name).toMatchObject({ material: 'rock', harvest: { tool: 'pickaxe' } });
+      }
       expect(info.falls, name).toBe(FALLING_DIGGABLE_BLOCKS.has(name));
     }
-    // Never the water garden: it floats on water, where its drop would land.
-    expect(DIGGABLE_BLOCKS).not.toContain('harvestcraft:watergarden');
+    // Never the water garden (it floats on water, where its drop would land), the silverfish's
+    // stone, or obsidian (level 5, and no route to it here).
+    for (const never of [
+      'harvestcraft:watergarden',
+      'minecraft:monster_egg',
+      'minecraft:obsidian',
+    ]) {
+      expect(DIGGABLE_BLOCKS as readonly string[]).not.toContain(never);
+    }
+  });
+
+  it('knows what harvests each stone and ore (the jars and IguanaTweaks), and its natural metadata', () => {
+    const rules = Object.fromEntries(
+      TOOL_DIGGABLE_BLOCKS.map((b) => {
+        const i = DIGGABLE.get(b);
+        return [b, [i?.harvest?.level, i?.harvestTool, i?.naturalMeta ?? 'any']];
+      }),
+    );
+    expect(rules).toEqual({
+      'minecraft:stone': [0, 'pickaxe', [0]],
+      'minecraft:cobblestone': [0, 'pickaxe', [0]],
+      'minecraft:mossy_cobblestone': [0, 'pickaxe', [0]],
+      'minecraft:sandstone': [0, 'pickaxe', [0]],
+      'minecraft:netherrack': [0, 'pickaxe', [0]],
+      // No harvest tool (not in ItemPickaxe's set): any pickaxe harvests rock.
+      'minecraft:hardened_clay': [0, null, [0]],
+      'minecraft:stained_hardened_clay': [0, null, 'any'],
+      'gregtech:gt.blockgranites': [3, 'pickaxe', [0, 8]],
+      'gregtech:gt.blockstones': [2, 'pickaxe', [0, 8]],
+      // By metadata (digFacts); the table holds the least level any GT ore needs.
+      'gregtech:gt.blockores': [0, 'pickaxe', [0, 1, 2, 3, 4, 5, 6, 7]],
+      'minecraft:emerald_ore': [4, 'pickaxe', [0]],
+    });
+    // A GT ore's level is its metadata, but 5 and 6 give 2 (BlockOresAbstract); hardness 1 +
+    // level.
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map(gtOreHarvestLevel)).toEqual([0, 1, 2, 3, 4, 2, 2, 7]);
+    expect(digFacts('gregtech:gt.blockores', 2)).toEqual({
+      hardness: 3,
+      harvest: { tool: 'pickaxe', level: 2 },
+    });
+    expect(digFacts('gregtech:gt.blockores', 6)).toEqual({
+      hardness: 3,
+      harvest: { tool: 'pickaxe', level: 2 },
+    });
+    // Metadata 8 and up would be a shovel's (getHarvestTool): never.
+    expect(digFacts('gregtech:gt.blockores', 9)).toMatchObject({ problem: /not a natural one/ });
+    expect(digFacts('gregtech:gt.blockores', undefined)).toMatchObject({ problem: /not known/ });
+    // Granite bricks (2), chiseled sandstone (1): builds, never dug.
+    expect(digFacts('gregtech:gt.blockgranites', 2)).toMatchObject({ problem: /not a natural/ });
+    expect(digFacts('minecraft:sandstone', 1)).toMatchObject({ problem: /not a natural/ });
+    expect(digFacts('gregtech:gt.blockgranites', 8)).toEqual({
+      hardness: 4.5,
+      harvest: { tool: 'pickaxe', level: 3 },
+    });
+    // A block a hand digs needs no metadata.
+    expect(digFacts('minecraft:log', undefined)).toEqual({ hardness: 2, harvest: null });
   });
 
   it("walks break Biomes O' Plenty's leaves too, as they break vanilla leaves", () => {
@@ -79,7 +144,14 @@ describe('the dig allowlist', () => {
       'BiomesOPlenty:appleLeaves',
     ] as const) {
       expect(WALK_BREAKABLE_BLOCKS.has(leaves), leaves).toBe(true);
-      expect(DIGGABLE.get(leaves)).toEqual({ hardness: 0.2, bareHandHarvests: true, falls: false });
+      expect(DIGGABLE.get(leaves)).toEqual({
+        hardness: 0.2,
+        bareHandHarvests: true,
+        falls: false,
+        material: 'leaves',
+        harvestTool: null,
+        harvest: null,
+      });
     }
     expect([...WALK_BREAKABLE_BLOCKS].every((b) => /leaves/i.test(b))).toBe(true);
   });
@@ -104,6 +176,20 @@ describe('the dig allowlist', () => {
       'minecraft:sand': 0.5,
       'minecraft:gravel': 0.6,
       'minecraft:clay': 0.6,
+      // Block.registerBlocks (minecraft_server.1.7.10.jar, class aji).
+      'minecraft:stone': 1.5,
+      'minecraft:cobblestone': 2,
+      'minecraft:mossy_cobblestone': 2,
+      'minecraft:sandstone': 0.8,
+      'minecraft:netherrack': 0.4,
+      'minecraft:hardened_clay': 1.25,
+      'minecraft:stained_hardened_clay': 1.25,
+      'minecraft:emerald_ore': 3,
+      // GregTech: 3 x stone's (BlockStonesAbstract); a GT ore's is 1 + its level, here the
+      // hardest (metadata 7).
+      'gregtech:gt.blockgranites': 4.5,
+      'gregtech:gt.blockstones': 4.5,
+      'gregtech:gt.blockores': 8,
       ...Object.fromEntries(GARDEN_BLOCKS.map((g) => [g, 0])),
     });
   });
@@ -163,8 +249,12 @@ const ID = {
   tallgrass: 31,
   torch: 50,
   chest: 54,
+  cobblestone: 4,
+  sandstone: 24,
   modded: 4000,
   garden: 4100,
+  gtOres: 4200,
+  granites: 4201,
   unnamed: 4242,
 } as const;
 const NAMES = new Map<number, string>([
@@ -184,11 +274,20 @@ const NAMES = new Map<number, string>([
   [ID.chest, 'minecraft:chest'],
   [ID.modded, 'gregtech:gt.blockmachines'],
   [ID.garden, 'harvestcraft:berrygarden'],
+  [ID.cobblestone, 'minecraft:cobblestone'],
+  [ID.sandstone, 'minecraft:sandstone'],
+  [ID.gtOres, 'gregtech:gt.blockores'],
+  [ID.granites, 'gregtech:gt.blockgranites'],
 ]);
 
+/**
+ * The test world: `blocks` over a glass floor, `unloaded` columns, and with `metas` the
+ * blocks' metadata (0 where none is given); without it, metadata is not known.
+ */
 function world(
   blocks: Record<string, number> = {},
   unloaded: Array<[number, number]> = [],
+  metas: Record<string, number> | null = null,
 ): WalkWorld {
   const overrides = new Map(Object.entries(blocks));
   const missing = new Set(unloaded.map(([x, z]) => `${x},${z}`));
@@ -199,6 +298,9 @@ function world(
       if (o !== undefined) return o;
       return y === 199 && Math.abs(x) <= 20 && Math.abs(z) <= 20 ? ID.glass : ID.air;
     },
+    ...(metas === null
+      ? {}
+      : { metaAt: (x: number, y: number, z: number) => metas[`${x},${y},${z}`] ?? 0 }),
     blockName: (id) => (id === 0 ? undefined : NAMES.get(id)),
     hazardCode: (id) =>
       id === ID.lava ? BLOCK_CODE.lava : NAMES.has(id) ? BLOCK_CODE.safe : BLOCK_CODE.unknown,
@@ -431,10 +533,11 @@ describe('checkDig', () => {
     ['too high', { [k(1, 205, 0)]: ID.dirt }, { x: 1, y: 205, z: 0 }, /outside the dig heights/],
     ['air', {}, { x: 1, y: 200, z: 0 }, /is air: there is nothing to dig/],
     [
-      'stone',
+      // Stone is told from bricks by its metadata: unknown, it is never dug.
+      'stone whose metadata is not known',
       { [k(1, 200, 0)]: ID.stone },
       { x: 1, y: 200, z: 0 },
-      /minecraft:stone, which is not on the dig allowlist/,
+      /the metadata of minecraft:stone is not known/,
     ],
     [
       'a machine',
@@ -502,6 +605,86 @@ describe('checkDig', () => {
     if (!r.ok) expect(r.reason).toMatch(reason);
   });
 
+  describe('stone and ores (only with a tool that harvests them: the client chooses it)', () => {
+    it('allows natural stone and a GT ore, with their own hardness and harvest rule', () => {
+      const w = world(
+        { [k(1, 200, 0)]: ID.stone, [k(1, 201, 0)]: ID.gtOres, [k(1, 202, 0)]: ID.granites },
+        [],
+        { [k(1, 201, 0)]: 2, [k(1, 202, 0)]: 8 },
+      );
+      expect(checkDig(w, AREA, FEET, { x: 1, y: 200, z: 0 })).toMatchObject({
+        ok: true,
+        block: 'minecraft:stone',
+        hardness: 1.5,
+        harvest: { tool: 'pickaxe', level: 0 },
+      });
+      // The ore next to the stone does not stop the stone's dig (a natural full block), and
+      // its own level and hardness come from its metadata (2: a level-2 pickaxe, hardness 3).
+      expect(checkDig(w, AREA, FEET, { x: 1, y: 201, z: 0 })).toMatchObject({
+        ok: true,
+        block: 'gregtech:gt.blockores',
+        hardness: 3,
+        harvest: { tool: 'pickaxe', level: 2 },
+      });
+      expect(checkDig(w, AREA, FEET, { x: 1, y: 202, z: 0 })).toMatchObject({
+        ok: true,
+        block: 'gregtech:gt.blockgranites',
+        hardness: 4.5,
+        harvest: { tool: 'pickaxe', level: 3 },
+      });
+      // Dirt reports a hand's rule: none.
+      const dirt = checkDig(world({ [k(1, 200, 0)]: ID.dirt }, [], {}), AREA, FEET, {
+        x: 1,
+        y: 200,
+        z: 0,
+      });
+      expect(dirt).toMatchObject({ ok: true, hardness: 0.5, harvest: null });
+    });
+
+    it.each<[string, Record<string, number>, Record<string, number>, RegExp]>([
+      [
+        'granite bricks (a build)',
+        { [k(1, 200, 0)]: ID.granites },
+        { [k(1, 200, 0)]: 2 },
+        /gt\.blockgranites with metadata 2 is not a natural one/,
+      ],
+      [
+        'chiseled sandstone (a temple)',
+        { [k(1, 200, 0)]: ID.sandstone },
+        { [k(1, 200, 0)]: 1 },
+        /minecraft:sandstone with metadata 1 is not a natural one/,
+      ],
+      [
+        'a GT ore of metadata 8 or more (a shovel would be its tool)',
+        { [k(1, 200, 0)]: ID.gtOres },
+        { [k(1, 200, 0)]: 12 },
+        /gt\.blockores with metadata 12 is not a natural one/,
+      ],
+      [
+        'stone with gravel on top (it would fall into the hole)',
+        { [k(1, 200, 0)]: ID.stone, [k(1, 201, 0)]: ID.gravel },
+        {},
+        /minecraft:gravel on top of \(1, 200, 0\) would fall/,
+      ],
+      [
+        'stone touching water (a cave or a lake behind it)',
+        { [k(1, 200, 0)]: ID.cobblestone, [k(2, 200, 0)]: ID.water },
+        {},
+        /touches minecraft:water at \(2, 200, 0\)/,
+      ],
+      [
+        'an ore next to lava',
+        { [k(1, 200, 0)]: ID.gtOres, [k(2, 201, 0)]: ID.lava },
+        {},
+        /next to minecraft:lava at \(2, 201, 0\)/,
+      ],
+    ])('refuses %s', (_name, blocks, metas, reason) => {
+      const r = checkDig(world(blocks, [], metas), AREA, FEET, { x: 1, y: 200, z: 0 });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(reason);
+    });
+  });
+
   it('never digs what the player stands on, even standing on a block inside the area', () => {
     // Feet at y=201 on a dirt block at (0, 200, 0): its whole column below the head is out.
     const w = world({ [k(0, 200, 0)]: ID.dirt, [k(1, 200, 0)]: ID.dirt });
@@ -538,6 +721,11 @@ describe('checkDig', () => {
       'minecraft:stone',
       'minecraft:log',
       'minecraft:sand',
+      // Natural stone and ores: nothing about them changes when a neighbour goes.
+      'minecraft:netherrack',
+      'gregtech:gt.blockores',
+      'gregtech:gt.blockstones',
+      'minecraft:emerald_ore',
     ]) {
       expect(DIG_NEIGHBOURS.has(name), name).toBe(true);
     }
@@ -625,8 +813,10 @@ describe('resource scan', () => {
   it('maps this world registry ids to allowlisted blocks only', () => {
     expect(diggableOf(table, BLOCK.log)).toBe('minecraft:log');
     expect(diggableOf(table, BLOCK.grass)).toBe('minecraft:grass');
-    expect(diggableOf(table, BLOCK.stone)).toBeUndefined();
+    // Stone is listed (dug only with a pickaxe); a chest or a machine never.
+    expect(diggableOf(table, BLOCK.stone)).toBe('minecraft:stone');
     expect(diggableOf(table, BLOCK.chest)).toBeUndefined();
+    expect(diggableOf(table, BLOCK.gtMachines)).toBeUndefined();
     expect(diggableOf(table, 0)).toBeUndefined();
   });
 
@@ -648,11 +838,13 @@ describe('resource scan', () => {
     const rest = scan.resources.filter((r) => r.position.y !== 105);
     expect(rest.map(({ block, position }) => ({ block, position }))).toEqual([
       { block: 'minecraft:sand', position: { x: 1, y: 106, z: 0 } },
+      { block: 'minecraft:stone', position: { x: 1, y: 107, z: 1 } },
       { block: 'minecraft:log', position: { x: -2, y: 107, z: 0 } },
       { block: 'minecraft:dirt', position: { x: 3, y: 106, z: 0 } },
     ]);
     expect(rest.map((r) => r.distance)).toEqual([
       expect.closeTo(Math.hypot(1, 0.5), 9),
+      expect.closeTo(Math.hypot(1, 1.5, 1), 9),
       expect.closeTo(Math.hypot(2, 1.5), 9),
       expect.closeTo(Math.hypot(3, 0.5), 9),
     ]);
