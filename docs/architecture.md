@@ -339,7 +339,12 @@ row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play/play.ts`); with `--listen` 
 5 minutes at a time (`MOB_LONG_WAIT_MS`) instead of quitting. Every new session re-checks the
 state from scratch, so a mob that is still there pauses it again. An idle bot standing by does
 the same (`standbyReason` answers `mob`): seen live 2026-10-04, a zombie followed the bot home,
-where the pause had it stand still until it was killed. Sealed in its shelter it stays online.
+where the pause had it stand still until it was killed. Sealed in its shelter it stays online. So
+does any session that ends on an answer to a mob that failed (`mobPause`: a retreat that found no
+way home, perhaps fleeing a little instead, or was refused as a repeated failure; a fight back):
+an owner's command waiting is told ("A mob is near: I go offline a moment for it to leave") and
+goes on after (seen live the same day: a trip into a ravine of mobs gave up after its retreats
+failed, and the bot stood there idle until it was killed).
 
 **Food** (`src/app/play/food.ts`, `src/domain/food.ts`; approved 2026-10-01). Seen live: food 9/20
 with nothing to eat, its only apple eaten. Below food 6 with no food System 1 retreats or
@@ -569,7 +574,7 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   second and interrupts the same way. The stop then cancels the command and pauses play's own
   goals (`owner_paused`; `cli play` clears it when it starts; `quests off` is kept).
 - **Idle** (`idleRound`): paused, or with `--listen` nothing left to do, play waits for commands
-  in short slices; with `--listen` any end of play but the stop file, Ctrl+C, the limits, the
+  in short slices (looking for one every 0.5 s, and around it every 3 s); with `--listen` any end of play but the stop file, Ctrl+C, the limits, the
   night and a mob becomes such a wait, and play looks again after 2 minutes. Every slice the
   deterministic router looks at a fresh observation, and when it would retreat, fight, eat or
   rest, a short standby session lets System 1 do it. When it would pause only because a mob is
