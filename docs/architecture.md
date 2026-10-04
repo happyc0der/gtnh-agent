@@ -307,7 +307,11 @@ Enclosed, the agent waits for sunrise. In the morning, walled in, code plans the
 the same rules (`planShelterExit`): from the pit, the roof and a staircase (two digs for each
 step up, the upper block first), then a walk onto open ground; from the box, one wall (head
 level first) and a walk out. Play runs it as known steps before the day's goal, and the goal's
-journal says the walls are open again. Walled in with no way out, play stops and says why.
+journal says the walls are open again. Walled in with no way out, play stops and says why,
+unless an owner's command is running or queued: that goes first, since it may be the way out
+(`!surface` and `!home` pillar and dig; seen live 2026-10-04 at the bottom of an 8-deep shaft the
+bot had dug down to stone, play ended every round before the command round and spun at 100%
+CPU with `!surface` waiting).
 
 **Sealed in with mobs near.** The live observation reports whether the player is sealed in
 (`player.sealed`, `sealedIn` in `night-pit.ts`): the cells beside its feet and head, above its
@@ -552,7 +556,9 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   rest, a short standby session lets System 1 do it. When it would pause only because a mob is
   near while the bot is home (or has none) and not sealed in, play ends to wait offline, as
   after a session ([A mob near home](#routes-nights-and-the-play-loop); seen live 2026-10-04: a
-  zombie followed the idle bot home, where the pause had it stand still until it was killed). `cli play --listen` also reconnects when the
+  zombie followed the idle bot home, where the pause had it stand still until it was killed).
+  A standby whose retreat from a mob fails, or is refused as a repeated failure, raises the
+  same alarm (seen live: 37 refused retreats in a row from a pit the morning had opened). `cli play --listen` also reconnects when the
   connection drops (5 s, 15 s, 60 s, then every 2 minutes).
 - **Chat out**: replies are whispers only (`outbound.whisper`: `/tell <owner> <text>`, the one
   chat packet, plain text, at most 100 characters a line), cut into at most 3 lines and sent at
