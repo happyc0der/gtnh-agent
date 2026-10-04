@@ -71,7 +71,7 @@ export type Validation =
   { readonly ok: true; readonly ticks: number } | ({ readonly ok: false } & StepFault);
 
 export interface ValidationOptions {
-  /** Calm one-deep water may hold the body. */
+  /** Calm water may hold the body (wading, swimming). */
   readonly water?: boolean;
 }
 
@@ -443,8 +443,29 @@ export function validatePlan(
       replay.change({ cell: seg.restore.cell, block: seg.restore.block, meta: seg.restore.meta });
     }
     const m = seg.movement;
+    const first = plan.segments[k + 1]?.movement;
+    if (m === null && first != null) {
+      // The centring ends in the first movement's start block (afloat: its top water block).
+      const fy = replay.mode(s) === 'water' ? Math.floor(s.y + 1e-9) : Math.round(s.y);
+      if (
+        Math.floor(s.x) !== first.from.x ||
+        fy !== first.from.y ||
+        Math.floor(s.z) !== first.from.z
+      ) {
+        return fault(
+          seg.steps.length - 1,
+          `the centring ends at (${Math.floor(s.x)}, ${fy}, ${Math.floor(s.z)}), not in the start block (${first.from.x}, ${first.from.y}, ${first.from.z})`,
+        );
+      }
+    }
     if (m !== null) {
-      const feet = { x: Math.floor(s.x), y: Math.round(s.y), z: Math.floor(s.z) };
+      // Swimming, the feet float in the top water block, up to 0.6 above its bottom.
+      const afloat = m.swim && !s.onGround && replay.mode(s) === 'water';
+      const feet = {
+        x: Math.floor(s.x),
+        y: afloat ? Math.floor(s.y + 1e-9) : Math.round(s.y),
+        z: Math.floor(s.z),
+      };
       // On the ground, or (a climb up, down, onto one or across) held by the ladder at a
       // block's level.
       const held =
@@ -454,7 +475,12 @@ export function validatePlan(
           m.kind === 'climbAcross') &&
         replay.view.held(feet.x, feet.y, feet.z) &&
         Math.abs(s.y - feet.y) < 1e-9;
-      if (feet.x !== m.to.x || feet.y !== m.to.y || feet.z !== m.to.z || !(s.onGround || held)) {
+      if (
+        feet.x !== m.to.x ||
+        feet.y !== m.to.y ||
+        feet.z !== m.to.z ||
+        !(s.onGround || held || afloat)
+      ) {
         return fault(
           seg.steps.length - 1,
           `the ${m.kind} ends at (${feet.x}, ${feet.y}, ${feet.z}), not on its block (${m.to.x}, ${m.to.y}, ${m.to.z})`,
@@ -468,7 +494,7 @@ export function validatePlan(
 /**
  * Why the box going from feet `a` to feet `b` (one step of a plan) would touch a cell it
  * must not, on the blocks as they are now, or null: a cell the box (and the Y move's sweep at
- * a's x and z) touches that is not passable (or calm one-deep water, with `water`), is next
+ * a's x and z) touches that is not passable (or calm water, with `water`), is next
  * to a hazard or an unloaded block, or lies outside the fence, or the feet in a vine. The
  * validator's own rule for a step, for the executor to check each step just before it sends
  * it: the world may have changed since the plan was made.

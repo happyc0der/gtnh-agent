@@ -194,7 +194,7 @@ describe('the step validator', () => {
   it('checks climbing out of water: a bump needs a block, the push up needs the bump', () => {
     const w = poolWorld();
     const fence: Fence = { min: { x: -8, y: 50, z: 0 }, max: { x: 12, y: 72, z: 0 } };
-    const r = planPath(w, fence, FROM, goalBlock(6, 55, 0), { water: true });
+    const r = planPath(w, fence, FROM, goalBlock(6, 60, 0), { water: true });
     const p = planExecution(w, fence, FROM, r.movements, { water: true });
     expect(validatePlan(w, fence, FROM, p, { water: true })).toMatchObject({ ok: true });
     if (!p.ok) throw new Error(p.reason);

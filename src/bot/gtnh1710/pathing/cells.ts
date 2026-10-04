@@ -478,9 +478,30 @@ export class CellCache implements PhysicsWorld {
     return this.#keep(i, D.WADE_KNOWN, D.WADE, v);
   }
 
-  /** Standable on dry ground, or (with water allowed) in calm one-deep water. */
+  /**
+   * The player can swim with its feet in the cell: the top of calm deep water (calm still
+   * water at the feet, and under them: a swimmer getting up to speed dips into it), the two
+   * cells above passable (it floats with its feet up to 0.6 above the cell's bottom, its head
+   * in the second cell above), nothing dangerous near. Made of kept facts, so not kept itself.
+   */
+  swimmable(x: number, y: number, z: number): boolean {
+    return (
+      this.calmWater(x, y - 1, z) &&
+      this.calmWater(x, y, z) &&
+      !this.nearHazard(x, y, z) &&
+      this.open(x, y + 1, z) &&
+      this.open(x, y + 2, z)
+    );
+  }
+
+  /**
+   * Standable on dry ground, or (with water allowed) in calm one-deep water or swimming at the
+   * top of calm deep water.
+   */
   footing(x: number, y: number, z: number, water: boolean): boolean {
-    return this.standable(x, y, z) || (water && this.wadeable(x, y, z));
+    return (
+      this.standable(x, y, z) || (water && (this.wadeable(x, y, z) || this.swimmable(x, y, z)))
+    );
   }
 
   /**

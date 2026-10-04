@@ -14,7 +14,7 @@ import { MAX_WATER_FALL, type PathCosts } from './costs.ts';
  * Pure.
  *
  * Safety the movements themselves enforce, whatever the caller allows:
- *  - every cell the body passes is passable (or calm one-deep water, when water is allowed)
+ *  - every cell the body passes is passable (or calm water, when water is allowed)
  *    and has no hazard, unloaded or unnamed block in the 3 x 3 x 3 cube around it; every feet
  *    block a movement ends on is standable (cells.ts);
  *  - a block is broken only if the caller's canBreak allows it, and never: next to a fluid
@@ -26,7 +26,11 @@ import { MAX_WATER_FALL, type PathCosts } from './costs.ts';
  *    (clicking anything else could open it), never next to a fluid or a hazard, never sand or
  *    gravel with nothing under it, and only while throwaway blocks are left;
  *  - a fall lands on a known full block at most maxFall (3) down, where it does no damage, or
- *    into calm one-deep water from a height the server's accounting does not punish;
+ *    into calm one-deep water from a height the server's accounting does not punish, or into
+ *    the top of calm deep water from such a height (deeper water only adds ticks in it);
+ *  - with water allowed, the player wades in calm one-deep water and swims at the top of calm
+ *    deep water (cells.ts swimmable), afloat with its eyes above the surface; it goes between
+ *    deep water and land only by a drop in or a climb out up a bank one higher;
  *  - a parkour jump crosses only gaps it would survive falling into (unless the caller allows
  *    deep ones), with the whole arc clear;
  *  - nothing leaves the search area (the fence): every feet block is inside it;
@@ -137,6 +141,11 @@ export interface Movement {
   readonly place: BlockPlace | null;
   /** The feet are in calm one-deep water at its start, its end, or both (wading, a fall into water). */
   readonly water: boolean;
+  /**
+   * Its start or its end is the top of calm deep water (cells.ts swimmable): the player swims
+   * there, floating (execute.ts SWIM_RUN).
+   */
+  readonly swim: boolean;
   /** Sprinting (a 3-block parkour jump needs it). */
   readonly sprint: boolean;
   /** Parkour: the blocks jumped over. */
@@ -167,7 +176,10 @@ export interface MoveOptions {
   readonly downward: boolean;
   /** Whether the block underfoot at `cell` may be dug down through (null: canBreak alone). */
   readonly canDigDown: ((cell: Cell) => boolean) | null;
-  /** Wading in calm one-deep water, and falls into it. */
+  /**
+   * Water: wading in calm one-deep water, swimming at the top of calm deep water, and falls
+   * into either.
+   */
   readonly water: boolean;
   /** The highest fall onto dry ground (at most 3: higher ones hurt). */
   readonly maxFall: number;
@@ -185,6 +197,7 @@ interface Detail {
   breaks: BlockBreak[];
   place: BlockPlace | null;
   water: boolean;
+  swim: boolean;
   sprint: boolean;
   toggle: DoorToggle | null;
 }
@@ -429,7 +442,8 @@ type Evaluate = (
 ) => number;
 
 /**
- * One block cardinal at the same level: walking, wading in calm one-deep water (into it, out
+ * One block cardinal at the same level: walking, wading in calm one-deep water or swimming at
+ * the top of calm deep water (into it, out
  * of it or within it), or with the body's way broken open (head first), or onto a block
  * placed in the gap against the side of the block underfoot (a bridge).
  */
@@ -441,9 +455,19 @@ const traverse: Evaluate = (ctx, x, y, z, d, detail) => {
   if (!ctx.inFence(nx, y, nz)) return Infinity;
   const c = ctx.cells;
   const o = ctx.options;
-  if (o.water && (c.has(x, y, z, CELL.WATER) || c.wadeable(nx, y, nz))) {
+  if (o.water && (c.has(x, y, z, CELL.WATER) || c.wadeable(nx, y, nz) || c.swimmable(nx, y, nz))) {
     if (!c.footing(nx, y, nz, true)) return Infinity;
-    if (detail !== null) detail.water = true;
+    // A swim stays in the water: between deep water and anything else at one level (dry land,
+    // a doorway, a ladder's foot) natural water would have flowed there, and a floating body
+    // does not walk out (out of deep water is a climb up a bank: ascend). Afloat, the head is
+    // in the second cell above the feet, at both ends.
+    const swim = c.swimmable(x, y, z) || c.swimmable(nx, y, nz);
+    if (swim && !(c.has(x, y, z, CELL.WATER) && c.has(nx, y, nz, CELL.WATER))) return Infinity;
+    if (swim && !(c.open(x, y + 2, z) && c.open(nx, y + 2, nz))) return Infinity;
+    if (detail !== null) {
+      detail.water = true;
+      detail.swim = swim;
+    }
     return ctx.costs.wade;
   }
   if (c.standable(nx, y, nz)) {
@@ -491,10 +515,16 @@ const diagonal: Evaluate = (ctx, x, y, z, d, detail) => {
   const water = ctx.options.water;
   if (!c.footing(nx, y, nz, water)) return Infinity;
   let wet = water && (c.has(x, y, z, CELL.WATER) || c.has(nx, y, nz, CELL.WATER));
+  // Swimming, the body floats up to 0.6 higher: the head reaches the second cell above, at
+  // both ends and the corners; and it stays in the water (traverse).
+  const swim = water && (c.swimmable(x, y, z) || c.swimmable(nx, y, nz));
+  if (swim && !(c.has(x, y, z, CELL.WATER) && c.has(nx, y, nz, CELL.WATER))) return Infinity;
+  if (swim && !(c.open(x, y + 2, z) && c.open(nx, y + 2, nz))) return Infinity;
   for (let corner = 0; corner < 2; corner++) {
     const cx = corner === 0 ? nx : x;
     const cz = corner === 0 ? z : nz;
     if (!c.open(cx, y + 1, cz)) return Infinity;
+    if (swim && !c.open(cx, y + 2, cz)) return Infinity;
     if (!c.open(cx, y, cz)) {
       if (!(water && c.calmWater(cx, y, cz) && !c.nearHazard(cx, y, cz))) return Infinity;
       wet = true;
@@ -502,6 +532,7 @@ const diagonal: Evaluate = (ctx, x, y, z, d, detail) => {
   }
   if (detail !== null) {
     detail.water = wet;
+    detail.swim = swim;
     detail.sprint = !wet && ctx.options.sprint;
   }
   return wet ? ctx.costs.wadeDiagonal : ctx.costs.diagonal;
@@ -526,7 +557,10 @@ const ascend: Evaluate = (ctx, x, y, z, d, detail) => {
     // the cells up to 3 above it must be open. Nothing is broken.
     if (!ctx.options.water || !c.standable(nx, y + 1, nz)) return Infinity;
     if (!c.open(x, y + 2, z) || !c.open(x, y + 3, z) || !c.open(nx, y + 3, nz)) return Infinity;
-    if (detail !== null) detail.water = true;
+    if (detail !== null) {
+      detail.water = true;
+      detail.swim = c.swimmable(x, y, z);
+    }
     return ctx.costs.waterExit;
   }
   // Sand or gravel over the head is never broken (the client's dig rules refuse it: digging.ts
@@ -586,11 +620,35 @@ const drop: Evaluate = (ctx, x, y, z, d, detail) => {
     const fy = y - h;
     if (!ctx.inFence(nx, fy, nz)) return Infinity;
     if (c.has(nx, fy, nz, CELL.WATER)) {
-      // Into calm one-deep water, from a height the server's accounting does not punish.
-      const cost = ctx.costs.waterFall[h] ?? Infinity;
-      if (!o.water || !c.wadeable(nx, fy, nz) || !Number.isFinite(cost)) return Infinity;
+      // Into calm one-deep water, from a height the server's accounting does not punish, or
+      // into the top of calm deep water (swimming there), as deep as the dive goes (costs.ts
+      // deepWaterDive) and a block more calm water clear of hazards: the feet never touch the
+      // floor (a stop there would leave the player under water: an independent review,
+      // 2026-10-04).
+      const swim = c.swimmable(nx, fy, nz);
+      const cost = (swim ? ctx.costs.deepFall[h] : ctx.costs.waterFall[h]) ?? Infinity;
+      if (!o.water || !(swim || c.wadeable(nx, fy, nz)) || !Number.isFinite(cost)) {
+        return Infinity;
+      }
+      if (swim) {
+        const depth = ctx.costs.diveDepth[h] ?? Infinity;
+        if (!ctx.inFence(nx, Math.floor(fy - depth), nz)) return Infinity;
+        const deepest = Math.floor(depth) + 1;
+        for (let k = 1; k <= deepest; k++) {
+          if (!c.calmWater(nx, fy - k, nz) || c.nearHazard(nx, fy - k, nz)) return Infinity;
+        }
+        // Under that, more water or a full block: a fence or a wall reaches up into the block
+        // above it, where the feet go.
+        const under = fy - deepest - 1;
+        if (!c.has(nx, under, nz, CELL.WATER) && !c.has(nx, under, nz, CELL.SURFACE)) {
+          return Infinity;
+        }
+      }
       ctx.dest(KIND.fall, nx, fy, nz, h);
-      if (detail !== null) detail.water = true;
+      if (detail !== null) {
+        detail.water = true;
+        detail.swim = swim;
+      }
       return cost;
     }
     if (!c.open(nx, fy, nz) || c.has(nx, fy, nz, CELL.LADDER)) return Infinity;
@@ -977,7 +1035,14 @@ export function describe(ctx: MoveContext, from: Cell, code: number): Movement |
   const evaluate = BY_KIND[kind];
   const name = MOVEMENT_KINDS[kind];
   if (evaluate === undefined || name === undefined) return null;
-  const detail: Detail = { breaks: [], place: null, water: false, sprint: false, toggle: null };
+  const detail: Detail = {
+    breaks: [],
+    place: null,
+    water: false,
+    swim: false,
+    sprint: false,
+    toggle: null,
+  };
   const cost = evaluate(ctx, from.x, from.y, from.z, d, detail);
   if (!(cost < Infinity) || ctx.kind !== kind || ctx.param !== param) return null;
   const [dx, dz] = isVertical(kind) ? [0, 0] : (DIRECTIONS[d] as readonly [number, number]);
@@ -990,6 +1055,7 @@ export function describe(ctx: MoveContext, from: Cell, code: number): Movement |
     breaks: detail.breaks,
     place: detail.place,
     water: detail.water,
+    swim: detail.swim,
     sprint: detail.sprint,
     gap: kind === KIND.parkour ? param : 0,
     drop: kind === KIND.descend || kind === KIND.fall ? param : 0,

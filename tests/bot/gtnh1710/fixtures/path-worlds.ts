@@ -176,9 +176,9 @@ export function benchWalkWorld(): {
  * x 1..3, and a bank one higher (ground 54, feet 55) from x = 4.
  */
 export function poolWorld(): TestWorld {
-  return new TestWorld((x) => (x <= 0 ? 63 : x <= 3 ? 53 : 54)).fill(
-    { x: 1, y: 54, z: -3 },
-    { x: 3, y: 54, z: 3 },
+  return new TestWorld((x) => (x <= 0 ? 63 : x <= 3 ? 58 : 59)).fill(
+    { x: 1, y: 59, z: -3 },
+    { x: 3, y: 59, z: 3 },
     B.water,
   );
 }

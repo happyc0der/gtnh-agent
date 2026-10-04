@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { deepWaterDive } from '../../../../src/bot/gtnh1710/pathing/costs.ts';
 import {
   planExecution,
+  surfacing,
   type ExecutionPlan,
   type PathStep,
   type Segment,
@@ -51,6 +53,29 @@ const ladderWorld = (): TestWorld => {
   for (let y = 64; y <= 67; y++) w.set(1, y, 0, B.ladder, 4);
   return w;
 };
+
+/**
+ * A calm lake four deep (water y 60-63, its floor's top at 60) between banks of grass at 63
+ * (feet 64): x 1-5, z -3..3. With `shallows`, its edge rows x = 1 and x = 5 are one deep.
+ * `bank` raises the west bank's top (feet bank + 1), for a drop in.
+ */
+const lakeWorld = (shallows = false, bank = 63): TestWorld => {
+  const w = new TestWorld((x) => (x <= 0 ? bank : x <= 5 ? 59 : 63)).fill(
+    { x: 1, y: 60, z: -3 },
+    { x: 5, y: 63, z: 3 },
+    B.water,
+  );
+  if (shallows) {
+    w.fill({ x: 1, y: 60, z: -3 }, { x: 1, y: 62, z: 3 }, B.dirt);
+    w.fill({ x: 5, y: 60, z: -3 }, { x: 5, y: 62, z: 3 }, B.dirt);
+  }
+  return w;
+};
+const LAKE: Fence = { min: { x: -4, y: 55, z: -4 }, max: { x: 10, y: 70, z: 4 } };
+/** The water's surface in the lake (a source block is 8/9 full). */
+const SURFACE = 63 + 8 / 9;
+const kindsOf = (segments: readonly Segment[]): string[] =>
+  segments.flatMap((x) => x.movement?.kind ?? []);
 
 const seg = (segments: readonly Segment[], kind: string): Segment => {
   const s = segments.find((x) => x.movement?.kind === kind);
@@ -190,6 +215,114 @@ describe('execution plans', () => {
     });
   });
 
+  it('swims across a calm deep lake: in by a drop, afloat across, out up the far bank', () => {
+    const w = lakeWorld();
+    // Without water there is no way across.
+    expect(planPath(w, LAKE, centre(-1, 64, 0), goalBlock(7, 64, 0)).status).toBe('none');
+    const r = walk(w, LAKE, centre(-1, 64, 0), [7, 64, 0], { water: true });
+    expect(kindsOf(r.segments)).toEqual([
+      'traverse',
+      'fall',
+      'traverse',
+      'traverse',
+      'traverse',
+      'traverse',
+      'ascend',
+      'traverse',
+    ]);
+    expect(r.segments.filter((s) => s.movement?.swim === true)).toHaveLength(6);
+    // Afloat over the deep water, the feet stay in its top block, never above the height where
+    // the body leaves the water (63.599), and the eyes (1.62 up) above the surface.
+    const afloat = r.steps.filter((s) => s.pos.x > 1.5 && s.pos.x < 5.5);
+    expect(afloat.length).toBeGreaterThan(30);
+    for (const s of afloat) {
+      expect(s.pos.y).toBeGreaterThanOrEqual(63);
+      expect(s.pos.y).toBeLessThan(63.599);
+      expect(s.pos.y + 1.62).toBeGreaterThan(SURFACE);
+      expect(s.onGround).toBe(false);
+    }
+    // Jump is held only to stay up, never out of the water.
+    expect(afloat.some((s) => s.jump)).toBe(true);
+    expect(r.steps.at(-1)).toMatchObject({ pos: { x: 7.5, y: 64, z: 0.5 }, onGround: true });
+  });
+
+  it('stops afloat out on a lake, or standing in its shallows', () => {
+    const afloat = walk(lakeWorld(), LAKE, centre(-1, 64, 0), [3, 63, 0], { water: true });
+    const end = afloat.steps.at(-1);
+    expect(end?.pos).toMatchObject({ x: 3.5, z: 0.5 });
+    expect(end?.pos.y).toBeGreaterThanOrEqual(63);
+    expect(end?.onGround).toBe(false);
+    // One-deep at x = 5: it sinks onto the floor there and stands.
+    const shallow = walk(lakeWorld(true), LAKE, centre(-1, 64, 0), [5, 63, 0], { water: true });
+    expect(shallow.steps.at(-1)).toMatchObject({ pos: { x: 5.5, y: 63, z: 0.5 }, onGround: true });
+  });
+
+  it('starts afloat (a walk stopped on the lake), and dives in from a bank up to 5 high', () => {
+    const r = walk(lakeWorld(), LAKE, { x: 3.3, y: 63.45, z: 0.6 }, [7, 64, 0], { water: true });
+    expect(kindsOf(r.segments)).toEqual(['traverse', 'traverse', 'ascend', 'traverse']);
+    for (const bank of [65, 67]) {
+      const dive = walk(lakeWorld(false, bank), LAKE, centre(-1, bank + 1, 0), [7, 64, 0], {
+        water: true,
+      });
+      expect(kindsOf(dive.segments).slice(0, 2)).toEqual(['traverse', 'fall']);
+      // The fall ends back up in the lake's top block, before swimming on.
+      const fall = seg(dive.segments, 'fall');
+      expect(Math.floor((fall.steps.at(-1) as PathStep).pos.y)).toBe(63);
+    }
+  });
+
+  it('starts under water by rising into the top block first, and afloat over one-deep water by sinking', () => {
+    // Under water (a stop, a correction, a login there), at several depths: up, then on.
+    for (const y of [60.2, 61.5, 62.9]) {
+      const r = walk(lakeWorld(), LAKE, { x: 3.4, y, z: 0.6 }, [7, 64, 0], { water: true });
+      const rise = r.segments[0]?.steps ?? [];
+      expect(Math.floor((rise.at(-1) as PathStep).pos.y)).toBe(63);
+      expect(kindsOf(r.segments).at(-2)).toBe('ascend');
+    }
+    // Afloat over the one-deep rim: it sinks onto the floor and wades on.
+    const s = walk(lakeWorld(true), LAKE, { x: 1.5, y: 63.4, z: 0.5 }, [-1, 64, 0], {
+      water: true,
+    });
+    expect(s.steps.some((x) => x.onGround && x.pos.y === 63)).toBe(true);
+  });
+
+  it('idle in or over deep water: swims up into its top block, or falls in first', () => {
+    const w = lakeWorld();
+    const top = (steps: PathStep[] | null): number => {
+      const end = steps?.at(-1);
+      if (end === undefined) throw new Error('no steps');
+      return end.pos.y;
+    };
+    // Under water: up into the top block, rising.
+    const up = surfacing(w, { x: 3.5, y: 60.7, z: 0.5 });
+    expect(top(up)).toBeGreaterThanOrEqual(63);
+    expect(top(up)).toBeLessThan(63.599);
+    // Above it (a stop mid-fall): down into it, then up to its top block.
+    expect(Math.floor(top(surfacing(w, { x: 3.5, y: 65.3, z: 0.5 })))).toBe(63);
+    // Afloat in the top block already, or on dry land: nothing to do.
+    expect(surfacing(w, { x: 3.5, y: 63.4, z: 0.5 })).toBeNull();
+    expect(surfacing(w, { x: -1.5, y: 64, z: 0.5 })).toBeNull();
+    // On the bank's edge with its centre over the lake (an independent review, 2026-10-04: it
+    // "swam up" on the spot forever), or in the air beside the bank (it would land on it).
+    expect(surfacing(w, { x: 1.1, y: 64, z: 0.5 })).toBeNull();
+    expect(surfacing(w, { x: 1.1, y: 66.5, z: 0.5 })).toBeNull();
+    // Higher above the water than any drop a path makes: not from there.
+    expect(surfacing(w, { x: 3.5, y: 70.5, z: 0.5 })).toBeNull();
+  });
+
+  it('a dive goes deeper the higher the drop, and comes back up', () => {
+    let last = -1;
+    for (const h of [1, 2, 3, 5, 10, 20]) {
+      const d = deepWaterDive(h);
+      expect(d.depth).toBeGreaterThan(last);
+      expect(d.ticks).toBeGreaterThan(h);
+      last = d.depth;
+    }
+    // From one block up the feet barely dip under the top block; from ten, about four blocks.
+    expect(deepWaterDive(1).depth).toBeLessThan(0.3);
+    expect(deepWaterDive(10).depth).toBeGreaterThan(3.5);
+  });
+
   it('walk at no more than the vanilla walking speed, on the ground, ending at rest on the goal', () => {
     const { steps, plan } = walk(new TestWorld(), area(12, 60, 70), FROM, [9, 64, 4]);
     let at = FROM;
@@ -262,19 +395,19 @@ describe('execution plans', () => {
     }
   });
 
-  it('a fall into one-deep water from 10 up is honest and safe', () => {
-    const lake = new TestWorld((x) => (x >= 2 ? 53 : 63)).fill(
-      { x: 2, y: 54, z: 0 },
-      { x: 12, y: 54, z: 0 },
+  it('a fall into one-deep water from 5 up is honest and safe', () => {
+    const lake = new TestWorld((x) => (x >= 2 ? 58 : 63)).fill(
+      { x: 2, y: 59, z: 0 },
+      { x: 12, y: 59, z: 0 },
       B.water,
     );
-    const { segments } = walk(lake, STRIP, FROM, [6, 54, 0], { water: true });
+    const { segments } = walk(lake, STRIP, FROM, [6, 59, 0], { water: true });
     const fall = seg(segments, 'fall');
-    expect(fall.steps.at(-1)?.pos.y).toBe(54);
+    expect(fall.steps.at(-1)?.pos.y).toBe(59);
   });
 
   it('climbs out of one-deep water as a player does: swimming up against the bank until pushed up', () => {
-    const { segments } = walk(poolWorld(), STRIP, FROM, [6, 55, 0], { water: true });
+    const { segments } = walk(poolWorld(), STRIP, FROM, [6, 60, 0], { water: true });
     const out = seg(segments, 'ascend');
     // Swimming up (jump held) while in the water, pressed against the bank (x = 4).
     expect(out.steps.some((s) => s.jump)).toBe(true);
@@ -284,7 +417,7 @@ describe('execution plans', () => {
     // The water's push: a rise of about 0.3 (+ 0.04 swimming) in one tick after a bump.
     const rises = out.steps.map((s, i) => (i === 0 ? 0 : s.pos.y - out.steps[i - 1]!.pos.y));
     expect(Math.max(...rises)).toBeGreaterThan(0.3);
-    expect(out.steps.at(-1)).toMatchObject({ onGround: true, pos: { y: 55 } });
+    expect(out.steps.at(-1)).toMatchObject({ onGround: true, pos: { y: 60 } });
     // About as long as it costs.
     expect(out.steps.length).toBeGreaterThan(12);
     expect(out.steps.length).toBeLessThan(26);

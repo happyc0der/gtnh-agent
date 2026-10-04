@@ -18,6 +18,7 @@ import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import {
   BLOCK,
+  DIG_TEST_BLOCK_REGISTRY,
   flatWorld,
   FOLIAGE,
   openSkyLight,
@@ -457,6 +458,150 @@ describe('Gtnh1710Client walking over terrain', () => {
     // A real jump (the pathfinder's physics): the server's own move check takes every step.
     expect(server.moveSim.corrections).toEqual([]);
   });
+
+  it('swims across a calm lake and climbs out up its far bank: the server takes every step', async () => {
+    // A lake four deep (water y 102-105) at x -8..-6 across the pen, stone under and beside it;
+    // the banks are the grass at 105 (feet 106) on either side.
+    const blocks = new Map<string, number>();
+    for (let z = -12; z <= -4; z++) {
+      for (let y = 101; y <= 104; y++) {
+        blocks.set(`-9,${y},${z}`, BLOCK.stone);
+        blocks.set(`-5,${y},${z}`, BLOCK.stone);
+      }
+      for (let x = -8; x <= -6; x++) {
+        blocks.set(`${x},101,${z}`, BLOCK.stone);
+        for (let y = 102; y <= 105; y++) blocks.set(`${x},${y},${z}`, BLOCK.water);
+      }
+    }
+    const { server, client } = await start(
+      { blockOverrides: blocks, blocks: DIG_TEST_BLOCK_REGISTRY },
+      {
+        fence: { min: { x: -9, y: 102, z: -12 }, max: { x: -1, y: FEET_Y + 1, z: -4 } },
+        path: { ...defaultConfig().minecraft.movement.path, allowWater: true },
+      },
+    );
+    const across = await perform(client, moveTo(-8.5, -7.5, FEET_Y));
+    expect(across, across.message).toMatchObject({ ok: true, code: 'OK' });
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -8.5, y: FEET_Y, z: -7.5 },
+    });
+    // Afloat over the lake: the feet in its top block, the eyes above the surface.
+    const afloat = server.walkSteps().filter((p) => p.x < -5.6 && p.x > -8.4);
+    expect(afloat.length).toBeGreaterThan(15);
+    for (const p of afloat) expect(p.feetY + 1.62).toBeGreaterThan(105 + 8 / 9);
+    expect(server.moveSim.corrections).toEqual([]);
+    expect(server.moveSim.falls.filter((f) => f.damage > 0)).toEqual([]);
+  }, 20_000);
+
+  it('never dives where the dive would reach the floor, and swims up from under water when idle', async () => {
+    // An independent review (2026-10-04): a dive into a lake two deep touched its floor, a stop
+    // there left the player standing under water, and it drowned. A lake two deep (water
+    // 103-104 over stone at 102) at x -8..-6; the west bank the grass at 105 (feet 106: a drop
+    // of two), the east one lowered to grass at 104 (feet 105: a climb out).
+    const shallow = new Map<string, number>();
+    for (let z = -12; z <= -4; z++) {
+      for (let y = 102; y <= 104; y++) shallow.set(`-9,${y},${z}`, BLOCK.stone);
+      for (let x = -5; x <= -1; x++) {
+        shallow.set(`${x},105,${z}`, BLOCK.air);
+        shallow.set(`${x},104,${z}`, BLOCK.grass);
+        for (let y = 102; y <= 103; y++) shallow.set(`${x},${y},${z}`, BLOCK.stone);
+      }
+      for (let x = -8; x <= -6; x++) {
+        shallow.set(`${x},105,${z}`, BLOCK.air);
+        shallow.set(`${x},102,${z}`, BLOCK.stone);
+        for (let y = 103; y <= 104; y++) shallow.set(`${x},${y},${z}`, BLOCK.water);
+      }
+    }
+    const path = { ...defaultConfig().minecraft.movement.path, allowWater: true };
+    const fence = { min: { x: -9, y: 102, z: -12 }, max: { x: -1, y: FEET_Y + 1, z: -4 } };
+    const dry = await start(
+      {
+        blockOverrides: shallow,
+        blocks: DIG_TEST_BLOCK_REGISTRY,
+        spawn: { x: -8.5, eyeY: FEET_Y + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
+      },
+      { fence, path },
+    );
+    const across = await perform(dry.client, moveTo(-3.5, -7.5, FEET_Y - 1));
+    expect(across.ok).toBe(false);
+    expect(dry.server.walkSteps().filter((p) => p.feetY < 104)).toEqual([]);
+    // Put under water in a lake four deep (a correction, a login there): idle swims it up into
+    // the top block, its eyes out of the water.
+    const deep = new Map<string, number>();
+    for (let z = -12; z <= -4; z++) {
+      for (let y = 101; y <= 104; y++) {
+        deep.set(`-9,${y},${z}`, BLOCK.stone);
+        deep.set(`-5,${y},${z}`, BLOCK.stone);
+      }
+      for (let x = -8; x <= -6; x++) {
+        deep.set(`${x},101,${z}`, BLOCK.stone);
+        for (let y = 102; y <= 105; y++) deep.set(`${x},${y},${z}`, BLOCK.water);
+      }
+    }
+    const under = await start(
+      {
+        blockOverrides: deep,
+        blocks: DIG_TEST_BLOCK_REGISTRY,
+        spawn: { x: -6.5, eyeY: 102.4 + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
+      },
+      { fence, path },
+    );
+    await under.client.observe();
+    const deadline = Date.now() + 5_000;
+    let y = 0;
+    while (Date.now() < deadline) {
+      const seen = (await under.client.observe()).player.position;
+      y = seen.known ? seen.value.y : 0;
+      if (y >= 105) break;
+      await delay(100);
+    }
+    expect(y).toBeGreaterThanOrEqual(105);
+    expect(y).toBeLessThan(105.599);
+    expect(under.server.moveSim.corrections).toEqual([]);
+    // From there, a walk out up the bank.
+    const out = await perform(under.client, moveTo(-4.5, -7.5, FEET_Y));
+    expect(out, out.message).toMatchObject({ ok: true, code: 'OK' });
+  }, 30_000);
+
+  it('checks a dive before it steps off: a block that appeared in the drop stops it on the bank', async () => {
+    // An independent review (2026-10-04): the flight was no longer checked before the bot
+    // walked off into a dive. A lake four deep (water 98-101 over stone at 97), walled, under
+    // the flat world's grass at 105: a drop of five from the bank (feet 106) into it.
+    const blocks = new Map<string, number>();
+    for (let x = -9; x <= -3; x++) {
+      for (let z = -12; z <= -4; z++) {
+        const wall = x === -9 || x === -3 || z === -12 || z === -4;
+        if (wall && x !== -9) continue;
+        for (let y = 97; y <= 101; y++) {
+          blocks.set(`${x},${y},${z}`, wall || y === 97 ? BLOCK.stone : BLOCK.water);
+        }
+        if (!wall) for (let y = 102; y <= 105; y++) blocks.set(`${x},${y},${z}`, BLOCK.air);
+      }
+    }
+    const { server, client } = await start(
+      {
+        blockOverrides: blocks,
+        blocks: DIG_TEST_BLOCK_REGISTRY,
+        spawn: { x: -9.5, eyeY: FEET_Y + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
+      },
+      {
+        fence: { min: { x: -10, y: 97, z: -12 }, max: { x: -2, y: FEET_Y + 1, z: -4 } },
+        path: { ...defaultConfig().minecraft.movement.path, allowWater: true },
+      },
+    );
+    const walk = perform(client, moveTo(-6.5, -7.5, 101));
+    const deadline = Date.now() + 10_000;
+    while (server.walkSteps().length === 0 && Date.now() < deadline) await delay(1);
+    // While it walks to the edge: a block in the drop column, 3 below the bank's top.
+    server.setBlock(-8, 103, -8, BLOCK.stone);
+    const result = await walk;
+    expect(result).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(result.message).toMatch(/the way ahead is not clear/);
+    // It never stepped off.
+    expect(Math.min(...server.walkSteps().map((p) => p.feetY))).toBe(FEET_Y);
+    expect(server.moveSim.corrections).toEqual([]);
+  }, 30_000);
 
   it('climbs a ladder up a wall onto its top, and back down: the server takes every step', async () => {
     // A stone wall at x = -5 four high (y 106-109) at z = -10, a ladder up its west face at

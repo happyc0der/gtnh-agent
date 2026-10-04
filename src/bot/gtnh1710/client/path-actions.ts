@@ -540,6 +540,9 @@ export class PathActions {
     this.#core.walking = true;
     this.#core.movement.stopIdle();
     try {
+      // Whether the last step sent left the body where no stop may come (carried into the next
+      // segment: a swim's last step may be one).
+      let carried: boolean = false;
       for (const seg of exec.segments) {
         if (seg.toggle != null) {
           // A door or gate in the way: opened standing still, as a player uses it.
@@ -570,7 +573,7 @@ export class PathActions {
           if (typeof slot === 'string') return stopped(slot);
           holding = slot;
         }
-        let airborne = false;
+        let airborne: boolean = carried;
         // A step counted as on the ground with the body past an edge, over no block: the next
         // tick falls (1.7.10 moves along y before x and z, so the step off an edge still lands
         // on it). Seen live 2026-10-04: a hostile stopped a walk there, and the bot hung in the
@@ -624,9 +627,17 @@ export class PathActions {
               ? null
               : this.#core.movement.walkInterruption(guard, { from: at, to: step.pos });
             if (soft !== null) return stopped(soft);
-            // This step, and when it leaves the ground every step to the landing: no pause in
-            // the air.
-            const why = this.#flightProblem(fence, at, seg.steps, i, policy.water);
+            // This step, and when it leaves the ground every step to the next place a walk may
+            // stop (a landing, a ladder holding the feet, afloat in the top of the water): no
+            // pause on the way.
+            const why = this.#flightProblem(
+              fence,
+              at,
+              seg.steps,
+              i,
+              policy.water,
+              seg.movement?.swim === true,
+            );
             if (why !== null) return stopped(`the way ahead is not clear: ${why}`);
             // Sprinting only while the food bar stays above 10 (HungerOverhaul: it costs food).
             const food = this.#world.food;
@@ -656,7 +667,11 @@ export class PathActions {
             Math.abs(step.pos.x - Math.floor(step.pos.x) - 0.5) < 1e-6 &&
             Math.abs(step.pos.z - Math.floor(step.pos.z) - 0.5) < 1e-6 &&
             this.#heldAt(step.pos);
-          airborne = !step.onGround && !held;
+          // Afloat in the top block of the water a walk may stop too (a walk from there starts
+          // afloat); under it (a dive) or above the water it may not (an independent review,
+          // 2026-10-04: stopped on a lake's floor at the bottom of a dive, the player drowned).
+          const afloat = seg.movement?.swim === true && !step.onGround && this.#afloatAt(step.pos);
+          airborne = !step.onGround && !held && !afloat;
           overEdge =
             step.onGround && seg.steps[i + 1]?.onGround === false && !this.#overBlock(step.pos);
           if (placing.length > 0) setSprint(false);
@@ -675,6 +690,7 @@ export class PathActions {
           }
           await delay(WALK_TICK_MS);
         }
+        carried = airborne;
         if (seg.restore != null) {
           // Through: the door is left as it was found (closed behind, as a player does).
           const why = await this.#clickDoor(seg.restore);
@@ -794,6 +810,7 @@ export class PathActions {
     steps: readonly PathStep[],
     i: number,
     water: boolean,
+    swim = false,
   ): string | null {
     const world = this.#world.walkWorld();
     if (world === null) return 'the block data became unknown';
@@ -802,10 +819,28 @@ export class PathActions {
       const step = steps[k] as PathStep;
       const why = stepProblem(world, fence, prev, step.pos, water);
       if (why !== null) return why;
-      if (step.onGround) break;
+      if (step.onGround || (swim && this.#afloatAt(step.pos))) break;
       prev = step.pos;
     }
     return null;
+  }
+
+  /**
+   * Whether feet at `pos` float in the top block of water: water where the feet are, none in
+   * the block above, the feet low enough to be in it (under its level + 0.599: physics.ts
+   * inWater). Not when blocks are unknown.
+   */
+  #afloatAt(pos: Vec3): boolean {
+    const world = this.#world.walkWorld();
+    if (world === null) return false;
+    const x = Math.floor(pos.x);
+    const y = Math.floor(pos.y + 1e-9);
+    const z = Math.floor(pos.z);
+    const water = (id: number | undefined): boolean => {
+      const name = id === undefined || id === 0 ? undefined : world.blockName(id);
+      return name === 'minecraft:water' || name === 'minecraft:flowing_water';
+    };
+    return pos.y - y < 0.599 && water(world.blockAt(x, y, z)) && !water(world.blockAt(x, y + 1, z));
   }
 
   /** Whether a ladder holds feet at `pos` (terrain.ts onLadder); not when blocks are unknown. */

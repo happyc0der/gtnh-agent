@@ -5,6 +5,7 @@ import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { outbound } from '../packets.ts';
 import { CLIMB_DOWN_PER_TICK } from '../pathing/costs.ts';
+import { surfacing, type PathStep } from '../pathing/execute.ts';
 import { goalBlock } from '../pathing/goals.ts';
 import { fenceHolds } from '../play-area.ts';
 import {
@@ -12,6 +13,7 @@ import {
   edgeLanding,
   fallDistances,
   landingHazard,
+  eyesInWater,
   MAX_SAFE_FALL,
   onBlock,
   onLadder,
@@ -378,6 +380,27 @@ export class MovementActions {
       this.#floatingNote = null;
       return;
     }
+    // Under calm water, or over it with nothing else underfoot (a stop, a correction, a login
+    // there): up into its top block as a swimming client comes up, or onto one-deep water's
+    // floor. Afloat there a walk can start; under it the player would drown (an independent
+    // review, 2026-10-04), and idle gravity would set it on the water as on a floor.
+    const swim = surfacing(world, feet);
+    const end = swim?.at(-1);
+    if (swim !== null && end !== undefined && fenceHolds(fence, end.pos)) {
+      await this.#sendSteps(swim, 'swam up');
+      return;
+    }
+    if (eyesInWater(world, feet)) {
+      const why =
+        swim !== null
+          ? 'under water, and the way up leaves the fence'
+          : 'under water, and no safe way up is known';
+      if (this.#floatingNote !== why) {
+        this.#floatingNote = why;
+        this.#core.log(`at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}): ${why}`);
+      }
+      return;
+    }
     const support = checkSupport(world, feet);
     if (support.kind === 'unknown') return;
     // Held up for the server, the feet may still hang a little above the ground, or just past
@@ -431,6 +454,34 @@ export class MovementActions {
       }
       this.#floatingNote = null;
       this.#core.log(`fell ${(feet.y - landY).toFixed(2)} blocks onto the ground at y=${landY}`);
+    } finally {
+      this.#core.walking = false;
+      if (this.#core.phase === 'play') this.startIdle();
+    }
+  }
+
+  /** Sends idle steps (a walk of its own), stopping at a correction or a closed connection. */
+  async #sendSteps(steps: readonly PathStep[], what: string): Promise<void> {
+    this.#core.walking = true;
+    this.stopIdle();
+    const placements = this.#core.confirmedPositions;
+    const from = this.#world.ownPosition;
+    try {
+      for (const step of steps) {
+        if (this.#core.phase !== 'play' || this.#core.confirmedPositions !== placements) return;
+        this.#core.send(
+          outbound.playerMove(
+            { x: step.pos.x, feetY: step.pos.y, z: step.pos.z, yaw: this.#core.lastYaw, pitch: 0 },
+            step.onGround,
+          ),
+        );
+        this.#world.setOwnPosition(step.pos);
+        await delay(WALK_TICK_MS);
+      }
+      const end = steps.at(-1)?.pos;
+      if (from !== null && end !== undefined) {
+        this.#core.log(`${what} from y=${from.y.toFixed(2)} to y=${end.y.toFixed(2)}`);
+      }
     } finally {
       this.#core.walking = false;
       if (this.#core.phase === 'play') this.startIdle();

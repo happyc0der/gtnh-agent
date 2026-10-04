@@ -10,8 +10,11 @@ import {
   AIR_DRAG,
   SPRINT_JUMP_BOOST,
   SPRINT_SPEED,
+  SWIM_UP,
   WADE_SPEED,
   WALK_SPEED,
+  WATER_DRAG,
+  WATER_GRAVITY,
 } from './physics.ts';
 
 /**
@@ -122,6 +125,58 @@ export function waterLanding(height: number): { ticks: number; damage: number } 
 /** The highest fall the pathfinder ever considers (into water): the search area is 32 levels at most. */
 export const MAX_WATER_FALL = 48;
 
+/**
+ * The highest drop into water a path makes. A stop in mid-air (a correction, a disconnect)
+ * leaves the server counting the fall so far, and the client's next packets say it is on the
+ * ground (the server checked in its jar by an independent review, 2026-10-04): from at most
+ * this high that costs at most 2 health.
+ */
+export const MAX_WATER_DROP = 5;
+
+/** Feet below this height over the bottom of the top water block are in the water (physics.ts inWater). */
+const IN_WATER_BELOW = 0.599;
+
+/**
+ * Whether a swimmer at feet height `y` over the bottom of the top block of deep water, moving
+ * up by `vy`, holds jump: only when the rise it carries still ends in the water (execute.ts
+ * StepBuilder.floats, in a column of water all the way down).
+ */
+function floatsUp(y: number, vy: number): boolean {
+  if (!(y < IN_WATER_BELOW)) return false;
+  let used = vy + SWIM_UP;
+  let at = y + used;
+  for (let t = 0; t < 20; t++) {
+    if (!(at < IN_WATER_BELOW)) return false;
+    const next = used * WATER_DRAG - WATER_GRAVITY;
+    if (next <= 0) return true;
+    used = next;
+    at += used;
+  }
+  return true;
+}
+
+/**
+ * A drop into calm deep water, walking off an edge `height` above the bottom of its top block,
+ * jump held while that keeps the body in the water (floatsUp): the ticks until the feet are back
+ * up in the top block, rising, and how far below that block's bottom they went (0: never).
+ */
+export function deepWaterDive(height: number): { ticks: number; depth: number } {
+  let y = height;
+  let vy = GROUND_MOTION_Y;
+  let lowest = y;
+  for (let t = 1; t <= 400; t++) {
+    const wet = y < IN_WATER_BELOW;
+    const used = wet && floatsUp(y, vy) ? vy + SWIM_UP : vy;
+    y += used;
+    lowest = Math.min(lowest, y);
+    vy = nextMotionY(used, wet ? 'water' : 'air');
+    if (y < IN_WATER_BELOW && y >= 0 && Math.floor(y) === 0 && vy > 0 && lowest < height) {
+      return { ticks: t, depth: Math.max(0, -lowest) };
+    }
+  }
+  throw new Error(`internal: no rise out of a dive from ${height}`);
+}
+
 /** The resolved cost table for one search. */
 export interface PathCosts {
   /** One block cardinal on dry ground (sprinting when allowed), and diagonally. */
@@ -137,6 +192,12 @@ export interface PathCosts {
   readonly fall: readonly number[];
   /** A fall into calm one-deep water, by height; Infinity where the landing hurts. */
   readonly waterFall: readonly number[];
+  /**
+   * A fall into the top of calm deep water, by height: the walk off, the dive, the rise back up
+   * into the top block (deepWaterDive); and how deep the feet go below that block's bottom.
+   */
+  readonly deepFall: readonly number[];
+  readonly diveDepth: readonly number[];
   /** A parkour jump, by gap (1..3); Infinity where not allowed. */
   readonly parkour: readonly number[];
   readonly parkourSprint: readonly boolean[];
@@ -189,10 +250,19 @@ export function pathCosts(o: CostOptions): PathCosts {
   for (let h = 1; h <= MAX_WATER_FALL; h++) {
     const landing = waterLanding(h);
     waterFall.push(
-      o.water && landing.damage === 0
+      o.water && landing.damage === 0 && h <= MAX_WATER_DROP
         ? WALK_OFF_EDGE + landing.ticks + 0.2 * WADE_ONE_BLOCK
         : Infinity,
     );
+  }
+  const deepFall: number[] = [Infinity];
+  const diveDepth: number[] = [0];
+  for (let h = 1; h <= MAX_WATER_FALL; h++) {
+    const dive = deepWaterDive(h);
+    deepFall.push(
+      o.water && h <= MAX_WATER_DROP ? WALK_OFF_EDGE + dive.ticks + 0.2 * WADE_ONE_BLOCK : Infinity,
+    );
+    diveDepth.push(dive.depth);
   }
   const parkour: number[] = [Infinity];
   const parkourSprint: boolean[] = [false];
@@ -212,6 +282,8 @@ export function pathCosts(o: CostOptions): PathCosts {
     waterExit: WATER_EXIT_TICKS + o.jumpPenalty,
     fall,
     waterFall,
+    deepFall,
+    diveDepth,
     parkour,
     parkourSprint,
     pillar: STOP_START_TICKS + ASCEND_TICKS + o.jumpPenalty + o.placePenalty,

@@ -56,7 +56,10 @@ export const PathConfigSchema = z.strictObject({
    * makes sprinting cost food on this server.
    */
   allowSprint: z.boolean().default(false),
-  /** Wade through calm one-deep water, and drop into it from a height that does not hurt. */
+  /**
+   * Wade through calm one-deep water and swim across calm deep water (afloat, the eyes above
+   * the surface), and drop into either from a height that does not hurt.
+   */
   allowWater: z.boolean().default(false),
   /**
    * Walk through doorways: open a wooden door or fence gate in the way with a right-click,

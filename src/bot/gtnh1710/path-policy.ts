@@ -63,8 +63,8 @@ import type { Fence, Vec3, WalkWorld } from './walking.ts';
  *    vine.
  *  - Parkour (allowParkour): only over gaps that falling into would not hurt, unless
  *    parkourOverDeepGaps; sprinting (allowSprint) only when the caller says the walk is long
- *    and the food bar high enough (client/path-actions.ts); wading (allowWater) in calm
- *    one-deep water.
+ *    and the food bar high enough (client/path-actions.ts); water (allowWater): wading in calm
+ *    one-deep water and swimming at the top of calm deep water.
  *  - A walk that does no work (a retreat, a flee, the walk to a drop: threats do not stop
  *    them, and a dig or a placement would) breaks and places nothing.
  */
@@ -158,7 +158,7 @@ export interface WalkPolicy {
   readonly options: PathOptions;
   /** Breaking, placing and their throwaway as allowed, in words for logs. */
   readonly summary: string;
-  /** Wading allowed: the execution plan and its checks must know. */
+  /** Water allowed (wading, swimming): the execution plan and its checks must know. */
   readonly water: boolean;
 }
 
@@ -456,7 +456,7 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
     placing ? `placing up to ${throwaway.count} ${throwaway.block}` : 'no placing',
     s.allowParkour ? (s.parkourOverDeepGaps ? 'parkour (deep gaps too)' : 'parkour') : null,
     input.sprint ? 'sprinting' : null,
-    s.allowWater ? 'wading' : null,
+    s.allowWater ? 'wading, swimming' : null,
     s.allowDoors ? 'doors' : null,
     s.allowClimb ? 'ladders' : null,
   ].filter((w) => w !== null);

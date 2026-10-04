@@ -1015,8 +1015,9 @@ moment (the inventory, the other players, the boundary) into the pathfinder's op
   and plain blocks around (`PLACE_BLOCK`'s neighbour rule; the pathfinder itself keeps
   placements away from fluids and hazards).
 - **Parkour** (`allowParkour`, on) only over gaps that falling into would not hurt
-  (`parkourOverDeepGaps`, off); **sprinting** (`allowSprint`, off) as below; **wading**
-  (`allowWater`, off) in calm one-deep water; falls of at most 3 blocks. Walks never dig down
+  (`parkourOverDeepGaps`, off); **sprinting** (`allowSprint`, off) as below; **water**
+  (`allowWater`, off): wading in calm one-deep water and swimming at the top of calm deep water;
+  falls of at most 3 blocks. Walks never dig down
   (that is the night pit's `DIG_DOWN`).
 - A walk that does no work (a retreat, the flee, the walk to a drop: threats do not stop them,
   and a dig or a placement would) breaks and places nothing; only the walk to a dig's drop that
@@ -1155,7 +1156,8 @@ classified with the walkers' own rules (what the body passes is `passable.ts`'s,
 stood on `terrain.ts`'s, hazards `block-hazards.ts`'s), with derived facts kept per cell: near a
 hazard (one in the 3 x 3 x 3 cube, or an unloaded or unnamed block), standable (exactly
 `standProblem`, and never with the feet in a vine: a game client climbs vines, and that is not
-modelled), calm one-deep water (vanilla's flow vector is zero). A ladder on a wall
+modelled), calm one-deep water (vanilla's flow vector is zero), the top of calm deep water
+(`swimmable`: water under it, the two cells above open). A ladder on a wall
 (`minecraft:ladder`, metadata 2-5) is a climbable cell (`CLIMB`): neither passable nor solid, its
 box a 1/8 slab along the wall's edge (`bodyFitsLadder`), so a body centred in its column is clear
 of it; the feet are held there (`held`), floor or not.
@@ -1189,6 +1191,7 @@ below and the client's waits:
 | bridge      | place a block in the gap ahead against the side of the block underfoot, walk on                  | 32.63 (with the placement penalty 20)                      |
 | downward    | dig the block underfoot, drop one block (only when the caller enables it)                        | 17 + the dig                                               |
 | wading      | a traverse or diagonal in calm one-deep water (into it, out of it, within it)                    | 10.20, 14.43                                               |
+| swimming    | a traverse or diagonal at the top of calm deep water, afloat (from or into one-deep water too)   | 10.20, 14.43                                               |
 | (ascend)    | out of calm one-deep water onto a bank one higher, the cells 3 above open                        | 20 (about 18 ticks, + jump penalty 2)                      |
 | climbUp     | up a ladder one block, the body centred in its column (clear of the ladder's slab)               | 9.50 (1 / 0.1176 a tick, + 1 to start)                     |
 | climbDown   | down a ladder one block                                                                          | 7.67 (1 / 0.15 a tick, + 1)                                |
@@ -1208,7 +1211,7 @@ allows it: `canDigDown`); see
 
 **Safety the search enforces**, whatever the caller allows:
 
-- every cell the body passes is passable (or calm one-deep water, when wading is allowed) and
+- every cell the body passes is passable (or calm water, when water is allowed) and
   has no hazard, unloaded or unnamed block in the 3 x 3 x 3 cube around it; every feet block a
   movement ends on is standable; nothing leaves the fence;
 - a block is broken only where `canBreak` allows it and never next to a fluid (above or beside:
@@ -1248,10 +1251,33 @@ position the click goes (`afterStep`) and the first step that stands on it (`nee
   the server's own move from the last position lands exactly where the client says; only
   climbing out of water presses against one (below).
 - Walking and wading run as fast as allowed, flowing on from one straight movement to the next.
-  An ascend jumps from the start block's centre and keeps off the step until the feet are above
-  it. A descend or fall walks off the edge, then steers in the air to land inside the column,
-  never back over the start block. Parkour runs up and jumps on the last tick still on the start
-  block, flying as hard as needed to be over the landing before the feet come down to its top.
+- Swimming (a movement from or to the top of calm deep water: `swim`) runs as wading does, the
+  water's acceleration and drag every tick, but afloat: jump is held on a tick only when the
+  rise it carries still ends in the water (`floats`: the feet below the top block's level +
+  0.599, where the box shrunk by 0.4 leaves the water), so every tick is the water's, the feet
+  stay in the top block and the eyes (1.62 up) out of the water. A stop floats there; in one-deep
+  water it sinks onto the floor and stands, and a swim into one-deep water stops so before
+  anything but more swimming or a climb out. The server checks nothing of it but the blocks in
+  the way, and a packet sent from in the water resets the fall.
+- A drop into deep water (`costs.ts` `deepWaterDive`, by height) goes as deep as the dive
+  takes the feet (1.2 below the top block from 2 up, 2.9 from 5), then back up into the top
+  block, rising, before the swim on; it is planned only where that much calm water, and a block
+  more, lies under the top block, clear of hazards, inside the fence, with water or a full block
+  under that: the feet never touch the floor (an independent review, 2026-10-04: a stop on a
+  lake's floor at the bottom of a dive left the player under water, where it drowns). No drop
+  into water, one deep or deep, is higher than 5 (`MAX_WATER_DROP`): a stop in mid-air (a
+  correction, a disconnect) leaves the server counting the fall, and the client's next packets
+  say it is on the ground; from 5 that costs at most 2 health.
+- A walk stops afloat only in the top block (`path-actions.ts`; a dive or a climb out are
+  airborne, and before taking off every step to the next stop point is checked on the blocks as
+  they are); a walk may start afloat, under water (rising into the top block first), or afloat
+  over one-deep water (sinking onto its floor first: `search.ts` `afloat`). Idle
+  (`surfacing`), under water the player swims up into the top block, through any water; from
+  just above calm water (every column under the body water, at most MAX_WATER_DROP + 1 down)
+  it drops in first; never onto a block, never a fall that hurts, never when it stands on
+  something; with no safe way up it says so (it would drown). No dig is planned from afloat
+  (`stand-spots.ts`: digging off the ground is five times as slow). Not handled: a login (or a
+  correction) left under a ceiling, beside lava, inside a waterfall or over flowing water.
 - A pillar jumps straight up from rest and places the block in the cell the feet left right
   after the first step with the feet above it (the third); it lands on the block six ticks
   later (four under a block that cuts the jump short). If the server has not confirmed the
@@ -1339,8 +1365,9 @@ test run.
 
 **Not covered yet:**
 
-- swimming: water deeper than one block is never entered, and water that flows (it pushes) is
-  never waded;
+- swimming under water (the body always floats at the top: no diving for anything) and water
+  that flows (it pushes): never entered; falls into deep water only from the heights safe for
+  one-deep water;
 - vines (the body never has its feet in one; ladders are climbed since 2026-10-04), slabs,
   stairs, soul sand, ice and other partial or slippery blocks (not surfaces);
 - falling blocks are avoided, not handled (Baritone breaks a falling column again and again);

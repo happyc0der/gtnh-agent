@@ -56,15 +56,25 @@ describe('the search', () => {
     }
     const deep = new TestWorld((x) => (x >= 2 ? 59 : 63));
     expect(planPath(deep, STRIP, FROM, goalBlock(5, 60, 0)).status).not.toBe('reached');
-    // A lake one deep at the cliff's foot, from 10 blocks up (a height the server does not punish).
-    const lake = new TestWorld((x) => (x >= 2 ? 53 : 63)).fill(
+    // A lake one deep at the cliff's foot, from 5 blocks up (a height the server does not
+    // punish, and no higher than MAX_WATER_DROP: a stop in mid-air would count the fall).
+    const lake = new TestWorld((x) => (x >= 2 ? 58 : 63)).fill(
+      { x: 2, y: 59, z: 0 },
+      { x: 12, y: 59, z: 0 },
+      B.water,
+    );
+    const into = planPath(lake, STRIP, FROM, goalBlock(6, 59, 0), { water: true });
+    expect(into.status).toBe('reached');
+    expect(into.movements.find((m) => m.kind === 'fall')).toMatchObject({ drop: 5, water: true });
+    // From 10 up, never.
+    const high = new TestWorld((x) => (x >= 2 ? 53 : 63)).fill(
       { x: 2, y: 54, z: 0 },
       { x: 12, y: 54, z: 0 },
       B.water,
     );
-    const into = planPath(lake, STRIP, FROM, goalBlock(6, 54, 0), { water: true });
-    expect(into.status).toBe('reached');
-    expect(into.movements.find((m) => m.kind === 'fall')).toMatchObject({ drop: 10, water: true });
+    expect(planPath(high, STRIP, FROM, goalBlock(6, 54, 0), { water: true }).status).not.toBe(
+      'reached',
+    );
     // From 4 up (the box skips the water's last 0.6 in one tick: a hit), never.
     const four = new TestWorld((x) => (x >= 2 ? 59 : 63)).fill(
       { x: 2, y: 60, z: 0 },
@@ -74,7 +84,7 @@ describe('the search', () => {
     const r4 = planPath(four, STRIP, FROM, goalBlock(6, 60, 0), { water: true });
     expect(r4.status).not.toBe('reached');
     // Without water allowed, never into it.
-    expect(planPath(lake, STRIP, FROM, goalBlock(6, 54, 0)).status).not.toBe('reached');
+    expect(planPath(lake, STRIP, FROM, goalBlock(6, 59, 0)).status).not.toBe('reached');
   });
 
   it('jumps gaps of 1 and 2 walking, 3 sprinting, never 4', () => {
@@ -342,17 +352,63 @@ describe('the search', () => {
     expect(wet.movements.filter((m: Movement) => m.water).length).toBeGreaterThan(0);
   });
 
+  it('swims out of deep water only up a bank, never onto dry land at its own level', () => {
+    // Deep water (60-63) at x -2..0; dry land beside it at x >= 1, its top at 62 (feet 63, the
+    // water's own level: in the game that water would flow onto it).
+    const strip = { min: { x: -4, y: 55, z: 0 }, max: { x: 6, y: 70, z: 0 } };
+    const afloat = { x: 0.5, y: 63.45, z: 0.5 };
+    const level = new TestWorld((x) => (x <= 0 ? 59 : 62)).fill(
+      { x: -2, y: 60, z: 0 },
+      { x: 0, y: 63, z: 0 },
+      B.water,
+    );
+    expect(planPath(level, strip, afloat, goalBlock(2, 63, 0), { water: true }).status).toBe(
+      'none',
+    );
+    // A bank one higher: out up it.
+    const bank = new TestWorld((x) => (x <= 0 ? 59 : 63)).fill(
+      { x: -2, y: 60, z: 0 },
+      { x: 0, y: 63, z: 0 },
+      B.water,
+    );
+    const out = planPath(bank, strip, afloat, goalBlock(2, 64, 0), { water: true });
+    expect(out.status).toBe('reached');
+    expect(out.movements.map((m: Movement) => m.kind)).toEqual(['ascend', 'traverse']);
+    expect(out.movements[0]?.swim).toBe(true);
+  });
+
+  it('drops into deep water only where it is deep enough for the dive: the floor is never touched', () => {
+    // Lakes x 1..5 under banks of grass at 63 (feet 64), the west bank `bank` high; water from
+    // 63 down `deep` blocks.
+    const lake = (deep: number, bank: number): TestWorld =>
+      new TestWorld((x) => (x <= 0 ? bank : x <= 5 ? 63 - deep : 63)).fill(
+        { x: 1, y: 64 - deep, z: -3 },
+        { x: 5, y: 63, z: 3 },
+        B.water,
+      );
+    const across = (deep: number, bank: number) =>
+      planPath(lake(deep, bank), area(8, 50, 75), centre(-1, bank + 1, 0), goalBlock(7, 64, 0), {
+        water: true,
+      }).status;
+    // From two up the feet go 1.2 under the top block: two deep is too shallow, three is not.
+    expect(across(2, 64)).not.toBe('reached');
+    expect(across(3, 64)).toBe('reached');
+    // From five up, 2.9 under it: three deep is too shallow, four is not.
+    expect(across(3, 67)).not.toBe('reached');
+    expect(across(4, 67)).toBe('reached');
+  });
+
   it('falls into one-deep water and climbs out onto a bank one block higher', () => {
-    // A 10-block cliff over a pool one deep (floor 53, water 54), a bank at 54 beyond it.
+    // A 5-block cliff over a pool one deep (floor 58, water 59), a bank at 59 beyond it.
     const w = poolWorld();
-    const r = planPath(w, STRIP, FROM, goalBlock(6, 55, 0), { water: true });
+    const r = planPath(w, STRIP, FROM, goalBlock(6, 60, 0), { water: true });
     expect(r.status).toBe('reached');
     expect(kinds(r)).toEqual(['fall', 'traverse', 'traverse', 'ascend', 'traverse', 'traverse']);
-    expect(r.movements[0]).toMatchObject({ drop: 10, water: true });
-    expect(r.movements[3]).toMatchObject({ water: true, to: { x: 4, y: 55, z: 0 } });
+    expect(r.movements[0]).toMatchObject({ drop: 5, water: true });
+    expect(r.movements[3]).toMatchObject({ water: true, to: { x: 4, y: 60, z: 0 } });
     // Without room above the water, no climbing out (and so no falling in).
-    const low = poolWorld().set(3, 57, 0, B.stone);
-    expect(planPath(low, STRIP, FROM, goalBlock(6, 55, 0), { water: true }).status).not.toBe(
+    const low = poolWorld().set(3, 62, 0, B.stone);
+    expect(planPath(low, STRIP, FROM, goalBlock(6, 60, 0), { water: true }).status).not.toBe(
       'reached',
     );
   });

@@ -6,6 +6,7 @@ import {
   CLIMB_DOWN_PER_TICK,
   CLIMB_UP_PER_TICK,
   LEVEL_JUMP_TICKS,
+  MAX_WATER_DROP,
 } from './costs.ts';
 import type { BlockBreak, DoorToggle, Movement } from './movements.ts';
 import {
@@ -14,6 +15,7 @@ import {
   blocksZ,
   clipX,
   clipZ,
+  FallAccount,
   freeOfBlocksAndLiquid,
   GROUND_DRAG,
   GROUND_MOTION_Y,
@@ -215,7 +217,8 @@ export function physicsTick(
   jump: boolean,
 ): Body | null {
   const mode = modeOf(world, b);
-  const vy = jump ? JUMP_VELOCITY : b.vy;
+  // Holding jump: off the ground a jump, in water swimming up (EntityLivingBase.onLivingUpdate).
+  const vy = !jump ? b.vy : mode === 'water' ? b.vy + SWIM_UP : JUMP_VELOCITY;
   const moved = moveY(world, b.x, b.y, b.z, vy);
   const clipped = moved !== vy;
   const down = clipped && vy < 0;
@@ -241,6 +244,8 @@ const EDGE_MARGIN = 0.01;
 const FLOW_HANDOFF = 0.1;
 /** A run is at its end this close to it. */
 const ARRIVED = 1e-7;
+/** A braking run's steps keep this much more than its braking distance to the end. */
+const BRAKING_SPARE = 1e-7;
 /** A bridge is placed standing this far past the centre: the eyes beyond the block's edge. */
 const BRIDGE_EDGE = 0.6;
 
@@ -264,6 +269,11 @@ interface RunParams {
   /** For braking: what a key takes off per tick, and the drag. */
   readonly brake: number;
   readonly drag: number;
+  /**
+   * Swimming: floating in water (jump held on every tick that still ends in it), not on the
+   * ground at one level (StepBuilder.run).
+   */
+  readonly swim?: boolean;
 }
 
 const WALK_RUN: RunParams = {
@@ -279,6 +289,7 @@ const WADE_RUN: RunParams = {
   brake: keyAccel('water', false),
   drag: WATER_DRAG,
 };
+const SWIM_RUN: RunParams = { ...WADE_RUN, swim: true };
 
 /** The fastest last step of a stop: the next tick's keys can then cancel what is carried over. */
 const stopSpeed = (p: RunParams): number => (0.97 * p.brake) / p.drag;
@@ -389,11 +400,22 @@ class StepBuilder {
   body: Body;
   readonly steps: PathStep[] = [];
 
-  constructor(world: WalkWorld, box: CellBox, fence: Fence, water: boolean, from: Vec3) {
+  /** Any water may hold the body, calm or not (surfacing: coming up out of it). */
+  readonly #anyWater: boolean;
+
+  constructor(
+    world: WalkWorld,
+    box: CellBox,
+    fence: Fence,
+    water: boolean,
+    from: Vec3,
+    anyWater = false,
+  ) {
     this.#world = world;
     this.#box = box;
     this.#fence = fence;
     this.#water = water;
+    this.#anyWater = anyWater;
     this.view = new CellCache(world, box);
     this.body = restingBody(from);
   }
@@ -482,6 +504,71 @@ class StepBuilder {
       sprint: false,
       jump: false,
     });
+  }
+
+  /**
+   * Floating still in water for a tick (the carried motion taken off; on `at` when given),
+   * jump held when the tick still ends in water (floats); and where a floor is under the feet
+   * block (one-deep water), sinking onto it, jump let go, and standing (hold).
+   */
+  float(at?: { readonly x: number; readonly z: number }): void {
+    const b = this.body;
+    if (Math.hypot(b.cx, b.cz) > keyAccel('water', false) + 1e-12) {
+      throw new Fail('moving too fast to stop');
+    }
+    const mx = at === undefined ? 0 : at.x - b.x;
+    const mz = at === undefined ? 0 : at.z - b.z;
+    if (Math.hypot(mx, mz) > 1e-6) throw new Fail('internal: floating still would move');
+    const l: Line = { ox: b.x, oz: b.z, ux: 1, uz: 0 };
+    const jump = this.floats(l, 0, mx, mz);
+    const moved = physicsTick(this.view, b, mx, mz, jump);
+    if (moved === null) throw new Fail('cannot float still here');
+    const problem = this.unsafe(b, moved);
+    if (problem !== null) throw new Fail(problem);
+    const next = at === undefined ? moved : { ...moved, x: at.x, z: at.z };
+    this.body = next;
+    this.steps.push({
+      pos: { x: next.x, y: next.y, z: next.z },
+      onGround: next.onGround,
+      sprint: false,
+      jump,
+    });
+    const feet = Math.floor(next.y + 1e-9);
+    if (!this.view.has(Math.floor(next.x), feet - 1, Math.floor(next.z), CELL.SURFACE)) return;
+    // One-deep water: let go and sink onto the floor, then stand.
+    for (let t = 0; t < 40 && !this.body.onGround; t++) {
+      const sink = physicsTick(this.view, this.body, 0, 0, false);
+      if (sink === null) throw new Fail('cannot sink onto the floor');
+      const why = this.unsafe(this.body, sink);
+      if (why !== null) throw new Fail(why);
+      this.body = sink;
+      this.steps.push({
+        pos: { x: sink.x, y: sink.y, z: sink.z },
+        onGround: sink.onGround,
+        sprint: false,
+        jump: false,
+      });
+    }
+    if (!this.body.onGround) throw new Fail('did not sink onto the floor');
+    this.hold();
+  }
+
+  /**
+   * Whether a swimmer holds jump this tick, moving d along `l` (or by mx, mz): only when the
+   * tick still ends in water, so every tick is the water's and the feet float just under the
+   * top (inWater: below the top water block's level + 0.599), the eyes well above it.
+   */
+  floats(l: Line, d: number, mx = d * l.ux, mz = d * l.uz): boolean {
+    if (modeOf(this.view, this.body) !== 'water') return false;
+    let up = physicsTick(this.view, this.body, mx, mz, true);
+    if (up === null || !inWater(this.view, up.x, up.y, up.z)) return false;
+    // The rise it carries on, jump let go, must end in the water too.
+    for (let t = 0; t < 20 && up.vy > 0; t++) {
+      const next = physicsTick(this.view, up, 0, 0, false);
+      if (next === null || !inWater(this.view, next.x, next.y, next.z)) return false;
+      up = next;
+    }
+    return true;
   }
 
   /**
@@ -637,7 +724,7 @@ class StepBuilder {
             const flags = v.flags(x, y, z);
             if (
               (flags & CELL.PASSABLE) === 0 &&
-              !(this.#water && v.calmWater(x, y, z)) &&
+              !(this.#water && (this.#anyWater ? v.water(x, y, z) : v.calmWater(x, y, z))) &&
               !v.bodyFitsDoorway(x, y, z, px - h, px + h, pz - h, pz + h) &&
               !v.bodyFitsLadder(x, y, z, px - h, px + h, pz - h, pz + h)
             ) {
@@ -656,7 +743,9 @@ class StepBuilder {
    * Runs along `l` to `sEnd`: exactly there (its last displacement at most the exit's speed,
    * then a tick standing still for a stop), or until within FLOW_HANDOFF of it. As fast as
    * allowed, braking just in time (each tick keeps the rest of the way at least the braking
-   * distance). Stays on the ground at its level.
+   * distance). Stays on the ground at its level; swimming (p.swim), in the water instead,
+   * floating (jump held on every tick that still ends in water: floats), and a stop there floats
+   * at the end, or with a floor under it (one-deep water) sinks onto it and stands.
    */
   run(
     l: Line,
@@ -673,7 +762,10 @@ class StepBuilder {
       if (exit.kind !== 'flow' && Math.abs(r) <= ARRIVED) {
         // There, and slow enough for what comes next (a landing may arrive too fast).
         if (Math.hypot(this.body.cx, this.body.cz) <= p.drag * vEnd + 1e-9) {
-          if (exit.kind === 'stop') this.hold(end);
+          if (exit.kind === 'stop') {
+            if (p.swim === true) this.float(end);
+            else this.hold(end);
+          }
           return;
         }
         this.#reverse(l, sEnd, p, end);
@@ -694,21 +786,28 @@ class StepBuilder {
       } else if (exit.kind === 'flow') {
         d = hi;
       } else {
-        // The largest step after which braking still stops in time (with a hair to spare).
-        const fits = (x: number): boolean =>
-          r - x >= brakingDistance(x, vEnd, p) + 1e-9 && (x <= vEnd || r - x > 1e-9);
+        // The largest step after which braking still stops in time (with a hair to spare), the
+        // step taken keeping a little more (BRAKING_SPARE): the next tick's check, a tick of
+        // rounding later, must still pass (seen braking in water, slow over several ticks).
+        const fits = (x: number, spare = 1e-9): boolean =>
+          r - x >= brakingDistance(x, vEnd, p) + spare && (x <= vEnd || r - x > 1e-9);
         if (!fits(lo)) throw new Fail('cannot stop in time');
         d = Math.min(hi, r);
-        if (!fits(d)) {
+        if (!fits(d, BRAKING_SPARE)) {
           let a = lo;
           let b = d;
           for (let k = 0; k < 50; k++) {
             const mid = (a + b) / 2;
-            if (fits(mid)) a = mid;
+            if (fits(mid, BRAKING_SPARE)) a = mid;
             else b = mid;
           }
           d = a;
         }
+      }
+      if (p.swim === true) {
+        this.tick(l, d, this.floats(l, d), false);
+        if (modeOf(this.view, this.body) !== 'water') throw new Fail('a swim left the water');
+        continue;
       }
       this.tick(l, d, false, p.sprint && d > bnd.par + 1e-12);
       if (!this.body.onGround || Math.abs(this.body.y - level) > 1e-9) {
@@ -728,9 +827,11 @@ class StepBuilder {
     for (let guard = 0; guard < 100; guard++) {
       const bnd = this.bounds(l, false, false);
       if (bnd.lo <= 0 && bnd.hi >= 0) break;
-      this.tick(l, Math.max(bnd.lo, 0), false, false);
+      const d = Math.max(bnd.lo, 0);
+      this.tick(l, d, p.swim === true && this.floats(l, d), false);
     }
-    this.hold();
+    if (p.swim === true) this.float();
+    else this.hold();
     const back: Line = { ox: l.ox, oz: l.oz, ux: -l.ux, uz: -l.uz };
     this.run(back, -sEnd, { kind: 'stop' }, p, end);
   }
@@ -757,6 +858,9 @@ function exitFor(
   restNext: boolean,
 ): Exit {
   if (next === undefined || restNext || needsRest(next)) return { kind: 'stop' };
+  // Out of a swim into anything but more swimming or a climb out up a bank: it stops, and in
+  // one-deep water stands on the floor (StepBuilder.float), for the walk or wade after it.
+  if (curParams.swim === true && !next.swim && next.kind !== 'ascend') return { kind: 'stop' };
   const u2 = lineOf(next);
   const same = Math.abs(cur.ux - u2.ux) < 1e-9 && Math.abs(cur.uz - u2.uz) < 1e-9;
   if (same) {
@@ -768,9 +872,110 @@ function exitFor(
 }
 
 function paramsFor(m: Movement, wet: boolean): RunParams {
+  // Out of the water up a bank, the run after it is on the bank (waterExit).
+  if (m.swim && m.kind !== 'ascend') return SWIM_RUN;
   if (wet) return WADE_RUN;
   return m.sprint ? SPRINT_RUN : WALK_RUN;
 }
+
+/** How far below the feet idle looks for water to come down into (blocks): any drop a path makes. */
+const WATER_BELOW = MAX_WATER_DROP + 1;
+/** How far idle swims up to the top of the water (blocks), and for how long at most (ticks). */
+const MAX_SURFACING_RISE = 40;
+const MAX_SURFACING_TICKS = 600;
+
+/**
+ * Idle in or over water (a stop, a correction or a login there): the ticks that bring the
+ * player, standing still, up into the top block of the water, as a client swimming up does
+ * (jump held while that keeps it in the water: StepBuilder.floats), falling in first from just
+ * above calm water, or down onto the floor of one-deep water; until it is afloat in the top
+ * block, rising, or on that floor. Under water any water will do on the way up (it must not
+ * drown); from above, only calm water under every column the body is over, a drop of at most
+ * MAX_WATER_DROP, and no fall damage. Null when nothing is to be done (afloat there already,
+ * standing on something, no water), or no safe way is known (a block or a hazard on the way;
+ * the caller says so when the eyes are under water).
+ */
+export function surfacing(world: WalkWorld, feet: Vec3): PathStep[] | null {
+  const fx = Math.floor(feet.x);
+  const fz = Math.floor(feet.z);
+  const fy = Math.floor(feet.y + 1e-9);
+  const box: CellBox = {
+    min: { x: fx - 3, y: fy - WATER_BELOW - 3, z: fz - 3 },
+    max: { x: fx + 3, y: fy + MAX_SURFACING_RISE + 3, z: fz + 3 },
+  };
+  const view = new CellCache(world, box);
+  const [x0, x1, , , z0, z1] = overlappedCells(feet.x, feet.y, feet.z);
+  let water = -1;
+  const under = inWater(view, feet.x, feet.y, feet.z);
+  // Out of the water, standing on something (a bank, a ledge): nothing to do.
+  if (!under && Math.abs(feet.y - Math.round(feet.y)) < 1e-6) {
+    for (let x = x0; x <= x1; x++) {
+      for (let z = z0; z <= z1; z++) {
+        const below = Math.round(feet.y) - 1;
+        if (view.solid(x, below, z) && !view.water(x, below, z)) return null;
+      }
+    }
+  }
+  if (under) {
+    // In it: one-deep water's floor, or the top block of the water above.
+    let top = fy;
+    while (top < fy + MAX_SURFACING_RISE && view.water(fx, top + 1, fz)) top++;
+    if (top === fy && feet.y - fy < 0.599) return null; // afloat in the top block already
+    water = top;
+  } else {
+    // Just above calm water, nothing under any column the body is over but air down to it.
+    for (let y = fy; y >= fy - WATER_BELOW; y--) {
+      let wet = 0;
+      for (let x = x0; x <= x1; x++) {
+        for (let z = z0; z <= z1; z++) {
+          if (view.calmWater(x, y, z)) wet++;
+          else if (!view.open(x, y, z)) return null;
+        }
+      }
+      if (wet === (x1 - x0 + 1) * (z1 - z0 + 1)) {
+        water = y;
+        break;
+      }
+      if (wet > 0) return null;
+    }
+    if (water < 0) return null;
+  }
+  const b = new StepBuilder(world, box, LOOSE_FENCE, true, feet, under);
+  b.body = { ...b.body, vy: 0, onGround: false };
+  const l: Line = { ox: feet.x, oz: feet.z, ux: 1, uz: 0 };
+  const fall = new FallAccount();
+  let there = false;
+  try {
+    for (let t = 0; t < MAX_SURFACING_TICKS; t++) {
+      const body = b.body;
+      const wet = modeOf(view, body) === 'water';
+      // Afloat in the top block, rising; or on one-deep water's floor, the eyes out of it.
+      there =
+        (Math.floor(body.y + 1e-9) === water && body.vy > 0 && wet) ||
+        (body.onGround && wet && Math.floor(body.y + 1e-9) === water);
+      if (there) break;
+      b.tick(l, 0, b.floats(l, 0), false);
+      const next = b.body;
+      // Never onto a block from the air, never a fall that hurts.
+      if (next.onGround && !inWater(view, next.x, next.y, next.z)) return null;
+      if (fall.packet(inWater(view, body.x, body.y, body.z), next.y - body.y, next.onGround) > 0) {
+        return null;
+      }
+    }
+  } catch (e) {
+    if (e instanceof Fail) return null;
+    throw e;
+  }
+  const end = b.steps.at(-1);
+  if (!there || end === undefined || Math.abs(end.pos.y - feet.y) < 1e-6) return null;
+  return b.steps;
+}
+
+/** A fence that holds nothing back (idle's own checks keep it in the play area). */
+const LOOSE_FENCE: Fence = {
+  min: { x: -30_000_000, y: 0, z: -30_000_000 },
+  max: { x: 30_000_000, y: 255, z: 30_000_000 },
+};
 
 /**
  * Builds the execution plan of `movements` (a path from planPath), for a player at rest at
@@ -787,9 +992,11 @@ export function planExecution(
   for (let attempt = 0; attempt <= movements.length; attempt++) {
     const r = build(world, area, from, movements, options, restBefore);
     if (r.ok) return r;
-    // Drive the failing movement from rest: the one before it stops at its end.
-    if (r.movement < 0 || restBefore.has(r.movement)) return r;
-    restBefore.add(r.movement);
+    // Drive the failing movement from rest: the one before it (or the centring on the start
+    // block, for the first) stops at its end.
+    const k = Math.max(r.movement, 0);
+    if (restBefore.has(k)) return r;
+    restBefore.add(k);
   }
   return { ok: false, reason: 'internal: too many attempts', movement: -1 };
 }
@@ -836,6 +1043,7 @@ function build(
     const cz = startCell.z + 0.5;
     const dist = Math.hypot(cx - from.x, cz - from.z);
     const startWet = b.view.has(startCell.x, startCell.y, startCell.z, CELL.WATER);
+    const startSwim = water && b.view.swimmable(startCell.x, startCell.y, startCell.z);
     // Held by a ladder with no floor (beside its column's centre, over its top, or between
     // levels): across to the column's centre and up or down to the start block's level, as a
     // climbing client moves (search.ts startOf).
@@ -845,6 +1053,56 @@ function build(
         Math.abs(from.y - startCell.y) > 1e-9);
     if (hanging) {
       b.climb(cx, startCell.y, cz, true);
+    } else if (startSwim) {
+      // Under water (a stop or a login there), or sinking in its top block (a walk starts as if
+      // at rest, sinking): up into the top block, rising, first, jump held while that keeps the
+      // body in the water (floats), then swimming to its centre.
+      for (let t = 0; t < 200; t++) {
+        const body = b.body;
+        if (Math.floor(body.y + 1e-9) === startCell.y && body.vy > 0) break;
+        const l: Line = { ox: body.x, oz: body.z, ux: 1, uz: 0 };
+        b.tick(l, 0, b.floats(l, 0), false);
+        if (modeOf(b.view, b.body) !== 'water') throw new Fail('rising out of the water');
+      }
+      if (Math.floor(b.body.y + 1e-9) !== startCell.y) {
+        throw new Fail('did not rise into the top of the water');
+      }
+      const left = Math.hypot(cx - b.body.x, cz - b.body.z);
+      if (left > 1e-9) {
+        const l: Line = {
+          ox: b.body.x,
+          oz: b.body.z,
+          ux: (cx - b.body.x) / left,
+          uz: (cz - b.body.z) / left,
+        };
+        const exit: Exit =
+          first === undefined || needsRest(first) || restBefore.has(0)
+            ? { kind: 'stop' }
+            : { kind: 'exact', v: cornerSpeed(l, lineOf(first), true, SWIM_RUN.vmax) };
+        b.run(l, left, exit, SWIM_RUN, { x: cx, z: cz });
+        if (Math.hypot(b.body.x - cx, b.body.z - cz) > 1e-6) {
+          throw new Fail('centring missed the centre');
+        }
+      }
+    } else if (startWet && Math.abs(from.y - startCell.y) > 1e-9) {
+      // Afloat over one-deep water: jump let go, it sinks onto the floor, then wades.
+      land(b, startCell.y);
+      if (dist > 1e-9) {
+        const l: Line = {
+          ox: from.x,
+          oz: from.z,
+          ux: (cx - from.x) / dist,
+          uz: (cz - from.z) / dist,
+        };
+        const exit: Exit =
+          first === undefined || needsRest(first) || restBefore.has(0)
+            ? { kind: 'stop' }
+            : { kind: 'exact', v: cornerSpeed(l, lineOf(first), true, WADE_RUN.vmax) };
+        b.run(l, dist, exit, WADE_RUN, { x: cx, z: cz });
+        if (Math.hypot(b.body.x - cx, b.body.z - cz) > 1e-6) {
+          throw new Fail('centring missed the centre');
+        }
+      }
     } else if (dist > 1e-9) {
       const l: Line = {
         ox: from.x,
@@ -1184,6 +1442,19 @@ function fall(b: StepBuilder, m: Movement, l: Line, exit: Exit, after: RunParams
     const body = b.body;
     if (body.onGround && Math.abs(body.y - m.to.y) <= 1e-9) break;
     const s = b.s(l);
+    if (m.swim && modeOf(b.view, body) === 'water') {
+      // Into deep water: the dive is over once the body is back up in the top block, rising
+      // (jump held while that keeps it in the water: #floats); then the swim to the landing
+      // block's centre takes over. Meanwhile it keeps inside the landing column.
+      if (Math.floor(body.y + 1e-9) === m.to.y && body.vy > 0) break;
+      const bnd = b.bounds(l, false, false);
+      const lo = Math.max(bnd.lo, off - s);
+      const hi = Math.min(bnd.hi, inColumn - s);
+      if (hi < lo) throw new Fail('cannot keep inside the landing column');
+      const d = clamp(1 - s, lo, hi);
+      b.tick(l, d, b.floats(l, d), false);
+      continue;
+    }
     const bnd = b.bounds(l, false, false);
     const supported = moveY(b.view, body.x, body.y, body.z, body.vy) !== body.vy;
     if (supported && Math.abs(body.y - y0) <= 1e-9) {
@@ -1200,7 +1471,8 @@ function fall(b: StepBuilder, m: Movement, l: Line, exit: Exit, after: RunParams
     if (hi < lo) throw new Fail('cannot steer the fall into the landing column');
     b.tick(l, clamp((1 - s) / Math.max(1, left), lo, hi), false, false);
   }
-  if (!b.body.onGround || Math.abs(b.body.y - m.to.y) > 1e-9)
+  const swimming = m.swim && modeOf(b.view, b.body) === 'water';
+  if (!swimming && (!b.body.onGround || Math.abs(b.body.y - m.to.y) > 1e-9))
     throw new Fail('the fall did not land');
   b.run(l, 1, exit, after, centreOf(m.to));
 }

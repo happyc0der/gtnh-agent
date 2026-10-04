@@ -719,6 +719,13 @@ export function onLadder(world: WalkWorld, feet: Vec3): boolean {
   return meta !== undefined && meta >= 2 && meta <= 5;
 }
 
+/** Whether the eyes of a player with its feet at `feet` are in a water block (it would drown). */
+export function eyesInWater(world: WalkWorld, feet: Vec3): boolean {
+  const id = world.blockAt(Math.floor(feet.x), Math.floor(feet.y + 1.62), Math.floor(feet.z));
+  const block = id === undefined || id === 0 ? undefined : world.blockName(id);
+  return block === 'minecraft:water' || block === 'minecraft:flowing_water';
+}
+
 /** Whether a known full block (TERRAIN_SURFACES) is under the footprint of feet at a whole y. */
 export function onBlock(world: WalkWorld, feet: Vec3): boolean {
   const y = Math.round(feet.y) - 1;

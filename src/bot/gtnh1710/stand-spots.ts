@@ -13,6 +13,13 @@ import type { Vec3, WalkWorld } from './walking.ts';
  * from here reaches a spot to dig one from", for logs walled in by leaves.
  */
 
+/** Water (still or flowing) at the cell. */
+function isWater(world: WalkWorld, x: number, y: number, z: number): boolean {
+  const id = world.blockAt(x, y, z);
+  const name = id === undefined || id === 0 ? undefined : world.blockName(id);
+  return name === 'minecraft:water' || name === 'minecraft:flowing_water';
+}
+
 /** Feet heights tried, relative to the block: on the ground beside it, level, or below it. */
 const STAND_HEIGHTS = [1, 0, -1, -2, -3, -4] as const;
 /** goalGetToBlock's test only (its heuristic is not used here). */
@@ -23,7 +30,9 @@ const NO_RATES = { across: 0, up: 0, down: 0 };
  * `target`: goalGetToBlock's test with `adjacent` (the feet in one of the 8 columns around the
  * block, the block's centre within reach of the eyes, as a person stands beside what it digs;
  * a log's drop then falls next to it), and checkDig allowing the dig from there on the blocks
- * as they are. Null when there is none.
+ * as they are; never afloat in deep water (afloat, a dig is five times as slow as on the ground,
+ * which the dig's timing does not count on: an independent review, 2026-10-04). Null when there
+ * is none.
  */
 export function standSpotOnPath(
   world: WalkWorld,
@@ -42,6 +51,7 @@ export function standSpotOnPath(
         const fy = target.y + dy;
         const reached = flood.get(fx, fy, fz);
         if (reached === undefined || !goal.isGoal(fx, fy, fz)) continue;
+        if (isWater(world, fx, fy, fz) && isWater(world, fx, fy - 1, fz)) continue;
         if (best !== null && reached.cost >= best.cost - 1e-9) continue;
         const spot = { x: fx + 0.5, y: fy, z: fz + 0.5 };
         if (!checkDig(world, area, spot, target).ok) continue;

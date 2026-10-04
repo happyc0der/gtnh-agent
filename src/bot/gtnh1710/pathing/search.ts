@@ -13,7 +13,7 @@ import {
 } from './costs.ts';
 import { compileGoal, describeGoal, type Goal } from './goals.ts';
 import { NodeHeap } from './heap.ts';
-import { overlappedCells } from './physics.ts';
+import { inWater, overlappedCells } from './physics.ts';
 import {
   describe,
   DIRECTIONS,
@@ -217,14 +217,19 @@ function prepare(
   if (volume > MAX_AREA_CELLS) {
     return refused(`the search area holds ${volume} feet blocks (at most ${MAX_AREA_CELLS})`);
   }
-  // Between levels only where a ladder holds the feet (a correction mid-climb).
-  const level = Math.abs(from.y - Math.round(from.y)) <= 1e-6;
-  if (!level && !(move.climb && onLadder(world, from))) {
-    return refused(`the player's feet are at y=${from.y}, not on a block top`);
-  }
   const cells = new CellCache(world, cacheBox(area));
   const ctx = new MoveContext(cells, area, move, costs);
-  const start = startOf(world, cells, from, move.climb);
+  // Between levels only where a ladder holds the feet (a correction mid-climb), or afloat at
+  // the top of deep water (a walk stopped there, or a login).
+  const level = Math.abs(from.y - Math.round(from.y)) <= 1e-6;
+  if (
+    !level &&
+    !(move.climb && onLadder(world, from)) &&
+    !(move.water && afloat(cells, from) !== null)
+  ) {
+    return refused(`the player's feet are at y=${from.y}, not on a block top`);
+  }
+  const start = startOf(world, cells, from, move);
   if (!ctx.inFence(start.x, start.y, start.z)) {
     return refused('the start is outside the search area', start);
   }
@@ -269,6 +274,26 @@ function prepare(
 }
 
 /**
+ * The block a walk starts from for a player in the water (a stop, a correction or a login
+ * there): one-deep water's own block (the walk sinks onto its floor first); else the top block
+ * of the deep water the feet are in, or under (the walk rises into it first: an independent
+ * review, 2026-10-04, stranded the player under water, where it would drown). Null when not in
+ * calm water like that.
+ */
+function afloat(cells: CellCache, from: Vec3): Cell | null {
+  if (!inWater(cells, from.x, from.y, from.z)) return null;
+  const x = Math.floor(from.x);
+  const z = Math.floor(from.z);
+  let y = Math.floor(from.y + 1e-9);
+  if (cells.wadeable(x, y, z)) return { x, y, z };
+  for (let k = 0; k < MAX_RISE && cells.calmWater(x, y + 1, z); k++) y++;
+  return cells.swimmable(x, y, z) ? { x, y, z } : null;
+}
+
+/** How far a walk starting under water may rise to the top first (blocks). */
+const MAX_RISE = 12;
+
+/**
  * The block a walk starts from: standingCell's, and with climbing on, first the ladder that
  * holds the feet (its block, between levels too); then, where no block under the body is
  * standable, the foot of a ladder the body rests over (the foot's floor holds it up), or the
@@ -277,9 +302,12 @@ function prepare(
  * could start no walk. The walk first moves to the start block's centre (execute.ts build: a
  * climbing client's moves where a ladder holds the body).
  */
-function startOf(world: WalkWorld, cells: CellCache, from: Vec3, climb: boolean): Cell {
+function startOf(world: WalkWorld, cells: CellCache, from: Vec3, move: MoveOptions): Cell {
+  const climb = move.climb;
   const feet = { x: Math.floor(from.x), y: Math.floor(from.y + 1e-9), z: Math.floor(from.z) };
   if (climb && cells.held(feet.x, feet.y, feet.z) && onLadder(world, from)) return feet;
+  const top = move.water ? afloat(cells, from) : null;
+  if (top !== null) return top;
   const standing = standingCell(world, from);
   if (!climb || standProblem(world, standing.x, standing.y, standing.z) === null) return standing;
   const y = Math.round(from.y);
