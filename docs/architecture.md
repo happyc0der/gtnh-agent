@@ -963,6 +963,14 @@ moment (the inventory, the other players, the boundary) into the pathfinder's op
   the tool the dig would hold (`DigActions.digTicksFor`, the same choice as `DIG_BLOCK`'s: stone
   only with a carried pickaxe that harvests it, natural metadata only). At most 24 per walk
   (`MAX_PATH_BREAKS`).
+- **Digging down** (the pathfinder's `downward`, as Baritone's): with breaking, on a walk's
+  terrain fence, the block underfoot may be dug and the player drops one block into the hole,
+  only where `checkDigDown` allows it from that block's top (`canDigDown`: exactly one block
+  down onto a plain full block, nothing fluid, hazardous or falling in the 3 x 3 columns around,
+  hazards one level lower still; with `anyGround`, stone with a tool that harvests it as well as
+  dirt, grass, sand, gravel and clay; never an ore) and the policy's breaking rules. The walk
+  digs it with the same check, every tick. Seen live 2026-10-04: "!goto stone" to stone 15
+  blocks below found no walk at all, since walks never dug down.
 - **Placing** (`allowPlace`, on) only on a walk that works, with placing enabled, on a terrain
   fence: pillars and bridges of throwaway blocks (`chooseThrowaway`: cobblestone, netherrack or
   dirt, whichever the player carries most of, never a protected item, dirt counted less
@@ -1147,7 +1155,8 @@ going round wins unless breaking is clearly cheaper (`penalties` changes them). 
 placing are policies the caller passes: `canBreak(cell)` (dig ticks or null), `canPlace(cell)`,
 `throwaway` (how many blocks, which: a surface the walker stands on, whether it falls), and the
 flags `parkour`, `pillar`, `bridge`, `downward`, `sprint` and `water`, all off by default. The
-client's walk policy sets them from its config (`downward` never: walks do not dig down); see
+client's walk policy sets them from its config (`downward` with breaking, where `checkDigDown`
+allows it: `canDigDown`); see
 [Walking on the pathfinder](#walking-on-the-pathfinder).
 
 **Safety the search enforces**, whatever the caller allows:

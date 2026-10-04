@@ -2,12 +2,13 @@ import type { BlockPosition } from '../../../domain/common.ts';
 import { mayExplode } from '../../../domain/combat.ts';
 import { TICK_MS } from '../../../domain/dig-time.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
-import { eyesOf, type DigArea } from '../digging.ts';
+import { checkDigDown, eyesOf, type DigArea, type DigCheck } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { outbound } from '../packets.ts';
 import { passProblem } from '../passable.ts';
 import {
   checkPathBreak,
+  pathBreakProblem,
   checkPathPlace,
   chooseThrowaway,
   walkPolicy,
@@ -246,6 +247,7 @@ export class PathActions {
       ...this.#context(),
       hostiles: this.#hostiles(),
       settings: cfg.movement.path,
+      fence,
       breaking: request.work !== false && terrain && cfg.digging.enabled && cfg.presenceTicks,
       placing: request.work === true && terrain && cfg.placing.enabled && cfg.presenceTicks,
       digHeight: cfg.digging.maxHeightAboveFence,
@@ -800,8 +802,19 @@ export class PathActions {
         IDLE_TICK_MS,
       );
       try {
-        const rule = (w: WalkWorld, feet: Vec3) =>
-          checkPathBreak(w, area, feet, cell, this.#context());
+        // The block underfoot (the downward movement): dug down through by checkDigDown's
+        // rules (it is the player's support: checkDig refuses it), with the policy's.
+        const rule = (w: WalkWorld, feet: Vec3): DigCheck => {
+          const under =
+            cell.x === Math.floor(feet.x) &&
+            cell.z === Math.floor(feet.z) &&
+            cell.y === Math.floor(feet.y + 1e-6) - 1;
+          if (!under) return checkPathBreak(w, area, feet, cell, this.#context());
+          const why = pathBreakProblem(w, cell, this.#context());
+          return why !== null
+            ? { ok: false, reason: why }
+            : checkDigDown(w, area, feet, cell, { anyGround: true });
+        };
         const dug = await this.#core.dig.digChecked(cell, rule, protectedItems, 'digging', guard);
         if (!dug.ok) {
           // A leaf that decayed while it was dug (its log was just chopped) is out of the way

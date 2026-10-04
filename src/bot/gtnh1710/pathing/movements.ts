@@ -150,6 +150,8 @@ export interface MoveOptions {
   readonly bridge: boolean;
   /** Digging down: breaking the block underfoot and dropping one block into the hole. */
   readonly downward: boolean;
+  /** Whether the block underfoot at `cell` may be dug down through (null: canBreak alone). */
+  readonly canDigDown: ((cell: Cell) => boolean) | null;
   /** Wading in calm one-deep water, and falls into it. */
   readonly water: boolean;
   /** The highest fall onto dry ground (at most 3: higher ones hurt). */
@@ -665,6 +667,8 @@ const downward: Evaluate = (ctx, x, y, z, _d, detail) => {
     return Infinity;
   }
   if (!c.has(x, y - 2, z, CELL.SURFACE)) return Infinity;
+  const digDown = ctx.options.canDigDown;
+  if (digDown !== null && !digDown({ x, y: y - 1, z })) return Infinity;
   const t = ctx.breakTicks(x, y - 1, z);
   if (t < 0) return Infinity;
   ctx.breaks = 1;

@@ -2,6 +2,8 @@ import {
   FALLING_DIGGABLE_BLOCKS,
   isDiggableBlock,
   isGardenBlock,
+  isToolDiggable,
+  ORE_DIGGABLE_BLOCKS,
   SOLID_DIGGABLE_BLOCKS,
   TOOL_DIGGABLE_BLOCKS,
   type DiggableBlock,
@@ -574,8 +576,8 @@ export function landingProblem(world: WalkWorld, x: number, y: number, z: number
 
 /**
  * Whether the player standing at `feet` may dig the block under its own feet, `target`, and
- * drop exactly one block onto the block under that (DIG_DOWN, the night pit only). Fail
- * closed. It refuses:
+ * drop exactly one block onto the block under that (DIG_DOWN, the night pit; and a walk's
+ * downward movement, with `anyGround`: stone too, never an ore). Fail closed. It refuses:
  *  - a fence on one level (the pen keeps its floor), a target outside the fence's columns,
  *    or a landing outside its heights;
  *  - anything but the block right under the feet, with the player on top of it and its body
@@ -597,6 +599,7 @@ export function checkDigDown(
   area: DigArea,
   feet: Vec3,
   target: BlockPos,
+  opts: { anyGround?: boolean } = {},
 ): DigCheck {
   const refuse = (reason: string): DigCheck => ({ ok: false, reason });
   const { x, y, z } = target;
@@ -636,9 +639,17 @@ export function checkDigDown(
   if (name === undefined) {
     return refuse(`${fmt(target)} holds block id ${id}, which the registry does not name`);
   }
-  if (!isDiggableBlock(name) || !isDigDownBlock(name)) {
+  // A walk digs down through stone as well (the dig holds a tool that harvests it, or
+  // refuses), as Baritone's downward movement does; never through an ore.
+  const ground =
+    isDigDownBlock(name) ||
+    (opts.anyGround === true &&
+      isToolDiggable(name) &&
+      !(ORE_DIGGABLE_BLOCKS as readonly string[]).includes(name));
+  if (!isDiggableBlock(name) || !ground) {
     return refuse(
-      `${fmt(target)} is ${name}: digging down takes only dirt, grass, sand, gravel or clay`,
+      `${fmt(target)} is ${name}: digging down takes only dirt, grass, sand, gravel or clay` +
+        (opts.anyGround === true ? ', or stone' : ''),
     );
   }
   if (world.builtByPlayer?.(x, y, z) === true) {

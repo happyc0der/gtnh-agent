@@ -134,6 +134,38 @@ describe('Gtnh1710Client walks through leaves (MOVE_TO over terrain, digging ena
     ).toBe(true);
   }, 15_000);
 
+  it('digs down through the ground to a point below (Baritone downward), a block at a time', async () => {
+    // Seen live: "!goto stone" to stone 15 blocks below found no walk at all.
+    const ground = (_x: number, y: number, _z: number): number =>
+      y === 0
+        ? BLOCK.bedrock
+        : y === 105
+          ? BLOCK.grass
+          : y >= 100 && y < 105
+            ? BLOCK.dirt
+            : y < 100
+              ? BLOCK.stone
+              : BLOCK.air;
+    const { server, client } = await start({ world: ground });
+    const below: ActionSpec = {
+      type: 'MOVE_TO',
+      args: { target: { x: -4.5, y: FEET_Y - 3, z: -7.5 }, tolerance: 0.5 },
+    };
+    const result = await perform(client, below);
+    expect(result, result.message).toMatchObject({ ok: true });
+    // The block underfoot each time, then the drop into the hole.
+    expect(server.digSim.broken.map((b) => [b.x, b.y, b.z])).toEqual([
+      [-5, 105, -8],
+      [-5, 104, -8],
+      [-5, 103, -8],
+    ]);
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -4.5, y: FEET_Y - 3, z: -7.5 },
+    });
+    expect(server.moveSim.corrections).toEqual([]);
+  }, 20_000);
+
   it('only with digging enabled: otherwise the wall refuses the walk, and nothing is sent', async () => {
     const { server, client } = await start({}, false);
     const result = await perform(client, BEYOND);

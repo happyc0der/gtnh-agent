@@ -2,7 +2,14 @@ import { isDiggableBlock, ORE_DIGGABLE_BLOCKS, type DiggableBlock } from '../../
 import { isBlockInsideBox } from '../../domain/geometry.ts';
 import { isProtected } from '../../safety/protected-items.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
-import { checkDig, digDoesNotDisturb, reachTo, type DigArea, type DigCheck } from './digging.ts';
+import {
+  checkDig,
+  checkDigDown,
+  digDoesNotDisturb,
+  reachTo,
+  type DigArea,
+  type DigCheck,
+} from './digging.ts';
 import { passProblem } from './passable.ts';
 import type { PathOptions } from './pathing/search.ts';
 import {
@@ -19,7 +26,7 @@ import {
 } from './placing.ts';
 import type { PointBox } from './play-area.ts';
 import type { Cell } from './terrain.ts';
-import type { Vec3, WalkWorld } from './walking.ts';
+import type { Fence, Vec3, WalkWorld } from './walking.ts';
 
 /**
  * What a walk may do on its way, as the pathfinder's options (pathing/search.ts PathOptions):
@@ -128,6 +135,8 @@ export interface WalkPolicyInput extends PolicyContext {
   readonly placing: boolean;
   /** Digging's maxHeightAboveFence: an ascend breaks two blocks above the feet. */
   readonly digHeight: number;
+  /** The walk's fence: with it (and breaking), the walk may dig down (checkDigDown). */
+  readonly fence?: Fence;
   /** The dig time of a block with what the dig would hold, or why it cannot be dug. */
   readonly digTicks: (
     block: DiggableBlock,
@@ -405,6 +414,23 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
           },
         }
       : {}),
+    // Digging down through the block underfoot, as Baritone's downward movement does: only
+    // where checkDigDown allows it from that block's top (exactly one block down onto solid
+    // ground, nothing fluid, hazardous or falling around; stone with a tool, never an ore).
+    ...(breaking && input.fence !== undefined
+      ? {
+          downward: true,
+          canDigDown: (cell: Cell): boolean =>
+            pathBreakProblem(world, cell, ctx) === null &&
+            checkDigDown(
+              world,
+              { fence: input.fence as Fence, maxHeightAboveFence: input.digHeight },
+              { x: cell.x + 0.5, y: cell.y + 1, z: cell.z + 0.5 },
+              cell,
+              { anyGround: true },
+            ).ok,
+        }
+      : {}),
     ...(placing
       ? {
           pillar: true,
@@ -415,7 +441,11 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
       : {}),
   };
   const words = [
-    breaking ? 'breaking' : 'no breaking',
+    breaking
+      ? input.fence !== undefined
+        ? 'breaking (digging down too)'
+        : 'breaking'
+      : 'no breaking',
     placing ? `placing up to ${throwaway.count} ${throwaway.block}` : 'no placing',
     s.allowParkour ? (s.parkourOverDeepGaps ? 'parkour (deep gaps too)' : 'parkour') : null,
     input.sprint ? 'sprinting' : null,

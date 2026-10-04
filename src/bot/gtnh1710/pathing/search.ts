@@ -64,6 +64,8 @@ export interface PathOptions {
   readonly pillar?: boolean;
   readonly bridge?: boolean;
   readonly downward?: boolean;
+  /** Whether the block underfoot at `cell` may be dug down through (absent: canBreak alone). */
+  readonly canDigDown?: (cell: Cell) => boolean;
   /** Wading in calm one-deep water and falls into it (off by default: walks never enter water). */
   readonly water?: boolean;
   /** Through doorways, opening (or closing) wooden doors and fence gates to pass (off by default). */
@@ -147,6 +149,7 @@ export function resolvePathOptions(options: PathOptions): ResolvedPathOptions | 
     pillar: options.pillar ?? false,
     bridge: options.bridge ?? false,
     downward: options.downward ?? false,
+    canDigDown: options.canDigDown ?? null,
     water: options.water ?? false,
     doors: options.doors ?? false,
     maxFall: Math.max(1, Math.min(3, Math.floor(options.maxFall ?? 3))),

@@ -83,6 +83,33 @@ describe('the walk policy (path-policy.ts)', () => {
     expect(off.summary).toBe('no breaking, no placing');
   });
 
+  it('digs down through the ground where checkDigDown allows it, as Baritone does', () => {
+    // Seen live: "!goto stone" to stone 15 blocks below: "no walk gets nearer" (the
+    // pathfinder's downward movement was never switched on).
+    const fence = area(8, 50, 70);
+    const policy = walkPolicy(input({ fence }));
+    expect(policy.options.downward).toBe(true);
+    expect(policy.summary).toMatch(/^breaking \(digging down too\), /);
+    const down = planPath(new TestWorld(), fence, centre(0, 64, 0), goalBlock(0, 60, 0), {
+      ...policy.options,
+    });
+    expect(down.status).toBe('reached');
+    expect(down.movements.map((m) => m.kind)).toContain('downward');
+    // Dirt and stone underfoot, onto solid ground: yes; over a cave (a longer fall): no.
+    const dig = (world: TestWorld, y: number) =>
+      walkPolicy(input({ world, fence })).options.canDigDown?.({ x: 0, y, z: 0 });
+    expect(dig(new TestWorld(), 63)).toBe(true);
+    expect(dig(new TestWorld(), 58)).toBe(true);
+    const cave = new TestWorld().fill({ x: -2, y: 55, z: -2 }, { x: 2, y: 57, z: 2 }, B.air);
+    expect(dig(cave, 58)).toBe(false);
+    // Lava below the landing: no.
+    const lava = new TestWorld().set(1, 56, 0, B.lava);
+    expect(dig(lava, 58)).toBe(false);
+    // No fence, or no breaking: no digging down.
+    expect(walkPolicy(input()).options.downward).toBeUndefined();
+    expect(walkPolicy(input({ fence, breaking: false })).options.downward).toBeUndefined();
+  });
+
   it('keeps away from hostiles, and far and hard from one that explodes or might', () => {
     // Seen live 2026-10-04: a retreat walked past a concussion creeper, and the bot died.
     const policy = walkPolicy(
