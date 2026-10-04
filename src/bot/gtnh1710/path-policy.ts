@@ -43,6 +43,8 @@ import type { Vec3, WalkWorld } from './walking.ts';
  *    neighbour rule), never within PLAYER_PLACE_DISTANCE of another player, never outside the
  *    safety boundary; clicking only a plain full block (placing.ts CLICKABLE_SUPPORTS) or a
  *    block the same walk placed.
+ *  - Hostile mobs: a path keeps MOB_AVOID_RADIUS from them where it can (movements near one
+ *    cost MOB_AVOID_COEFFICIENT times as much), as Baritone avoids mobs.
  *  - Doors (allowDoors): wooden doors and fence gates in the way are opened with a right-click
  *    and closed again once the walk is through (pathing/movements.ts door); never an iron one.
  *  - Parkour (allowParkour): only over gaps that falling into would not hurt, unless
@@ -52,6 +54,11 @@ import type { Vec3, WalkWorld } from './walking.ts';
  *  - A walk that does no work (a retreat, a flee, the walk to a drop: threats do not stop
  *    them, and a dig or a placement would) breaks and places nothing.
  */
+
+/** Hostile mobs are kept this far from (blocks) by making movements near them dearer. */
+export const MOB_AVOID_RADIUS = 8;
+/** How much dearer (Baritone's mobAvoidanceCoefficient default, the idea). */
+export const MOB_AVOID_COEFFICIENT = 1.5;
 
 /** Blocks broken per walk at most: a tunnel of a dozen blocks, or a belt of leaves. */
 export const MAX_PATH_BREAKS = 24;
@@ -103,6 +110,8 @@ export interface PolicyContext {
 export interface WalkPolicyInput extends PolicyContext {
   readonly world: WalkWorld;
   readonly settings: WalkSettings;
+  /** Hostile mobs near, where they stand: paths keep away from them where they can. */
+  readonly hostiles?: readonly Vec3[];
   /** Digging may break on this walk: digging is enabled and the walk does work. */
   readonly breaking: boolean;
   /** Placing may place on this walk: placing is enabled and the walk does work. */
@@ -362,6 +371,17 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
     water: s.allowWater,
     // Doors and gates are opened (and closed again) on any walk: an escape into a house too.
     doors: s.allowDoors,
+    ...((input.hostiles ?? []).length === 0
+      ? {}
+      : {
+          avoid: (input.hostiles ?? []).map((h) => ({
+            x: h.x,
+            y: h.y,
+            z: h.z,
+            radius: MOB_AVOID_RADIUS,
+            coefficient: MOB_AVOID_COEFFICIENT,
+          })),
+        }),
     maxFall: 3,
     ...(breaking
       ? {

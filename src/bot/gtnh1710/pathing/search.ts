@@ -79,6 +79,18 @@ export interface PathOptions {
   /** The blocks to place: how many, which (a surface the walker stands on), whether they fall. */
   readonly throwaway?: { readonly count: number; readonly block: string; readonly falls?: boolean };
   readonly penalties?: Partial<Penalties>;
+  /**
+   * Places to keep away from (hostile mobs: Baritone's mobAvoidanceRadius and coefficient, the
+   * idea): a movement whose feet block ends within `radius` of one costs `coefficient` times
+   * as much (at least 1, so the heuristic stays a lower bound). planPath only.
+   */
+  readonly avoid?: ReadonlyArray<{
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+    readonly radius: number;
+    readonly coefficient: number;
+  }>;
   /** A partial path must end at least this far (blocks) from the start (default 5). */
   readonly minPartialDistance?: number;
 }
@@ -321,6 +333,18 @@ export function planPath(
   let currentBroken = 0;
   let currentPlaced = 0;
   let opened = 1;
+  const avoid = (options.avoid ?? []).filter((a) => a.coefficient > 1 && a.radius > 0);
+  /** The cost factor of a movement ending at feet block (x, y, z): 1 away from every place to avoid. */
+  const avoidFactor = (x: number, y: number, z: number): number => {
+    let f = 1;
+    for (const a of avoid) {
+      const dx = x + 0.5 - a.x;
+      const dy = y - a.y;
+      const dz = z + 0.5 - a.z;
+      if (dx * dx + dy * dy + dz * dz <= a.radius * a.radius) f *= a.coefficient;
+    }
+    return f;
+  };
   let capBreaks = false;
   let capBlocks = false;
   const emit: Emit = (nx, ny, nz, cost, code, nBreaks, nPlaces) => {
@@ -336,7 +360,7 @@ export function planPath(
       capBlocks = true;
       return;
     }
-    const cost2 = currentCost + cost;
+    const cost2 = currentCost + (avoid.length === 0 ? cost : cost * avoidFactor(nx, ny, nz));
     const known = g[i] as number;
     if (cost2 > known + TIE) return;
     if (cost2 >= known - TIE) {

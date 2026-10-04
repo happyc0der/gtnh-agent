@@ -342,3 +342,27 @@ describe('the search', () => {
     );
   });
 });
+
+describe('keeping away from hostile mobs (avoid)', () => {
+  it('bends a walk around a mob where a detour costs less than walking past it', () => {
+    // A zombie just beside the straight line from (0, 64, 0) to (16, 64, 0).
+    const mob = { x: 8.5, y: 64, z: 1.5, radius: 4, coefficient: 1.5 };
+    const straight = planPath(new TestWorld(), area(20, 60, 70), FROM, goalBlock(16, 64, 0));
+    expect(straight.movements.every((m) => m.to.z === 0)).toBe(true);
+    const r = planPath(new TestWorld(), area(20, 60, 70), FROM, goalBlock(16, 64, 0), {
+      avoid: [mob],
+    });
+    expect(r.status).toBe('reached');
+    // No feet block of the path within the mob's radius once it can keep out of it.
+    const near = r.movements.filter(
+      (m) => Math.hypot(m.to.x + 0.5 - mob.x, m.to.z + 0.5 - mob.z) <= mob.radius,
+    );
+    expect(near.length).toBeLessThan(
+      straight.movements.filter(
+        (m) => Math.hypot(m.to.x + 0.5 - mob.x, m.to.z + 0.5 - mob.z) <= mob.radius,
+      ).length,
+    );
+    // The cost reported is the walk's real ticks (the avoidance only steers the search).
+    expect(r.cost).toBeGreaterThan(straight.cost);
+  });
+});

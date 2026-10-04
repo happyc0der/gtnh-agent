@@ -190,6 +190,16 @@ export class PathActions {
       .map((e) => ({ x: e.x, y: e.y, z: e.z }));
   }
 
+  /** Hostile mobs the client sees (alive), where they stand: walks keep away from them. */
+  #hostiles(): Vec3[] {
+    return this.#world
+      .trackedEntities()
+      .filter(
+        (e) => e.kind === 'mob' && e.classification.category === 'hostile' && e.diedAt == null,
+      )
+      .map((e) => ({ x: e.x, y: e.y, z: e.z }));
+  }
+
   /** The policy's view of the world now: the boundary, and the other players. */
   #context(): PolicyContext {
     return { boundary: this.#opts.explorationBoundary ?? null, players: this.#players() };
@@ -220,6 +230,7 @@ export class PathActions {
     return walkPolicy({
       world,
       ...this.#context(),
+      hostiles: this.#hostiles(),
       settings: cfg.movement.path,
       breaking: request.work && terrain && cfg.digging.enabled && cfg.presenceTicks,
       placing: request.work && terrain && cfg.placing.enabled && cfg.presenceTicks,
