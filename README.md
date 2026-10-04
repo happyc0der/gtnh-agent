@@ -27,19 +27,19 @@ server's own updates. The models only propose; they never act. See
 Every world-changing ability is off until you switch it on, and works only inside the fence (or
 the play area that moves with the player) and within the safety boundary.
 
-| Ability                                                                                    | Switch                                          | Run live                          |
-| ------------------------------------------------------------------------------------------ | ----------------------------------------------- | --------------------------------- |
-| Observe position, health, food, inventory, mobs, hazards, light, GregTech machines, quests | `MC_ENABLE_LIVE_CONNECTION`                     | yes                               |
-| Walk over terrain like Baritone, retreat or flee, explore and remember what it saw         | `MC_ENABLE_MOVEMENT`, `MC_MOVEMENT_MODE=follow` | yes; the pathfinder: fake server  |
-| Dig allowlisted blocks (stone and ores with a pickaxe) with the best tool; a night pit     | `MC_ENABLE_DIGGING`                             | yes; stone, ores: fake server     |
-| Place allowlisted plain blocks (night shelters); a crafting table or furnace to use        | `MC_ENABLE_PLACING`                             | plain yes; stations fake server   |
-| Eat approved food; go and get food when it has none                                        | `MC_ENABLE_EATING`                              | yes                               |
-| Craft hand-verified and GTNH's own recipes in the 2x2 grid; at a crafting table            | `MC_ENABLE_CRAFTING`                            | 2x2 yes; table on the fake server |
-| Move exact amounts to and from configured vanilla chests                                   | `MC_ENABLE_CONTAINERS`                          | yes (test pen)                    |
-| Quest book: submit quests, tick checkboxes, claim rewards                                  | `MC_ENABLE_QUEST_BOOK`                          | yes                               |
-| Take its owners' commands in chat (`!come`, `!goto`, `!get 20 logs`...) and whisper back   | `MC_OWNERS`                                     | fake server only                  |
-| Open blocks it has a profile for (furnaces, crafting stations, modded chests) and smelt    | `MC_ENABLE_INTERACT`                            | fake server only                  |
-| Fight: strike a listed hostile or a farm animal, defend                                    | `MC_ENABLE_COMBAT`                              | fake server only                  |
+| Ability                                                                                    | Switch                                          | Run live                        |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------- |
+| Observe position, health, food, inventory, mobs, hazards, light, GregTech machines, quests | `MC_ENABLE_LIVE_CONNECTION`                     | yes                             |
+| Walk over terrain like Baritone, retreat or flee, explore and remember what it saw         | `MC_ENABLE_MOVEMENT`, `MC_MOVEMENT_MODE=follow` | yes (the pathfinder, doors too) |
+| Dig allowlisted blocks (stone and ores with a pickaxe) with the best tool; a night pit     | `MC_ENABLE_DIGGING`                             | yes; ores: fake server          |
+| Place allowlisted plain blocks (night shelters); a crafting table or furnace to use        | `MC_ENABLE_PLACING`                             | yes; a furnace: fake server     |
+| Eat approved food; go and get food when it has none                                        | `MC_ENABLE_EATING`                              | yes                             |
+| Craft hand-verified and GTNH's own recipes in the 2x2 grid; at a crafting table            | `MC_ENABLE_CRAFTING`                            | yes (2x2 and at a table)        |
+| Move exact amounts to and from configured vanilla chests                                   | `MC_ENABLE_CONTAINERS`                          | yes (test pen)                  |
+| Quest book: submit quests, tick checkboxes, claim rewards                                  | `MC_ENABLE_QUEST_BOOK`                          | yes                             |
+| Take its owners' commands in chat (`!come`, `!goto`, `!get 20 logs`...) and whisper back   | `MC_OWNERS`                                     | yes (natural language too)      |
+| Open blocks it has a profile for (furnaces, crafting stations, modded chests) and smelt    | `MC_ENABLE_INTERACT`                            | fake server only                |
+| Fight: strike a listed hostile or a farm animal, defend                                    | `MC_ENABLE_COMBAT`                              | fake server only                |
 
 "Fake server" is the repository's fake GTNH server (`tests/bot/gtnh1710/fixtures/fake-server.ts`), which
 the tests run against. How it compares with Baritone, row by row:
