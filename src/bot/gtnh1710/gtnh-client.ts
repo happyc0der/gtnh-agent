@@ -9,6 +9,7 @@ import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
 import type { OwnerMessage } from './client/chat-actions.ts';
 import { ClientCore } from './client/core.ts';
+import type { PathOptions } from './pathing/search.ts';
 import type { PointBox } from './play-area.ts';
 import type { Fence, WalkPlan } from './walking.ts';
 import type { WorldModel } from './world-model.ts';
@@ -169,6 +170,15 @@ export class Gtnh1710Client implements MinecraftClient {
   /** The players' builds agent memory keeps: never broken (walks, DIG_BLOCK, GATHER). */
   knowPlayerBuilds(builds: readonly PlayerBuild[]): void {
     this.#core.world.knowPlayerBuilds(builds);
+  }
+
+  /**
+   * A MOVE_TO's walk policy now, as the pathfinder's options (client/path-actions.ts): for code
+   * that plans a step with the client's own rules (owners' travel); null without a fence or
+   * blocks.
+   */
+  walkOptions(): PathOptions | null {
+    return this.#core.paths.moveOptions();
   }
 
   /**

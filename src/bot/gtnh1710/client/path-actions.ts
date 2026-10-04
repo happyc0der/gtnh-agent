@@ -22,7 +22,13 @@ import {
 } from '../pathing/execute.ts';
 import { describeGoal, type Goal } from '../pathing/goals.ts';
 import type { Movement } from '../pathing/movements.ts';
-import { floodPath, planPath, type PathFlood, type PathResult } from '../pathing/search.ts';
+import {
+  floodPath,
+  planPath,
+  type PathFlood,
+  type PathOptions,
+  type PathResult,
+} from '../pathing/search.ts';
 import { stepProblem, validatePlan } from '../pathing/validate.ts';
 import type { PlaceArea } from '../placing.ts';
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
@@ -221,6 +227,21 @@ export class PathActions {
           : chooseThrowaway(items, request.protectedItems, cfg.movement.path.throwawayReserve),
       sprint: request.sprint,
     });
+  }
+
+  /**
+   * MOVE_TO's walk policy now, as the pathfinder's options (owners' travel plans its steps with
+   * it, app/play/owner-travel.ts); null when the fence or the blocks are not known.
+   */
+  moveOptions(): PathOptions | null {
+    const world = this.#world.walkWorld();
+    const fence = this.#core.fence().fence;
+    if (world === null || fence === null) return null;
+    return this.policy(world, fence, {
+      work: true,
+      protectedItems: this.#lastProtected,
+      sprint: false,
+    }).options;
   }
 
   /**
