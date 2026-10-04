@@ -148,6 +148,27 @@ describe(
       );
     });
 
+    it('uses the kind of wood held, and gathers logs of any kind (seen live: oak only, in a forest of others)', () => {
+      const birch = steps(
+        needing({ 'minecraft:wooden_pickaxe': 1 }, { 'minecraft:log@2': 3 }, (w) => {
+          w.containers = [];
+        }),
+      );
+      expect(
+        routeActions(birch).map((a) => (a.type === 'CRAFT_ITEM' ? a.args.recipe : a.type)),
+      ).toEqual(['planks_birch', 'sticks', 'minecraft:wooden_pickaxe#1']);
+      const none = steps(
+        needing({ 'minecraft:wooden_pickaxe': 1 }, {}, (w) => {
+          w.containers = [];
+        }),
+      );
+      // Any log counts: the next route uses the kind then held.
+      expect(routeActions(none)[0]).toEqual({
+        type: 'GATHER',
+        args: { block: 'minecraft:log', count: 3 },
+      });
+    });
+
     it('names the GATHER for a gather step: the block in view', () => {
       // Seen live 2026-10-04: "get 8 cobblestone" had the model plan digs of blocks it misnamed.
       const cobble = steps(

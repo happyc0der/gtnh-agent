@@ -24,6 +24,11 @@
 /** The route's line when nothing is missing (planner-provider.ts, plan-steps.ts read it). */
 export const EVERYTHING_HELD = 'everything the goal needs is already held';
 
+/** Kinds of one ingredient (any planks, any wool) weighed by what they cost now, at most. */
+const MAX_KINDS_WEIGHED = 16;
+/** Costs (seconds) closer than this are equal: then the kind seen nearby wins. */
+const COST_EPSILON = 0.01;
+
 export interface RouteInput {
   /** Any mix of these items. */
   anyOf: readonly string[];
@@ -1132,6 +1137,46 @@ export function planRoute(
   };
 
   /** `n` of any mix of `anyOf`: held ones first, then the cheapest kind to get. */
+  /**
+   * Whether `item`'s raw material is seen nearby: a source of it with a known place, or a
+   * recipe for it with an input that has one (birch planks: birch logs in view).
+   */
+  const seenNearby = (item: string): boolean => {
+    const known = (v: string): boolean =>
+      optionsOf(ix, v).some((o) => o.kind === 'source' && places(o.source.blocks, v).length > 0);
+    if (known(item)) return true;
+    return optionsOf(ix, item).some(
+      (o) =>
+        o.kind === 'recipe' &&
+        o.recipe.inputs.some((i) => i.tool !== true && i.anyOf.slice(0, 8).some(known)),
+    );
+  };
+
+  /**
+   * Of kinds that do the same (any planks), the one cheapest to get `n` of now: what is held
+   * one recipe down counts as free (birch logs held make birch planks the cheapest), then one
+   * whose raw material is seen nearby, then the book's order; null when none can be had. Seen
+   * live 2026-10-04: in a forest of other woods the route asked for oak, the first of equal
+   * costs, and the bot walked from tree to tree until dark.
+   */
+  const cheapestNow = (kinds: readonly string[], n: number): string | null => {
+    let best: { item: string; cost: number; seen: boolean } | null = null;
+    for (const v of kinds.slice(0, MAX_KINDS_WEIGHED)) {
+      let cost = Infinity;
+      for (const o of optionsOf(ix, v)) cost = Math.min(cost, evaluate(v, n, o));
+      if (cost === Infinity) continue;
+      const seen = seenNearby(v);
+      if (
+        best === null ||
+        cost < best.cost - COST_EPSILON ||
+        (Math.abs(cost - best.cost) <= COST_EPSILON && seen && !best.seen)
+      ) {
+        best = { item: v, cost, seen };
+      }
+    }
+    return best?.item ?? null;
+  };
+
   const acquireAny = (
     anyOf: readonly string[],
     n: number,
@@ -1154,6 +1199,7 @@ export function planRoute(
     const open = anyOf.filter((v) => !stack.has(v));
     // The cheapest kind; if none can be had, the one a missing tool blocks most directly.
     const kind =
+      cheapestNow(open, rest) ??
       table().cheapest(open).item ??
       [...open].sort((a, b) => toolBlocked(a, 0) - toolBlocked(b, 0))[0] ??
       anyOf[0];

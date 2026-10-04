@@ -829,8 +829,15 @@ function gatherHint(
   const seen = state.nearbyBlocks.known ? state.nearbyBlocks.value.resources : [];
   const block = seen.find((r) => diggable.includes(r.block))?.block ?? diggable[0];
   const drops = gatherDrops(block as DiggableBlock);
+  // Drops that are only kinds of one item (oak, spruce, birch and jungle logs): any counts.
+  // The route picks one kind for its recipes (oak, the first of equal costs), but the trees
+  // in view may be others (seen live 2026-10-04: one oak log in a forest of other woods, and
+  // a GATHER of oak only walked from tree to tree until dark); a craft that needs the other
+  // kind is then refused, and the next route uses the kind held.
+  const base = (name: string): string => name.replace(/@\d+$/, '');
+  const kindsOfOne = drops.every((d) => base(d) === base(leg.item));
   const args =
-    drops.length === 1 && drops[0] === leg.item
+    (drops.length === 1 && drops[0] === leg.item) || kindsOfOne
       ? { block, count }
       : { block, count, item: leg.item };
   const step = GatherStepSchema.safeParse({ type: GATHER, args });
