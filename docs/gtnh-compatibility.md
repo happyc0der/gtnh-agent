@@ -543,7 +543,8 @@ for logs), so a server running at little more than half speed still accepts it.
 - **`BreakSpeed` handlers** (26 classes) all depend on a held tool, armor, enchantments, special
   blocks or a dimension. For an empty hand only IguanaTweaks' `ExtraHarvestLevelHandler` could
   matter: it cancels the speed for a no-tool block with harvest level above 0. The test server's
-  `config/IguanaTinkerTweaks/BlockDefaults.cfg` gives every allowlisted block level 0, and
+  `config/IguanaTinkerTweaks/BlockDefaults.cfg` gives every block a hand digs level 0 (the
+  stones and ores need a tool anyway: see [Tools](#pickaxes-stone-and-ores-2026-10-03)), and
   `BlockOverride.cfg` overrides nothing. GregTech's handler only applies to GregTech tools.
 - **Claims and protection:** ServerUtilities chunk claims are off on the test server
   (`chunk_claiming=false`, `spawn_radius=0`).
@@ -630,10 +631,11 @@ fields and names):
     boats, EMT tools), as loot, or in tooltips and slot filters.
 - **Harvest levels** (IguanaTweaks `ToolDefaults.cfg`; level names Stone 0, Copper 1, Iron 2,
   Bronze 3, ...):
-  - wooden shovel, wooden, stone and golden axe: 0; iron axe: 3; diamond axe: 5.
-  - The allowlisted blocks are level 0 (`BlockDefaults.cfg`: dirt, grass, sand, gravel and clay
+  - wooden shovel, wooden pickaxe, wooden, stone and golden axe: 0; iron axe: 3; diamond axe: 5.
+  - The hand-dug blocks are level 0 (`BlockDefaults.cfg`: dirt, grass, sand, gravel and clay
     under `blocks_shovel`, the logs under `blocks_axe`), and their materials need no tool.
-  - `ExtraHarvestLevelHandler` ignores level-0 blocks. Harvest levels matter for ores, not here.
+  - `ExtraHarvestLevelHandler` ignores level-0 blocks and every block whose material needs a
+    tool. Harvest levels matter for stone and ores: see "Pickaxes, stone and ores" below.
 - **The 26 `BreakSpeed` handlers** (see "Digging") were checked again with a vanilla tool in hand.
   None applies: each needs its own item, armor, accessory, enchantment, potion, dimension, block,
   hover or spectator mode. The exceptions are IguanaTweaks' nerf (above) and GregTech's, which
@@ -641,16 +643,17 @@ fields and names):
 
 **Early tools on this server:**
 
-| Tool                                | How an early player gets it                                                                                                                                                   | Speed on its blocks                                                                                            | Max. damage               | Agent                 |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------- | --------------------- |
-| Wooden shovel                       | Vanilla 3x3 at a crafting table: 1 plank above 2 sticks. The quest "Tools" asks for it.                                                                                       | 2 (dirt, grass, sand, gravel, clay)                                                                            | 64 (the agent assumes 59) | Uses it               |
-| Wooden axe                          | Vanilla 3x3: 3 planks, 2 sticks                                                                                                                                               | 2 (logs)                                                                                                       | 64 (59)                   | Uses it               |
-| Stone axe                           | No recipe (removed)                                                                                                                                                           | 4                                                                                                              | 131                       | Uses it if it has one |
-| Iron, golden axe                    | Not early (their GTNH recipes were not checked)                                                                                                                               | 6, 12                                                                                                          | 250, 32                   | Uses them             |
-| Diamond axe                         | No recipe (removed)                                                                                                                                                           | 8                                                                                                              | 1561                      | Uses it               |
-| Stone, iron, golden, diamond shovel | Stone and diamond recipes removed                                                                                                                                             | **0** (IguanaTweaks)                                                                                           |                           | Never                 |
-| GregTech tools                      | There is **no** GregTech shovel, axe, pickaxe, sword or hoe in 5.09.51.482 (`MetaGeneratedTool01` starts at the saw). The quests describe a flint knife: flint above a stick. | see below                                                                                                      | in NBT (`GT.ToolStats`)   | Never (NBT)           |
-| TConstruct flint shovel, hatchet    | The quest "Your First Tool": Part Builder, stencil table and Tool Station (placed blocks).                                                                                    | about 4 (flint's mining speed is 400 in IguanaTweaks' `MaterialDefaults.cfg`; durability 113, harvest level 1) | in NBT (`InfiTool`)       | Never (NBT)           |
+| Tool                                            | How an early player gets it                                                                                                                                                   | Speed on its blocks                                                                                                                         | Max. damage               | Agent                                    |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------- |
+| Wooden shovel                                   | Vanilla 3x3 at a crafting table: 1 plank above 2 sticks. The quest "Tools" asks for it.                                                                                       | 2 (dirt, grass, sand, gravel, clay)                                                                                                         | 64 (the agent assumes 59) | Uses it                                  |
+| Wooden pickaxe                                  | Vanilla 3x3: 3 planks above 2 sticks (the agent's `wooden_pickaxe` recipe)                                                                                                    | 2 (every stone and ore below; it harvests those of level 0)                                                                                 | 64 (59)                   | Uses it (level 0)                        |
+| Wooden axe                                      | Vanilla 3x3: 3 planks, 2 sticks                                                                                                                                               | 2 (logs)                                                                                                                                    | 64 (59)                   | Uses it                                  |
+| Stone axe                                       | No recipe (removed)                                                                                                                                                           | 4                                                                                                                                           | 131                       | Uses it if it has one                    |
+| Iron, golden axe                                | Not early (their GTNH recipes were not checked)                                                                                                                               | 6, 12                                                                                                                                       | 250, 32                   | Uses them                                |
+| Diamond axe                                     | No recipe (removed)                                                                                                                                                           | 8                                                                                                                                           | 1561                      | Uses it                                  |
+| Stone, iron, golden, diamond shovel and pickaxe | Stone and diamond recipes removed                                                                                                                                             | **0** (IguanaTweaks)                                                                                                                        |                           | Never                                    |
+| GregTech tools                                  | There is **no** GregTech shovel, axe, pickaxe, sword or hoe in 5.09.51.482 (`MetaGeneratedTool01` starts at the saw). The quests describe a flint knife: flint above a stick. | see below                                                                                                                                   | in NBT (`GT.ToolStats`)   | Never (NBT)                              |
+| TConstruct pickaxe, shovel, hatchet, mattock    | The quest "Your First Tool": Part Builder, stencil table and Tool Station (placed blocks).                                                                                    | from its `InfiTool` data: a flint head about 4 (`MiningSpeed` 400 in IguanaTweaks' `MaterialDefaults.cfg`; durability 113, harvest level 1) | in NBT (`InfiTool`)       | Reads its NBT data; from the hotbar only |
 
 GregTech's `MetaGeneratedTool.getDigSpeed` is the tool's speed multiplier × its primary
 material's `mToolSpeed`, on blocks the tool can mine. TConstruct's `AbilityHelper.calcToolSpeed`
@@ -659,12 +662,14 @@ the Stonebound bonus; `HarvestTool.getDigSpeed` gives 0.1 once the tool is broke
 
 **What the agent does** (`src/domain/tools.ts`, [architecture: digging](architecture.md#digging)):
 
-- It may hold only the wooden shovel and the vanilla axes, each only on the blocks it digs faster.
+- It may hold only the wooden shovel, the wooden pickaxe, the vanilla axes and Tinkers'
+  Construct's pickaxe, shovel, hatchet and mattock, each only on the blocks it digs faster and,
+  for stone and ores, only when it harvests them (see below).
 - It uses each tool's speed above as a lower bound: 2 for wood (4 if GregTech's mixin were
   loaded). The maximum damage it assumes for wooden tools is 59 (64 here): a server with
   GregTech's option off has 59. Being slower or more careful than the server is always safe.
-- It never uses a tool when one more use would take it past that maximum, nor one with NBT data,
-  more than one in a stack, or a protected item.
+- It never uses a tool when one more use would take it past that maximum, nor a vanilla tool
+  with NBT data, more than one in a stack, or a protected item.
 
 Dig times with a tool (ticks of 50 ms; empty hand for comparison):
 
@@ -688,8 +693,143 @@ Prior art: mineflayer-tool and Baritone's `ToolSet` also choose the item that br
 fastest, and Baritone can stop using a tool just before it breaks. The agent uses the same idea
 with this server's verified numbers. No code from either is used (Baritone is LGPL-3.0).
 
+### Pickaxes, stone and ores (2026-10-03)
+
+Checked in the same jars and configs as above (_verified_, not live):
+
+- **Harvest.** A block whose material needs a tool (rock, iron, anvil, snow; every stone and ore
+  below is rock) drops only for the right one. `ForgeHooks.canHarvestBlock` takes the block's
+  harvest tool and level for its metadata (`getHarvestTool(meta)`, `getHarvestLevel(meta)`) and
+  asks the held item's `getHarvestLevel(stack, toolClass)`. With no harvest tool set (hardened
+  clay) it asks the item instead (`ItemPickaxe.func_150897_b`: any rock). Any other dig is
+  slower (speed / hardness / **100** per tick) and leaves nothing: the block is gone. So the
+  agent digs stone and ores only with a tool that harvests them, never by hand.
+- **Levels.** IguanaTweaks' `BlockDefaults.cfg`: stone, cobblestone, mossy cobblestone,
+  sandstone and netherrack pickaxe level 0, emerald ore 4; hardened clay has no harvest tool.
+  GregTech 5.09.51.482 sets its own:
+  - `BlockStonesAbstract`: hardness 3 x stone's (4.5), black and red granite
+    (`gt.blockgranites`) level 3, marble and basalt (`gt.blockstones`) level 2.
+  - `BlockOresAbstract`: level = the metadata mod 8, except that 5 and 6 give 2; hardness 1 +
+    level; harvest tool "pickaxe" only below metadata 8. The metadata is
+    `TileEntityOres.getHarvestData`: max(the stone's base level, 3 in black and red granite and
+    else 0, min(7, the material's tool quality, less 1 for a small ore)). It reaches the client
+    in the chunk data. Which ore it is (the material) is in the tile entity, which GregTech
+    sends in its own packet that the client does not read: only a dig shows it.
+- **Pickaxes.** IguanaTweaks disables the stone, iron, golden and diamond pickaxes (speed 0, as
+  the shovels), so the **wooden pickaxe** (level 0) is the only vanilla one that digs here, and
+  Tinkers' Construct's are the way up (below).
+- **What GTNH generates.** GT's `disableVanillaOres` denies the vanilla ores'
+  `OreGenEvent` (`GTProxy.PREVENTED_ORES`), so coal, iron, gold, diamond, lapis and redstone ore
+  never generate. Emerald ore still does: vanilla's Extreme Hills and Biomes O' Plenty's
+  mountains place it directly, with no such event. GT's stone generator (`WorldgenStone`) puts
+  granite, marble and basalt blobs in the Overworld's stone (y 0-180).
+
+The stones and ores `DIG_BLOCK` may dig (`src/domain/blocks.ts`, `src/domain/dig-time.ts`):
+
+| Block                                    | Hardness           | Pickaxe level             | One dig drops                               | Wooden pickaxe: vanilla / server / agent (ticks) |
+| ---------------------------------------- | ------------------ | ------------------------- | ------------------------------------------- | ------------------------------------------------ |
+| `stone`                                  | 1.5                | 0                         | cobblestone                                 | 23 / 15 / 31                                     |
+| `cobblestone`, `mossy_cobblestone`       | 2.0                | 0                         | itself                                      | 30 / 20 / 40                                     |
+| `sandstone` (metadata 0)                 | 0.8                | 0                         | itself                                      | 12 / 8 / 17                                      |
+| `netherrack`                             | 0.4                | 0                         | itself                                      | 6 / 4 / 10                                       |
+| `hardened_clay`, `stained_hardened_clay` | 1.25               | any pickaxe               | itself (stained keeps its colour)           | 19 / 13 / 26                                     |
+| `gt.blockgranites` (0 black, 8 red)      | 4.5                | 3                         | its cobblestone (metadata 1, 9)             | does not harvest                                 |
+| `gt.blockstones` (0 marble, 8 basalt)    | 4.5                | 2                         | its cobblestone (metadata 1, 9)             | does not harvest                                 |
+| `gt.blockores`, metadata 0               | 1                  | 0                         | a vein ore: its raw ore; a small ore: a mix | 15 / 10 / 21                                     |
+| `gt.blockores`, metadata 1-7             | 1 + level (2 to 8) | the metadata (5 and 6: 2) | the same                                    | does not harvest                                 |
+| `emerald_ore`                            | 3.0                | 4                         | 1 emerald                                   | does not harvest                                 |
+
+The drops: vanilla `getItemDropped` and `damageDropped` (stone gives cobblestone; sandstone and
+stained clay keep their metadata), GregTech's `BlockStonesAbstract.damageDropped` (a smooth
+stone gives its cobblestone), and `TileEntityOres.getDrops` with `oredropbehavior=FortuneItem`
+(a vein ore: 1 raw ore, `gt.metaitem.03` at 5000 + the material id, more with Fortune; a small
+ore: weighted gems, crushed ore and impure dust). Of the 48 classes in the mod jars that refer
+to `HarvestDropsEvent` (each read), none changes these drops for a wooden pickaxe or a plain
+Tinkers' one: they need their own tool, enchantment, potion or modifier, and Et Futurum's raw
+ores are off (`enableRawOres=false`).
+
+Not on the list: obsidian, `monster_egg` (it looks like stone and hides a silverfish), chiseled
+and smooth sandstone (temples), bricks and other unnatural metadata (the client refuses a
+block whose metadata is not a natural one), and BartWorks' ores (their own blocks and tile
+entities, not checked).
+
+A GT ore with a Tinkers' pickaxe (agent's wait, ticks; the speed comes from its NBT data):
+
+| GT ore metadata (level) | Hardness | Speed 4 (flint head) | Speed 5 | Speed 6 |
+| ----------------------- | -------- | -------------------- | ------- | ------- |
+| 0 (0)                   | 1        | 12                   | 10      | 9       |
+| 1 (1)                   | 2        | 21                   | 17      | 15      |
+| 2, 5, 6 (2)             | 3        | 31                   | 25      | 21      |
+| 3 (3)                   | 4        | 40                   | 32      | 27      |
+| 4 (4)                   | 5        | 50                   | 40      | 34      |
+| 7 (7)                   | 8        | 77                   | 62      | 52      |
+
+### Tinkers' Construct tools (2026-10-03)
+
+TConstruct-1.13.57-GTNH (`javap`): a tool's stats are its NBT data, the compound `InfiTool`:
+`HarvestLevel` (and `HarvestLevel2`, the mattock's shovel side), `MiningSpeed` (and
+`MiningSpeed2`, `MiningSpeedHandle`, `MiningSpeedExtra`), `Damage`, `TotalDurability`,
+`Broken`, `Shoddy` (the Stonebound or Jagged trait) and `Lava` (auto-smelt); Silk Touch is in
+the stack's `ench` list. Every slot update carries the stack's NBT data, gzipped; the client
+keeps it, read only (`ItemStackData.nbt` in `src/bot/gtnh1710/packets.ts`).
+
+- **Harvest:** `HarvestTool.getHarvestLevel` is `HarvestLevel` for its tool class (0 once
+  broken). IguanaTweaks (`pickaxeBoostRequired`) writes a new pickaxe's level as its head
+  material's less 1, and raises it when the pickaxe levels up (`LevelingLogic.addBoostTags`).
+  The NBT data is the level that counts, so the agent reads it rather than guess from the head.
+- **Speed:** `HarvestTool.getDigSpeed`, on a block it is made for (its harvest tool is the
+  tool's class, or its material is one of the tool's: the pickaxe rock; the shovel grass,
+  ground, sand and clay; the hatchet wood and leaves; the mattock wood and plants, grass,
+  ground and clay), is `AbilityHelper.calcToolSpeed`: the mean of its mining speeds / 100 (x 1
+  for these four tools), plus the Stonebound bonus (log(Damage / 72 + 1) x 2 x Shoddy), in Java
+  floats. It is 0.1 when the block's level is above the tool's or the tool is broken, and 1 on
+  other blocks. The agent computes the same float, rounded down to 1/1000.
+- **Wear:** `AbilityHelper.damageTool` adds 1 to `Damage` for each dug block with hardness
+  above 0 (less often with Reinforced). A use that takes `Damage` above `TotalDurability` breaks
+  the tool (`Broken`: speed 0.1, harvests nothing until repaired). The stack's damage value is
+  only the percentage worn, for the durability bar.
+- **One block per dig:** the pickaxe, shovel, hatchet and mattock. The hammer, excavator and
+  lumber axe break an area or a tree (`AOEHarvestTool`, `LumberAxe.onBlockStartBreak`); the
+  agent never holds them.
+
+What the agent does with one (`readTinkersTool` and `tinkersTool` in `src/domain/tools.ts`):
+
+- It holds it only when it harvests the block, digs it faster than a hand, is not broken, has
+  neither auto-smelt nor Silk Touch (both change what drops), and one more use leaves `Damage`
+  at or below `TotalDurability`. Data it cannot read (no `InfiTool` compound, a value of the
+  wrong type, no durability or speed) means the tool is not used.
+- Only from the hotbar: moving a stack takes a window click that must carry the stack's NBT data
+  exactly, and the client sends none. A tool in the main inventory is reported, not used.
+- After the dig it reads the new `Damage` and reports the uses left.
+- The planner and the safety policy see only its name (`TConstruct:pickaxe`), so its level is
+  unknown to them: the route counts it as a pickaxe of unknown level ("check it"), and the
+  client decides for each block.
+
+### How a dig that would harvest nothing is refused
+
+1. **The planner's knowledge** (`src/goals/route-book.ts`): every stone and ore source carries
+   its pickaxe level (the dig rules above; a test keeps them equal to the knowledge base's
+   harvest table), so a route gets the pickaxe first (a wooden one from planks and sticks) or
+   says that none it can make will do. GT ores are dug as the one block `gt.blockores`; each
+   source names its ore, where it generates, and the `GATHER` that digs it
+   (`{"block":"gregtech:gt.blockores","item":"<its raw ore>"}`). A tool worn to the agent's
+   limit does not count as held.
+2. **The safety policy** (`src/safety/dig-checks.ts`): a `DIG_BLOCK` of stone or an ore needs a
+   carried pickaxe of the block's level (vanilla tools by name and wear; a Tinkers' tool of
+   unknown level counts, and the client decides), else `NOT_DIGGABLE`. A `GATHER` dry-runs each
+   dig and passes such blocks over. The observation does not carry a GT ore's metadata, so the
+   policy allows any pickaxe for one.
+3. **The client** (`checkDig`, `#chooseHand` in `client/dig-actions.ts`): it reads the block's
+   metadata from the chunk data (a GT ore's level and hardness; an unnatural metadata is
+   refused) and holds only a tool that harvests that very block. With none it refuses, saying
+   what the block needs and why each carried tool was passed over, and sends nothing.
+
 _Not verified:_ a live run with a tool. It would show the faster dig accepted and the damage
-going up by one per block.
+going up by one per block. For stone and ores, a live run should also show: a wooden pickaxe's
+and a Tinkers' pickaxe's digs accepted at these times, the drops (cobblestone, raw ore), the
+wear (a wooden pickaxe's damage value, a Tinkers' tool's `Damage`), the `InfiTool` data of real
+tools (types and values) and IguanaTweaks' lowered pickaxe level, GT ore metadata as described,
+and emerald ore in Extreme Hills.
 
 ## Placing (2026-09-30)
 

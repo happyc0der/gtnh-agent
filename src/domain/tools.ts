@@ -126,7 +126,8 @@ export const TOOLS: Readonly<Record<ToolItem, ToolInfo>> = {
     digsFaster: PICKAXE_BLOCKS,
     evidence:
       `${WOODEN} ItemPickaxe (adn): efficiency on material rock, iron and anvil; harvests ` +
-      'stone, cobblestone, sandstone, netherrack, hardened clay and level-0 GT ores, nothing above.',
+      'stone, cobblestone, mossy cobblestone, sandstone, netherrack, hardened and stained clay ' +
+      'and level-0 GT ores, nothing above (GregTech granite, marble, basalt and emerald ore not).',
   },
   'minecraft:wooden_axe': {
     item: 'minecraft:wooden_axe',

@@ -573,7 +573,17 @@ anew: no code was taken from Baritone (LGPL-3.0).
   below the fighting limits, a hostile near) is passed over, and the step ends saying why.
 - **None in view, but remembered.** A `GATHER` of a block with none of it in view heads for the
   nearest place world memory remembers it at (an `EXPLORE` toward its x and z), then digs there
-  as usual. Animals wander, and world memory keeps no animals: a hunt has no such trip.
+  as usual. Animals wander, and world memory keeps no animals: a hunt has no such trip. World
+  memory's ore places stand for the ores `DIG_BLOCK` digs (GT ores, emerald ore).
+- **One drop of a block.** `{"block":"gregtech:gt.blockores","item":"gregtech:gt.metaitem.03@5032","count":16}`
+  counts only that drop (16 raw iron ore) and digs only blocks that can drop it. Every GT ore
+  is that one block, and its material is in its tile entity, so the step digs the GT ores it
+  sees until enough of the item is held (the others' drops are kept). An item the block never
+  drops ends the step at once, saying so. The route's ore sources name the `GATHER` to plan.
+- **Stone and ores need a pickaxe.** Its dry run includes the policy's harvest check, so a
+  `GATHER` of stone with no usable pickaxe (none, or worn to its last safe use) ends at once
+  ("none ... can be dug now ... `NOT_DIGGABLE`"), and the planner, asked again, gets a route
+  that makes one.
 - **Each cycle** while it is the plan's current step, System 1 decides first, as always
   (dangers, vitals, upkeep). When it decides `REQUEST_PLANNER`, code picks the action from the
   fresh observation, without a model:
@@ -931,8 +941,11 @@ copied, and every number was checked in the 1.7.10 and GTNH jars.
 
 `DIG_BLOCK` breaks ONE block from a fixed allowlist of natural blocks: vanilla `log`, `log2`,
 `leaves`, `leaves2`, `dirt`, `grass`, `sand`, `gravel` and `clay`, Biomes O' Plenty's leaves,
-and HarvestCraft's land gardens (`src/domain/blocks.ts`). A bare hand harvests all of them,
-and none has a tile entity. It needs `MC_ENABLE_DIGGING=true`
+and HarvestCraft's land gardens (`src/domain/blocks.ts`), which a bare hand harvests; and
+stone and ores (vanilla stone, cobblestone, mossy cobblestone, sandstone, netherrack, hardened
+and stained clay, GregTech's granites, marble and basalt, GregTech's ores and emerald ore),
+which only a pickaxe of the block's level harvests (anything else would leave nothing). Only
+the GT ores have a tile entity (it holds their material). It needs `MC_ENABLE_DIGGING=true`
 **and** the movement fence. The block facts and dig times are in `src/domain/dig-time.ts`, the
 tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digging.ts`;
 `Gtnh1710Client` sends. The server-side rules it relies on are in
@@ -966,13 +979,19 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
    - It must clear known hazards by `hazardAvoidanceRadius`.
    - It must not be under the player or in its body's cells, must not be sand or gravel over
      the player's head, and must not have a listed sand or gravel block on top (`UNSAFE_DIG`).
+   - Stone and ores need a carried pickaxe that harvests them (`NOT_DIGGABLE`, pause): judged
+     from the inventory names (a vanilla tool's level and wear; a Tinkers' tool counts, its
+     level unknown here). The observation carries no block metadata, so for a GT ore any
+     pickaxe passes here, and the client judges its level.
    - Preconditions: within `interactionReach` of the eyes, and a free inventory slot for the
      drop.
    - Like any world action, it is refused during danger.
 3. **The client re-checks it all on the blocks the server sent** (`checkDig`), fail closed:
    - inside the fence's columns, from the fence level up to `maxHeightAboveFence` (default 4),
      never the floor;
-   - loaded, named and allowlisted;
+   - loaded, named and allowlisted; for stone and ores, with a natural metadata (never bricks
+     or chiseled stone), from which a GT ore's level and hardness come (`digFacts` in
+     `src/domain/dig-time.ts`);
    - within 4.5 of the eyes;
    - not in the player's own columns at or below its head, and not sand or gravel above it.
    - Everything touching the block's six faces must be air, an allowlisted block, or one of the
@@ -990,14 +1009,23 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
      waits no dig time (`instantDig` in `src/domain/dig-time.ts`); a right-click would pick it up
      as a block instead, and the agent never right-clicks one.
 4. **The dig itself, with the best allowed tool or an empty hand.**
-   - Only the wooden shovel (on dirt, grass, sand, gravel and clay) and the vanilla axes (on
-     logs) may be held. On this server each breaks one block, and its speed and wear are known.
-     The other vanilla shovels dig nothing here (IguanaTweaks), and GregTech and TConstruct tools
-     keep their wear in NBT data the client does not read.
-   - The client picks the fastest such tool in the inventory that has no NBT data, is not
-     protected, and that one more use cannot break. The executor hands the protected items over
-     with the validated action. For wooden tools "cannot break" means damage + 1 ≤ 59, the lower
-     of vanilla's and GregTech's maxima.
+   - Only the wooden shovel (on dirt, grass, sand, gravel and clay), the wooden pickaxe (on
+     stone and ores), the vanilla axes (on logs) and Tinkers' Construct's pickaxe, shovel,
+     hatchet and mattock may be held. On this server each breaks one block, and its speed and
+     wear are known. The other vanilla shovels and pickaxes dig nothing here (IguanaTweaks), and
+     GregTech's tools keep their wear in NBT data the client does not read.
+   - A Tinkers' tool's stats are its NBT data (`InfiTool`), which the client keeps for every
+     slot (gunzipped, read only) and reads: its level, its speed as TConstruct computes it, its
+     wear (`readTinkersTool`, `tinkersTool` in `src/domain/tools.ts`). Such a tool is used only
+     from the hotbar (moving a stack with NBT data would need that data echoed in the click),
+     never broken, auto-smelting or with Silk Touch.
+   - On stone and ores only a tool that harvests that very block (its kind and level, for a GT
+     ore from its metadata) is held; with none the client refuses, saying what the block needs
+     and why each carried tool was passed over, and sends nothing.
+   - The client picks the fastest such tool in the inventory that has no NBT data (a Tinkers'
+     tool aside), is not protected, and that one more use cannot break. The executor hands the
+     protected items over with the validated action. For wooden tools "cannot break" means
+     damage + 1 ≤ 59, the lower of vanilla's and GregTech's maxima.
    - At equal speed it prefers the tool in hand, then the hotbar, then the main inventory. A tool
      in the main inventory is first moved into an empty hotbar slot with two confirmed clicks in
      window 0. A click that is not accepted puts the cursor back and fails the dig.
@@ -1038,8 +1066,12 @@ are digs inside the walk, with this same routine: see
   judge the dig too early, and the dig fails cleanly.
 - Leaves decaying later once nearby logs are gone. That is the world's normal behaviour after
   chopping.
-- Enchanted or renamed tools (NBT data), GregTech tools and TConstruct tools: never held. Their
-  data would have to be decoded first.
+- Enchanted or renamed vanilla tools (NBT data) and GregTech tools: never held. Their data would
+  have to be decoded first. A Tinkers' tool in the main inventory is not used either.
+- A GT ore's material: it is in the ore's tile entity, which the client does not read, so which
+  ore a block is shows only when it is dug. The observation does not carry block metadata
+  either, so the safety policy and `GATHER` treat every GT ore alike, and the client refuses one
+  above the carried tools' level (a failed action that the step passes over).
 
 ## Digging down: the night pit
 
