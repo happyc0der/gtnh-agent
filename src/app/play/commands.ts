@@ -67,9 +67,14 @@ export {
  * any other; a goal is pursued by the planner and GATHER exactly as `cli play --needs`.
  */
 
-/** Idle: commands are looked for this often, this many times, before play looks around again. */
+/**
+ * Idle: commands are looked for this often, this many times, before play looks around again
+ * (the standby: a mob near, low health, a meal). Every 3 s: in 10 s a creeper closes in from
+ * the edge of the scan (seen live 2026-10-04: the bot stood idle in a ravine of mobs and was
+ * killed).
+ */
 export const IDLE_POLL_MS = 500;
-const IDLE_POLLS = 20;
+const IDLE_POLLS = 6;
 /** Idle with nothing to do: play looks for something to do again after this long. */
 export const IDLE_RETRY_MS = 120_000;
 /** The task the idle bot stands by under, when System 1 must act (standby). */
