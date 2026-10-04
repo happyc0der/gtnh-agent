@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ExploreDirectionSchema, type ExploreDirection } from './actions.ts';
-import { COORDINATE_LIMIT, ItemNameSchema, MAX_TRANSFER_QUANTITY } from './common.ts';
+import { COORDINATE_LIMIT, itemBase, ItemNameSchema, MAX_TRANSFER_QUANTITY } from './common.ts';
 
 /**
  * Owner commands: what the bot's owners (MC_OWNERS) may tell it in chat, Baritone-style
@@ -82,6 +82,12 @@ function addressedText(text: string, self: string): string | null {
 
 /** Most items a get or mine goal may ask for: a full inventory (36 stacks of 64). */
 export const MAX_GOAL_COUNT = MAX_TRANSFER_QUANTITY;
+/** A get or mine that names no count: this many, or one of a tool (DEFAULT_ONE). */
+export const DEFAULT_GOAL_COUNT = 16;
+/** Tools and armour: "get a pickaxe" means one. */
+const DEFAULT_ONE = /_(pickaxe|axe|shovel|spade|hoe|sword|helmet|chestplate|leggings|boots)$/;
+/** Words before a get's item that mean nothing to it: "get me some logs". */
+const GOAL_FILLER: ReadonlySet<string> = new Set(['me', 'a', 'an', 'some', 'the']);
 
 /**
  * A waypoint's name: lowercase letters, digits, - and _, at most 32, starting with a letter or
@@ -262,8 +268,8 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   explore: 'usage: !explore [direction] [blocks], e.g. !explore north 100 (8-256 blocks)',
   tunnel:
     'usage: !tunnel <north|south|east|west> [blocks] [down], e.g. !tunnel east 20, or !tunnel east 20 down for stairs (1-64 blocks)',
-  get: 'usage: !get <count> <item>, e.g. !get 20 logs (any wood; minecraft:log@2: birch only)',
-  mine: 'usage: !mine <count> <block>, e.g. !mine 10 sand or !mine 16 iron ore',
+  get: 'usage: !get [count] <item>, e.g. !get 20 logs (any wood; minecraft:log@2: birch only; no count: 16, or 1 of a tool)',
+  mine: 'usage: !mine [count] <block>, e.g. !mine 10 sand or !mine 16 iron ore',
   quests: 'usage: !quests on or !quests off',
   waypoint: 'usage: !waypoint <name>, !waypoint delete <name> or !waypoints',
 };
@@ -271,7 +277,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
 export const HELP_TEXT =
   'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z> | <waypoint> ' +
   '!explore [dir] [n] !tunnel <dir> [n] !surface ' +
-  '!get <n> <item> !mine <n> <block> !sethome !home !waypoint <name> | delete <name> ' +
+  '!get [n] <item> !mine [n] <block> !sethome !home !waypoint <name> | delete <name> ' +
   '!waypoints !quests on|off';
 
 /**
@@ -473,18 +479,27 @@ function goalCommand(
   args: readonly string[],
   names: CommandNames,
 ): CommandParse {
-  // "get 20 logs" or "get logs 20"; an item name may hold spaces ("Natura:N Crops").
+  // "get 20 logs", "get logs 20", "get me some logs" (DEFAULT_GOAL_COUNT); an item name may
+  // hold spaces ("Natura:N Crops").
+  let rest = args;
+  while (rest.length > 0 && GOAL_FILLER.has((rest[0] ?? '').toLowerCase())) rest = rest.slice(1);
   let count: string | undefined;
   let words: readonly string[];
-  if (NUMBER.test(args[0] ?? '')) [count, words] = [args[0], args.slice(1)];
-  else if (NUMBER.test(args.at(-1) ?? '')) [count, words] = [args.at(-1), args.slice(0, -1)];
-  else return usage(verb);
-  const n = Number(count);
+  if (NUMBER.test(rest[0] ?? '')) [count, words] = [rest[0], rest.slice(1)];
+  else if (NUMBER.test(rest.at(-1) ?? '')) [count, words] = [rest.at(-1), rest.slice(0, -1)];
+  else [count, words] = [undefined, rest];
+  while (words.length > 0 && GOAL_FILLER.has((words[0] ?? '').toLowerCase())) {
+    words = words.slice(1);
+  }
+  if (words.length === 0) return usage(verb);
   // "iron ore", "copper ores": a GregTech ore, mined for its raw ore (the caller's names).
   const text = words.join(' ');
   const ore = /\sores?$/i.test(text) ? (names.ore?.(text) ?? null) : null;
   const name = ore === null ? resolveItemName(text) : ore.item;
-  if (!Number.isInteger(n) || name === null) return usage(verb);
+  if (name === null) return usage(verb);
+  const n =
+    count !== undefined ? Number(count) : DEFAULT_ONE.test(itemBase(name)) ? 1 : DEFAULT_GOAL_COUNT;
+  if (!Number.isInteger(n)) return usage(verb);
   if (n < 1 || n > MAX_GOAL_COUNT) {
     return { ok: false, kind: 'usage', usage: `the count must be 1-${MAX_GOAL_COUNT}` };
   }

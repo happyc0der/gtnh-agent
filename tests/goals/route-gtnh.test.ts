@@ -3,6 +3,7 @@ import { TOOL_DIGGABLE_BLOCKS } from '../../src/domain/blocks.ts';
 import { diggableInfo } from '../../src/domain/dig-time.ts';
 import { loadKnowledge } from '../../src/goals/knowledge.ts';
 import {
+  cannotGet,
   gtnhRouteBook,
   harvestRequirement,
   knowledgeFailure,
@@ -211,6 +212,15 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     );
     expect(pickaxe.legs).toEqual([]);
     expect(pickaxe.fromInventory).toEqual({ 'minecraft:wooden_pickaxe@7': 1 });
+  });
+
+  it("says why an owner's get cannot be done at all: no way known, or a pickaxe none can make", () => {
+    expect(cannotGet('minecraft:nothing_at_all', 4, {})).toBe('no recipe or source known');
+    expect(cannotGet('gregtech:gt.metaitem.03@5035', 16, {})).toMatch(
+      /^digging gregtech:gt\.blockores \(Copper ore .*\) needs a pickaxe level >= 1: none held, none known to make$/,
+    );
+    expect(cannotGet('minecraft:log', 16, {}, true)).toBeNull();
+    expect(cannotGet('minecraft:wooden_pickaxe', 1, {}, true)).toBeNull();
   });
 
   it('a worn wooden pickaxe (its damage is its wear) still digs', () => {

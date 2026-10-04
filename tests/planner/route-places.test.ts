@@ -53,6 +53,31 @@ const WORLD: ExplorationSummary = {
   ],
 };
 
+describe("an owner's goal of any kind", () => {
+  it('reaches the planner: every kind held counts, and the stock says so', () => {
+    // Seen live 2026-10-04: the request's schema refused the stock line, every cycle.
+    const state = needing({ 'minecraft:log': 8 });
+    if (!state.inventory.known) throw new Error('fixture inventory unknown');
+    const request = buildPlannerRequest({
+      state: {
+        ...state,
+        inventory: {
+          known: true,
+          value: { ...state.inventory.value, items: { 'minecraft:log@2': 3 } },
+        },
+        currentTask: { ...state.currentTask, anyKind: ['minecraft:log'] },
+      },
+      safety: safetyCtx(),
+      maxPlanSteps: 8,
+      recentActions: [],
+      recentFailures: [],
+    });
+    expect(request.route?.stock).toEqual([
+      { item: 'minecraft:log', have: 3, stored: 0, need: 8, missing: 5, anyKind: true },
+    ]);
+  });
+});
+
 describe('the route uses what exploring found', () => {
   it('counts places remembered from exploring as known places', () => {
     const route = routeForPlanner(needing({ 'minecraft:log': 8 }), WORLD);

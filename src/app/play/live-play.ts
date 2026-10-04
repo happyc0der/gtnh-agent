@@ -24,6 +24,7 @@ import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
 import type { GameState } from '../../domain/game-state.ts';
 import { carriedHarvester } from '../../domain/tools.ts';
 import type { Abilities } from '../../goals/quest-goals.ts';
+import { cannotGet } from '../../goals/route-book.ts';
 import type { CommandTranslator } from '../../llm/ollama-command-provider.ts';
 import { openDatabase } from '../../persistence/database.ts';
 import { NIGHT_PIT_KEY } from '../../persistence/memory-repository.ts';
@@ -332,6 +333,8 @@ export function liveCommands(
     }),
     step: (target) => planTravelStep({ ...travelInput(), target }),
     surface: () => surfaceTarget(travelInput()),
+    goalProblem: (item, count, anyKind) =>
+      cannotGet(item, count, client.world.inventoryItems() ?? {}, anyKind),
     owners: config.minecraft.owners,
     homeName: config.routing.homeLocationName,
     configLocations: new Map(Object.entries(config.locations)),

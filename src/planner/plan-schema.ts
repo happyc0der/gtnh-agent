@@ -330,6 +330,8 @@ export const PlannerRequestSchema = z.strictObject({
             stored: z.int().min(0),
             need: z.int().min(0),
             missing: z.int().min(0),
+            /** Every kind of the item counts (an owner's "logs": any wood). */
+            anyKind: z.literal(true).optional(),
           }),
         )
         .max(32),

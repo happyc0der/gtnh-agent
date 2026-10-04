@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { gtOreByName } from '../../src/goals/ore-names.ts';
 import {
   commandTextOf,
+  DEFAULT_GOAL_COUNT,
   describeCommand,
   HELP_TEXT,
   isActionCommand,
@@ -185,6 +186,20 @@ describe('the structured form', () => {
     }
   });
 
+  it('a get or mine with no count: 16, or one of a tool; "me", "some" and "a" mean nothing', () => {
+    const cases: Array<[string, unknown]> = [
+      ['!get logs', { verb: 'get', count: DEFAULT_GOAL_COUNT, item: 'minecraft:log' }],
+      ['!get me some logs', { verb: 'get', count: 16, item: 'minecraft:log' }],
+      ['!get me 20 logs', { verb: 'get', count: 20, item: 'minecraft:log' }],
+      ['!get wooden_pickaxe', { verb: 'get', count: 1, item: 'minecraft:wooden_pickaxe' }],
+      ['!get a stone_axe', { verb: 'get', count: 1, item: 'minecraft:stone_axe' }],
+      ['!mine sand', { verb: 'mine', count: 16, block: 'minecraft:sand', item: 'minecraft:sand' }],
+    ];
+    for (const [text, command] of cases) {
+      expect(parseOwnerCommand(text), text).toEqual({ ok: true, command });
+    }
+  });
+
   it('a known verb with arguments it does not take gives its usage', () => {
     const usage = (text: string): string => {
       const p = parseOwnerCommand(text);
@@ -194,7 +209,8 @@ describe('the structured form', () => {
     expect(usage('!goto 10')).toMatch(/^usage: !goto/);
     expect(usage('!goto 1 2 3 4')).toMatch(/^usage: !goto/);
     expect(usage('!goto 1 300 3')).toMatch(/^usage: !goto/); // y is 0-255
-    expect(usage('!get logs')).toMatch(/^usage: !get/);
+    expect(usage('!get')).toMatch(/^usage: !get/);
+    expect(usage('!get me')).toMatch(/^usage: !get/);
     expect(usage('!get 2.5 logs')).toMatch(/^usage: !get/);
     expect(usage(`!get ${MAX_GOAL_COUNT + 1} logs`)).toBe(`the count must be 1-${MAX_GOAL_COUNT}`);
     expect(usage('!get 0 logs')).toBe(`the count must be 1-${MAX_GOAL_COUNT}`);

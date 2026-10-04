@@ -81,6 +81,11 @@ export interface CommandDeps {
   view: () => CommandView;
   /** The next step toward a target, with the client's walk rules (owner-travel.ts). */
   step: (target: TravelTarget) => TravelStep;
+  /**
+   * Why a get or mine cannot be done at all with what is held (route-book.ts cannotGet: no
+   * way known, or a tool none can make), or null; absent: not checked.
+   */
+  goalProblem?: (item: string, count: number, anyKind: boolean) => string | null;
   /** Where `!surface` goes (owner-travel.ts surfaceTarget); absent: it cannot here. */
   surface?: () => { point: Position; here: boolean } | { problem: string };
   /** The owners (MC_OWNERS): `follow` follows only them. */
@@ -421,9 +426,16 @@ function checkAction(
       const to = surfaceTarget(play, cmd);
       return 'problem' in to ? to.problem : null;
     }
-    case 'come':
     case 'get':
-    case 'mine':
+    case 'mine': {
+      const why = commands.goalProblem?.(
+        command.item,
+        command.count,
+        anyKindOf(command).length > 0,
+      );
+      return why === undefined || why === null ? null : `I cannot get ${command.item}: ${why}`;
+    }
+    case 'come':
     case 'tunnel':
       return null;
   }

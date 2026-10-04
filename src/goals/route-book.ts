@@ -27,7 +27,13 @@ import {
   type IngredientRef,
   type KnowledgeData,
 } from './knowledge.ts';
-import type { RouteBook, RouteRecipe, RouteSource, RouteTool } from './route.ts';
+import {
+  planRoute,
+  type RouteBook,
+  type RouteRecipe,
+  type RouteSource,
+  type RouteTool,
+} from './route.ts';
 
 /**
  * The agent's route book: GTNH's real recipes and world knowledge (the generated knowledge
@@ -646,6 +652,36 @@ export function gtnhRouteBook(): RouteBook {
 export function knowledgeFailure(): string | null {
   gtnhRouteBook();
   return failure;
+}
+
+/**
+ * Why `count` of `item` cannot be got at all from `inventory`, by the book's route: an item
+ * it knows no way to get, or one that needs a tool none held is and none can be made (a
+ * GregTech ore and its pickaxe level); `anyKind`: every kind of it counts. Null when the
+ * route gets it, and when the knowledge base did not load (nothing is known then).
+ */
+export function cannotGet(
+  item: string,
+  count: number,
+  inventory: Readonly<Record<string, number>>,
+  anyKind = false,
+): string | null {
+  if (knowledgeFailure() !== null) return null;
+  const route = planRoute(
+    { [item]: count },
+    inventory,
+    ROUTE_BOOK,
+    () => [],
+    [],
+    undefined,
+    new Set(anyKind ? [item] : []),
+  );
+  const missing = Object.entries(route.unresolved)[0];
+  if (missing === undefined) return null;
+  const [what, n] = missing;
+  // The GATHER the route would plan says nothing to a person.
+  const why = (route.why[what] ?? 'no way to get it is known').replace(/; GATHER \{[^}]*\}/, '');
+  return what === item ? why : `it takes ${n} ${what}, and ${why}`;
 }
 
 /** The agent's route book (loaded lazily: importing this module reads no data). */

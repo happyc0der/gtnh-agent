@@ -418,6 +418,28 @@ describe("owners' commands in play", () => {
     expect(repos.memory.taskAnyKind('command-1')).toEqual([]);
   });
 
+  it('a get that cannot be done at all fails at once, saying why', async () => {
+    const sim = newSim({ heard: [whisper('!mine 16 sand'), whisper('!get 4 minecraft:me')] });
+    const base = deps(open(), sim);
+    const asked: string[] = [];
+    await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          goalProblem: (item, count, anyKind) => {
+            asked.push(`${count} ${item} ${anyKind}`);
+            return item === 'minecraft:me' ? 'no recipe or source known' : null;
+          },
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(asked).toEqual(['16 minecraft:sand true', '4 minecraft:me true']);
+    expect(said(sim)).toContain('Failed: I cannot get minecraft:me: no recipe or source known');
+  });
+
   it('halfway counts from what was held when the command began', async () => {
     // Seen live: "get me 14 dirt" holding 12 said "Halfway: 12/14" before digging anything.
     const repos = open();
