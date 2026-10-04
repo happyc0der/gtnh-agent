@@ -1179,7 +1179,6 @@ function planRouteOnce(
     });
   };
 
-  /** `n` of any mix of `anyOf`: held ones first, then the cheapest kind to get. */
   /**
    * Whether `item`'s raw material is seen nearby: a source of it with a known place, or a
    * recipe for it with an input that has one (birch planks: birch logs in view).
@@ -1220,6 +1219,7 @@ function planRouteOnce(
     return best?.item ?? null;
   };
 
+  /** `n` of any mix of `anyOf`: held ones first, then the cheapest kind to get. */
   const acquireAny = (
     anyOf: readonly string[],
     n: number,

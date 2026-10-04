@@ -502,7 +502,13 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   `cli play --needs` (`runGoalSession`: the planner plans from the route, GATHER digs; when
   every step of the route is an exact action, code follows it without asking the model:
   [Following the route](#following-the-route)), done when the inventory holds them, failed
-  after `maxStuckSessions` sessions without progress.
+  after `maxStuckSessions` sessions in a row without progress. Progress is fewer missing, new
+  ground seen, or more of anything held than at the session's start: work on the way (a
+  wooden pickaxe from nothing takes gravel, flint, logs and a table first; seen live
+  2026-10-04, such sessions counted as none and the command failed). A session System 1 ended
+  with a reflex (a retreat from a mob, a fight, a meal, a rest) was interrupted, not stuck: it
+  counts neither way (seen live the same day: three retreats from mobs failed a pickaxe
+  command for "no progress").
 - **Stop.** The client's `interrupt()` makes `haltReason` (which every walk, EXPLORE hop, dig,
   placement, fight and window checks before it starts and at every step or tick) report the stop,
   without `halt()`'s lasting latch: the action in progress stops at its next tick, and the one a
@@ -621,14 +627,27 @@ prompt tells the model to trust these and the route over its memory of vanilla.
   knows of costs a little, and a machine station (no item to make it) rules a recipe out. Ties go
   to hand-verified recipes. Output counts the data does not know are taken as 1 and shown as
   `>=N`.
+- **Kinds.** Of kinds that do the same (an ingredient of any planks, any logs, any wool), held
+  ones go first; for the rest the route weighs what each kind costs now (`cheapestNow`, at
+  most 16 kinds): what is held one recipe down is free (birch logs held make birch planks the
+  cheapest), and of equal costs the kind whose raw material is in view or remembered nearby
+  wins, then the book's order. Seen live 2026-10-04: in a forest of other woods the route
+  asked for oak, the first of equal costs, and the bot walked from tree to tree until dark.
 - **Tools.** A gather leg whose blocks need a tool the inventory lacks gets the cheapest fitting
   tool first, expanding its recipe tree; its steps are marked `[for: tool: ...]`. If the tool
   needs the item it will dig (a pickaxe made of what it mines), the route gets those items
   another way first. Held tools match by kind and level (worn vanilla tools by base name);
   Tinkers' Construct tools take their level from NBT, so they count as fitting with a warning.
 - **Stations.** `planRoute(..., stations)` takes the stations the agent can use; each needed one
-  is listed as available, held (place it), missing (with how to make its item), or, when the
-  caller does not say, as needed. The route never places anything.
+  is listed as available, held (place it), made, missing (with how to make its item), or, when
+  the caller does not say, as needed. A missing one whose item the book makes is made, as a
+  person does: a second pass plans the goal plus that item, so the route gets the item's
+  ingredients and crafts it before the crafts at it, and notes "step N makes one, placed right
+  after"; when that pass leaves something new unresolved, the station stays missing. Seen live
+  2026-10-04: "make a crafting table: 2 flint, 2 logs, then place it" with no flint held and
+  nothing in the route to get any; the model then crafted the pickaxe without a table. The
+  route itself places nothing: its step lines say what to place
+  ([Following the route](#following-the-route)).
 - **What it cannot do.** Unresolved items carry a reason, e.g. "digging
   gregtech:gt.blockores@16500 (GT small ore Diamond: y 5-15) needs a pickaxe level >= 3: none
   held, none known to make". When nothing completes, the route still expands the recipe that
@@ -669,8 +688,11 @@ before the planner, so a plan simply waits while System 1 handles them.
 
 The route (`src/goals/route.ts`, read to the planner by `planner-provider.ts`) ends each step it
 can name exactly with the action that does it: `=> PLACE_BLOCK {...}` for a station to put
-down, `=> CRAFT_ITEM {...}` for a craft (its recipe id, times, and table), `=> GATHER {...}` for
-a gather (the block in view that gives it, with `item` when the block may drop something else).
+down, `=> CRAFT_ITEM {...}` for a craft (its recipe id, times, and table; for a station the
+route makes, `CRAFT_ITEM {...}; then PLACE_BLOCK {...}`), `=> GATHER {...}` for a gather (the
+block in view that gives it, with `item` when the block may drop something else, but not when
+its drops are only kinds of one item: a GATHER of logs counts oak, spruce, birch and jungle
+alike).
 When every step of the route is such an exact action, following the route is the plan, and
 code makes it (`src/planner/route-plan.ts` `planFromRoute`; stored with the planner `route`):
 the model is not asked. Seen live 2026-10-04: with planks and sticks held, the model planned
@@ -709,10 +731,15 @@ anew: no code was taken from Baritone (LGPL-3.0).
   which the live client walks to and picks up after the kill, as a dig picks up its drop. Each
   strike is dry-run like a dig: an animal the policy would not let it attack now (food or health
   below the fighting limits, a hostile near) is passed over, and the step ends saying why.
-- **None in view, but remembered.** A `GATHER` of a block with none of it in view heads for the
+- **None in view, or none it can get to.** A `GATHER` of a block with none of it in view, or
+  only blocks no walk from here reaches (logs high in the trees, behind water), heads for the
   nearest place world memory remembers it at (an `EXPLORE` toward its x and z), then digs there
-  as usual. Animals wander, and world memory keeps no animals: a hunt has no such trip. World
-  memory's ore places stand for the ores `DIG_BLOCK` digs (GT ores, emerald ore).
+  as usual; with none remembered, it explores on into the ground world memory has seen least
+  (`wanderTarget`), as Baritone's mine process goes on to blocks it can get to. A block refused
+  for another reason (no tool that harvests it, a hazard) ends the step instead: the next plan
+  sees why. Seen live 2026-10-04: "!get 1 wooden pickaxe" got one log of three, the rest up the
+  trees, and stopped. Animals wander, and world memory keeps no animals: a hunt has no such
+  trip. World memory's ore places stand for the ores `DIG_BLOCK` digs (GT ores, emerald ore).
 - **One drop of a block.** `{"block":"gregtech:gt.blockores","item":"gregtech:gt.metaitem.03@5032","count":16}`
   counts only that drop (16 raw iron ore) and digs only blocks that can drop it. Every GT ore
   is that one block, and its material is in its tile entity, so the step digs the GT ores it
@@ -752,7 +779,11 @@ anew: no code was taken from Baritone (LGPL-3.0).
   When it ends before choosing an action, nothing runs that cycle; the summary is
   `REQUEST_PLANNER -> GATHER:<done|bound|no-target> -> succeeded`. A plan the planner has just
   made whose `GATHER` has nothing to dig is `rejected` instead, like a first step refused as
-  stale: the task goes on.
+  stale: the task goes on. Later in a plan, a `GATHER` with nothing to dig is skipped when
+  another `GATHER` comes next (gravel with none in view, before logs in view: the next plan
+  still sees the gravel missing); before any other step (a craft that needs what was not
+  gathered: seen live 2026-10-04, planks from one log of three, refused plan after plan) the
+  plan ends as stale, and the next cycle plans again.
 
 - **Progress** (the drops held at the start, actions, digs, skipped blocks) is kept in agent
   memory (`task_gather:<taskId>`), so a `GATHER` goes on across cycles, sessions and
