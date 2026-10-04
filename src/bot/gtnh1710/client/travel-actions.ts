@@ -1,4 +1,5 @@
 import type { ExploreToward } from '../../../domain/actions.ts';
+import { hostileTactic } from '../../../domain/combat.ts';
 import type { Position } from '../../../domain/common.ts';
 import { mergeSeen, type SeenChunk } from '../../../domain/world-memory.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
@@ -6,7 +7,7 @@ import { ARRIVED, exploreGoal } from '../explore.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { goalAny, goalAway, goalNear, goalXZ, type Goal } from '../pathing/goals.ts';
 import { OVER_BUDGET } from './path-actions.ts';
-import type { WorldModel } from '../world-model.ts';
+import { ENTITY_SCAN_RADIUS, type WorldModel } from '../world-model.ts';
 import { describeSightings } from '../world-survey.ts';
 import type { ClientCore } from './core.ts';
 
@@ -332,9 +333,19 @@ export class TravelActions {
   async #flee(): Promise<string | null> {
     const feet = this.#world.ownPosition;
     if (feet === null || this.#core.movement.movementBlocker() !== null) return null;
+    // The threats System 1 retreats from (safety-policy.ts assessDangers): those within the
+    // threat radius, and a ranged one (a skeleton) anywhere in the entity scan. Seen live
+    // 2026-10-04: a sniper skeleton on a hill 10.3 blocks off made every retreat fail on the
+    // spot, its pit sealed and home far, and the flee found nothing within 10 to flee from.
+    const radius = this.#opts.config.movement.threatRadius;
     const threats = this.#world
-      .nearbyEntities(this.#opts.config.movement.threatRadius, this.#opts.clock.now())
-      .filter((e) => (e.category === 'hostile' && !e.calm) || e.category === 'unclassified');
+      .nearbyEntities(ENTITY_SCAN_RADIUS, this.#opts.clock.now())
+      .filter(
+        (e) =>
+          ((e.category === 'hostile' && !e.calm) || e.category === 'unclassified') &&
+          (e.distance <= radius ||
+            (e.category === 'hostile' && hostileTactic(e.name) === 'ranged')),
+      );
     if (threats.length === 0) return null;
     const away = (x: number, z: number): number =>
       Math.min(...threats.map((e) => Math.hypot(e.position.x - x, e.position.z - z)));

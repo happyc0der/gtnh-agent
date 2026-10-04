@@ -109,6 +109,30 @@ describe('travel on the pathfinder', { timeout: 40_000 }, () => {
     expect(fake.placeSim.placements).toEqual([]);
   });
 
+  it('flees a skeleton beyond the threat radius but in bow range, as System 1 counts it', async () => {
+    // Seen live: a sniper skeleton 10.3 blocks off on a hill; every retreat failed on the spot.
+    const skeleton = {
+      kind: 'mob' as const,
+      entityId: 951,
+      mobType: 51,
+      x: SPAWN.x + 4,
+      y: FEET_Y,
+      z: SPAWN.z + 12,
+    };
+    const { client } = await harness.start({
+      server: server(exploreWorld, { entities: [skeleton] }),
+      movement: { area: { side: 32, height: 8 } },
+    });
+    const home = { x: 50.5, y: FEET_Y, z: 20.5 };
+    const retreat: ActionSpec = { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } };
+    const before = Math.hypot(SPAWN.x - skeleton.x, SPAWN.z - skeleton.z);
+    expect(before).toBeGreaterThan(10);
+    const r = await perform(client, retreat, home);
+    expect(r.message).toMatch(/fled instead to/);
+    const at = await positionOf(client);
+    expect(Math.hypot(at.x - skeleton.x, at.z - skeleton.z)).toBeGreaterThan(before);
+  });
+
   it('a retreat beyond the play area travels in hops and threats do not stop it', async () => {
     const { client } = await harness.start();
     expect(await perform(client, explore('north', 14))).toMatchObject({ ok: true });
