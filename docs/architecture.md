@@ -456,7 +456,10 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   text, the parsed command, status (queued, running, done, failed, cancelled), the latest reply,
   timestamps. `cli command` queues one as the first owner; a running play takes it between
   cycles.
-- **The command round** (`src/app/play/commands.ts`), after the night and morning rounds: it hears
+- **The command round** (`src/app/play/commands.ts`; its parts in `command-base.ts` (what they
+  share: `CommandDeps`, a command's run, the replies), `command-travel.ts`, `command-find.ts`,
+  `command-dig.ts` (tunnels and the strip mine) and `command-goal.ts`), after the night and
+  morning rounds: it hears
   the commands that came (chat and the database), answers the instant ones (stop, pause, status,
   waypoints...) and starts the newest action command, cancelling any other: one runs at a time.
   Owners' commands come before food trips, scouting and quests: every such session checks
@@ -2274,7 +2277,7 @@ src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
 src/app          cli.ts (the CLI) and providers.ts (the decision-provider and planner factory), plus:
   loop/          one agent cycle (agent-loop.ts), agent memory overlaid on the state (agent-memory.ts), the open plan's steps and the planner (plan-steps.ts), a session of cycles; GATHER steps, dead ends, the trail, known steps
-  play/          the play loop (play.ts) over rounds sharing one play state (play-state.ts): night and morning (night.ts), owners' commands and idling (commands.ts, travel steps in owner-travel.ts), food trips (food.ts), quest goals and quest-book clicks (goal-round.ts), scouting; narration.ts prints its events
+  play/          the play loop (play.ts) over rounds sharing one play state (play-state.ts): night and morning (night.ts), owners' commands and idling (commands.ts and its command-*.ts parts, travel steps in owner-travel.ts, the strip mine in strip-mine.ts), food trips (food.ts), quest goals and quest-book clicks (goal-round.ts), scouting; narration.ts prints its events
   commands/      what the CLI runs: cli-context.ts (options), cli-live.ts, cli-runs.ts, cli-records.ts (the commands), live commands and their views, plans, tasks, world memory
   mock/          the mock agent and its scenarios
 ```
