@@ -290,6 +290,29 @@ export const MODDED_ENTITY_TABLE: readonly ModdedEntityEntry[] = [
     total: 1,
     modVersion: '3.6.3',
   },
+  // Read in the mod's code (javap, TConstruct-1.13.57-GTNH.jar): TinkerWorld registers its
+  // entities with fixed numbers. Seen live 2026-10-04: "TConstruct#12" (a blue slime, which
+  // attacks like a vanilla slime) kept stopping a trip to water as an unidentified entity.
+  {
+    modId: 'TConstruct',
+    typeId: 12,
+    name: 'TConstruct.EdibleSlime',
+    category: 'hostile',
+    votes: 0,
+    total: 0,
+    fromCode: 'TinkerWorld: registerModEntity(BlueSlime.class, "EdibleSlime", 12, ...)',
+    modVersion: '1.13.57-GTNH',
+  },
+  {
+    modId: 'TConstruct',
+    typeId: 14,
+    name: 'TConstruct.KingSlime',
+    category: 'hostile',
+    votes: 0,
+    total: 0,
+    fromCode: 'TinkerWorld: registerModEntity(KingBlueSlime.class, "KingSlime", 14, ...)',
+    modVersion: '1.13.57-GTNH',
+  },
 ];
 
 const TABLE_BY_KEY: ReadonlyMap<string, ModdedEntityEntry> = new Map(

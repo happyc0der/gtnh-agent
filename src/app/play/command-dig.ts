@@ -29,6 +29,7 @@ import {
   commandTaskId,
   finish,
   MAX_COMMAND_FAILURES,
+  mobReflexEnded,
   reflexEnded,
   runOf,
   say,
@@ -326,14 +327,15 @@ async function digSession(
     300,
   );
   if (result.stopKind === 'cycle-failed') {
-    const mobbed = await mobInTheWay(play, cmd, why);
+    // A walk a hostile stopped (a Mirage Enderman 4 blocks off, seen live 2026-10-04), or one
+    // of System 1's reflexes (a retreat with no way home: a stairs command failed with 0
+    // blocks dug the same day): interrupted by mobs, waited out (mobInTheWay).
+    const mobbed = await mobInTheWay(play, cmd, why, false, mobReflexEnded(play));
     if (mobbed === 'retry') return 'next-round';
     if (mobbed === 'give-up') return fail(`${why} (${run.mobStops - 1} tries; ${dug})`);
-    // A step failed: one of System 1's reflexes (a retreat with no way home, seen live
-    // 2026-10-04: a stairs command failed with 0 blocks dug), or a walk a hostile stopped (a
-    // Mirage Enderman 4 blocks off, the same day). The dig was interrupted: it is planned
-    // again from the world as it is next round, as a trip is, MAX_COMMAND_FAILURES times in a
-    // row at most; a cell that may not be dug then says so.
+    // Any other step that failed: planned again from the world as it is next round, as a
+    // trip's is, MAX_COMMAND_FAILURES times in a row at most; a cell that may not be dug then
+    // says so.
     run.failures += 1;
     if (run.failures >= MAX_COMMAND_FAILURES) return fail(`${why} (${dug})`);
     await play.sleep(TUNNEL_RETRY_MS);

@@ -291,6 +291,12 @@ describe('entity packets', () => {
       name: 'EnderZoo#12',
       category: 'hostile',
     });
+    // Seen live 2026-10-04: "TConstruct#12" stopped a trip unidentified: a blue slime.
+    expect(classifyModded('TConstruct', 12, '1.13.57-GTNH')).toEqual({
+      name: 'TConstruct.EdibleSlime',
+      category: 'hostile',
+    });
+    expect(classifyModded('TConstruct', 0, '1.13.57-GTNH').category).toBe('unclassified');
   });
 
   it('decodes the player abilities: invulnerable while the spawn protection lasts', () => {

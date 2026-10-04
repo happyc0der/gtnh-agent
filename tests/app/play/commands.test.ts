@@ -392,6 +392,55 @@ describe("owners' commands in play", () => {
     expect(follow.sim.steps[0]).toBe('MOVE_TO 4.5 0.5');
   });
 
+  it('so is a retreat from mobs that fails (it fled instead): seen live past a blue slime', async () => {
+    const sim = newSim({ heard: [whisper('!goto 20 64 0')] });
+    const base = deps(open(), sim);
+    let failed = 0;
+    const retreat = 'retreat stopped after 16.8 blocks in 1 hop(s): no way further';
+    await runPlay(
+      {
+        ...base,
+        session: (limits, hooks) => {
+          if (failed >= 4) return base.session(limits, hooks);
+          failed += 1;
+          hooks.onCycle(
+            {
+              summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> failed',
+              status: 'failed',
+              decision: {
+                decision: 'RETREAT_HOME',
+                confidence: 0.95,
+                reasonCodes: ['UNCLASSIFIED_ENTITY_NEARBY'],
+                factsUsed: {},
+                requiresHumanConfirmation: false,
+                provider: 'test',
+              },
+              outcome: { execution: { ok: false, code: 'FAILED', message: retreat, data: {} } },
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [
+              { cycleId: 'c1', summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> failed' },
+            ],
+            stopReason: 'stopped after: RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> failed',
+            stopKind: 'cycle-failed',
+            taskId: 'command-1',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual([
+      'OK: going to 20 64 0',
+      'Mobs near me: I keep away from them (I do not fight) and try again',
+      'Done: at 20 64 0',
+    ]);
+  });
+
   it('come and follow fail at once when the player is not seen, before any OK', async () => {
     const sim = newSim({ owner: null, heard: [whisper('!come'), whisper('!follow')] });
     await runPlay(deps(open(), sim), LIMITS, noStop);

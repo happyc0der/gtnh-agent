@@ -199,26 +199,32 @@ const MOB_STOP = /\b(?:hostile|unclassified) entity (\S+) ([\d.]+) blocks away/;
  * bot does not fight unless combat is on) is not a failure of the way: the owner is told once,
  * and the next round tries again a moment later, System 1 seeing the mob first (it may retreat
  * or flee). Seen live 2026-10-04: a zombie in the Hot Forest's shade stopped a follow's walks
- * three times in 15 s, and the follow failed. 'retry' after MOB_RETRY_MS; 'give-up' after
- * MAX_MOB_STOPS in a row (`endless`: never, as for a follow); null when `why` is no mob's stop.
+ * three times in 15 s, and the follow failed. So is a session one of System 1's reflexes ended
+ * (`reflex`: a retreat from mobs that found no way home and fled instead; seen live the same
+ * day, three such failed a trip to water past a blue slime). 'retry' after MOB_RETRY_MS;
+ * 'give-up' after MAX_MOB_STOPS in a row (`endless`: never, as for a follow); null when `why`
+ * is no mob's stop and no reflex ended the session.
  */
 export async function mobInTheWay(
   play: PlayState,
   cmd: OwnerCommandRecord,
   why: string,
   endless = false,
+  reflex = false,
 ): Promise<'retry' | 'give-up' | null> {
   const m = MOB_STOP.exec(why);
-  if (m === null) return null;
+  if (m === null && !reflex) return null;
   const run = runOf(play, cmd.id);
   run.mobStops += 1;
   if (!endless && run.mobStops > MAX_MOB_STOPS) return 'give-up';
-  const name = (m[1] ?? 'mob').replace(/^.*[:.]/, '');
+  const name = (m?.[1] ?? 'mob').replace(/^.*[:.]/, '');
   sayOnce(
     play,
     cmd,
     'mob-in-way',
-    `A ${name} ${Math.round(Number(m[2]))} blocks off is in my way: I keep away (I do not fight) and try again`,
+    m === null
+      ? 'Mobs near me: I keep away from them (I do not fight) and try again'
+      : `A ${name} ${Math.round(Number(m[2]))} blocks off is in my way: I keep away (I do not fight) and try again`,
   );
   await play.sleep(MOB_RETRY_MS);
   return 'retry';
@@ -349,6 +355,12 @@ export const roundPoint = (p: Position): Position => ({
 /** Whether the session's last decision was one of System 1's reflexes (REFLEXES). */
 export function reflexEnded(play: PlayState): boolean {
   return play.lastDecision !== null && REFLEXES.has(play.lastDecision.decision);
+}
+
+/** ...one of those that answer mobs: a retreat (it may have fled instead) or fighting back. */
+export function mobReflexEnded(play: PlayState): boolean {
+  const d = play.lastDecision?.decision;
+  return d === 'RETREAT_HOME' || d === 'DEFEND';
 }
 
 export const blocks = (n: number): string => `${n} block${n === 1 ? '' : 's'}`;
