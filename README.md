@@ -8,8 +8,10 @@ action for safety before it runs and verifies it against the server afterwards.
 line on a private test server and takes its owners' commands in chat, in `!` form or plain
 English: Baritone's everyday commands (come, follow, goto a point, a waypoint or a block, find,
 explore, tunnel, surface, mine, stop) and goals of items to have (`!get 16 logs`,
-`!get 1 wooden_pickaxe` from nothing). It explores, gathers, digs (down too), shelters for the
-night, eats, crafts, and submits quests and claims their rewards. It has played Age 0 up to
+`!get 1 wooden_pickaxe` from nothing). It explores, gathers, digs (stairs down through stone,
+and down or up through the ground on a walk), shelters for the night, eats, crafts, and submits
+quests and claims their rewards. Combat is off, so a hostile in its way is waited out: it says
+so and tries again, and a follow keeps on as long as its owner is in sight. It has played Age 0 up to
 "Fluffy and Red", which needs wool from sheep, and combat is off. The benchmark is the 92 quests
 of the "Tier 0 - Stone Age" chapter, plus the 14 it needs from other chapters, counted only as
 the server records them.
