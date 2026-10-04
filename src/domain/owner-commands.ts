@@ -144,6 +144,10 @@ export const OwnerCommandSchema = z.discriminatedUnion('verb', [
   z.strictObject({ verb: z.literal('goto-waypoint'), name: WaypointNameSchema }),
   /** Go up to open sky, as Baritone's #surface: out of a tunnel, a cave or a pit. */
   z.strictObject({ verb: z.literal('surface') }),
+  /** Travel to the nearest block of a kind it sees or remembers, as Baritone's #goto <block>. */
+  z.strictObject({ verb: z.literal('goto-block'), block: ItemNameSchema }),
+  /** Say where the nearest blocks of a kind are, as Baritone's #find. */
+  z.strictObject({ verb: z.literal('find'), block: ItemNameSchema }),
   /**
    * Explore `distance` blocks toward a compass direction (null: the one seen least), as
    * Baritone's #explore: a travel to the point that far that way from where it starts.
@@ -189,7 +193,10 @@ export type OwnerVerb = OwnerCommand['verb'];
 /** Commands that walk somewhere: come, follow, goto (a point or a waypoint), home. */
 export type TravelCommand = Extract<
   OwnerCommand,
-  { verb: 'come' | 'follow' | 'goto' | 'goto-waypoint' | 'home' | 'explore' | 'surface' }
+  {
+    verb:
+      'come' | 'follow' | 'goto' | 'goto-waypoint' | 'goto-block' | 'home' | 'explore' | 'surface';
+  }
 >;
 /** Commands that pursue items to have: get, mine. */
 export type GoalCommand = Extract<OwnerCommand, { verb: 'get' | 'mine' }>;
@@ -208,6 +215,7 @@ const TRAVEL_VERBS: ReadonlySet<OwnerVerb> = new Set<OwnerVerb>([
   'home',
   'explore',
   'surface',
+  'goto-block',
 ]);
 
 export function isTravelCommand(c: OwnerCommand): c is TravelCommand {
@@ -264,7 +272,8 @@ const MINE_DROPS: Readonly<Record<string, string>> = {
 /** How each verb is written, for a reply when its arguments are not understood. */
 export const USAGE: Readonly<Partial<Record<string, string>>> = {
   follow: 'usage: !follow [player]',
-  goto: 'usage: !goto <x> <y> <z>, !goto <x> <z> or !goto <waypoint>',
+  goto: 'usage: !goto <x> <y> <z>, !goto <x> <z>, !goto <waypoint> or !goto <block> (e.g. !goto chest)',
+  find: 'usage: !find <block>, e.g. !find crafting_table or !find water',
   explore: 'usage: !explore [direction] [blocks], e.g. !explore north 100 (8-256 blocks)',
   tunnel:
     'usage: !tunnel <north|south|east|west> [blocks] [down], e.g. !tunnel east 20, or !tunnel east 20 down for stairs (1-64 blocks)',
@@ -275,10 +284,9 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
 };
 
 export const HELP_TEXT =
-  'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z> | <waypoint> ' +
-  '!explore [dir] [n] !tunnel <dir> [n] !surface ' +
-  '!get [n] <item> !mine [n] <block> !sethome !home !waypoint <name> | delete <name> ' +
-  '!waypoints !quests on|off';
+  'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z>|<waypoint>|<block> ' +
+  '!find <block> !explore [dir] [n] !tunnel <dir> [n] !surface ' +
+  '!get [n] <item> !mine [n] <block> !sethome !home !waypoint [delete] [name] !quests on|off';
 
 /**
  * Names the parser cannot know by itself (the domain holds no game data): `ore` resolves a
@@ -372,6 +380,11 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
     case 'surface':
     case 'top':
       return none ? ok({ verb: 'surface' }) : usage(verb);
+    case 'find':
+    case 'locate': {
+      const block = none ? null : blockName(args);
+      return block === null ? usage('find') : ok({ verb: 'find', block });
+    }
     case 'sethome':
       return none ? ok({ verb: 'sethome' }) : usage(verb);
     case 'get':
@@ -408,13 +421,41 @@ function gotoCommand(args: readonly string[]): CommandParse {
     command = { verb: 'goto', x: nums[0], y: nums[1], z: nums[2] };
   } else if (nums !== null && nums.length === 2) {
     command = { verb: 'goto', x: nums[0], y: null, z: nums[1] };
+  } else if (args.length === 1 && (args[0] ?? '').includes(':')) {
+    // A registry name ("minecraft:chest") is a block, never a waypoint.
+    command = { verb: 'goto-block', block: blockName(args) };
   } else if (args.length === 1) {
     const name = (args[0] ?? '').toLowerCase();
-    // Home is the waypoint named home: going there is `home`.
+    // Home is the waypoint named home: going there is `home`. A name that is no waypoint
+    // may be a block ("!goto chest"): play looks for one (commands.ts).
     command = name === 'home' ? { verb: 'home' } : { verb: 'goto-waypoint', name };
+  } else if (args.length > 1 && nums === null) {
+    command = { verb: 'goto-block', block: blockName(args) };
   }
   const parsed = OwnerCommandSchema.safeParse(command);
   return parsed.success ? { ok: true, command: parsed.data } : usage('goto');
+}
+
+/** Blocks as an owner may name them for !find and !goto (beyond the item aliases). */
+const BLOCK_ALIASES: Readonly<Record<string, string>> = {
+  table: 'minecraft:crafting_table',
+  'crafting table': 'minecraft:crafting_table',
+  workbench: 'minecraft:crafting_table',
+  tree: 'minecraft:log',
+  trees: 'minecraft:log',
+  lake: 'minecraft:water',
+};
+
+/**
+ * A block an owner names in words: an alias ("table", "crafting table"), or an item name
+ * (resolveItemName) as typed or with its words joined by `_` ("crafting_table"); null when
+ * it is none of these.
+ */
+function blockName(words: readonly string[]): string | null {
+  const text = words.join(' ');
+  return (
+    BLOCK_ALIASES[text.toLowerCase()] ?? resolveItemName(text) ?? resolveItemName(words.join('_'))
+  );
 }
 
 /** Words for the compass directions: "north", "n", "northeast", "north-east", "ne"... */
@@ -567,6 +608,10 @@ export function describeCommand(c: OwnerCommand): string {
       return `go to waypoint ${c.name}`;
     case 'surface':
       return 'go up to the surface';
+    case 'goto-block':
+      return `go to the nearest ${c.block}`;
+    case 'find':
+      return `find ${c.block}`;
     case 'explore':
       return `explore ${c.distance} blocks ${c.direction === null ? 'the way I have seen least' : c.direction.replace('_', '-')}`;
     case 'tunnel':

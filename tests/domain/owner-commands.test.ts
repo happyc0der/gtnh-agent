@@ -29,6 +29,40 @@ function parsed(text: string): OwnerCommand {
   return p.command;
 }
 
+describe('find and goto a block', () => {
+  it('parses !find <block> and !goto <block> (a registry name, or words that name one)', () => {
+    expect(parseOwnerCommand('!find chest')).toEqual({
+      ok: true,
+      command: { verb: 'find', block: 'minecraft:chest' },
+    });
+    expect(parseOwnerCommand('!find crafting table')).toEqual({
+      ok: true,
+      command: { verb: 'find', block: 'minecraft:crafting_table' },
+    });
+    expect(parseOwnerCommand('!locate table')).toEqual({
+      ok: true,
+      command: { verb: 'find', block: 'minecraft:crafting_table' },
+    });
+    expect(parseOwnerCommand('!find')).toMatchObject({ ok: false, kind: 'usage' });
+    expect(parseOwnerCommand('!goto minecraft:chest')).toEqual({
+      ok: true,
+      command: { verb: 'goto-block', block: 'minecraft:chest' },
+    });
+    expect(parseOwnerCommand('!goto crafting table')).toEqual({
+      ok: true,
+      command: { verb: 'goto-block', block: 'minecraft:crafting_table' },
+    });
+    // One plain word may be a waypoint: play looks for a block only when it is none.
+    expect(parseOwnerCommand('!goto chest')).toEqual({
+      ok: true,
+      command: { verb: 'goto-waypoint', name: 'chest' },
+    });
+    expect(describeCommand({ verb: 'goto-block', block: 'minecraft:chest' })).toBe(
+      'go to the nearest minecraft:chest',
+    );
+  });
+});
+
 describe('surface', () => {
   it('parses !surface and !top, and takes no arguments', () => {
     expect(parseOwnerCommand('!surface')).toEqual({ ok: true, command: { verb: 'surface' } });

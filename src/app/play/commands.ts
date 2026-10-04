@@ -1,8 +1,13 @@
 import { MIN_EXPLORE_DISTANCE } from '../../domain/actions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
-import { COMPASS, summarizeExploration, wanderTarget } from '../../domain/world-memory.ts';
+import {
+  COMPASS,
+  summarizeExploration,
+  wanderTarget,
+  type PlaceKind,
+} from '../../domain/world-memory.ts';
 import { gtOreByItem, gtOreByName, gtOreHeights } from '../../goals/ore-names.ts';
-import { heldOf, type Position } from '../../domain/common.ts';
+import { heldOf, type BlockPosition, type Position } from '../../domain/common.ts';
 import {
   describeCommand,
   HELP_TEXT,
@@ -10,6 +15,7 @@ import {
   isStructured,
   isTravelCommand,
   parseOwnerCommand,
+  resolveItemName,
   type ActionCommand,
   type GoalCommand,
   type HeardCommand,
@@ -86,6 +92,11 @@ export interface CommandDeps {
    * way known, or a tool none can make), or null; absent: not checked.
    */
   goalProblem?: (item: string, count: number, anyKind: boolean) => string | null;
+  /**
+   * Blocks of these kinds the bot sees (a face open to air: no x-ray), nearest first
+   * (world-model.ts findBlocks); absent: it cannot look.
+   */
+  findBlock?: (names: readonly string[]) => Array<{ position: BlockPosition; distance: number }>;
   /** Where `!surface` goes (owner-travel.ts surfaceTarget); absent: it cannot here. */
   surface?: () => { point: Position; here: boolean } | { problem: string };
   /** The owners (MC_OWNERS): `follow` follows only them. */
@@ -167,6 +178,7 @@ function runOf(play: PlayState, id: number): CommandRun {
       startHave: null,
       exploreTo: null,
       surfaceTo: null,
+      blockTo: null,
       tunnelFrom: null,
       tunnelDone: null,
       worked: false,
@@ -403,15 +415,24 @@ function checkAction(
         : null;
     case 'goto':
       return outsideBoundary(commands.boundary, command);
+    case 'goto-block': {
+      // The block it heads for is fixed now (blockTarget): none, and it fails.
+      const to = blockTarget(play, cmd, command.block);
+      return 'problem' in to ? to.problem : null;
+    }
     case 'goto-waypoint':
     case 'home': {
       const name = command.verb === 'home' ? commands.homeName : command.name;
       const at = locations(play).get(name);
-      if (at === undefined) {
-        return command.verb === 'home'
-          ? 'I have no home yet: say !sethome where it should be'
-          : `I know no waypoint ${name}: say !waypoints`;
+      if (at === undefined && command.verb === 'goto-waypoint') {
+        // No waypoint of that name: perhaps a block ("!goto chest").
+        const block = resolveItemName(name);
+        const to = block === null ? null : blockTarget(play, cmd, block);
+        if (to !== null && !('problem' in to)) return null;
+        const looked = commands.findBlock === undefined ? '' : `, and I see no ${name} near here`;
+        return `I know no waypoint ${name}${looked}: say !waypoints`;
       }
+      if (at === undefined) return 'I have no home yet: say !sethome where it should be';
       const here = commands.view().dimension;
       if (here !== null && at.dimension !== here) return `${name} is in ${at.dimension}`;
       return outsideBoundary(commands.boundary, at.position);
@@ -485,8 +506,14 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
     case 'home': {
       const name = c.verb === 'home' ? (play.deps.commands as CommandDeps).homeName : c.name;
       const at = locations(play).get(name);
+      const block = runOf(play, cmd.id).blockTo;
+      if (at === undefined && block !== null) return blockAck(block);
       const where = at === undefined ? '' : ` (${fmt(at.position)})`;
       return c.verb === 'home' ? `going home${where}` : `going to ${name}${where}`;
+    }
+    case 'goto-block': {
+      const to = blockTarget(play, cmd, c.block);
+      return 'problem' in to ? `not going: ${to.problem}` : blockAck(to);
     }
     case 'surface': {
       const to = surfaceTarget(play, cmd);
@@ -579,6 +606,9 @@ function instant(play: PlayState, cmd: OwnerCommandRecord, c: InstantCommand): v
       return;
     case 'help':
       finish(play, cmd, 'done', HELP_TEXT);
+      return;
+    case 'find':
+      finish(play, cmd, 'done', findText(play, c.block));
       return;
     case 'sethome':
       saveLocation(play, cmd, commands.homeName);
@@ -876,15 +906,136 @@ function travelTarget(
       const to = surfaceTarget(play, cmd);
       return 'problem' in to ? to : { target: { kind: 'point', point: to } };
     }
+    case 'goto-block': {
+      const to = blockTarget(play, cmd, c.block);
+      return 'problem' in to ? to : { target: blockTravel(to) };
+    }
     case 'goto-waypoint':
     case 'home': {
       const name = c.verb === 'home' ? commands.homeName : c.name;
       const at = locations(play).get(name);
+      const block = runOf(play, cmd.id).blockTo;
+      if (at === undefined && block !== null) return { target: blockTravel(block) };
       return at === undefined
         ? { problem: `the waypoint ${name} is gone` }
         : { target: { kind: 'point', point: at.position } };
     }
   }
+}
+
+/** Where a block command heads: one in view (near it), or a place world memory keeps. */
+type BlockTo = CommandRun['blockTo'] & object;
+
+/** Kinds of one block that `!find` and `!goto <block>` count as it (any log is a log). */
+const SAME_BLOCKS: Readonly<Record<string, readonly string[]>> = {
+  'minecraft:log': ['minecraft:log', 'minecraft:log2'],
+  'minecraft:water': ['minecraft:water', 'minecraft:flowing_water'],
+};
+
+/** World memory's kind of place for a block an owner names (world-memory.ts PLACE_KINDS). */
+const REMEMBERED_AS: Readonly<Record<string, PlaceKind>> = {
+  'minecraft:log': 'log',
+  'minecraft:log2': 'log',
+  'minecraft:dirt': 'dirt',
+  'minecraft:grass': 'dirt',
+  'minecraft:sand': 'sand',
+  'minecraft:gravel': 'gravel',
+  'minecraft:clay': 'clay',
+  'minecraft:water': 'water',
+  'minecraft:stone': 'stone',
+  'gregtech:gt.blockores': 'ore',
+};
+
+/** How near a block `!goto <block>` stops (across, from its centre). */
+const BLOCK_WITHIN = 2.5;
+
+/**
+ * Where a block command heads, fixed when it begins (so it does not switch blocks on the
+ * way): the nearest such block the bot sees (a face open to air), else the nearest place
+ * world memory keeps for its kind (logs, sand, water...).
+ */
+function blockTarget(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  block: string,
+): BlockTo | { problem: string } {
+  const run = runOf(play, cmd.id);
+  if (run.blockTo !== null) return run.blockTo;
+  const found = findNear(play, block);
+  if ('problem' in found) return found;
+  run.blockTo = found;
+  return found;
+}
+
+/** The nearest block of a kind in view, else a remembered place of it, else why none. */
+function findNear(play: PlayState, block: string): BlockTo | { problem: string } {
+  const commands = play.deps.commands as CommandDeps;
+  if (commands.findBlock === undefined) return { problem: 'I cannot look for blocks here' };
+  const seen = commands.findBlock(SAME_BLOCKS[block] ?? [block])[0];
+  if (seen !== undefined) {
+    return { block, position: { ...seen.position }, distance: seen.distance, seen: true };
+  }
+  const place = rememberedPlace(play, block);
+  return place ?? { problem: `I see no ${block} near here, and remember none` };
+}
+
+/** The nearest place world memory keeps for the block's kind, or null. */
+function rememberedPlace(play: PlayState, block: string): BlockTo | null {
+  const kind = REMEMBERED_AS[block];
+  const commands = play.deps.commands as CommandDeps;
+  const view = commands.view();
+  if (kind === undefined || view.position === null || view.dimension === null) return null;
+  const summary = summarizeExploration({
+    chunks: play.deps.repos.worldMemory.chunks(view.dimension),
+    from: view.position,
+    boundary: commands.boundary,
+    now: new Date(play.now()),
+  });
+  const place = summary.places.find((p) => p.resource === kind);
+  if (place === undefined) return null;
+  return {
+    block,
+    position: { x: place.x, y: place.y, z: place.z },
+    distance: place.distance,
+    seen: false,
+  };
+}
+
+const blockAck = (to: BlockTo): string =>
+  to.seen
+    ? `going to the ${to.block} at ${fmt(to.position)}`
+    : `going to where I remember ${to.block} (${fmt(to.position)}, ${blocks(Math.round(to.distance))} away)`;
+
+/** A block in view: near it; a remembered place: to it (its column, when y is not known). */
+const blockTravel = (to: BlockTo): TravelTarget =>
+  to.seen && to.position.y !== null
+    ? {
+        kind: 'near',
+        point: { x: to.position.x + 0.5, y: to.position.y, z: to.position.z + 0.5 },
+        within: BLOCK_WITHIN,
+      }
+    : { kind: 'point', point: { ...to.position } };
+
+/** What `!find` says: the nearest blocks of a kind in view, else a remembered place. */
+function findText(play: PlayState, block: string): string {
+  const commands = play.deps.commands as CommandDeps;
+  if (commands.findBlock === undefined) return 'I cannot look for blocks here';
+  const seen = commands.findBlock(SAME_BLOCKS[block] ?? [block]);
+  const [first, ...rest] = seen;
+  if (first !== undefined) {
+    const also = rest
+      .slice(0, 3)
+      .map((f) => `${fmt(f.position)} (${Math.round(f.distance)})`)
+      .join(', ');
+    return (
+      `${block}: the nearest at ${fmt(first.position)}, ${blocks(Math.round(first.distance))} away` +
+      (also === '' ? '' : `; also ${also}`)
+    );
+  }
+  const place = rememberedPlace(play, block);
+  return place === null
+    ? `I see no ${block} near here, and remember none`
+    : `I see no ${block} near here; I remember some at ${fmt(place.position)}, ${blocks(Math.round(place.distance))} away`;
 }
 
 /**
@@ -955,6 +1106,8 @@ function arrivedText(play: PlayState, c: TravelCommand, distance: number): strin
       return 'Done: under open sky';
     case 'goto-waypoint':
       return `Done: at ${c.name}`;
+    case 'goto-block':
+      return `Done: at the ${c.block}`;
     case 'home':
       return `Done: home (${(play.deps.commands as CommandDeps).homeName})`;
   }

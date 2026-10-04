@@ -98,6 +98,16 @@ export interface CommandRun {
   exploreTo: { x: number; z: number; direction: string } | null;
   /** Surface: the open-sky cell it heads for, fixed when it began. */
   surfaceTo: Position | null;
+  /**
+   * Goto a block: the one it heads for, fixed when it began; one in view (`seen`), or a place
+   * world memory keeps for its kind (y null when only its chunk is known).
+   */
+  blockTo: {
+    block: string;
+    position: { x: number; y: number | null; z: number };
+    distance: number;
+    seen: boolean;
+  } | null;
   /** A goal: its last session left more of something in the inventory (work on the way). */
   worked: boolean;
   /** A goal: its last session ended with one of System 1's reflexes (a retreat, a meal...). */

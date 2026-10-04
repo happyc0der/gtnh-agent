@@ -27,6 +27,7 @@ import {
   type PlayerBuild,
   type PlayerBuildChanges,
 } from '../../domain/player-builds.ts';
+import { findExposedBlocks, type FoundBlock } from './block-find.ts';
 import { chooseWeapon, listedCategory, vitalsOf, type HotbarSlot } from './combat.ts';
 import { PASSABLE_BLOCKS, PASSABLE_BY_METADATA } from './passable.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
@@ -2470,6 +2471,19 @@ export class WorldModel {
     const pos = this.#position;
     if (pos === null || this.#blockCodes === null) return null;
     return scanHazards(this.#store, this.#blockCodes, { x: pos.x, y: pos.feetY, z: pos.z }, radius);
+  }
+
+  /**
+   * Blocks named `names` the player could see near it (a face open to air: block-find.ts),
+   * nearest first; [] while the registry or the position is not known.
+   */
+  findBlocks(names: readonly string[]): FoundBlock[] {
+    const pos = this.#position;
+    const registry = this.#registry;
+    if (pos === null || registry === null) return [];
+    const ids = new Set<number>();
+    for (const [id, name] of registry.blocks) if (names.includes(name)) ids.add(id);
+    return findExposedBlocks(this.#store, ids, { x: pos.x, y: pos.feetY, z: pos.z });
   }
 
   /** The player's feet position: where the client walked it, or where the server placed it. */

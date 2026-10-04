@@ -23,6 +23,7 @@ export const MODEL_COMMAND_VERBS = [
   'explore',
   'tunnel',
   'surface',
+  'find',
   'get',
   'mine',
   'sethome',
@@ -55,7 +56,8 @@ status: say where it is and how it is
 help: list the commands
 come: walk to the owner
 follow: follow the owner; args [player] to follow that player
-goto: args [x, y, z], [x, z] or [waypoint]: travel there
+goto: args [x, y, z], [x, z], [waypoint] or [block] (block like chest, crafting_table, water): travel there
+find: args [block]: say where the nearest such blocks are
 explore: args [], [direction], [blocks] or [direction, blocks] (direction north, north_east, east... ; blocks 8-256): explore new ground that way
 tunnel: args [direction], [direction, blocks] or [direction, blocks, "down"] (direction north, south, east or west; blocks 1-64; "down": stairs going one block down for each block forward): dig a straight tunnel that way
 surface: go up to open sky (out of a tunnel, a cave or a hole)

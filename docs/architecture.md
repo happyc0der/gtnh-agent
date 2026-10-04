@@ -485,6 +485,12 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   blocks (default 64, at most 256) toward the compass direction asked, or, with none, the one
   world memory has seen least (`wanderTarget`), no farther than the room left to the safety
   boundary that way (refused with less than EXPLORE's minimum).
+- **Goto a block, find** (Baritone's #goto <block> and #find): `!goto chest` (a waypoint of
+  that name goes first), `!goto crafting table`, `!find water`. The client lists the nearest
+  blocks of the kind with a face open to air (`block-find.ts`: no x-ray, unlike Baritone's
+  chunk cache), else world memory's nearest place for logs, sand, gravel, clay, water, stone
+  and ores; a goto heads for the one chosen when it began, near a block in view (within 2.5)
+  or to a remembered place.
 - **Surface** (Baritone's #surface, `!surface` or `!top`) is travel to a cell fixed when it
   begins (`surfaceTarget`): natural ground with nothing but air or plants above it, within 16
   blocks across. Of the 48 nearest, the search's goal is any of them, so the one the cheapest

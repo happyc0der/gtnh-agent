@@ -582,7 +582,7 @@ describe("owners' commands in play", () => {
     expect(asked).toEqual(['could you bring me some wood', 'sing a song']);
     expect(said(sim)).toEqual([
       NOT_UNDERSTOOD, // !dance: a typo in the structured form is answered at once
-      'usage: !goto <x> <y> <z>, !goto <x> <z> or !goto <waypoint>',
+      'usage: !goto <x> <y> <z>, !goto <x> <z>, !goto <waypoint> or !goto <block> (e.g. !goto chest)',
       'OK: getting minecraft:log until I have 2 (I have 0)',
       NOT_UNDERSTOOD, // sing a song
       'Done: I have 6 minecraft:log', // a session of 3 cycles, 2 logs each
@@ -664,6 +664,50 @@ describe("owners' commands in play", () => {
     await runPlay(deps(open(), edge), LIMITS, noStop);
     expect(said(edge)).toEqual(['Failed: my safety boundary is 5 blocks north of here']);
     expect(edge.steps).toEqual([]);
+  });
+
+  it('finds blocks in view, and goes to the nearest: a waypoint name first (Baritone #find, #goto <block>)', async () => {
+    const repos = open();
+    const sim = newSim({
+      heard: [whisper('!find chest'), whisper('!find sand'), whisper('!goto chest')],
+    });
+    const base = deps(repos, sim);
+    const chests = [
+      { position: { x: 6, y: 64, z: 0 }, distance: 5.6 },
+      { position: { x: -9, y: 64, z: 2 }, distance: 9.7 },
+    ];
+    await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          findBlock: (names) => (names.includes('minecraft:chest') ? chests : []),
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual([
+      'minecraft:chest: the nearest at 6 64 0, 6 blocks away; also -9 64 2 (10)',
+      'I see no minecraft:sand near here, and remember none',
+      'OK: going to the minecraft:chest at 6 64 0',
+      'Done: at chest',
+    ]);
+    expect(sim.steps).toEqual(['MOVE_TO 5.5 0.5']);
+    // With no such block in view or remembered, and no waypoint of that name: it says so.
+    const none = newSim({ heard: [whisper('!goto anvil')] });
+    const noneBase = deps(open(), none);
+    await runPlay(
+      {
+        ...noneBase,
+        commands: { ...(noneBase.commands as CommandDeps), findBlock: () => [] },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(none)).toEqual([
+      'Failed: I know no waypoint anvil, and I see no anvil near here: say !waypoints',
+    ]);
   });
 
   it('goes up to the surface: a cell found as it begins, then a walk there (Baritone #surface)', async () => {
