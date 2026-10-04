@@ -15,6 +15,7 @@ import { DeterministicDecisionProvider } from '../../../src/system1/decision-pro
 import { systemClock } from '../../../src/util/clock.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import { BLOCK, PLACE_TEST_BLOCK_REGISTRY, type BlockFn } from './fixtures/chunk-fixtures.ts';
+import type { FakeDigOptions } from './fixtures/fake-digging.ts';
 import { FakeGtnhServer, spawnFrame, type FakeEntity } from './fixtures/fake-server.ts';
 
 // Players' builds (src/domain/player-builds.ts): a cell that turns from air into a block while
@@ -66,13 +67,14 @@ function configFor(port: number, fence = FENCE, placing = true): AgentConfig {
   });
 }
 
-async function serve(entities: FakeEntity[] = [OWNER]) {
+async function serve(entities: FakeEntity[] = [OWNER], dig: FakeDigOptions = {}) {
   const server = new FakeGtnhServer({
     blocks: PLACE_TEST_BLOCK_REGISTRY,
     world: ground,
     spawn: { x: -4.5, eyeY: FEET_Y + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
     inventory: [{ slot: 36, id: BLOCK.dirt, count: 10, damage: 0 }],
     entities,
+    dig,
   });
   servers.push(server);
   return { server, port: await server.listen() };
@@ -159,6 +161,22 @@ describe("players' builds", { timeout: 30_000 }, () => {
     await vi.waitFor(() => expect(client.world.blockAt(-9, FEET_Y, -8)).toBe(BLOCK.dirt));
     expect(client.world.builtByPlayer(-9, FEET_Y, -8)).toBe(false);
     expect(client.world.builtByPlayer(-4, FEET_Y, -9)).toBe(false);
+    expect(client.takePlayerBuilds().added).toEqual([]);
+  });
+
+  it("a dig the server cancels (air, then the block again) is the agent's own: no build", async () => {
+    // Forge sends "air" to the digging player before a mod may cancel the break, then the block
+    // again: the cell turns from air into grass with the owner 3 blocks off, by the agent's dig.
+    const { server, port } = await serve([OWNER], { cancelBreak: true });
+    const { client } = await connect(port);
+    const grass = { x: -3, y: FEET_Y - 1, z: -8 };
+    const dig = await perform(client, { type: 'DIG_BLOCK', args: { position: grass } });
+    expect(dig).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(server.digSim.digs.map((d) => d.status)).toEqual([0, 2]);
+    await vi.waitFor(() =>
+      expect(client.world.blockAt(grass.x, grass.y, grass.z)).toBe(BLOCK.grass),
+    );
+    expect(client.world.builtByPlayer(grass.x, grass.y, grass.z)).toBe(false);
     expect(client.takePlayerBuilds().added).toEqual([]);
   });
 

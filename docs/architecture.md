@@ -1530,8 +1530,9 @@ player's build (`world-model.ts`): a cell that turned from air (or tall grass, a
 vines or a snow layer, which a block replaces) into a block with a collision box, by a single
 block change (a player places one block at a time; a chunk sent again says nothing about who
 changed what), while another player's body was within 8 blocks of it (`PLAYER_BUILD_RADIUS`),
-and that the agent had not clicked to fill itself in the last 5 s (`expectOwnPlacement`, set
-before every `PLACE_BLOCK` and every block a walk places). A build that turns back into air (or
+and that the agent had not changed itself in the last 5 s (`expectOwnChange`, set before every
+`PLACE_BLOCK`, every block a walk places and every dig's finish: a break the server cancels
+sends the digging player "air", then the block again). A build that turns back into air (or
 such a plant) is forgotten.
 
 - **Kept.** Agent memory stores them after every observation and action (`player_builds`,

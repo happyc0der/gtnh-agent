@@ -489,6 +489,9 @@ export class DigActions {
       const self = this.#world.selfEntityId;
       if (self !== null) this.#core.send(outbound.swingArm(self));
       const startSentAt = watch.updates.length;
+      // A break the server cancels puts the block back (after "air"): the agent's own doing,
+      // never a player's build. An instant dig is broken at the start.
+      if (instant) this.#world.expectOwnChange(target, clock.now());
       this.#core.send(outbound.digBlock(DIG_STATUS.start, x, y, z, check.face));
       if (instant) {
         // The server's answer to the start is the verdict: air with no re-send, as for a
@@ -524,6 +527,7 @@ export class DigActions {
         }
       }
       const sentAt = watch.updates.length;
+      this.#world.expectOwnChange(target, clock.now());
       this.#core.send(outbound.digBlock(DIG_STATUS.finish, x, y, z, check.face));
       verdict = await this.#digVerdict(watch, sentAt, check.block, where);
     } finally {

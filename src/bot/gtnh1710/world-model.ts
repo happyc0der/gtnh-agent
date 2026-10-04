@@ -417,11 +417,11 @@ const MAX_REMEMBERED_PLACEMENTS = 64;
 /** Entities this close to the player are passed to the placeable-cell scan. */
 const PLACE_SCAN_ENTITY_RADIUS = 12;
 /**
- * After the agent's own click, a change of the clicked cell within this long is its own
- * placement, never a player's build (the server answers in a tick or two; a pillar's late
+ * After the agent's own placement click or dig, a change of that cell within this long is its
+ * own doing, never a player's build (the server answers in a tick or two; a pillar's late
  * block too).
  */
-const OWN_PLACEMENT_MS = 5_000;
+const OWN_CHANGE_MS = 5_000;
 /** What a block may be put into for a player's build: air, and the plants a block replaces. */
 const BUILD_OPEN: ReadonlySet<string> = new Set([
   'minecraft:air',
@@ -555,8 +555,8 @@ export class WorldModel {
   /** Builds seen, and recorded cells seen turning back into air, since takePlayerBuilds(). */
   #newBuilds: PlayerBuild[] = [];
   #goneBuilds: PlayerBuildChanges['removed'][number][] = [];
-  /** Cells the agent clicked to fill itself ("x,y,z"), and until when (ms) a change is its own. */
-  readonly #ownPlacements = new Map<string, number>();
+  /** Cells the agent is filling or digging ("x,y,z"), and until when (ms) a change is its own. */
+  readonly #ownChanges = new Map<string, number>();
   readonly #watches = new Set<BlockWatch>();
   /** Counts the updates recorded by every watch (BlockWatch.order). */
   #watchedUpdates = 0;
@@ -640,13 +640,16 @@ export class WorldModel {
   }
 
   /**
-   * The agent is about to fill `cell` itself (PLACE_BLOCK, or a walk's pillar or bridge): the
-   * server's change of it in the next OWN_PLACEMENT_MS is its own, never a player's build.
+   * The agent is about to change `cell` itself: fill it (PLACE_BLOCK, a walk's pillar or
+   * bridge), or break it (C07 finish, or the start of a dig the server breaks at once). The
+   * server's changes of it in the next OWN_CHANGE_MS are its own, never a player's build: a
+   * placed block, and the block a cancelled break puts back (Forge sends the digging player
+   * "air" before a mod may cancel the break, then the block again).
    */
-  expectOwnPlacement(cell: { x: number; y: number; z: number }, at: Date): void {
+  expectOwnChange(cell: { x: number; y: number; z: number }, at: Date): void {
     const now = at.getTime();
-    for (const [k, until] of this.#ownPlacements) if (until < now) this.#ownPlacements.delete(k);
-    this.#ownPlacements.set(`${cell.x},${cell.y},${cell.z}`, now + OWN_PLACEMENT_MS);
+    for (const [k, until] of this.#ownChanges) if (until < now) this.#ownChanges.delete(k);
+    this.#ownChanges.set(`${cell.x},${cell.y},${cell.z}`, now + OWN_CHANGE_MS);
   }
 
   /** Whether a player built the block at (x, y, z) in the current dimension (never broken). */
@@ -675,7 +678,8 @@ export class WorldModel {
   /**
    * A player's build, or the end of one: a cell that turned from air (or a plant a block
    * replaces) into a block with a collision box while another player stood within
-   * PLAYER_BUILD_RADIUS of it, and the agent did not click it itself; a recorded one that
+   * PLAYER_BUILD_RADIUS of it, and the agent did not change it itself (expectOwnChange: its
+   * placements, and the block a cancelled dig of its own puts back); a recorded one that
    * turned back into air (or such a plant) is forgotten. Only single block changes count (a
    * player's placement is one); a chunk sent again says nothing about who changed it.
    */
@@ -704,7 +708,7 @@ export class WorldModel {
     }
     if (before === undefined || !open(nameOf(before))) return;
     if (after === undefined || !hasCollisionBox(after)) return;
-    const own = this.#ownPlacements.get(`${x},${y},${z}`);
+    const own = this.#ownChanges.get(`${x},${y},${z}`);
     if (own !== undefined && own >= at.getTime()) return;
     const cx = x + 0.5;
     const cy = y + 0.5;

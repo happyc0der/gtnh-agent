@@ -173,7 +173,7 @@ export class PlaceActions {
         this.#core.lastYaw = look.yaw;
         this.#core.log(`placing ${args.item} at ${where} against ${against}`);
         // The cell's change is the agent's own: never a player's build.
-        this.#world.expectOwnPlacement(target, this.#opts.clock.now());
+        this.#world.expectOwnChange(target, this.#opts.clock.now());
         const sent = {
           clicked: clickedWatch.updates.length,
           cell: cellWatch.updates.length,
