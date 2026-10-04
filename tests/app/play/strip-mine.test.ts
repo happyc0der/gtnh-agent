@@ -4,6 +4,7 @@ import {
   nextLeg,
   STRIP_LEG,
   stripDirection,
+  waysByRoom,
   stripLevel,
   type StripState,
 } from '../../../src/app/play/strip-mine.ts';
@@ -53,5 +54,11 @@ describe('strip mining (Baritone legitMine, the idea)', () => {
     const rooms: Record<string, number> = { north: 40, east: 200, south: 90, west: 10 };
     expect(stripDirection((d) => rooms[d])).toBe('east');
     expect(stripDirection(() => undefined)).toBe('north');
+  });
+
+  it('orders the ways by room for a tunnel whose owner named none: unknown ones last', () => {
+    const rooms: Record<string, number> = { south: 90, east: 200 };
+    expect(waysByRoom((d) => rooms[d])).toEqual(['east', 'south', 'north', 'west']);
+    expect(waysByRoom(() => 50)).toEqual(['north', 'east', 'south', 'west']);
   });
 });

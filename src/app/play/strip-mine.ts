@@ -108,10 +108,18 @@ export function nextLeg(
  * to the safety boundary (world memory's summary `room`); north when none is known.
  */
 export function stripDirection(room: (d: TunnelDirection) => number | undefined): TunnelDirection {
-  let best: { d: TunnelDirection; room: number } | null = null;
-  for (const d of ['north', 'east', 'south', 'west'] as const) {
-    const r = room(d);
-    if (r !== undefined && (best === null || r > best.room)) best = { d, room: r };
-  }
-  return best?.d ?? 'north';
+  return waysByRoom(room)[0] ?? 'north';
+}
+
+/**
+ * North, east, south and west, the most room left to the safety boundary first (world
+ * memory's summary `room`), those with none known last: the order a tunnel whose owner named
+ * no way tries them in.
+ */
+export function waysByRoom(room: (d: TunnelDirection) => number | undefined): TunnelDirection[] {
+  const ways = ['north', 'east', 'south', 'west'] as const;
+  const known = ways.filter((d) => room(d) !== undefined);
+  // A stable sort: ties keep the order above.
+  known.sort((a, b) => (room(b) as number) - (room(a) as number));
+  return [...known, ...ways.filter((d) => room(d) === undefined)];
 }

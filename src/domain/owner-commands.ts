@@ -169,10 +169,11 @@ export const OwnerCommandSchema = z.discriminatedUnion('verb', [
   /**
    * Dig a straight tunnel, one block wide and two high, `length` blocks toward a compass
    * direction from where the bot stands, as Baritone's #tunnel (code plans it: tunnel.ts).
+   * No direction ("!tunnel down 10", "dig down"): code picks the way when it begins.
    */
   z.strictObject({
     verb: z.literal('tunnel'),
-    direction: z.enum(TUNNEL_DIRECTIONS),
+    direction: z.enum(TUNNEL_DIRECTIONS).nullable(),
     length: z.int().min(1).max(TUNNEL_COMMAND_MAX),
     /** Stored before stairs existed: level. */
     slope: z.enum(['level', 'down']).default('level'),
@@ -285,7 +286,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   find: 'usage: !find <block>, e.g. !find crafting_table or !find water',
   explore: 'usage: !explore [direction] [blocks], e.g. !explore north 100 (8-256 blocks)',
   tunnel:
-    'usage: !tunnel <north|south|east|west> [blocks] [down], e.g. !tunnel east 20, or !tunnel east 20 down for stairs (1-64 blocks)',
+    'usage: !tunnel [north|south|east|west] [blocks] [down], e.g. !tunnel east 20, !tunnel east 20 down for stairs, !tunnel down 10 (I pick the way; 1-64 blocks)',
   get: 'usage: !get [count] <item>, e.g. !get 20 logs (any wood; minecraft:log@2: birch only; no count: 16, or 1 of a tool)',
   mine: 'usage: !mine [count] <block>, e.g. !mine 10 sand or !mine 16 iron ore',
   quests: 'usage: !quests on or !quests off',
@@ -294,7 +295,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
 
 export const HELP_TEXT =
   'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z>|<waypoint>|<block> ' +
-  '!find <block> !explore [dir] [n] !tunnel <dir> [n] !surface ' +
+  '!find <block> !explore [dir] [n] !tunnel [dir] [n] [down] !surface ' +
   '!get [n] <item> !mine [n] <block> !sethome !home !waypoint [delete] [name] !quests on|off';
 
 /**
@@ -348,6 +349,10 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
     args = [];
   }
   if (verb === 'come' && lower(0) === 'to' && lower(1) === 'me' && args.length === 2) args = [];
+  // "go north", "walk 20 blocks east", "head nw": an explore that way.
+  if (['go', 'walk', 'head'].includes(verb) && args.some((a) => directionOf(a) !== null)) {
+    verb = 'explore';
+  }
   const none = args.length === 0;
   const ok = (command: OwnerCommand): CommandParse => {
     const parsed = OwnerCommandSchema.safeParse(command);
@@ -430,6 +435,9 @@ function usage(verb: string): CommandParse {
 function gotoCommand(args: readonly string[]): CommandParse {
   const nums = args.every((a) => NUMBER.test(a)) ? args.map(Number) : null;
   let command: unknown = null;
+  // "!goto north", "!goto north 20": a compass direction is an explore that way.
+  const words = args.filter((a) => !NUMBER.test(a) && !BLOCKS_WORD.test(a));
+  if (words.length === 1 && directionOf(words[0] ?? '') !== null) return exploreCommand(args);
   if (nums !== null && nums.length === 3) {
     command = { verb: 'goto', x: nums[0], y: nums[1], z: nums[2] };
   } else if (nums !== null && nums.length === 2) {
@@ -497,8 +505,14 @@ function directionOf(word: string): ExploreDirection | null {
   return parsed.success ? parsed.data : (short[w] ?? null);
 }
 
-function exploreCommand(args: readonly string[]): CommandParse {
+/** "blocks" after a distance ("explore 20 blocks north"): no word of its own. */
+const BLOCKS_WORD = /^blocks?$/i;
+/** Words around an explore's direction that say nothing ("head north for a bit"). */
+const EXPLORE_FILLER: ReadonlySet<string> = new Set(['for', 'a', 'bit', 'little', 'while']);
+
+function exploreCommand(all: readonly string[]): CommandParse {
   // "explore", "explore north", "explore 100", "explore north 100", "explore 100 north".
+  const args = all.filter((a) => !BLOCKS_WORD.test(a) && !EXPLORE_FILLER.has(a.toLowerCase()));
   let direction: ExploreDirection | null = null;
   let distance = EXPLORE_COMMAND_DISTANCE;
   for (const a of args) {
@@ -514,12 +528,14 @@ function exploreCommand(args: readonly string[]): CommandParse {
   return parsed.success ? { ok: true, command: parsed.data } : usage('explore');
 }
 
-function tunnelCommand(args: readonly string[]): CommandParse {
-  // "tunnel east", "tunnel east 20", "tunnel 20 east", "tunnel east 20 down" (stairs down).
+function tunnelCommand(all: readonly string[]): CommandParse {
+  // "tunnel east", "tunnel east 20", "tunnel 20 east", "tunnel east 20 down" (stairs down),
+  // "tunnel down 10" (code picks the way).
+  const args = all.filter((a) => !BLOCKS_WORD.test(a));
   let direction: string | null = null;
   let length = TUNNEL_COMMAND_LENGTH;
   let slope: TunnelSlope = 'level';
-  if (args.length === 0 || args.length > 3) return usage('tunnel');
+  if (args.length > 3) return usage('tunnel');
   for (const a of args) {
     if (NUMBER.test(a)) length = Number(a);
     else if (a.toLowerCase() === 'down') slope = 'down';
@@ -643,8 +659,8 @@ export function describeCommand(c: OwnerCommand): string {
       return `explore ${c.distance} blocks ${c.direction === null ? 'the way I have seen least' : c.direction.replace('_', '-')}`;
     case 'tunnel':
       return c.slope === 'down'
-        ? `dig stairs ${c.length} blocks down, going ${c.direction}`
-        : `dig a tunnel ${c.length} blocks ${c.direction}`;
+        ? `dig stairs ${c.length} blocks down${c.direction === null ? '' : `, going ${c.direction}`}`
+        : `dig a tunnel ${c.length} blocks ${c.direction ?? '(I pick the way)'}`;
     case 'home':
       return 'go home';
     case 'get':

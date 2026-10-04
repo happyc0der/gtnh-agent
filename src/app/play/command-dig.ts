@@ -1,5 +1,5 @@
 import { GT_ORE_BLOCK } from '../../domain/blocks.ts';
-import { type Position } from '../../domain/common.ts';
+import { type BlockPosition, type Position } from '../../domain/common.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import type { ShelterStep } from '../../domain/night-shelter.ts';
 import {
@@ -22,6 +22,7 @@ import {
   STRIP_MAX_TURNS,
   stripDirection,
   stripLevel,
+  waysByRoom,
 } from './strip-mine.ts';
 
 import {
@@ -88,12 +89,26 @@ export async function tunnelRound(
     run.tunnelFrom = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-6), z: Math.floor(at.z) };
     saveProgress(play, cmd.id);
   }
-  const plan = await deps.tunnel({
-    start: run.tunnelFrom,
-    direction: command.direction,
-    length: command.length,
-    slope: command.slope,
-  });
+  let direction = command.direction ?? run.tunnelDirection;
+  if (direction === null) {
+    const picked = await pickWay(play, command, run.tunnelFrom);
+    if (picked !== null && 'problem' in picked) return fail(picked.problem);
+    if (picked !== null) {
+      direction = picked.direction;
+      run.tunnelDirection = direction;
+      saveProgress(play, cmd.id);
+      say(play, cmd, `I ${describeCommand({ ...command, direction })}`);
+    }
+  }
+  const plan =
+    direction === null
+      ? null
+      : await deps.tunnel({
+          start: run.tunnelFrom,
+          direction,
+          length: command.length,
+          slope: command.slope,
+        });
   if (plan === null) {
     // Just after joining or respawning the chunks are still coming: wait a moment between tries.
     run.failures += 1;
@@ -105,7 +120,8 @@ export async function tunnelRound(
   const dug = `${plan.done} of ${command.length} blocks dug`;
   if (plan.steps.length === 0) {
     if (plan.done >= command.length) {
-      finish(play, cmd, 'done', `Done: ${describeCommand(command).replace(/^dig /, 'dug ')}`);
+      const dugIt = describeCommand({ ...command, direction }).replace(/^dig /, 'dug ');
+      finish(play, cmd, 'done', `Done: ${dugIt}`);
       return 'next-round';
     }
     return fail(`${plan.problem ?? 'there is nothing to dig'} (${dug})`);
@@ -116,6 +132,50 @@ export async function tunnelRound(
     return fail(`no progress in ${run.stuck} sessions (${play.lastStop}; ${dug})`);
   }
   return digSession(play, cmd, command, plan.steps, dug, fail);
+}
+
+/**
+ * The way for a tunnel whose owner named none ("!tunnel down 10"): of north, east, south and
+ * west, most room to the safety boundary first (as a strip mine starts), the first whose next
+ * cells may be dug. Null while the blocks around are not known.
+ */
+async function pickWay(
+  play: PlayState,
+  command: TunnelCommand,
+  start: BlockPosition,
+): Promise<{ direction: TunnelDirection } | { problem: string } | null> {
+  const tunnel = play.deps.tunnel;
+  if (tunnel === undefined) return { problem: 'I cannot dig a tunnel here' };
+  const room = roomFrom(play, start);
+  const why: string[] = [];
+  for (const d of waysByRoom(room)) {
+    const plan = await tunnel({
+      start,
+      direction: d,
+      length: command.length,
+      slope: command.slope,
+    });
+    if (plan === null) return null;
+    if (plan.ok && plan.steps.length > 0) return { direction: d };
+    why.push(`${d}: ${plan.ok ? (plan.problem ?? 'already open') : plan.reason}`);
+  }
+  return { problem: `no way may be dug (${why.join('; ')})`.slice(0, 380) };
+}
+
+/** World memory's room left to the safety boundary from `at`, per way (undefined: not known). */
+function roomFrom(play: PlayState, at: Position): (d: TunnelDirection) => number | undefined {
+  const commands = play.deps.commands as CommandDeps;
+  const dimension = commands.view().dimension;
+  const summary =
+    dimension === null
+      ? null
+      : summarizeExploration({
+          chunks: play.deps.repos.worldMemory.chunks(dimension),
+          from: at,
+          boundary: commands.boundary,
+          now: new Date(play.now()),
+        });
+  return (d) => summary?.directions[d]?.room;
 }
 
 /**
@@ -239,17 +299,7 @@ export async function stripRound(
         `no vein of ${name} lies between my safety boundary (y ${commands.boundary.min.y}) and here (y ${feet.y})`,
       );
     }
-    const summary =
-      view.dimension === null
-        ? null
-        : summarizeExploration({
-            chunks: deps.repos.worldMemory.chunks(view.dimension),
-            from: at,
-            boundary: commands.boundary,
-            now: new Date(play.now()),
-          });
-    const room = (d: TunnelDirection): number | undefined => summary?.directions[d]?.room;
-    const direction = stripDirection(room);
+    const direction = stripDirection(roomFrom(play, at));
     run.strip = { level, leg: firstLeg(feet, level, direction), dug: 0, turns: 0 };
     saveProgress(play, cmd.id);
     say(

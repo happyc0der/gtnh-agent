@@ -1,5 +1,6 @@
 import type { BlockPosition, Position } from '../../domain/common.ts';
 import type { StripState } from './strip-mine.ts';
+import type { TunnelDirection } from '../../domain/owner-commands.ts';
 import type { DecisionResult } from '../../domain/decisions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import { AGE0_QUESTS } from '../../goals/age0-quests.ts';
@@ -120,6 +121,8 @@ export interface CommandRun {
   /** Tunnel: its first cell (where the bot stood when it began), and the cells dug then. */
   tunnelFrom: BlockPosition | null;
   tunnelDone: number | null;
+  /** A tunnel whose owner named no way: the way code picked when it began. */
+  tunnelDirection: TunnelDirection | null;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { BlockPositionSchema, type BlockPosition, type Position } from '../../domain/common.ts';
-import { type HeardCommand } from '../../domain/owner-commands.ts';
+import { TUNNEL_DIRECTIONS, type HeardCommand } from '../../domain/owner-commands.ts';
 import type { Boundary, NamedLocation } from '../../domain/safety.ts';
 import type { CommandTranslation } from '../../llm/ollama-command-provider.ts';
 import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
@@ -133,6 +133,8 @@ const ProgressSchema = z.strictObject({
     .nullable(),
   stripSkipped: z.array(z.string().max(40)).max(256),
   tunnelFrom: BlockPositionSchema.nullable(),
+  /** Kept since 2026-10-04: progress saved before has none. */
+  tunnelDirection: z.enum(TUNNEL_DIRECTIONS).nullable().default(null),
 });
 
 /** Keeps the run's lasting progress (PROGRESS_KEY) for a restart of play. */
@@ -144,6 +146,7 @@ export function saveProgress(play: PlayState, id: number): void {
       strip: run.strip,
       stripSkipped: [...run.stripSkipped].slice(-256),
       tunnelFrom: run.tunnelFrom,
+      tunnelDirection: run.tunnelDirection,
     }),
   );
 }
@@ -178,6 +181,7 @@ export function runOf(play: PlayState, id: number): CommandRun {
       stripSkipped: new Set(kept?.stripSkipped ?? []),
       tunnelFrom: kept?.tunnelFrom ?? null,
       tunnelDone: null,
+      tunnelDirection: kept?.tunnelDirection ?? null,
       worked: false,
       interrupted: false,
     };

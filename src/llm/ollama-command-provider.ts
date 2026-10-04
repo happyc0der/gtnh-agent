@@ -58,8 +58,8 @@ come: walk to the owner
 follow: follow the owner; args [player] to follow that player
 goto: args [x, y, z], [x, z], [waypoint] or [block] (block like chest, crafting_table, water): travel there
 find: args [block]: say where the nearest such blocks are (a GregTech ore by its name and "ore": ["iron", "ore"])
-explore: args [], [direction], [blocks] or [direction, blocks] (direction north, north_east, east... ; blocks 8-256): explore new ground that way
-tunnel: args [direction], [direction, blocks] or [direction, blocks, "down"] (direction north, south, east or west; blocks 1-64; "down": stairs going one block down for each block forward): dig a straight tunnel that way
+explore: args [], [direction], [blocks] or [direction, blocks] (direction north, north_east, east... ; blocks 8-256): explore new ground that way; also "go north", "head east", "walk 20 blocks west": ["west", "20"]
+tunnel: args [direction], [direction, blocks], [direction, blocks, "down"] or ["down", blocks] (direction north, south, east or west; blocks 1-64; "down": stairs going one block down for each block forward; no direction: the bot picks the way): dig a straight tunnel that way; "dig down 10": ["down", "10"]
 surface: go up to open sky (out of a tunnel, a cave or a hole)
 get: args [count, item] or [item]: gather or craft until it has that many (item like log, sand, cobblestone, minecraft:dirt, wooden_pickaxe; no count: 16, or one tool)
 mine: args [count, block] or [block]: mine that block until it has that many of what it drops (a GregTech ore by its name and "ore": ["16", "iron", "ore"])

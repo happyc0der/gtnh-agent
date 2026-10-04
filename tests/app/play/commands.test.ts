@@ -1243,6 +1243,53 @@ describe("owners' commands in play", () => {
     ]);
   });
 
+  it('digs stairs down the way it picks when the owner names none ("dig down"), or says why none', async () => {
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!tunnel down 2')] });
+    const tried: string[] = [];
+    const tunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
+      tried.push(req.direction);
+      if (req.direction === 'north') {
+        return Promise.resolve({ ok: true, done: 0, steps: [], problem: 'lava ahead' });
+      }
+      if (req.direction !== 'east') return Promise.resolve({ ok: false, reason: 'not this way' });
+      const done = Math.floor(sim.position.x) - req.start.x;
+      if (done >= req.length) {
+        return Promise.resolve({ ok: true, done: req.length, steps: [], problem: null });
+      }
+      const x = req.start.x + done + 1;
+      const target = { x: x + 0.5, y: req.start.y - done - 1, z: req.start.z + 0.5 };
+      return Promise.resolve({
+        ok: true,
+        done,
+        steps: [{ spec: { type: 'MOVE_TO', args: { target, tolerance: 0.5 } }, text: 'step' }],
+        problem: null,
+      });
+    };
+    await runPlay(deps(repos, sim, { tunnel }), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: digging stairs 2 blocks down from 0 64 0',
+      'I dig stairs 2 blocks down, going east',
+      'Done: dug stairs 2 blocks down, going east',
+    ]);
+    // North first (no room known), then east; east from then on, never asked again.
+    expect(tried.slice(0, 2)).toEqual(['north', 'east']);
+    expect(tried.slice(2).every((d) => d === 'east')).toBe(true);
+
+    const walled = newSim({ heard: [whisper('!tunnel')] });
+    await runPlay(
+      deps(open(), walled, {
+        tunnel: (req) =>
+          Promise.resolve({ ok: true, done: 0, steps: [], problem: `${req.direction} is lava` }),
+      }),
+      LIMITS,
+      noStop,
+    );
+    expect(said(walled).at(-1)).toBe(
+      'Failed: no way may be dug (north: north is lava; east: east is lava; south: south is lava; west: west is lava)',
+    );
+  });
+
   it('idle with a mob near home: play waits offline for it to leave (it stood there once and died)', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!pause')] });

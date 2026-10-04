@@ -341,6 +341,26 @@ describe('explore (Baritone #explore)', () => {
     expect(describeCommand(parsed('!explore'))).toBe('explore 64 blocks the way I have seen least');
   });
 
+  it('is what going a compass direction means: !goto north, !go east, !walk 20 blocks west', () => {
+    const north = { verb: 'explore', direction: 'north', distance: 64 };
+    expect(parsed('!goto north')).toEqual(north);
+    expect(parsed('!go to north')).toEqual(north);
+    expect(parsed('!go north')).toEqual(north);
+    expect(parsed('!head n')).toEqual(north);
+    expect(parsed('!head north for a bit')).toEqual(north);
+    expect(parsed('!goto north 20')).toEqual({ ...north, distance: 20 });
+    expect(parsed('!walk 20 blocks west')).toEqual({ ...north, direction: 'west', distance: 20 });
+    expect(parsed('!explore 30 blocks east')).toEqual({
+      ...north,
+      direction: 'east',
+      distance: 30,
+    });
+    // Not a direction: a waypoint, a block, coordinates, as before.
+    expect(parsed('!goto northgate')).toEqual({ verb: 'goto-waypoint', name: 'northgate' });
+    expect(parsed('!goto 10 20')).toEqual({ verb: 'goto', x: 10, y: null, z: 20 });
+    expect(parseOwnerCommand('!go somewhere')).toMatchObject({ ok: false });
+  });
+
   it('gives its usage for anything else (a word that is no direction, too far, too much)', () => {
     for (const text of ['!explore up', '!explore 300', '!explore north south', '!explore 5']) {
       const p = parseOwnerCommand(text);
@@ -367,13 +387,30 @@ describe('tunnel (Baritone #tunnel)', () => {
     );
   });
 
-  it('gives its usage without a direction, for a diagonal, or a length past 64', () => {
+  it('with no direction, the bot picks the way ("dig down 10": !tunnel down 10)', () => {
+    expect(parsed('!tunnel down 10')).toEqual({
+      verb: 'tunnel',
+      direction: null,
+      length: 10,
+      slope: 'down',
+    });
+    expect(parsed('!tunnel')).toEqual({
+      verb: 'tunnel',
+      direction: null,
+      length: 16,
+      slope: 'level',
+    });
+    expect(parsed('!tunnel 20 blocks')).toMatchObject({ direction: null, length: 20 });
+    expect(describeCommand(parsed('!tunnel down 10'))).toBe('dig stairs 10 blocks down');
+    expect(describeCommand(parsed('!tunnel'))).toBe('dig a tunnel 16 blocks (I pick the way)');
+  });
+
+  it('gives its usage for a diagonal, two directions, a length past 64 or a stray word', () => {
     for (const text of [
-      '!tunnel',
       '!tunnel ne',
       '!tunnel east 100',
       '!tunnel east west',
-      '!tunnel 20',
+      '!tunnel down 100',
       '!tunnel foo east',
     ]) {
       const p = parseOwnerCommand(text);
