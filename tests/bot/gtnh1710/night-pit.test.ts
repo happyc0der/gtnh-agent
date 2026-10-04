@@ -9,8 +9,10 @@ import {
   planShelterExit,
   PlannedWorld,
   sealedIn,
+  shaftSite,
   walledIn,
   type PitOptions,
+  type PitSite,
 } from '../../../src/bot/gtnh1710/night-pit.ts';
 import type { PathOptions } from '../../../src/bot/gtnh1710/pathing/search.ts';
 import type { Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
@@ -498,6 +500,31 @@ describe('the way out in the morning', () => {
     expect(w.blockName(id)).toBe('minecraft:dirt');
     expect(w.hazardCode(id)).toBe(BLOCK_CODE.safe);
     expect(w.blockAt(5, 63, 5)).toBe(ID.grass);
+  });
+
+  it('climbs out of a shaft it dug down, deeper than a staircase out reaches (shaftSite)', () => {
+    // Seen live 2026-10-04: 8 deep, dug down to stone, roofed for the night: "no way out".
+    const shaft: Record<string, number> = { [k(0, 57, 0)]: ID.cobblestone };
+    for (let y = 55; y <= 63; y++) if (y !== 57) shaft[k(0, y, 0)] = ID.air;
+    const world = land(shaft);
+    const feet = { x: 0.5, y: 55, z: 0.5 };
+    expect(planShelterExit(world, feet, OPTS).ok).toBe(false);
+    const site = shaftSite(world, feet);
+    expect(site).toEqual({ x: 0, z: 0, groundY: 64 });
+    const options: PathOptions = {
+      pillar: true,
+      canBreak: (c) => {
+        const id = world.blockAt(c.x, c.y, c.z);
+        return id === ID.cobblestone ? 40 : null;
+      },
+      canPlace: () => true,
+      throwaway: { count: 16, block: 'minecraft:dirt' },
+    };
+    const climb = planClimbOut(world, AREA.fence, feet, site as PitSite, options);
+    if (!climb.ok) throw new Error(climb.reason);
+    expect(specs(climb.steps)[0]).toMatchObject({ type: 'MOVE_TO', args: { target: { y: 64 } } });
+    // Deep underground, no rim within 16 blocks: none.
+    expect(shaftSite(world, { x: 0.5, y: 30, z: 0.5 })).toBeNull();
   });
 
   it('climbs out through the roof on a pillar when no wall may be dug (planClimbOut)', () => {

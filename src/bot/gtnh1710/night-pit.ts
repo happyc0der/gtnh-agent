@@ -643,6 +643,35 @@ function stairExit(
   return { ok: false, reason: `no open ground within ${MAX_EXIT_STEPS} steps up` };
 }
 
+/** The deepest shaft shaftSite looks up from (blocks above the feet). */
+export const MAX_SHAFT_DEPTH = 16;
+
+/**
+ * The shaft the player stands at the bottom of, as a pit for planClimbOut: its column, and its
+ * ground layer (the lowest level above the feet where a side column has ground under two open
+ * cells: the rim). For a shaft the player dug down by walking, deeper than the night pit's
+ * staircase out reaches (seen live 2026-10-04: 8 deep to stone, roofed for the night, "no way
+ * out"). Null when no rim lies within MAX_SHAFT_DEPTH.
+ */
+export function shaftSite(world: WalkWorld, feet: Vec3): PitSite | null {
+  const x = Math.floor(feet.x);
+  const y = Math.floor(feet.y + EPS);
+  const z = Math.floor(feet.z);
+  for (let ry = y + 2; ry <= y + MAX_SHAFT_DEPTH; ry++) {
+    for (const [dx, dz] of SIDES) {
+      const ground = solidAt(world, { x: x + dx, y: ry - 1, z: z + dz });
+      if (
+        ground === true &&
+        open(world, { x: x + dx, y: ry, z: z + dz }) &&
+        open(world, { x: x + dx, y: ry + 1, z: z + dz })
+      ) {
+        return { x, z, groundY: ry };
+      }
+    }
+  }
+  return null;
+}
+
 /** Nodes and milliseconds a climb out of the pit may search (a few blocks around it). */
 const CLIMB_MAX_NODES = 20_000;
 const CLIMB_MAX_MS = 300;

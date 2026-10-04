@@ -437,6 +437,8 @@ export function planPath(
     currentPlaced = placed[i] as number;
     // Reached by a pillar or a bridge: its floor is a block the path places.
     ctx.floorPlaced = (parent[i] as number) >= 0 && placesFloor(via[i] as number);
+    // Its feet block solid in the world: one the path broke on the way there.
+    ctx.feetBroken = (parent[i] as number) >= 0 && cells.has(x + x0, y, z + z0, CELL.SOLID);
     ctx.doorway = doorwayAt(
       cells,
       x + x0,
@@ -447,6 +449,7 @@ export function planPath(
     expand(ctx, x + x0, y, z + z0, emit);
   }
   ctx.floorPlaced = false;
+  ctx.feetBroken = false;
   ctx.doorway = 0;
 
   const result = (status: PathStatus, end: number, reason: string): PathResult => {
@@ -645,6 +648,7 @@ export function floodPath(
     const y = (rest - z) / sz + y0;
     // Reached by a pillar or a bridge: its floor is a block the walk places.
     ctx.floorPlaced = i !== startIndex && viaPlaces[i] === 1;
+    ctx.feetBroken = i !== startIndex && ctx.cells.has(x + x0, y, z + z0, CELL.SOLID);
     ctx.doorway = doorwayAt(
       ctx.cells,
       x + x0,
@@ -655,6 +659,7 @@ export function floodPath(
     expand(ctx, x + x0, y, z + z0, emit);
   }
   ctx.floorPlaced = false;
+  ctx.feetBroken = false;
   ctx.doorway = 0;
   const spotOf = (i: number): FloodSpot => {
     const x = i % sx;

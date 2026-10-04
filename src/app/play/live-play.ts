@@ -9,6 +9,7 @@ import {
   planClimbOut,
   planNightPit,
   planShelterExit,
+  shaftSite,
   walledIn,
   type PitOptions,
   type PitSite,
@@ -204,12 +205,14 @@ export function liveShelter(
       const exit = planShelterExit(world, feet, opts);
       if (exit.ok) return { ...stuck, exit: exit.steps };
       // No wall or staircase it may dig: out of the pit as Baritone leaves a hole, through
-      // the roof and up a pillar, on MOVE_TO's own path rules.
-      const walk = inPit && site !== null && fence !== null ? client.walkOptions() : null;
-      if (walk === null || site === null || fence === null) {
+      // the roof and up a pillar, on MOVE_TO's own path rules; out of a shaft it dug down too
+      // (its column and rim: shaftSite).
+      const from = inPit && site !== null ? site : shaftSite(world, feet);
+      const walk = from !== null && fence !== null ? client.walkOptions() : null;
+      if (walk === null || from === null || fence === null) {
         return { ...stuck, problem: exit.reason };
       }
-      const climb = planClimbOut(world, fence, feet, site, walk);
+      const climb = planClimbOut(world, fence, feet, from, walk);
       return climb.ok
         ? { ...stuck, exit: climb.steps }
         : { ...stuck, problem: `${exit.reason}; ${climb.reason}` };

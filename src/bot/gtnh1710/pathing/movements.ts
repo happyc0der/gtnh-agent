@@ -209,6 +209,13 @@ export class MoveContext {
    */
   floorPlaced = false;
   /**
+   * The feet block being expanded is solid in the world: a block this path broke (the search
+   * reaches no other node with the body in a solid block). A pillar breaks the block over the
+   * head, which two pillars on is the feet block: placing may fill it although the world still
+   * shows the block (seen 2026-10-04: a climb up a shaft under a roof stopped two blocks up).
+   */
+  feetBroken = false;
+  /**
    * The feet block being expanded is a doorway: the axes the body may leave it along (1 along
    * x, 2 along z: the one it came in on), with IN_DOORWAY set; 0 out of doorways.
    */
@@ -319,8 +326,18 @@ export class MoveContext {
    * caller's canPlace, and the pathfinder's own rules (see the file comment). The block
    * clicked is the floor of the feet block the movement starts from: with `floorPlaced` it is
    * one this path placed (a pillar or bridge before), which the world does not show yet.
+   * With `broken`, (x, y, z) is a block this path broke (feetBroken): it takes a block
+   * although the world still shows the old one.
    */
-  canPlaceAt(x: number, y: number, z: number, ax: number, ay: number, az: number): boolean {
+  canPlaceAt(
+    x: number,
+    y: number,
+    z: number,
+    ax: number,
+    ay: number,
+    az: number,
+    broken = false,
+  ): boolean {
     const t = this.options.throwaway;
     const canPlace = this.options.canPlace;
     if (t === null || t.count <= 0 || canPlace === null) return false;
@@ -328,6 +345,7 @@ export class MoveContext {
     if (!this.floorPlaced && !c.has(ax, ay, az, CELL.CLICKABLE)) return false;
     const onPlaced = this.floorPlaced && ax === x && ay === y - 1 && az === z;
     if (t.falls && !onPlaced && !c.has(x, y - 1, z, CELL.SOLID)) return false;
+    if (broken) return this.#cellTakesBlock(x, y, z, canPlace, true);
     // What does not depend on the block clicked, kept per cell.
     const i = c.index(x, y, z);
     const kept = (this.#placeOk ??= new Int8Array(c.volume));
@@ -337,9 +355,15 @@ export class MoveContext {
     return ok;
   }
 
-  #cellTakesBlock(x: number, y: number, z: number, canPlace: (cell: Cell) => boolean): boolean {
+  #cellTakesBlock(
+    x: number,
+    y: number,
+    z: number,
+    canPlace: (cell: Cell) => boolean,
+    broken = false,
+  ): boolean {
     const c = this.cells;
-    if (!c.has(x, y, z, CELL.REPLACEABLE) || c.nearHazard(x, y, z)) return false;
+    if (!(broken || c.has(x, y, z, CELL.REPLACEABLE)) || c.nearHazard(x, y, z)) return false;
     for (const [dx, dy, dz] of FACES) if (c.has(x + dx, y + dy, z + dz, CELL.LIQUID)) return false;
     return canPlace({ x, y, z });
   }
@@ -612,7 +636,7 @@ const pillar: Evaluate = (ctx, x, y, z, _d, detail) => {
   const o = ctx.options;
   const c = ctx.cells;
   if (!o.pillar || c.has(x, y, z, CELL.WATER) || !ctx.inFence(x, y + 1, z)) return Infinity;
-  if (!ctx.canPlaceAt(x, y, z, x, y - 1, z)) return Infinity;
+  if (!ctx.canPlaceAt(x, y, z, x, y - 1, z, ctx.feetBroken)) return Infinity;
   // As for an ascend: sand or gravel over the head is never broken.
   if (c.has(x, y + 2, z, CELL.FALLING)) return Infinity;
   const head = ctx.open(x, y + 2, z, detail);

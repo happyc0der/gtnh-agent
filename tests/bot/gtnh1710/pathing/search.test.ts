@@ -14,7 +14,7 @@ import {
   type PathOptions,
   type PathResult,
 } from '../../../../src/bot/gtnh1710/pathing/search.ts';
-import { area, B, centre, poolWorld, TestWorld } from '../fixtures/path-worlds.ts';
+import { area, at, B, centre, poolWorld, TestWorld } from '../fixtures/path-worlds.ts';
 
 const kinds = (r: PathResult): string[] => r.movements.map((m) => m.kind);
 const breaks = (r: PathResult) => r.movements.flatMap((m) => m.breaks.map((b) => b.cell));
@@ -186,6 +186,21 @@ describe('the search', () => {
     expect(planPath(pit, area(6, 56, 70), centre(0, 61, 0), goalBlock(3, 64, 0)).status).toBe(
       'none',
     );
+
+    // Up through solid ground (the fence is the one column: no staircase), breaking the block
+    // over the head before each jump: two pillars on, the feet are in a block the path broke,
+    // which the world still shows and the next pillar fills.
+    const rock = new TestWorld().fill(at(0, 55, 0), at(0, 56, 0), B.air);
+    const column = { min: { x: 0, y: 50, z: 0 }, max: { x: 0, y: 70, z: 0 } };
+    const up = planPath(rock, column, centre(0, 55, 0), goalY(64), {
+      ...PLACING,
+      pillar: true,
+      canBreak: () => 5,
+    });
+    expect(up.status).toBe('reached');
+    expect(kinds(up)).toEqual(Array<string>(9).fill('pillar'));
+    expect(breaks(up).map((c) => c.y)).toEqual([57, 58, 59, 60, 61, 62, 63]);
+    expect(up.movements.map((m) => m.place?.cell.y)).toEqual([55, 56, 57, 58, 59, 60, 61, 62, 63]);
 
     const river = new TestWorld((x) => (x >= 1 && x <= 3 ? 55 : 63));
     const across = planPath(river, STRIP, FROM, goalBlock(6, 64, 0), { ...PLACING, bridge: true });
