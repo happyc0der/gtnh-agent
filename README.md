@@ -42,7 +42,8 @@ the play area that moves with the player) and within the safety boundary.
 | Fight: strike a listed hostile or a farm animal, defend                                    | `MC_ENABLE_COMBAT`                              | fake server only                  |
 
 "Fake server" is the repository's fake GTNH server (`tests/bot/gtnh1710/fixtures/fake-server.ts`), which
-the tests run against.
+the tests run against. How it compares with Baritone, row by row:
+[docs/baritone-parity.md](docs/baritone-parity.md).
 
 **Local models are opt-in:** `AGENT_DECISIONS=ollama` and `AGENT_PLANNER=ollama` (see
 [docs/local-llm-integration.md](docs/local-llm-integration.md)). Without them, a rule-based router
