@@ -1411,6 +1411,55 @@ describe("owners' commands in play", () => {
     expect(second.every((r) => r.direction === 'north' || r.direction === 'south')).toBe(true);
     expect(second.every((r) => r.length === 2 && r.start.y === 63)).toBe(true);
     expect(repos.tasks.get('command-1')?.status).toBe('completed');
+
+    // The way it turned to, blocked before a cell was dug (the world changed): it never goes
+    // back along the leg before (west), and with no other way it says why.
+    const later = newSim({ heard: [whisper('!tunnel down 3')] });
+    const asked: TunnelRequest[] = [];
+    let northPicked = false;
+    const changing = (req: TunnelRequest): Promise<TunnelPlan> => {
+      asked.push(req);
+      const turned = req.start.x === 1;
+      if (turned && req.direction === 'north' && northPicked) {
+        return Promise.resolve({ ok: true, done: 0, steps: [], problem: 'gravel fell in' });
+      }
+      if (turned && req.direction === 'north') northPicked = true;
+      if (turned && req.direction === 'east') {
+        return Promise.resolve({ ok: true, done: 0, steps: [], problem: 'still sand' });
+      }
+      return tunnelOf(later, req);
+    };
+    const tunnelOf = (s: Sim, req: TunnelRequest): Promise<TunnelPlan> => {
+      const open = cellsOpen(req);
+      if (open === null) return Promise.resolve({ ok: false, reason: 'not this way' });
+      const [dx, dz] = STEPS[req.direction];
+      const done = Math.max(
+        0,
+        (Math.floor(s.position.x) - req.start.x) * dx +
+          (Math.floor(s.position.z) - req.start.z) * dz,
+      );
+      if (done >= open) {
+        return Promise.resolve({ ok: true, done, steps: [], problem: 'sand overhead' });
+      }
+      const k = done + 1;
+      const target = {
+        x: req.start.x + k * dx + 0.5,
+        y: req.start.y - k,
+        z: req.start.z + k * dz + 0.5,
+      };
+      return Promise.resolve({
+        ok: true,
+        done,
+        steps: [{ spec: { type: 'MOVE_TO', args: { target, tolerance: 0.5 } }, text: 'step' }],
+        problem: k >= open ? 'sand overhead' : null,
+      });
+    };
+    await runPlay(deps(open(), later, { tunnel: changing }), LIMITS, noStop);
+    expect(said(later).slice(-2)).toEqual([
+      'sand overhead: I turn north (1 of 3 blocks dug)',
+      'Failed: gravel fell in (1 of 3 blocks dug)',
+    ]);
+    expect(asked.some((r) => r.start.x === 1 && r.direction === 'west')).toBe(false);
   });
 
   it('idle with a mob near home: play waits offline for it to leave (it stood there once and died)', async () => {

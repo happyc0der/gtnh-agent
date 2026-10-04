@@ -126,6 +126,8 @@ export interface CommandRun {
   /** A tunnel whose way code picks: the cells its legs before this one dug, and its turns. */
   tunnelBefore: number;
   tunnelTurns: number;
+  /** ...and the way of the leg before this one (never gone back along). */
+  tunnelPrevious: TunnelDirection | null;
 }
 
 /**

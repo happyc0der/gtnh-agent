@@ -71,6 +71,12 @@ const OPPOSITE: Readonly<Record<TunnelDirection, TunnelDirection>> = {
   east: 'west',
   west: 'east',
 };
+const OFFSET: Readonly<Record<TunnelDirection, { dx: number; dz: number }>> = {
+  north: { dx: 0, dz: -1 },
+  south: { dx: 0, dz: 1 },
+  east: { dx: 1, dz: 0 },
+  west: { dx: -1, dz: 0 },
+};
 
 /**
  * One session of an owner's tunnel: the next few cells, planned by code from where the bot
@@ -107,6 +113,9 @@ export async function tunnelRound(
   if (direction === null) {
     const picked = await pickWay(play, command, run.tunnelFrom, length, []);
     if (picked !== null && 'problem' in picked) return fail(picked.problem);
+    // Not known yet, or the bot is off the start (a retreat moved it since an earlier try):
+    // it begins again from where it stands, below.
+    if (picked === null) run.tunnelFrom = null;
     if (picked !== null) {
       direction = picked.direction;
       run.tunnelDirection = direction;
@@ -114,10 +123,11 @@ export async function tunnelRound(
       say(play, cmd, `I ${describeCommand({ ...command, direction })}`);
     }
   }
+  const start = run.tunnelFrom;
   const plan =
-    direction === null
+    direction === null || start === null
       ? null
-      : await deps.tunnel({ start: run.tunnelFrom, direction, length, slope: command.slope });
+      : await deps.tunnel({ start, direction, length, slope: command.slope });
   if (plan === null) {
     // Just after joining or respawning the chunks are still coming: wait a moment between tries.
     run.failures += 1;
@@ -136,19 +146,29 @@ export async function tunnelRound(
       return 'next-round';
     }
     const problem = plan.problem ?? 'there is nothing to dig';
-    if (command.direction === null && direction !== null && run.tunnelTurns < MAX_TUNNEL_TURNS) {
-      // Blocked on a way code picked: another one from where the tunnel got to (the bot stands
-      // in its last cell), for the rest of the length; never straight back.
-      const at = (deps.commands as CommandDeps).view().position;
-      const from =
-        at === null
-          ? null
-          : { x: Math.floor(at.x), y: Math.floor(at.y + 1e-6), z: Math.floor(at.z) };
-      const exclude = [direction, OPPOSITE[direction]];
-      const picked =
-        from === null ? null : await pickWay(play, command, from, command.length - total, exclude);
-      if (from !== null && picked !== null && 'direction' in picked) {
+    if (
+      command.direction === null &&
+      direction !== null &&
+      start !== null &&
+      run.tunnelTurns < MAX_TUNNEL_TURNS
+    ) {
+      // Blocked on a way code picked: another one from the tunnel's last cell (where the bot
+      // stands: a plan with no steps is made only there), for the rest of the length; never
+      // straight back, nor back along the leg before when this one dug nothing.
+      const { dx, dz } = OFFSET[direction];
+      const drop = command.slope === 'down' ? 1 : 0;
+      const from = {
+        x: start.x + plan.done * dx,
+        y: start.y - drop * plan.done,
+        z: start.z + plan.done * dz,
+      };
+      const back =
+        plan.done === 0 && run.tunnelPrevious !== null ? [OPPOSITE[run.tunnelPrevious]] : [];
+      const exclude = [direction, OPPOSITE[direction], ...back];
+      const picked = await pickWay(play, command, from, command.length - total, exclude);
+      if (picked !== null && 'direction' in picked) {
         run.tunnelFrom = from;
+        run.tunnelPrevious = direction;
         run.tunnelDirection = picked.direction;
         run.tunnelBefore = total;
         run.tunnelTurns += 1;
@@ -185,6 +205,17 @@ async function pickWay(
 ): Promise<{ direction: TunnelDirection } | { problem: string } | null> {
   const tunnel = play.deps.tunnel;
   if (tunnel === undefined) return { problem: 'I cannot dig a tunnel here' };
+  // Off the start, every way's plan is a walk back to it, which would count as clear (an
+  // independent review, 2026-10-04).
+  const at = (play.deps.commands as CommandDeps).view().position;
+  if (at === null) return null;
+  if (
+    Math.floor(at.x) !== start.x ||
+    Math.floor(at.y + 1e-6) !== start.y ||
+    Math.floor(at.z) !== start.z
+  ) {
+    return null;
+  }
   const room = roomFrom(play, start);
   const why: string[] = [];
   let best: { direction: TunnelDirection; cells: number } | null = null;

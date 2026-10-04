@@ -359,6 +359,20 @@ describe('explore (Baritone #explore)', () => {
     expect(parsed('!goto northgate')).toEqual({ verb: 'goto-waypoint', name: 'northgate' });
     expect(parsed('!goto 10 20')).toEqual({ verb: 'goto', x: 10, y: null, z: 20 });
     expect(parseOwnerCommand('!go somewhere')).toMatchObject({ ok: false });
+    // More than a direction and a distance is the model's to read, not a usage reply (an
+    // independent review, 2026-10-04: these all failed at once).
+    for (const text of [
+      'go north and find a village',
+      'head east to the river',
+      'walk west until you find sand',
+      'go north 2 chunks',
+    ]) {
+      expect(parseOwnerCommand(text), text).toEqual({ ok: false, kind: 'unknown' });
+    }
+    // A waypoint may not be named after a direction: !goto north explores.
+    for (const text of ['!waypoint north', '!waypoint ne']) {
+      expect(parseOwnerCommand(text), text).toMatchObject({ ok: false, kind: 'usage' });
+    }
   });
 
   it('gives its usage for anything else (a word that is no direction, too far, too much)', () => {
@@ -402,7 +416,7 @@ describe('tunnel (Baritone #tunnel)', () => {
     });
     expect(parsed('!tunnel 20 blocks')).toMatchObject({ direction: null, length: 20 });
     expect(describeCommand(parsed('!tunnel down 10'))).toBe('dig stairs 10 blocks down');
-    expect(describeCommand(parsed('!tunnel'))).toBe('dig a tunnel 16 blocks (I pick the way)');
+    expect(describeCommand(parsed('!tunnel'))).toBe('dig a tunnel 16 blocks');
   });
 
   it('gives its usage for a diagonal, two directions, a length past 64 or a stray word', () => {

@@ -107,7 +107,11 @@ export const WaypointNameSchema = z
     WAYPOINT_NAME,
     'expected a waypoint name: lowercase letters, digits, - and _ (max 32, a letter in it)',
   )
-  .refine((n) => !RESERVED_WAYPOINTS.has(n), 'that word is the waypoint command itself');
+  .refine((n) => !RESERVED_WAYPOINTS.has(n), 'that word is the waypoint command itself')
+  .refine(
+    (n) => directionOf(n) === null,
+    'a compass direction: !goto <direction> explores that way',
+  );
 
 const Coordinate = z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT);
 /** How far an explore command goes when the owner names no distance (blocks). */
@@ -349,9 +353,12 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
     args = [];
   }
   if (verb === 'come' && lower(0) === 'to' && lower(1) === 'me' && args.length === 2) args = [];
-  // "go north", "walk 20 blocks east", "head nw": an explore that way.
+  // "go north", "walk 20 blocks east", "head nw": an explore that way, when that is all the
+  // words say ("go north and find a village" is the model's to read: an independent review,
+  // 2026-10-04).
   if (['go', 'walk', 'head'].includes(verb) && args.some((a) => directionOf(a) !== null)) {
-    verb = 'explore';
+    const explore = exploreCommand(args);
+    if (explore.ok) return explore;
   }
   const none = args.length === 0;
   const ok = (command: OwnerCommand): CommandParse => {
@@ -660,7 +667,7 @@ export function describeCommand(c: OwnerCommand): string {
     case 'tunnel':
       return c.slope === 'down'
         ? `dig stairs ${c.length} blocks down${c.direction === null ? '' : `, going ${c.direction}`}`
-        : `dig a tunnel ${c.length} blocks ${c.direction ?? '(I pick the way)'}`;
+        : `dig a tunnel ${c.length} blocks${c.direction === null ? '' : ` ${c.direction}`}`;
     case 'home':
       return 'go home';
     case 'get':
