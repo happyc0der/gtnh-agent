@@ -2,7 +2,7 @@ import type { Cell } from '../terrain.ts';
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
 import { CELL, CellCache, changedWorld, type BlockChange, type CellBox } from './cells.ts';
 import { LEVEL_JUMP_TICKS } from './costs.ts';
-import type { BlockBreak, Movement } from './movements.ts';
+import type { BlockBreak, DoorToggle, Movement } from './movements.ts';
 import {
   AIR_DRAG,
   blocksX,
@@ -61,7 +61,10 @@ import {
  *    once they are above it; land on it;
  *  - bridge: walk to 0.6 past the centre (the eyes beyond the edge, seeing the side of the block
  *    underfoot), stop, place against that side, wait for the server, walk on;
- *  - downward: the dig (before the steps), then the fall into the hole.
+ *  - downward: the dig (before the steps), then the fall into the hole;
+ *  - door: a walk into the doorway; a door or gate in the way is right-clicked first, standing
+ *    still, and once the walk out of the doorway has stopped, right-clicked again: it is left
+ *    as it was found.
  * A movement that breaks blocks, pillars or digs down starts at rest (the one before it stops
  * at its end). If a movement cannot be driven from the way the one before ends, the plan is
  * made again with the one before stopping, so the movement starts from rest.
@@ -100,6 +103,14 @@ export interface StepPlace {
   readonly neededBy: number;
 }
 
+/** A right-click on a door or gate: the cell, the face toward the player, and the change. */
+export interface DoorClick extends DoorToggle {
+  /** 0 bottom, 1 top, 2 north, 3 south, 4 west, 5 east (C08's face). */
+  readonly face: number;
+  /** C08's cursor on that face, in sixteenths. */
+  readonly cursor: Vec3;
+}
+
 /** One movement's part of the plan (or, first, centring on the start block). */
 export interface Segment {
   /** The movement; null for centring on the start block. */
@@ -116,6 +127,10 @@ export interface Segment {
    * began. (Up to there the steps are the same either way.)
    */
   readonly fallback: { readonly fromStep: number; readonly steps: readonly PathStep[] } | null;
+  /** A door or gate opened (or closed) before the first step, standing still. */
+  readonly toggle?: DoorClick | null;
+  /** One opened (or closed) by the movement before, put back after the last step, at rest. */
+  readonly restore?: DoorClick | null;
 }
 
 export type ExecutionPlan =
@@ -261,9 +276,20 @@ function lengthOf(m: Movement): number {
   return Math.hypot(m.to.x - m.from.x, m.to.z - m.from.z);
 }
 
-/** Starts at rest: breaks first, or a vertical movement. */
+/** Starts at rest: breaks first, a door to open first, or a vertical movement. */
 function needsRest(m: Movement): boolean {
-  return m.breaks.length > 0 || m.kind === 'pillar' || m.kind === 'downward';
+  return m.breaks.length > 0 || m.toggle !== null || m.kind === 'pillar' || m.kind === 'downward';
+}
+
+/** The face of a block turned along (dx, dz): east 5, west 4, south 3, north 2. */
+function faceAlong(dx: number, dz: number): number {
+  return dx > 0 ? 5 : dx < 0 ? 4 : dz > 0 ? 3 : 2;
+}
+
+/** The click on `t`'s door from a player on its side (dx, dz) (a unit step), to make it `meta`. */
+function doorClick(t: DoorToggle, dx: number, dz: number, meta: number, was: number): DoorClick {
+  const face = faceAlong(dx, dz);
+  return { ...t, was, meta, face, cursor: FACE_CENTRES[face] as Vec3 };
 }
 
 /**
@@ -508,7 +534,11 @@ class StepBuilder {
         for (let y = y0; y <= y1; y++) {
           for (let z = z0; z <= z1; z++) {
             const flags = v.flags(x, y, z);
-            if ((flags & CELL.PASSABLE) === 0 && !(this.#water && v.calmWater(x, y, z))) {
+            if (
+              (flags & CELL.PASSABLE) === 0 &&
+              !(this.#water && v.calmWater(x, y, z)) &&
+              !v.bodyFitsDoorway(x, y, z, px - h, px + h, pz - h, pz + h)
+            ) {
               return `a step would put the body in the block at (${x}, ${y}, ${z})`;
             }
             if (v.nearHazard(x, y, z))
@@ -726,14 +756,33 @@ function build(
       steps: b.steps.splice(0),
       places: [],
       fallback: null,
+      toggle: null,
+      restore: null,
     });
 
+    /** A door the movement before opened (or closed): put back once this one is through it. */
+    let toRestore: DoorClick | null = null;
     for (index = 0; index < movements.length; index++) {
       const m = movements[index] as Movement;
       const next = movements[index + 1];
       const start: Vec3 = { x: b.body.x, y: b.body.y, z: b.body.z };
       for (const brk of m.breaks) b.change({ cell: brk.cell, block: null });
-      const out = drive(b, m, next, restBefore.has(index + 1));
+      let toggle: DoorClick | null = null;
+      if (m.toggle !== null) {
+        // Clicked from where the player stands, on the side it comes from.
+        toggle = doorClick(m.toggle, -m.dir.x, -m.dir.z, m.toggle.meta, m.toggle.was);
+        b.change({ cell: m.toggle.cell, block: m.toggle.block, meta: m.toggle.meta });
+      }
+      const restore = toRestore;
+      // The walk out of a doorway it opened stops beyond it, for the click that closes it.
+      const out = drive(b, m, next, restBefore.has(index + 1) || restore !== null);
+      if (restore !== null) {
+        b.change({ cell: restore.cell, block: restore.block, meta: restore.meta });
+      }
+      toRestore =
+        m.toggle === null
+          ? null
+          : doorClick(m.toggle, m.dir.x, m.dir.z, m.toggle.was, m.toggle.meta);
       segments.push({
         movement: m,
         start,
@@ -741,6 +790,8 @@ function build(
         steps: b.steps.splice(0),
         places: out.places,
         fallback: out.fallback,
+        toggle,
+        restore,
       });
     }
   } catch (e) {
@@ -793,6 +844,7 @@ function drive(
   switch (m.kind) {
     case 'traverse':
     case 'diagonal':
+    case 'door':
       b.run(l, end, exit, after, centreOf(m.to));
       return { places: [], fallback: null };
     case 'bridge':

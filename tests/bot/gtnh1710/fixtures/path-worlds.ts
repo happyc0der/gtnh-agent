@@ -30,8 +30,12 @@ export const B = {
   yellowFlower: 37,
   fire: 51,
   chest: 54,
+  woodenDoor: 64,
+  ironDoor: 71,
   cactus: 81,
+  fence: 85,
   vine: 106,
+  fenceGate: 107,
   foliage: 1102,
 } as const;
 
@@ -55,8 +59,12 @@ const NAMES = new Map<number, string>([
   [B.yellowFlower, 'minecraft:yellow_flower'],
   [B.fire, 'minecraft:fire'],
   [B.chest, 'minecraft:chest'],
+  [B.woodenDoor, 'minecraft:wooden_door'],
+  [B.ironDoor, 'minecraft:iron_door'],
   [B.cactus, 'minecraft:cactus'],
+  [B.fence, 'minecraft:fence'],
   [B.vine, 'minecraft:vine'],
+  [B.fenceGate, 'minecraft:fence_gate'],
   [B.foliage, 'BiomesOPlenty:foliage'],
 ]);
 

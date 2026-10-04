@@ -8,7 +8,8 @@ import { MAX_WATER_FALL, type PathCosts } from './costs.ts';
  * block, what it costs (ticks, costs.ts), and what it breaks and places. The set and the idea
  * of checking each against the blocks with its own rules are Baritone's (MovementTraverse,
  * MovementDiagonal, MovementAscend, MovementDescend, MovementFall, MovementParkour,
- * MovementPillar, MovementDownward); the rules here are this agent's walker's, written anew.
+ * MovementPillar, MovementDownward, and the doors MovementTraverse opens); the rules here are
+ * this agent's walker's, written anew.
  * The search calls them with no detail (nothing allocated); a found path is rebuilt with it.
  * Pure.
  *
@@ -28,7 +29,10 @@ import { MAX_WATER_FALL, type PathCosts } from './costs.ts';
  *    into calm one-deep water from a height the server's accounting does not punish;
  *  - a parkour jump crosses only gaps it would survive falling into (unless the caller allows
  *    deep ones), with the whole arc clear;
- *  - nothing leaves the search area (the fence): every feet block is inside it.
+ *  - nothing leaves the search area (the fence): every feet block is inside it;
+ *  - a doorway (a door or a fence gate, cells.ts) is entered only by the door movement, along
+ *    an axis its box leaves clear, opened or closed first only when a right-click turns it (a
+ *    wooden door, a gate; never an iron door), and left only along the same axis.
  */
 
 export const MOVEMENT_KINDS = [
@@ -41,6 +45,7 @@ export const MOVEMENT_KINDS = [
   'pillar',
   'bridge',
   'downward',
+  'door',
 ] as const;
 export type MovementKind = (typeof MOVEMENT_KINDS)[number];
 
@@ -54,6 +59,7 @@ const KIND = {
   pillar: 6,
   bridge: 7,
   downward: 8,
+  door: 9,
 } as const;
 
 /** Unit steps across: the four cardinal ones, then the four diagonal ones. */
@@ -79,6 +85,18 @@ const SIDES: ReadonlyArray<readonly [number, number]> = [
 export interface BlockBreak {
   readonly cell: Cell;
   readonly ticks: number;
+}
+
+/**
+ * A door or gate a movement opens or closes with a right-click before it walks in: the cell
+ * clicked (a door's lower half: its metadata holds the open bit), and its metadata before and
+ * after (bit 2, open, turned over; a gate may also turn to open away from the player).
+ */
+export interface DoorToggle {
+  readonly cell: Cell;
+  readonly block: string;
+  readonly was: number;
+  readonly meta: number;
 }
 
 /** A block a movement places: into `cell`, clicking face `face` of the block `against`. */
@@ -110,6 +128,8 @@ export interface Movement {
   readonly gap: number;
   /** Descend and fall: the blocks dropped. */
   readonly drop: number;
+  /** Door: the door or gate opened (or closed) to pass, or null when it was clear already. */
+  readonly toggle: DoorToggle | null;
 }
 
 export interface Throwaway {
@@ -137,6 +157,8 @@ export interface MoveOptions {
   readonly canBreak: ((cell: Cell) => number | null) | null;
   readonly canPlace: ((cell: Cell) => boolean) | null;
   readonly throwaway: Throwaway | null;
+  /** Walking through doorways, opening (or closing) wooden doors and fence gates to pass. */
+  readonly doors: boolean;
 }
 
 /** What a movement's evaluation collects when the path is rebuilt. */
@@ -145,6 +167,7 @@ interface Detail {
   place: BlockPlace | null;
   water: boolean;
   sprint: boolean;
+  toggle: DoorToggle | null;
 }
 
 /** The face of a block pointing along (dx, dz): east 5, west 4, south 3, north 2. */
@@ -183,6 +206,11 @@ export class MoveContext {
    * by a pillar or a bridge): placing may click it although the world still shows air there.
    */
   floorPlaced = false;
+  /**
+   * The feet block being expanded is a doorway: the axes the body may leave it along (1 along
+   * x, 2 along z: the one it came in on), with IN_DOORWAY set; 0 out of doorways.
+   */
+  doorway = 0;
   // Per cell, made when first needed (a search that breaks, places or jumps gaps).
   #breakTicks: Float32Array | null = null;
   #placeOk: Int8Array | null = null;
@@ -587,6 +615,48 @@ const pillar: Evaluate = (ctx, x, y, z, _d, detail) => {
   return ctx.costs.pillar + head;
 };
 
+/**
+ * Into a doorway (a door or a fence gate: cells.ts), one block cardinal, along an axis its box
+ * leaves clear, on its floor: a right-click first when its box is in the way and turns (a
+ * wooden door turns a quarter, a gate opens; an iron door never), which the walk's next
+ * movement undoes once the body is through (execute.ts). Doors must be allowed. Nothing is
+ * broken or placed; the body stands in it centred, and leaves along the same axis (expand).
+ */
+const door: Evaluate = (ctx, x, y, z, d, detail) => {
+  const [dx, dz] = DIRECTIONS[d] as readonly [number, number];
+  const nx = x + dx;
+  const nz = z + dz;
+  ctx.begin(KIND.door, nx, y, nz, 0);
+  if (!ctx.options.doors || d > 3 || !ctx.inFence(nx, y, nz)) return Infinity;
+  const c = ctx.cells;
+  const f = c.flags(nx, y, nz);
+  if ((f & CELL.DOORWAY) === 0 || !c.has(nx, y - 1, nz, CELL.SURFACE)) return Infinity;
+  if (c.has(x, y, z, CELL.WATER)) return Infinity;
+  if (c.nearHazard(nx, y, nz) || c.nearHazard(nx, y + 1, nz)) return Infinity;
+  // A door's upper half is the head's cell (the same door: the same clear axis); over a gate
+  // the head needs room.
+  const head = c.flags(nx, y + 1, nz);
+  const clear = CELL.CLEAR_X | CELL.CLEAR_Z;
+  if ((head & CELL.DOORWAY) !== 0) {
+    if ((head & clear) !== (f & clear)) return Infinity;
+  } else if (!c.open(nx, y + 1, nz)) {
+    return Infinity;
+  }
+  const axis = dx !== 0 ? CELL.CLEAR_X : CELL.CLEAR_Z;
+  if ((f & axis) !== 0) return ctx.costs.walk;
+  if ((f & CELL.TOGGLE) === 0) return Infinity;
+  if (detail !== null) {
+    const was = c.world.metaAt?.(nx, y, nz) ?? 0;
+    detail.toggle = {
+      cell: { x: nx, y, z: nz },
+      block: c.name(nx, y, nz) ?? '',
+      was,
+      meta: was ^ 4,
+    };
+  }
+  return ctx.costs.walk + ctx.costs.door;
+};
+
 /** Digging down: breaking the block underfoot and dropping one block onto a known floor. */
 const downward: Evaluate = (ctx, x, y, z, _d, detail) => {
   ctx.begin(KIND.downward, x, y - 1, z, 1);
@@ -613,6 +683,7 @@ const BY_KIND: readonly Evaluate[] = [
   pillar,
   traverse,
   downward,
+  door,
 ];
 
 export type Emit = (
@@ -625,11 +696,39 @@ export type Emit = (
   places: number,
 ) => void;
 
-const CARDINAL_MOVES: readonly Evaluate[] = [traverse, ascend, drop, parkour];
+const CARDINAL_MOVES: readonly Evaluate[] = [traverse, ascend, drop, parkour, door];
 const VERTICAL_MOVES: readonly Evaluate[] = [pillar, downward];
+const DOORWAY_MOVES: readonly Evaluate[] = [traverse, door];
+
+/** MoveContext.doorway: the feet block is a doorway (with the axes it may be left along). */
+export const IN_DOORWAY = 4;
+
+/** The axis bit (1 along x, 2 along z) of a cardinal direction (an index into DIRECTIONS). */
+const axisOf = (d: number): number => (d < 2 ? 1 : 2);
+
+/**
+ * The axes a body that came into a doorway by the movement with `code` may leave it along,
+ * for MoveContext.doorway: the door movement's own axis (back the same way, or on), else none.
+ */
+export function doorwayAxes(code: number): number {
+  return (code & 15) === KIND.door ? IN_DOORWAY | axisOf((code >> 4) & 15) : IN_DOORWAY;
+}
 
 /** Every movement possible from feet block (x, y, z), each passed to `emit`. */
 export function expand(ctx: MoveContext, x: number, y: number, z: number, emit: Emit): void {
+  if (ctx.doorway !== 0) {
+    // In a doorway: only a walk on (or back) along its clear axis, or into the next doorway.
+    for (let d = 0; d < 4; d++) {
+      if ((ctx.doorway & axisOf(d)) === 0) continue;
+      for (const evaluate of DOORWAY_MOVES) {
+        const cost = evaluate(ctx, x, y, z, d, null);
+        if (cost < Infinity) {
+          emit(ctx.nx, ctx.ny, ctx.nz, cost, ctx.code(d), ctx.breaks, ctx.places);
+        }
+      }
+    }
+    return;
+  }
   for (let d = 0; d < 4; d++) {
     for (const evaluate of CARDINAL_MOVES) {
       const cost = evaluate(ctx, x, y, z, d, null);
@@ -676,7 +775,7 @@ export function describe(ctx: MoveContext, from: Cell, code: number): Movement |
   const evaluate = BY_KIND[kind];
   const name = MOVEMENT_KINDS[kind];
   if (evaluate === undefined || name === undefined) return null;
-  const detail: Detail = { breaks: [], place: null, water: false, sprint: false };
+  const detail: Detail = { breaks: [], place: null, water: false, sprint: false, toggle: null };
   const cost = evaluate(ctx, from.x, from.y, from.z, d, detail);
   if (!(cost < Infinity) || ctx.kind !== kind || ctx.param !== param) return null;
   const vertical = kind === KIND.pillar || kind === KIND.downward;
@@ -693,5 +792,6 @@ export function describe(ctx: MoveContext, from: Cell, code: number): Movement |
     sprint: detail.sprint,
     gap: kind === KIND.parkour ? param : 0,
     drop: kind === KIND.descend || kind === KIND.fall ? param : 0,
+    toggle: detail.toggle,
   };
 }

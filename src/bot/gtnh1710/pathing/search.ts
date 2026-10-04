@@ -17,7 +17,9 @@ import {
   describe,
   DIRECTIONS,
   directionOf,
+  doorwayAxes,
   expand,
+  IN_DOORWAY,
   MoveContext,
   placesFloor,
   walkCode,
@@ -64,6 +66,8 @@ export interface PathOptions {
   readonly downward?: boolean;
   /** Wading in calm one-deep water and falls into it (off by default: walks never enter water). */
   readonly water?: boolean;
+  /** Through doorways, opening (or closing) wooden doors and fence gates to pass (off by default). */
+  readonly doors?: boolean;
   /** The highest fall onto dry ground, 1..3 (default 3: higher ones hurt). */
   readonly maxFall?: number;
   /** The dig time in ticks (with the tool the player would hold), or null: may not be broken. */
@@ -132,6 +136,7 @@ export function resolvePathOptions(options: PathOptions): ResolvedPathOptions | 
     bridge: options.bridge ?? false,
     downward: options.downward ?? false,
     water: options.water ?? false,
+    doors: options.doors ?? false,
     maxFall: Math.max(1, Math.min(3, Math.floor(options.maxFall ?? 3))),
     canBreak: options.canBreak ?? null,
     canPlace: options.canPlace ?? null,
@@ -202,7 +207,11 @@ function prepare(
   if (!ctx.inFence(start.x, start.y, start.z)) {
     return refused('the start is outside the search area', start);
   }
-  if (!cells.footing(start.x, start.y, start.z, move.water)) {
+  // A player in a doorway (a door it walked into, a gate) leaves it along a clear axis.
+  const inDoorway =
+    cells.has(start.x, start.y, start.z, CELL.DOORWAY) &&
+    cells.has(start.x, start.y - 1, start.z, CELL.SURFACE);
+  if (!inDoorway && !cells.footing(start.x, start.y, start.z, move.water)) {
     const why = cells.has(start.x, start.y, start.z, CELL.WATER)
       ? 'its feet are in water (wading is off, or the water is not calm and one deep)'
       : (standProblem(world, start.x, start.y, start.z) ??
@@ -214,7 +223,10 @@ function prepare(
   for (let x = bx0; x <= bx1; x++) {
     for (let y = by0; y <= by1; y++) {
       for (let z = bz0; z <= bz1; z++) {
-        const open = cells.has(x, y, z, CELL.PASSABLE) || (move.water && cells.calmWater(x, y, z));
+        const open =
+          cells.has(x, y, z, CELL.PASSABLE) ||
+          (move.water && cells.calmWater(x, y, z)) ||
+          cells.bodyFitsDoorway(x, y, z, from.x - 0.3, from.x + 0.3, from.z - 0.3, from.z + 0.3);
         if (!open || cells.nearHazard(x, y, z)) {
           return refused(
             `cannot walk from here: the body touches the block at (${x}, ${y}, ${z}), which is not open or is next to a hazard`,
@@ -351,8 +363,8 @@ export function planPath(
     const h = target.heuristic(nx, ny, nz);
     heap.push(i, cost2 + h);
     opened++;
-    // A partial path never ends in water: it may have no way out.
-    if (cells.has(nx, ny, nz, CELL.WATER)) return;
+    // A partial path never ends in water (it may have no way out), nor in a doorway.
+    if (cells.has(nx, ny, nz, CELL.WATER | CELL.DOORWAY)) return;
     for (let k = 0; k < COEFFICIENTS.length; k++) {
       const v = h + cost2 / (COEFFICIENTS[k] as number);
       if (v < (bestValue[k] as number)) {
@@ -393,9 +405,17 @@ export function planPath(
     currentPlaced = placed[i] as number;
     // Reached by a pillar or a bridge: its floor is a block the path places.
     ctx.floorPlaced = (parent[i] as number) >= 0 && placesFloor(via[i] as number);
+    ctx.doorway = doorwayAt(
+      cells,
+      x + x0,
+      y,
+      z + z0,
+      (parent[i] as number) >= 0 ? (via[i] as number) : null,
+    );
     expand(ctx, x + x0, y, z + z0, emit);
   }
   ctx.floorPlaced = false;
+  ctx.doorway = 0;
 
   const result = (status: PathStatus, end: number, reason: string): PathResult => {
     const codes: number[] = [];
@@ -539,6 +559,8 @@ export function floodPath(
 
   const g = new Float64Array(volume).fill(Infinity);
   const viaPlaces = new Uint8Array(volume);
+  /** The code of the movement that reached each spot, for leaving a doorway (doorwayAxes). */
+  const viaCode = new Int32Array(volume).fill(-1);
   const broken = new Uint16Array(volume);
   const placed = new Uint16Array(volume);
   const closed = new Uint8Array(volume);
@@ -563,6 +585,7 @@ export function floodPath(
     broken[i] = b;
     placed[i] = p;
     viaPlaces[i] = placesFloor(code) ? 1 : 0;
+    viaCode[i] = code;
     heap.push(i, cost2);
   };
   let expanded = 0;
@@ -590,9 +613,17 @@ export function floodPath(
     const y = (rest - z) / sz + y0;
     // Reached by a pillar or a bridge: its floor is a block the walk places.
     ctx.floorPlaced = i !== startIndex && viaPlaces[i] === 1;
+    ctx.doorway = doorwayAt(
+      ctx.cells,
+      x + x0,
+      y,
+      z + z0,
+      i === startIndex ? null : (viaCode[i] as number),
+    );
     expand(ctx, x + x0, y, z + z0, emit);
   }
   ctx.floorPlaced = false;
+  ctx.doorway = 0;
   const spotOf = (i: number): FloodSpot => {
     const x = i % sx;
     const rest = (i - x) / sx;
@@ -629,6 +660,21 @@ export function floodPath(
   };
 }
 
+/**
+ * MoveContext.doorway for the feet block (x, y, z): 0 out of doorways; in one, the axes it may
+ * be left along: the one the movement `code` came in on, or (the start: no code) those its
+ * box leaves clear now.
+ */
+function doorwayAt(cells: CellCache, x: number, y: number, z: number, code: number | null): number {
+  if (!cells.has(x, y, z, CELL.DOORWAY)) return 0;
+  if (code !== null) return doorwayAxes(code);
+  return (
+    IN_DOORWAY |
+    (cells.has(x, y, z, CELL.CLEAR_X) ? 1 : 0) |
+    (cells.has(x, y, z, CELL.CLEAR_Z) ? 2 : 0)
+  );
+}
+
 /** A plain walk across at the same level: a traverse or diagonal on dry ground, breaking nothing. */
 function plainWalk(m: Movement | null): m is Movement {
   return (
@@ -654,13 +700,16 @@ function straighten(
 ): { sources: Cell[]; codes: number[] } {
   const outSources: Cell[] = [];
   const outCodes: number[] = [];
+  /** A plain walk that does not start in a doorway (one is left only along its axis). */
+  const plain = (m: Movement | null): m is Movement =>
+    plainWalk(m) && !ctx.cells.has(m.from.x, m.from.y, m.from.z, CELL.DOORWAY);
   /** The steps from `from` with these codes, if each is a plain walk: their ends. */
   const walk = (from: Cell, steps: readonly number[]): Cell[] | null => {
     const ends: Cell[] = [];
     let at = from;
     for (const code of steps) {
       const m = describe(ctx, at, code);
-      if (!plainWalk(m) || m.to.y !== from.y) return null;
+      if (!plain(m) || m.to.y !== from.y) return null;
       ends.push(m.to);
       at = m.to;
     }
@@ -724,7 +773,7 @@ function straighten(
     let e = k;
     while (e < codes.length) {
       const m = describe(ctx, sources[e] as Cell, codes[e] as number);
-      if (!plainWalk(m) || m.from.y !== from.y || m.to.y !== from.y) break;
+      if (!plain(m) || m.from.y !== from.y || m.to.y !== from.y) break;
       e++;
     }
     if (e > k) {
@@ -771,6 +820,9 @@ function replay(
     movements.push(m);
     for (const b of m.breaks) changes.push({ cell: b.cell, block: null });
     if (m.place !== null) changes.push({ cell: m.place.cell, block: m.place.block });
+    if (m.toggle !== null) {
+      changes.push({ cell: m.toggle.cell, block: m.toggle.block, meta: m.toggle.meta });
+    }
   }
   return { movements, cutAt: null };
 }

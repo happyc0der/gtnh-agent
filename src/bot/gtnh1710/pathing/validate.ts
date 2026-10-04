@@ -1,6 +1,6 @@
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
 import { CELL, CellCache, changedWorld, type BlockChange, type CellBox } from './cells.ts';
-import type { ExecutionPlan, PathStep, Segment } from './execute.ts';
+import type { DoorClick, ExecutionPlan, PathStep, Segment } from './execute.ts';
 import {
   blocksX,
   blocksZ,
@@ -232,7 +232,19 @@ class Replay {
     for (let cx = x0; cx <= x1; cx++) {
       for (let cy = cy0; cy <= cy1; cy++) {
         for (let cz = z0; cz <= z1; cz++) {
-          if (!v.has(cx, cy, cz, CELL.PASSABLE) && !(this.#water && v.calmWater(cx, cy, cz))) {
+          if (
+            !v.has(cx, cy, cz, CELL.PASSABLE) &&
+            !(this.#water && v.calmWater(cx, cy, cz)) &&
+            !v.bodyFitsDoorway(
+              cx,
+              cy,
+              cz,
+              x - HALF_WIDTH,
+              x + HALF_WIDTH,
+              z - HALF_WIDTH,
+              z + HALF_WIDTH,
+            )
+          ) {
             return `the box is in the block at (${cx}, ${cy}, ${cz})`;
           }
           if (v.nearHazard(cx, cy, cz))
@@ -297,6 +309,12 @@ export function validatePlan(
     if (Math.hypot(seg.start.x - s.x, seg.start.y - s.y, seg.start.z - s.z) > 1e-7) {
       return fault(-1, 'the segment does not start where the last one ended');
     }
+    if (seg.toggle != null) {
+      // A door is clicked standing still, within reach, and turns as the click says.
+      const why = doorClickProblem(replay.view, s, seg.toggle, replay.mode(s));
+      if (why !== null) return fault(-1, why);
+      replay.change({ cell: seg.toggle.cell, block: seg.toggle.block, meta: seg.toggle.meta });
+    }
     if (seg.breaks.length > 0) {
       // Digging stands still: one idle tick takes off what is carried over.
       const mode = replay.mode(s);
@@ -355,6 +373,12 @@ export function validatePlan(
       }
       if (!t.onGround) return fault(-1, 'the fallback ends in the air');
     }
+    if (seg.restore != null) {
+      // The door the walk turned to pass, put back as it was once the body is through.
+      const why = doorClickProblem(replay.view, s, seg.restore, replay.mode(s));
+      if (why !== null) return fault(seg.steps.length - 1, why);
+      replay.change({ cell: seg.restore.cell, block: seg.restore.block, meta: seg.restore.meta });
+    }
     const m = seg.movement;
     if (m !== null) {
       const feet = { x: Math.floor(s.x), y: Math.round(s.y), z: Math.floor(s.z) };
@@ -401,6 +425,30 @@ export function stepProblem(
     replay.cellsAt(a.x, Math.min(a.y, b.y), Math.max(a.y, b.y), a.z) ??
     replay.cellsAt(b.x, b.y, b.y, b.z)
   );
+}
+
+/**
+ * Why a door or gate may not be clicked now (doors open in the doorway's cell only; the player
+ * stands still on the ground, within reach, not in the doorway), or null.
+ */
+function doorClickProblem(
+  view: CellCache,
+  s: State,
+  click: DoorClick,
+  mode: MoveMode,
+): string | null {
+  const c = click.cell;
+  if (!view.has(c.x, c.y, c.z, CELL.DOORWAY) || !view.has(c.x, c.y, c.z, CELL.TOGGLE)) {
+    return `the click at (${c.x}, ${c.y}, ${c.z}) is on no door or gate a click turns`;
+  }
+  if (!s.onGround || Math.hypot(s.cx, s.cz) > maxAccel(mode, false) + 1e-9) {
+    return 'a door is clicked while moving';
+  }
+  if (Math.hypot(c.x + 0.5 - s.x, c.y + 0.5 - (s.y + 1.62), c.z + 0.5 - s.z) > 4.5) {
+    return `the door at (${c.x}, ${c.y}, ${c.z}) is out of reach`;
+  }
+  if (Math.floor(s.x) === c.x && Math.floor(s.z) === c.z) return 'the player stands in the doorway';
+  return null;
 }
 
 /** Why a block may not be placed into `cell` by clicking face `face` of `against`, or null. */

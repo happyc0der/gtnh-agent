@@ -19,6 +19,15 @@ import type { PhysicsWorld } from './physics.ts';
  * vines like a ladder, which the pathfinder's physics does not model). Everything not known
  * is refused (fail closed): an unloaded cell is solid, not passable, and makes every cell
  * next to it unsafe.
+ *
+ * Doors and fence gates are doorways (DOORWAY): neither passable nor solid, a body may be in
+ * one only along an axis its collision box leaves clear (CLEAR_X, CLEAR_Z) and centred on the
+ * other (bodyFitsDoorway), and only the pathfinder's door movement enters one. 1.7.10's boxes
+ * (BlockDoor.func_150011_b, BlockFenceGate.getCollisionBoundingBoxFromPool): a door is a
+ * panel 3/16 thick along one edge of its cell, turning a quarter when it opens (a closed door
+ * facing 0 or 2, or an open one facing 1 or 3, lies along a west or east edge: clear along
+ * z); a closed gate is a bar across the middle of its cell, 1.5 high (clear along nothing);
+ * an open gate has no box at all.
  */
 
 export const CELL = {
@@ -45,10 +54,56 @@ export const CELL = {
   REPLACEABLE: 1 << 10,
   /** A plain full block to place against: clicking it opens nothing (placing.ts). */
   CLICKABLE: 1 << 11,
+  /** A door or a fence gate (see the file comment): neither passable nor solid. */
+  DOORWAY: 1 << 12,
+  /** A doorway a body centred on the cell's z passes along x, and one centred on its x along z. */
+  CLEAR_X: 1 << 13,
+  CLEAR_Z: 1 << 14,
+  /** A right-click opens or closes it: a wooden door, a fence gate (not an iron door). */
+  TOGGLE: 1 << 16,
 } as const;
 
 /** Internal: a plant passable only at some metadata, decided per cell. */
 const BY_METADATA = 1 << 15;
+/** Internal: a door or a fence gate, its doorway decided per cell from its metadata. */
+const DOOR_ID = 1 << 17;
+const GATE_ID = 1 << 18;
+
+/** A door's panel is this thick (BlockDoor: 0.1875), along one edge of its cell. */
+export const DOOR_THICKNESS = 0.1875;
+
+/** Doors, and whether a right-click opens them (BlockDoor.onBlockActivated: wood, not iron). */
+const DOORS: ReadonlyMap<string, boolean> = new Map([
+  ['minecraft:wooden_door', true],
+  ['minecraft:iron_door', false],
+]);
+const GATES: ReadonlySet<string> = new Set(['minecraft:fence_gate']);
+
+/**
+ * A door cell's doorway flags from the door's two halves' metadata (lower: facing in bits 0-1,
+ * open in bit 2; upper: bit 3 set), or 0 when they are unknown or not one door.
+ */
+function doorFlags(world: WalkWorld, x: number, y: number, z: number, id: number): number {
+  const meta = world.metaAt?.(x, y, z);
+  if (meta === undefined) return 0;
+  const upper = (meta & 8) !== 0;
+  const otherY = upper ? y - 1 : y + 1;
+  if (world.blockAt(x, otherY, z) !== id) return 0;
+  const other = world.metaAt?.(x, otherY, z);
+  if (other === undefined || ((other & 8) !== 0) === upper) return 0;
+  const lower = upper ? other : meta;
+  const open = (lower & 4) !== 0;
+  // The panel lies along a west or east edge (spanning z): clear along z; else along x.
+  const alongZ = ((lower & 1) === 0) !== open;
+  return CELL.DOORWAY | (alongZ ? CELL.CLEAR_Z : CELL.CLEAR_X);
+}
+
+/** A fence gate's doorway flags: open (metadata bit 2), no box at all; closed, a bar. */
+function gateFlags(world: WalkWorld, x: number, y: number, z: number): number {
+  const meta = world.metaAt?.(x, y, z);
+  if (meta === undefined) return 0;
+  return (meta & 4) !== 0 ? CELL.DOORWAY | CELL.CLEAR_X | CELL.CLEAR_Z : CELL.DOORWAY;
+}
 
 const WATER_BLOCKS: ReadonlySet<string> = new Set(['minecraft:water', 'minecraft:flowing_water']);
 const LAVA_BLOCKS: ReadonlySet<string> = new Set(['minecraft:lava', 'minecraft:flowing_lava']);
@@ -110,7 +165,7 @@ export class CellCache implements PhysicsWorld {
   readonly #sx: number;
   readonly #sy: number;
   readonly #sz: number;
-  readonly #flags: Uint16Array;
+  readonly #flags: Uint32Array;
   readonly #derived: Uint16Array;
   readonly #idFlags = new Map<number, number>();
 
@@ -124,7 +179,7 @@ export class CellCache implements PhysicsWorld {
       throw new Error('internal: an empty cell box');
     }
     const volume = this.#sx * this.#sy * this.#sz;
-    this.#flags = new Uint16Array(volume);
+    this.#flags = new Uint32Array(volume);
     this.#derived = new Uint16Array(volume);
   }
 
@@ -168,7 +223,12 @@ export class CellCache implements PhysicsWorld {
       f &= ~BY_METADATA;
       if (passProblem(world, x, y, z) === null) f |= CELL.PASSABLE;
     }
-    if ((f & (CELL.PASSABLE | CELL.LIQUID)) === 0) f |= CELL.SOLID;
+    if ((f & (DOOR_ID | GATE_ID)) !== 0) {
+      // A door or a gate, from its metadata; one not known (or not whole) is solid.
+      f |= (f & DOOR_ID) !== 0 ? doorFlags(world, x, y, z, id) : gateFlags(world, x, y, z);
+      f &= ~(DOOR_ID | GATE_ID);
+    }
+    if ((f & (CELL.PASSABLE | CELL.LIQUID | CELL.DOORWAY)) === 0) f |= CELL.SOLID;
     return f;
   }
 
@@ -191,6 +251,9 @@ export class CellCache implements PhysicsWorld {
       if (LADDER_BLOCKS.has(name)) f |= CELL.LADDER;
       if (PLACE_TARGETS.has(name)) f |= CELL.REPLACEABLE;
       if (CLICKABLE_SUPPORTS.has(name)) f |= CELL.CLICKABLE;
+      const door = DOORS.get(name);
+      if (door !== undefined) f |= DOOR_ID | (door ? CELL.TOGGLE : 0);
+      if (GATES.has(name)) f |= GATE_ID | CELL.TOGGLE;
     }
     this.#idFlags.set(id, f);
     return f;
@@ -205,6 +268,31 @@ export class CellCache implements PhysicsWorld {
     const id = this.world.blockAt(x, y, z);
     if (id === undefined) return undefined;
     return id === 0 ? 'minecraft:air' : this.world.blockName(id);
+  }
+
+  /**
+   * Whether a body spanning [minX, maxX] x [minZ, maxZ] stays clear of the box of the doorway
+   * at (x, y, z): an open gate has none; a door's panel lies along one edge or the other, so a
+   * body passing along a clear axis must keep within the 5/8 between the two edges across it.
+   */
+  bodyFitsDoorway(
+    x: number,
+    y: number,
+    z: number,
+    minX: number,
+    maxX: number,
+    minZ: number,
+    maxZ: number,
+  ): boolean {
+    const f = this.flags(x, y, z);
+    if ((f & CELL.DOORWAY) === 0) return false;
+    const eps = 1e-7;
+    const clearX = (f & CELL.CLEAR_X) !== 0;
+    const clearZ = (f & CELL.CLEAR_Z) !== 0;
+    if (clearX && clearZ) return true;
+    if (clearX) return minZ >= z + DOOR_THICKNESS - eps && maxZ <= z + 1 - DOOR_THICKNESS + eps;
+    if (clearZ) return minX >= x + DOOR_THICKNESS - eps && maxX <= x + 1 - DOOR_THICKNESS + eps;
+    return false;
   }
 
   // PhysicsWorld
@@ -359,22 +447,30 @@ export class CellCache implements PhysicsWorld {
   }
 }
 
-/** A block a path breaks (block null: air afterwards) or places (its registry name). */
+/**
+ * A block a path breaks (block null: air afterwards) or places (its registry name), or a door
+ * or gate it opens or closes (the same block, with its new metadata).
+ */
 export interface BlockChange {
   readonly cell: Cell;
   readonly block: string | null;
+  /** The block's metadata afterwards (default 0). */
+  readonly meta?: number;
 }
 
 /**
  * `world` with `changes` applied, in order (a later change to a cell wins): the world as a
  * path leaves it once it has broken and placed those blocks. A placed block gets an id of its
- * own (negative: no real id is), named as given, with metadata 0 and no hazard.
+ * own (negative: no real id is), named as given, with its metadata (default 0) and no hazard.
+ * A door's two halves are one block: a change to one half re-ids the other with it, so they
+ * still read as one door.
  */
 export function changedWorld(world: WalkWorld, changes: readonly BlockChange[]): WalkWorld {
   if (changes.length === 0) return world;
   const ids = new Map<string, number>();
   const names = new Map<number, string>();
   const at = new Map<string, number>();
+  const metas = new Map<string, number>();
   for (const c of changes) {
     let id = 0;
     if (c.block !== null) {
@@ -382,11 +478,29 @@ export function changedWorld(world: WalkWorld, changes: readonly BlockChange[]):
       ids.set(c.block, id);
       names.set(id, c.block);
     }
-    at.set(`${c.cell.x},${c.cell.y},${c.cell.z}`, id);
+    const k = `${c.cell.x},${c.cell.y},${c.cell.z}`;
+    at.set(k, id);
+    metas.set(k, c.meta ?? 0);
+    if (c.block !== null && DOORS.has(c.block)) {
+      // The door's other half, as it is, under the same new id.
+      for (const dy of [-1, 1]) {
+        const ok = `${c.cell.x},${c.cell.y + dy},${c.cell.z}`;
+        if (at.has(ok)) continue;
+        const otherId = world.blockAt(c.cell.x, c.cell.y + dy, c.cell.z);
+        if (otherId === undefined || world.blockName(otherId) !== c.block) continue;
+        const otherMeta = world.metaAt?.(c.cell.x, c.cell.y + dy, c.cell.z);
+        if (otherMeta === undefined) continue;
+        at.set(ok, id);
+        metas.set(ok, otherMeta);
+      }
+    }
   }
   return {
     blockAt: (x, y, z) => at.get(`${x},${y},${z}`) ?? world.blockAt(x, y, z),
-    metaAt: (x, y, z) => (at.has(`${x},${y},${z}`) ? 0 : world.metaAt?.(x, y, z)),
+    metaAt: (x, y, z) => {
+      const k = `${x},${y},${z}`;
+      return at.has(k) ? metas.get(k) : world.metaAt?.(x, y, z);
+    },
     blockName: (id) => names.get(id) ?? world.blockName(id),
     hazardCode: (id) => (names.has(id) ? BLOCK_CODE.safe : world.hazardCode(id)),
   };

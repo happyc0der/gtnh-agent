@@ -42,6 +42,8 @@ export const STOP_START_TICKS = 2;
 export const BREAK_VERDICT_TICKS = 1 + DIG_SETTLE_TICKS;
 /** After a placement's click: the answer and a quiet 250 ms (client/place-actions.ts). */
 export const PLACE_VERDICT_TICKS = 1 + 5;
+/** A door or gate's right-click: the server's block update (about a tick), and a little more. */
+export const DOOR_CLICK_TICKS = 1 + 3;
 /** Where a running jump takes off: about this far past the centre (the body leaves the block at 0.8). */
 const TAKE_OFF = 0.6;
 /**
@@ -146,6 +148,11 @@ export interface PathCosts {
   readonly breakExtra: number;
   /** Once per move that breaks: coming to rest first. */
   readonly breakStart: number;
+  /**
+   * On top of a walk into a doorway it opens (or closes) to pass: coming to rest, the click,
+   * and the one after it that leaves the door as it was.
+   */
+  readonly door: number;
 }
 
 export interface CostOptions extends Penalties {
@@ -195,6 +202,7 @@ export function pathCosts(o: CostOptions): PathCosts {
     downward: STOP_START_TICKS + BREAK_VERDICT_TICKS + fallLandingTick(1) + o.breakPenalty,
     breakExtra: BREAK_VERDICT_TICKS + o.breakPenalty,
     breakStart: STOP_START_TICKS,
+    door: 2 * STOP_START_TICKS + 2 * DOOR_CLICK_TICKS,
   };
 }
 
