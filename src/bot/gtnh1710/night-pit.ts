@@ -19,7 +19,7 @@ import { passProblem } from './passable.ts';
 import { goalOut } from './pathing/goals.ts';
 import { planPath, type PathOptions } from './pathing/search.ts';
 import { checkPlace } from './placing.ts';
-import { planTerrainWalk, reachableFeet, standProblem } from './terrain.ts';
+import { planTerrainWalk, reachableFeet, standProblem, TERRAIN_SURFACES } from './terrain.ts';
 import { WALKABLE_SURFACES, type Fence, type Vec3, type WalkWorld } from './walking.ts';
 
 /**
@@ -198,6 +198,31 @@ export function enclosedIn(world: WalkWorld, feet: Vec3): boolean | null {
     y: Math.floor(feet.y + EPS) + 2,
     z: Math.floor(feet.z),
   });
+}
+
+/**
+ * Sealed in, as the safety rules trust it (GameState player.sealed): the four cells beside
+ * the feet, the four beside the head, the one above the head and the one below the feet are
+ * all known full blocks (TERRAIN_SURFACES). Stricter than enclosedIn, which takes any block
+ * the body cannot pass: no door (a zombie breaks one on Hard), no fluid a mob swims through,
+ * no thin block it steps over. Null when one of them is not loaded.
+ */
+export function sealedIn(world: WalkWorld, feet: Vec3): boolean | null {
+  const x = Math.floor(feet.x);
+  const y = Math.floor(feet.y + EPS);
+  const z = Math.floor(feet.z);
+  const cells: BlockPos[] = [
+    { x, y: y - 1, z },
+    { x, y: y + 2, z },
+    ...SIDES.flatMap(([dx, dz]) => [0, 1].map((dy) => ({ x: x + dx, y: y + dy, z: z + dz }))),
+  ];
+  let all = true;
+  for (const p of cells) {
+    if (world.blockAt(p.x, p.y, p.z) === undefined) return null;
+    const name = nameAt(world, p);
+    all &&= name !== undefined && TERRAIN_SURFACES.has(name);
+  }
+  return all;
 }
 
 /**

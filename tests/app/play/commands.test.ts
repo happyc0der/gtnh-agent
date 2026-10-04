@@ -513,6 +513,31 @@ describe("owners' commands in play", () => {
     ]);
   });
 
+  it('explores toward a direction, from where it began: a point fixed then (Baritone #explore)', async () => {
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!explore north 50')] });
+    await runPlay(deps(repos, sim), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: exploring north toward 1 -49',
+      'Done: explored 50 blocks north',
+    ]);
+    expect(sim.steps).toEqual(['MOVE_TO 1 -49']);
+    // Toward the boundary: no farther than the room left that way; with too little, it fails.
+    const near = newSim({
+      position: { x: 0.5, y: 64, z: -230.5 },
+      heard: [whisper('!explore n 100')],
+    });
+    await runPlay(deps(open(), near), LIMITS, noStop);
+    expect(said(near)[0]).toBe('OK: exploring north toward 1 -255');
+    const edge = newSim({
+      position: { x: 0.5, y: 64, z: -250.5 },
+      heard: [whisper('!explore north 100')],
+    });
+    await runPlay(deps(open(), edge), LIMITS, noStop);
+    expect(said(edge)).toEqual(['Failed: my safety boundary is 5 blocks north of here']);
+    expect(edge.steps).toEqual([]);
+  });
+
   it('at night the shelter keeps priority: commands are answered, travel waits for the morning', async () => {
     const repos = open();
     const night = worldTime(18_000, true);
@@ -540,6 +565,40 @@ describe("owners' commands in play", () => {
     expect(said(sim)).toEqual([
       'It is night: I stay in my shelter until morning, then I come to you',
       'at 0 64 0, health 20/20, food 20/20; sheltered for the night (morning in about 5 min)',
+      'OK: coming to you',
+      'Done: here, 1 block from you',
+    ]);
+    expect(sim.sessions).toEqual(['command-1']);
+  });
+
+  it('in the morning, sealed in with hostiles near: commands are answered, travel waits for them to go', async () => {
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!come'), whisper('!status')] });
+    let walled = true;
+    sim.onSleep = () => {
+      walled = false; // the zombie burnt; and in the test, the shelter is gone with it
+    };
+    await runPlay(
+      deps(repos, sim, {
+        time: () => Promise.resolve(worldTime(1_000, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit' as const,
+            sheltered: walled,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled,
+            exit: [],
+            hostiles: walled ? '1 hostile(s), nearest at 4.0 blocks' : null,
+          }),
+      }),
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual([
+      'Hostiles are near my shelter: I stay inside until they go, then I come to you',
+      'at 0 64 0, health 20/20, food 20/20; staying in my shelter until the hostiles near it go (1 hostile(s), nearest at 4.0 blocks)',
       'OK: coming to you',
       'Done: here, 1 block from you',
     ]);

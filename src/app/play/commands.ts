@@ -1,4 +1,6 @@
+import { MIN_EXPLORE_DISTANCE } from '../../domain/actions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
+import { COMPASS, summarizeExploration, wanderTarget } from '../../domain/world-memory.ts';
 import { gtOreByName } from '../../goals/ore-names.ts';
 import type { Position } from '../../domain/common.ts';
 import {
@@ -141,6 +143,7 @@ function runOf(play: PlayState, id: number): CommandRun {
       missing: null,
       stuck: 0,
       startHave: null,
+      exploreTo: null,
     };
     play.commandRuns.set(id, run);
   }
@@ -282,10 +285,10 @@ async function handleQueued(
   // One action command at a time: the newest replaces the others.
   const replaced = replaceOthers(play, cmd.id);
   if (mode === 'night') {
-    sayOnce(play, cmd, 'night', nightNote(command));
+    sayOnce(play, cmd, nightKey(play), nightNote(play, command));
     return;
   }
-  const problem = checkAction(play, command);
+  const problem = checkAction(play, cmd, command);
   if (problem !== null) {
     finish(play, cmd, 'failed', `Failed: ${problem}`);
     return;
@@ -298,8 +301,14 @@ async function handleQueued(
   play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: ack });
 }
 
-const nightNote = (c: OwnerCommand): string =>
-  `It is night: I stay in my shelter until morning, then I ${describeCommand(c)}`;
+const nightNote = (play: PlayState, c: OwnerCommand): string =>
+  play.sheltered !== null && 'mobs' in play.sheltered
+    ? `Hostiles are near my shelter: I stay inside until they go, then I ${describeCommand(c)}`
+    : `It is night: I stay in my shelter until morning, then I ${describeCommand(c)}`;
+
+/** The say-once key of nightNote: its words change when the morning's wait is for mobs. */
+const nightKey = (play: PlayState): string =>
+  play.sheltered !== null && 'mobs' in play.sheltered ? 'mobs' : 'night';
 
 /**
  * In the shelter at night (night.ts): commands are heard and answered; travel and goals wait
@@ -310,7 +319,7 @@ export async function commandsAtNight(play: PlayState): Promise<void> {
   await takeCommands(play, 'night');
   const running = play.deps.repos.commands.running();
   if (running?.command != null && isActionCommand(running.command)) {
-    sayOnce(play, running, 'night', nightNote(running.command));
+    sayOnce(play, running, nightKey(play), nightNote(play, running.command));
   }
 }
 
@@ -354,7 +363,11 @@ function outsideBoundary(
 }
 
 /** Why an action command cannot even start, or null. */
-function checkAction(play: PlayState, command: ActionCommand): string | null {
+function checkAction(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  command: ActionCommand,
+): string | null {
   const commands = play.deps.commands as CommandDeps;
   switch (command.verb) {
     case 'follow':
@@ -376,6 +389,11 @@ function checkAction(play: PlayState, command: ActionCommand): string | null {
       if (here !== null && at.dimension !== here) return `${name} is in ${at.dimension}`;
       return outsideBoundary(commands.boundary, at.position);
     }
+    case 'explore': {
+      // Its point is fixed now, from here (exploreTarget): none, and it fails.
+      const to = exploreTarget(play, cmd, command);
+      return 'problem' in to ? to.problem : null;
+    }
     case 'come':
     case 'get':
     case 'mine':
@@ -395,6 +413,12 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
         : `following ${c.player}`;
     case 'goto':
       return `going to ${fmt(c)}`;
+    case 'explore': {
+      const to = exploreTarget(play, cmd, c);
+      return 'problem' in to
+        ? `not exploring: ${to.problem}`
+        : `exploring ${to.direction.replace('_', '-')} toward ${fmt({ x: to.x, y: null, z: to.z })}`;
+    }
     case 'goto-waypoint':
     case 'home': {
       const name = c.verb === 'home' ? (play.deps.commands as CommandDeps).homeName : c.name;
@@ -590,7 +614,9 @@ function statusText(play: PlayState): string {
       : off !== null
         ? off
         : shelter !== null
-          ? `sheltered for the night (morning in about ${Math.max(1, Math.round((shelter.until - play.now()) / 60_000))} min)`
+          ? 'mobs' in shelter
+            ? `staying in my shelter until the hostiles near it go (${shelter.mobs.slice(0, 80)})`
+            : `sheltered for the night (morning in about ${Math.max(1, Math.round((shelter.until - play.now()) / 60_000))} min)`
           : task !== null && task.status === 'active'
             ? `working on: ${task.goal.slice(0, 80)}`
             : 'idle';
@@ -659,6 +685,12 @@ function travelTarget(
     }
     case 'goto':
       return { target: { kind: 'point', point: { x: c.x, y: c.y, z: c.z } } };
+    case 'explore': {
+      const to = exploreTarget(play, cmd, c);
+      return 'problem' in to
+        ? to
+        : { target: { kind: 'point', point: { x: to.x, y: null, z: to.z } } };
+    }
     case 'goto-waypoint':
     case 'home': {
       const name = c.verb === 'home' ? commands.homeName : c.name;
@@ -670,6 +702,47 @@ function travelTarget(
   }
 }
 
+/**
+ * Where an explore command heads: `distance` blocks toward its direction (or, with none, the
+ * one world memory has seen least: wanderTarget) from where the bot stood when it began, no
+ * farther than the room left to the safety boundary that way; fixed then, so it does not
+ * move on with the bot.
+ */
+function exploreTarget(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  c: Extract<TravelCommand, { verb: 'explore' }>,
+): { x: number; z: number; direction: string } | { problem: string } {
+  const run = runOf(play, cmd.id);
+  if (run.exploreTo !== null) return run.exploreTo;
+  const commands = play.deps.commands as CommandDeps;
+  const view = commands.view();
+  const at = view.position;
+  if (at === null || view.dimension === null) return { problem: 'I do not know where I am' };
+  const summary = summarizeExploration({
+    chunks: play.deps.repos.worldMemory.chunks(view.dimension),
+    from: at,
+    boundary: commands.boundary,
+    now: new Date(play.now()),
+  });
+  const direction = c.direction ?? wanderTarget(summary, at, MIN_EXPLORE_DISTANCE)?.direction;
+  if (direction === undefined) return { problem: 'no way out of my safety boundary is left' };
+  const room = summary.directions[direction]?.room ?? 0;
+  const distance = Math.min(c.distance, room);
+  if (distance < MIN_EXPLORE_DISTANCE) {
+    return {
+      problem: `my safety boundary is ${room} blocks ${direction.replace('_', '-')} of here`,
+    };
+  }
+  const u = COMPASS[direction];
+  run.exploreTo = {
+    x: Math.round(at.x + u.x * distance),
+    z: Math.round(at.z + u.z * distance),
+    direction,
+  };
+  return run.exploreTo;
+}
+
 const blocks = (n: number): string => `${n} block${n === 1 ? '' : 's'}`;
 
 function arrivedText(play: PlayState, c: TravelCommand, distance: number): string {
@@ -679,6 +752,8 @@ function arrivedText(play: PlayState, c: TravelCommand, distance: number): strin
       return `Done: here, ${blocks(distance)} from you`;
     case 'goto':
       return `Done: at ${fmt(c)}`;
+    case 'explore':
+      return `Done: explored ${c.distance} blocks${c.direction === null ? '' : ` ${c.direction.replace('_', '-')}`}`;
     case 'goto-waypoint':
       return `Done: at ${c.name}`;
     case 'home':

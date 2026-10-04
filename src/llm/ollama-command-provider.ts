@@ -20,6 +20,7 @@ export const MODEL_COMMAND_VERBS = [
   'come',
   'follow',
   'goto',
+  'explore',
   'get',
   'mine',
   'sethome',
@@ -53,6 +54,7 @@ help: list the commands
 come: walk to the owner
 follow: follow the owner; args [player] to follow that player
 goto: args [x, y, z], [x, z] or [waypoint]: travel there
+explore: args [], [direction], [blocks] or [direction, blocks] (direction north, north_east, east... ; blocks 8-256): explore new ground that way
 get: args [count, item]: gather until it has that many (item like log, sand, cobblestone, minecraft:dirt)
 mine: args [count, block]: mine that block until it has that many of what it drops (a GregTech ore by its name and "ore": ["16", "iron", "ore"])
 sethome: home is where it stands; home: go home

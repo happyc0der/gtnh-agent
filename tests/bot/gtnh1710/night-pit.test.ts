@@ -8,6 +8,7 @@ import {
   planNightPit,
   planShelterExit,
   PlannedWorld,
+  sealedIn,
   walledIn,
   type PitOptions,
 } from '../../../src/bot/gtnh1710/night-pit.ts';
@@ -384,6 +385,23 @@ describe('the way out in the morning', () => {
     expect(enclosedIn(pit({ [k(0, 63, 0)]: ID.air }), BOTTOM)).toBe(false);
     expect(walledIn(land(), FEET)).toBe(false);
     expect(walledIn(land({}, { unloaded: [[1, 0]] }), FEET)).toBeNull();
+  });
+
+  it('knows when the player is sealed in: known full blocks beside, above and below it', () => {
+    expect(sealedIn(pit(), BOTTOM)).toBe(true);
+    expect(sealedIn(pit({ [k(0, 63, 0)]: ID.air }), BOTTOM)).toBe(false);
+    // Water in a wall: the body cannot pass it (enclosedIn), but a mob swims through.
+    const wet = pit({ [k(1, 61, 0)]: ID.water });
+    expect(enclosedIn(wet, BOTTOM)).toBe(true);
+    expect(sealedIn(wet, BOTTOM)).toBe(false);
+    // A cave under the floor.
+    expect(sealedIn(pit({ [k(0, 60, 0)]: ID.air }), BOTTOM)).toBe(false);
+    expect(
+      sealedIn(
+        land({ [k(0, 62, 0)]: ID.air, [k(0, 61, 0)]: ID.air }, { unloaded: [[0, 1]] }),
+        BOTTOM,
+      ),
+    ).toBeNull();
   });
 
   it('from the pit: the roof, then a staircase where no plant stands on the ground to dig', () => {

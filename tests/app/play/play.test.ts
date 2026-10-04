@@ -9,7 +9,12 @@ import {
   type PlayEvent,
 } from '../../../src/app/play/play.ts';
 import { describePlayEvent } from '../../../src/app/play/narration.ts';
-import { nightSoon, untilSunrise, SHELTER_LEAD_MINUTES } from '../../../src/app/play/night.ts';
+import {
+  MOB_SHELTER_POLL_MS,
+  nightSoon,
+  untilSunrise,
+  SHELTER_LEAD_MINUTES,
+} from '../../../src/app/play/night.ts';
 import { mobPause } from '../../../src/app/play/play-state.ts';
 import type { DecisionResult } from '../../../src/domain/decisions.ts';
 import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
@@ -808,6 +813,65 @@ describe('autonomous play', () => {
     expect(repos.memory.journal('quest-2').at(-1)?.text).toBe(
       'morning: the player dug out of its night shelter to (3.5, 64, 0.5): walking and EXPLORE work again; failures from inside its walls no longer apply',
     );
+  });
+
+  it('in the morning waits sealed in its shelter while hostiles are near, then digs out', async () => {
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    let walled = true;
+    let looks = 0;
+    const exit: ShelterStep[] = [
+      {
+        spec: { type: 'DIG_BLOCK', args: { position: { x: 0, y: 63, z: 0 } } },
+        text: 'dig the minecraft:dirt at (0, 63, 0) (the roof)',
+      },
+    ];
+    const base = deps(repos, world);
+    const events: PlayEvent[] = [];
+    const sleeps: number[] = [];
+    await runPlay(
+      {
+        ...base,
+        time: () => Promise.resolve(worldTime(1_000, true)), // morning
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
+        shelter: () => {
+          looks += 1;
+          return Promise.resolve({
+            kind: 'pit',
+            sheltered: walled,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled,
+            exit: walled ? exit : [],
+            // A zombie about the pit for the first three looks; then it has burnt.
+            hostiles: looks <= 3 ? '1 hostile(s), nearest at 4.0 blocks' : null,
+          });
+        },
+        session: (limits, hooks) => {
+          if (repos.memory.getValue(CURRENT_TASK_KEY) === 'leave-shelter') walled = false;
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    // No session (nothing System 1 would refuse, no exit try spent) while it waits: one look
+    // every MOB_SHELTER_POLL_MS, then the way out, then the day's goal.
+    expect(sleeps).toEqual([MOB_SHELTER_POLL_MS, MOB_SHELTER_POLL_MS, MOB_SHELTER_POLL_MS]);
+    expect(
+      events
+        .filter((e) => e.kind === 'night' || e.kind === 'goal')
+        .map((e) => describePlayEvent(e)),
+    ).toEqual([
+      'night: morning: hostiles near the shelter (1 hostile(s), nearest at 4.0 blocks): waiting inside for them to go',
+      'night: morning: no hostile near any more: leaving the shelter',
+      'goal: "leave the shelter"',
+      'goal: "Q2" - missing 100 minecraft:sand (new task)',
+    ]);
   });
 
   it('stops and says so when walled in with no way out', async () => {

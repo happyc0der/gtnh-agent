@@ -79,6 +79,11 @@ export interface ShelterStatus {
   walled: boolean;
   /** When walled: the way out, in order (digs, then the walk out). Empty otherwise. */
   exit: ShelterStep[];
+  /**
+   * In the morning: the hostiles near that stop it from leaving (the safety rules' words),
+   * else null or absent.
+   */
+  hostiles?: string | null;
 }
 
 /**

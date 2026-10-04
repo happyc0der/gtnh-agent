@@ -1,3 +1,4 @@
+import { recentHurtMs } from '../domain/combat.ts';
 import type { Decision, DecisionResult, FactValue, ReasonCode } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { gettingFood } from '../domain/food.ts';
@@ -44,6 +45,7 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
   'HOSTILE_IN_REACH',
   'CREEPER_NEARBY',
   'TOO_MANY_HOSTILES',
+  'SHELTERED',
   'LOW_HEALTH',
   'HUNGRY',
   'NO_APPROVED_FOOD',
@@ -56,6 +58,7 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  * Priority:
  *   0. unreliable state (unknown/stale/inconsistent)  -> PAUSE_AND_ASK_USER
  *   1. outside work area                               -> PAUSE_AND_ASK_USER
+ *      hostiles nearby, the player sealed in            -> PAUSE (SHELTERED: it stays inside)
  *      hostiles nearby and fighting back is the answer -> DEFEND (only with combat enabled; see
  *                                                         defend.ts: cornered by a quick kill,
  *                                                         or nowhere to retreat to)
@@ -138,6 +141,16 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     if (dangerCodes.has('HAZARD_PROXIMITY')) codes.push('HAZARD_NEARBY');
     if (dangerCodes.has('HOSTILES_NEARBY')) codes.push('HOSTILES_NEARBY');
     if (dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) codes.push('UNCLASSIFIED_ENTITY_NEARBY');
+    // Sealed in (full blocks beside, above and below it: its roofed night pit) and not hurt
+    // lately: no mob can reach the player, and no retreat or fight could leave or strike
+    // through the walls. It stays inside (seen live 2026-10-04: zombies about the night pit at
+    // sunrise, and RETREAT_HOME failed from inside it session after session). Hostiles still
+    // stop every other action: play waits for them to go before it digs out (night.ts).
+    const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp);
+    facts['sealed'] = state.player.sealed;
+    if (!dangerCodes.has('HAZARD_PROXIMITY') && state.player.sealed === true && hurt === null) {
+      return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'SHELTERED']);
+    }
     // Fighting back is considered only when hostiles are the sole danger: never near lava or
     // void, never with an unidentified entity near, never with low health or food.
     if ([...dangerCodes].every((c) => c === 'HOSTILES_NEARBY')) {

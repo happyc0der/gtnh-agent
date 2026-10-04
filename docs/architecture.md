@@ -309,6 +309,18 @@ step up, the upper block first), then a walk onto open ground; from the box, one
 level first) and a walk out. Play runs it as known steps before the day's goal, and the goal's
 journal says the walls are open again. Walled in with no way out, play stops and says why.
 
+**Sealed in with mobs near.** The live observation reports whether the player is sealed in
+(`player.sealed`, `sealedIn` in `night-pit.ts`): the cells beside its feet and head, above its
+head and below its feet are all known full blocks, so no door, fluid or thin block lets a mob
+through. Then System 1 does not retreat or fight while hostiles (or unidentified entities) are
+near, since a walk cannot leave the pit and no blow lands through its walls: it decides
+`PAUSE_AND_ASK_USER` with `SHELTERED`, unless the player was hurt a moment ago or lava is near
+(then the usual rules decide). The hostiles still stop every other action. In the morning, play
+waits inside while they are near (the sun burns zombies and skeletons), looking again every
+5 s, answering commands as at night and saying so in `!status`; it digs out once they are gone,
+and the wait spends none of the exit's tries (seen live 2026-10-04: zombies about the pit at
+sunrise, the retreat home failed from inside it session after session, and the exit gave up).
+
 **A mob near home.** When System 1 pauses only because a mob is near (`HOSTILES_NEARBY` or
 `UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand
 the pause to a person: it sets the task active again, notes it in the journal, and `cli play`

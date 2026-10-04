@@ -67,8 +67,11 @@ export interface PlayState {
    * are heard and answered meanwhile (commands.ts; set by runPlay).
    */
   whileSheltered: () => Promise<void>;
-  /** In the night shelter, waiting for the morning: until when (play.now's clock), else null. */
-  sheltered: { until: number } | null;
+  /**
+   * In the shelter, waiting: for the morning (until when, on play.now's clock), or in the
+   * morning for the hostiles near it to go (what they are); else null.
+   */
+  sheltered: { until: number } | { mobs: string } | null;
 }
 
 /** How an owner's running command is going (commands.ts). */
@@ -85,6 +88,8 @@ export interface CommandRun {
   stuck: number;
   /** A goal: how many of its item the inventory held when the command began. */
   startHave: number | null;
+  /** Explore: the point it heads for, fixed when it began (x, z). */
+  exploreTo: { x: number; z: number; direction: string } | null;
 }
 
 /**

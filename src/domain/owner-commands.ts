@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ExploreDirectionSchema, type ExploreDirection } from './actions.ts';
 import { COORDINATE_LIMIT, ItemNameSchema, MAX_TRANSFER_QUANTITY } from './common.ts';
 
 /**
@@ -99,6 +100,10 @@ export const WaypointNameSchema = z
   .refine((n) => !RESERVED_WAYPOINTS.has(n), 'that word is the waypoint command itself');
 
 const Coordinate = z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT);
+/** How far an explore command goes when the owner names no distance (blocks). */
+export const EXPLORE_COMMAND_DISTANCE = 64;
+/** The farthest an explore command goes (blocks): more is a goto. */
+export const EXPLORE_COMMAND_MAX = 256;
 const Count = z.int().min(1).max(MAX_GOAL_COUNT);
 
 export const OwnerCommandSchema = z.discriminatedUnion('verb', [
@@ -122,6 +127,15 @@ export const OwnerCommandSchema = z.discriminatedUnion('verb', [
   }),
   /** Travel to a named location (a waypoint, home included). */
   z.strictObject({ verb: z.literal('goto-waypoint'), name: WaypointNameSchema }),
+  /**
+   * Explore `distance` blocks toward a compass direction (null: the one seen least), as
+   * Baritone's #explore: a travel to the point that far that way from where it starts.
+   */
+  z.strictObject({
+    verb: z.literal('explore'),
+    direction: ExploreDirectionSchema.nullable(),
+    distance: z.int().min(8).max(EXPLORE_COMMAND_MAX),
+  }),
   /** Have `count` of `item`, pursued like `cli play --needs`. */
   z.strictObject({ verb: z.literal('get'), count: Count, item: ItemNameSchema }),
   /** Have `count` of what `block` drops (`item`), by mining it, likewise. */
@@ -147,7 +161,7 @@ export type OwnerVerb = OwnerCommand['verb'];
 /** Commands that walk somewhere: come, follow, goto (a point or a waypoint), home. */
 export type TravelCommand = Extract<
   OwnerCommand,
-  { verb: 'come' | 'follow' | 'goto' | 'goto-waypoint' | 'home' }
+  { verb: 'come' | 'follow' | 'goto' | 'goto-waypoint' | 'home' | 'explore' }
 >;
 /** Commands that pursue items to have: get, mine. */
 export type GoalCommand = Extract<OwnerCommand, { verb: 'get' | 'mine' }>;
@@ -162,6 +176,7 @@ const TRAVEL_VERBS: ReadonlySet<OwnerVerb> = new Set<OwnerVerb>([
   'goto',
   'goto-waypoint',
   'home',
+  'explore',
 ]);
 
 export function isTravelCommand(c: OwnerCommand): c is TravelCommand {
@@ -219,6 +234,7 @@ const MINE_DROPS: Readonly<Record<string, string>> = {
 export const USAGE: Readonly<Partial<Record<string, string>>> = {
   follow: 'usage: !follow [player]',
   goto: 'usage: !goto <x> <y> <z>, !goto <x> <z> or !goto <waypoint>',
+  explore: 'usage: !explore [direction] [blocks], e.g. !explore north 100 (8-256 blocks)',
   get: 'usage: !get <count> <item>, e.g. !get 20 logs',
   mine: 'usage: !mine <count> <block>, e.g. !mine 10 sand or !mine 16 iron ore',
   quests: 'usage: !quests on or !quests off',
@@ -227,6 +243,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
 
 export const HELP_TEXT =
   'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z> | <waypoint> ' +
+  '!explore [direction] [blocks] ' +
   '!get <n> <item> !mine <n> <block> !sethome !home !waypoint <name> | delete <name> ' +
   '!waypoints !quests on|off';
 
@@ -313,6 +330,8 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
         : usage(verb);
     case 'goto':
       return gotoCommand(args);
+    case 'explore':
+      return exploreCommand(args);
     case 'home':
       return none ? ok({ verb: 'home' }) : usage(verb);
     case 'sethome':
@@ -358,6 +377,44 @@ function gotoCommand(args: readonly string[]): CommandParse {
   }
   const parsed = OwnerCommandSchema.safeParse(command);
   return parsed.success ? { ok: true, command: parsed.data } : usage('goto');
+}
+
+/** Words for the compass directions: "north", "n", "northeast", "north-east", "ne"... */
+function directionOf(word: string): ExploreDirection | null {
+  const w = word.toLowerCase().replace(/[-\s]/g, '_');
+  const short: Readonly<Record<string, ExploreDirection>> = {
+    n: 'north',
+    ne: 'north_east',
+    e: 'east',
+    se: 'south_east',
+    s: 'south',
+    sw: 'south_west',
+    w: 'west',
+    nw: 'north_west',
+    northeast: 'north_east',
+    southeast: 'south_east',
+    southwest: 'south_west',
+    northwest: 'north_west',
+  };
+  const parsed = ExploreDirectionSchema.safeParse(w);
+  return parsed.success ? parsed.data : (short[w] ?? null);
+}
+
+function exploreCommand(args: readonly string[]): CommandParse {
+  // "explore", "explore north", "explore 100", "explore north 100", "explore 100 north".
+  let direction: ExploreDirection | null = null;
+  let distance = EXPLORE_COMMAND_DISTANCE;
+  for (const a of args) {
+    if (NUMBER.test(a)) distance = Number(a);
+    else {
+      const d = directionOf(a);
+      if (d === null || direction !== null) return usage('explore');
+      direction = d;
+    }
+  }
+  if (args.length > 2) return usage('explore');
+  const parsed = OwnerCommandSchema.safeParse({ verb: 'explore', direction, distance });
+  return parsed.success ? { ok: true, command: parsed.data } : usage('explore');
 }
 
 function goalCommand(
@@ -442,6 +499,8 @@ export function describeCommand(c: OwnerCommand): string {
       return `go to ${coord(c.x)} ${c.y === null ? '' : `${coord(c.y)} `}${coord(c.z)}`;
     case 'goto-waypoint':
       return `go to waypoint ${c.name}`;
+    case 'explore':
+      return `explore ${c.distance} blocks ${c.direction === null ? 'the way I have seen least' : c.direction.replace('_', '-')}`;
     case 'home':
       return 'go home';
     case 'get':

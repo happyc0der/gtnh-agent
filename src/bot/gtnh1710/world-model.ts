@@ -2104,6 +2104,8 @@ export class WorldModel {
         heldTool: this.#heldTool(),
         weapon: this.#weapon(),
         lastHurtAt: this.#lastHurtAt === null ? null : this.#lastHurtAt.toISOString(),
+        // The client's observe() works it out from the blocks (client/observation.ts).
+        sealed: null,
       },
       inventory: this.#inventory(),
       nearbyThreats: this.#threats(now),

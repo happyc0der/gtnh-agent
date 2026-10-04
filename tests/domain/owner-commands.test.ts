@@ -241,3 +241,29 @@ describe('the structured form', () => {
     expect(resolveItemName('two words')).toBeNull();
   });
 });
+
+describe('explore (Baritone #explore)', () => {
+  it('takes a compass direction and a distance in either order, both optional', () => {
+    expect(parsed('!explore')).toEqual({ verb: 'explore', direction: null, distance: 64 });
+    expect(parsed('!explore north')).toEqual({ verb: 'explore', direction: 'north', distance: 64 });
+    expect(parsed('!explore ne 100')).toEqual({
+      verb: 'explore',
+      direction: 'north_east',
+      distance: 100,
+    });
+    expect(parsed('!explore 40 south-west')).toEqual({
+      verb: 'explore',
+      direction: 'south_west',
+      distance: 40,
+    });
+    expect(describeCommand(parsed('!explore north 100'))).toBe('explore 100 blocks north');
+    expect(describeCommand(parsed('!explore'))).toBe('explore 64 blocks the way I have seen least');
+  });
+
+  it('gives its usage for anything else (a word that is no direction, too far, too much)', () => {
+    for (const text of ['!explore up', '!explore 300', '!explore north south', '!explore 5']) {
+      const p = parseOwnerCommand(text);
+      expect(p, text).toMatchObject({ ok: false, kind: 'usage' });
+    }
+  });
+});

@@ -231,6 +231,15 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
   const { deps, limits } = play;
   if (deps.shelter !== undefined) {
     const status = await deps.shelter('morning');
+    const mobs = status?.walled === true && status.sheltered ? (status.hostiles ?? null) : null;
+    if (mobs !== null) return waitOutMobs(play, mobs);
+    if (play.sheltered !== null && 'mobs' in play.sheltered) {
+      play.sheltered = null;
+      play.emit({
+        kind: 'night',
+        message: 'morning: no hostile near any more: leaving the shelter',
+      });
+    }
     if (status !== null && status.walled && status.exit.length === 0) {
       return done(
         play,
@@ -273,4 +282,29 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
   }
   play.exitTries = 0;
   return null;
+}
+
+/** How often play looks again while it waits in its shelter for hostiles to go. */
+export const MOB_SHELTER_POLL_MS = 5_000;
+
+/**
+ * Morning, sealed in its shelter with hostiles near (the safety rules' HOSTILES_NEARBY): no
+ * mob can reach the player down there, and digging out would open the way to them. It waits
+ * inside for them to go (the sun burns zombies and skeletons), hearing and answering owners'
+ * commands as at night, and no exit try is spent (seen live 2026-10-04: zombies about the
+ * night pit at sunrise; the exit gave up after three sessions, and the retreat home could
+ * not leave the pit). A round of it: the next looks again.
+ */
+async function waitOutMobs(play: PlayState, mobs: string): Promise<RoundEnd> {
+  if (play.sheltered === null || !('mobs' in play.sheltered)) {
+    play.emit({
+      kind: 'night',
+      message: `morning: hostiles near the shelter (${mobs}): waiting inside for them to go`,
+    });
+  }
+  play.sheltered = { mobs };
+  await play.whileSheltered();
+  const sleep = play.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  await sleep(MOB_SHELTER_POLL_MS);
+  return 'next-round';
 }

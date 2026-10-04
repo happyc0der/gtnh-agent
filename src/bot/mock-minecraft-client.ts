@@ -270,6 +270,8 @@ export interface MockWorld {
     hunger: number;
     /** When the player last lost health (ISO timestamp), for the danger rules; absent: never. */
     lastHurtAt?: string | null;
+    /** Sealed in (no mob can reach it: GameState player.sealed); absent: not known. */
+    sealed?: boolean | null;
   };
   inventory: { items: Record<string, number>; capacitySlots: number };
   /**
@@ -455,6 +457,7 @@ export class MockMinecraftClient implements MinecraftClient {
         heldTool: known(null),
         weapon: known({ ...(w.weapon ?? BARE_HAND) }),
         lastHurtAt: w.player.lastHurtAt ?? null,
+        sealed: w.player.sealed ?? null,
       },
       inventory: hidden.has('inventory')
         ? unknown('mock: inventory hidden')

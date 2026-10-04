@@ -85,6 +85,34 @@ describe('System1 deterministic router', () => {
       expect(d.reasonCodes).toEqual(['UNCLASSIFIED_ENTITY_NEARBY']);
     });
 
+    it('hostiles nearby while sealed in its shelter -> PAUSE (SHELTERED), no retreat or fight', () => {
+      const sealedIn = (w: MockWorld): void => {
+        w.player.position = { x: 30, y: 61, z: 30 };
+        w.player.sealed = true;
+        w.hostiles = [{ x: 31, y: 64, z: 30 }];
+      };
+      const d = route(sealedIn);
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
+      expect(d.reasonCodes).toEqual(['HOSTILES_NEARBY', 'SHELTERED']);
+      expect(d.factsUsed['sealed']).toBe(true);
+      // Hurt a moment ago: something reaches it after all. The usual rules decide.
+      const hurt = route((w) => {
+        sealedIn(w);
+        w.player.lastHurtAt = new Date(Date.parse(makeState().timestamp) - 1_000).toISOString();
+      });
+      expect(hurt.reasonCodes).not.toContain('SHELTERED');
+      // Not known to be sealed (or not sealed): as before.
+      expect(route((w) => void (sealedIn(w), (w.player.sealed = null))).decision).toBe(
+        'RETREAT_HOME',
+      );
+      // Lava near too: no staying put for that.
+      const lava = route((w) => {
+        sealedIn(w);
+        w.hazards = [{ kind: 'lava', position: { x: 31, y: 61, z: 30 } }];
+      });
+      expect(lava.reasonCodes).not.toContain('SHELTERED');
+    });
+
     it('hostiles nearby while already home -> PAUSE', () => {
       const d = route((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
       expect(d.decision).toBe('PAUSE_AND_ASK_USER');

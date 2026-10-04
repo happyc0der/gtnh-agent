@@ -7,6 +7,7 @@ import { errorMessage } from '../../../util/json.ts';
 import { standSpotFor, underFeetOf, type DigArea } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { interactAreaProblem, interactStandSpot } from '../interact.ts';
+import { sealedIn } from '../night-pit.ts';
 import { checkStation, placeAreaProblem, type PlaceArea } from '../placing.ts';
 import { standSpotOnPath } from '../stand-spots.ts';
 import { parseObservedTableId, type WorldModel } from '../world-model.ts';
@@ -59,7 +60,17 @@ export class Observation {
     // timestamp stops advancing, so the safety policy's staleness check fires.
     const asOf = last !== null && now.getTime() - last.getTime() > FRESHNESS_WINDOW_MS ? last : now;
     this.survey(false);
-    return this.#withInteractables(this.#withWorkAreas(this.#world.toGameState(asOf)));
+    return this.#withSealed(
+      this.#withInteractables(this.#withWorkAreas(this.#world.toGameState(asOf))),
+    );
+  }
+
+  /** Whether the player is sealed in (night-pit.ts sealedIn: no mob can reach it there). */
+  #withSealed(state: GameState): GameState {
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    const sealed = world === null || feet === null ? null : sealedIn(world, feet);
+    return { ...state, player: { ...state.player, sealed } };
   }
 
   /**

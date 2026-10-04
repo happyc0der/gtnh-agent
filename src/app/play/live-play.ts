@@ -27,7 +27,7 @@ import { openDatabase } from '../../persistence/database.ts';
 import { NIGHT_PIT_KEY } from '../../persistence/memory-repository.ts';
 import { createRepositories, type Repositories } from '../../persistence/repositories.ts';
 import type { PlannerProvider } from '../../planner/planner-provider.ts';
-import { assessStateReliability } from '../../safety/safety-policy.ts';
+import { assessDangers, assessStateReliability } from '../../safety/safety-policy.ts';
 import type { DecisionProvider } from '../../system1/decision-provider.ts';
 import { routeDecision } from '../../system1/deterministic-router.ts';
 import { systemClock } from '../../util/clock.ts';
@@ -78,7 +78,8 @@ function readPitSite(repos: Repositories): PitSite | null {
  *    (src/goals/shelter.ts); else why neither works (play then goes offline until sunrise).
  *  - 'morning': walled in, or still down in the night pit's column (an exit stopped half-way
  *    leaves a side open): the way out (the pit's roof and a staircase, or one wall of the
- *    box), planned with the same rules. Out of the pit's column, its site is forgotten.
+ *    box), planned with the same rules, whether it is sealed in (player.sealed) and the
+ *    hostiles near that stop it from leaving. Out of the pit's column, its site is forgotten.
  */
 export function liveShelter(
   client: Gtnh1710Client,
@@ -127,7 +128,16 @@ export function liveShelter(
     if (purpose === 'morning') {
       if (site !== null && !inPit) repos.memory.setValue(NIGHT_PIT_KEY, null);
       if (!walled && !inPit) return base;
-      const stuck = { ...base, walled: true };
+      const safety = buildSafetyContext(config, repos, systemClock.now());
+      const mobs = assessDangers(state, safety).filter(
+        (v) => v.code === 'HOSTILES_NEARBY' || v.code === 'UNCLASSIFIED_ENTITY_NEARBY',
+      );
+      const stuck: ShelterStatus = {
+        ...base,
+        walled: true,
+        sheltered: state.player.sealed === true,
+        hostiles: mobs.length === 0 ? null : mobs.map((v) => v.message).join('; '),
+      };
       if (opts === null) return { ...stuck, problem: 'there is no fence to dig or walk in' };
       const exit = planShelterExit(world, feet, opts);
       if (exit.ok) return { ...stuck, exit: exit.steps };
