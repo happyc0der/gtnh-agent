@@ -4,13 +4,15 @@ An agent that plays GregTech: New Horizons 2.8.4 (Minecraft 1.7.10) by itself on
 server you control, the way a person plays: local models decide and plan, and code checks every
 action for safety before it runs and verifies it against the server afterwards.
 
-**Status (2026-10-01):** `pnpm cli play --live` plays the quest book's "Finish Age 0" line on a
-private test server, or works toward a goal you give it (`--needs minecraft:diamond=100`). It
-explores, gathers, digs, shelters for the night, eats, crafts, and submits quests and claims
-their rewards in the quest book. It has finished the first three quests ("Your First Night",
-"Sticks 'n Stones", "Where's the Flint?") and is working on "Crafting Time". The benchmark is
-the 92 quests of the "Tier 0 - Stone Age" chapter, plus the 14 it needs from other chapters,
-counted only as the server records them.
+**Status (2026-10-04):** `pnpm cli play --live --listen` plays the quest book's "Finish Age 0"
+line on a private test server and takes its owners' commands in chat, in `!` form or plain
+English: Baritone's everyday commands (come, follow, goto a point, a waypoint or a block, find,
+explore, tunnel, surface, mine, stop) and goals of items to have (`!get 16 logs`,
+`!get 1 wooden_pickaxe` from nothing). It explores, gathers, digs (down too), shelters for the
+night, eats, crafts, and submits quests and claims their rewards. It has played Age 0 up to
+"Fluffy and Red", which needs wool from sheep, and combat is off. The benchmark is the 92 quests
+of the "Tier 0 - Stone Age" chapter, plus the 14 it needs from other chapters, counted only as
+the server records them.
 
 **How it decides.** Each cycle observes the world through the agent's own 1.7.10 + Forge client
 (`src/bot/gtnh1710/`; Mineflayer cannot join GTNH). System 1, a local model (qwen3:14b on
