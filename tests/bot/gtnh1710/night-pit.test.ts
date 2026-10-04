@@ -279,6 +279,24 @@ describe('the night pit plan', () => {
     expect(plan.steps).toHaveLength(5);
   });
 
+  it('walks a few blocks to open ground when its spot and the next ones cannot take a pit', () => {
+    // Seen live: by a tree, the pit's wall would have been leaves, and the agent went offline
+    // for the night. Here roots (logs) under the 3 x 3 around it spoil every spot within 2.
+    const roots: Record<string, number> = {};
+    for (let x = -1; x <= 1; x++) {
+      for (let z = -1; z <= 1; z++) {
+        roots[k(x, 62, z)] = ID.log;
+        roots[k(x, 61, z)] = ID.log;
+      }
+    }
+    const plan = planNightPit(land(roots), FEET, {}, OPTS);
+    if (!plan.ok) throw new Error(plan.reason);
+    // Beyond the next columns: the nearest spot whose four walls hold no root.
+    expect(Math.max(Math.abs(plan.site.x), Math.abs(plan.site.z))).toBeGreaterThanOrEqual(2);
+    expect(specs(plan.steps)[0]).toMatchObject({ type: 'MOVE_TO' });
+    expect(specs(plan.steps)[1]).toMatchObject({ type: 'DIG_DOWN' });
+  });
+
   it('takes a pit beside a column one lower, tall grass in the ground layer (seen live)', () => {
     // The roof's layer may hold a plant beside it: the player is walled in below it.
     const plan = planNightPit(land({ [k(-1, 63, 0)]: ID.tallgrass }), FEET, {}, OPTS);
@@ -293,7 +311,7 @@ describe('the night pit plan', () => {
   it('refuses where the ground is not natural, solid ground down to the floor all around', () => {
     // Stone at the top: DIG_DOWN takes only dirt, grass, sand, gravel and clay.
     expect(reasonOf(planNightPit(land({}, { top: ID.stone }), FEET, {}, OPTS))).toMatch(
-      /no spot for a pit here or next to it \(here: digging down at \(0, 63, 0\): .*minecraft:stone/,
+      /no spot for a pit within 12 blocks' walk \(here: digging down at \(0, 63, 0\): .*minecraft:stone/,
     );
     // A pond in the wall: not natural ground.
     const pond: Record<string, number> = {};

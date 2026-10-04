@@ -17,7 +17,7 @@ import {
 } from './digging.ts';
 import { passProblem } from './passable.ts';
 import { checkPlace } from './placing.ts';
-import { planTerrainWalk, standProblem } from './terrain.ts';
+import { planTerrainWalk, reachableFeet, standProblem } from './terrain.ts';
 import { WALKABLE_SURFACES, type Vec3, type WalkWorld } from './walking.ts';
 
 /**
@@ -365,8 +365,30 @@ export function planNightPit(
     const next = pitAt(world, feet, spot, inventory, opts);
     if (next.ok) return next;
   }
-  return { ok: false, reason: `no spot for a pit here or next to it (here: ${own.reason})` };
+  // Nowhere here or next to it: a few steps away, as a person walks off a bush to open
+  // ground. Seen live: by a tree, the pit's wall would have been leaves, a box on open ground
+  // cannot be roofed from inside, and the agent went offline for the night. The nearest
+  // spots the walker reaches, within PIT_SEARCH_WALK blocks, at most PIT_SEARCH_SPOTS of them.
+  const tried = new Set([`${fx},${fy},${fz}`, ...spots.map((p) => `${p.x},${p.y},${p.z}`)]);
+  const reach = reachableFeet(world, fence, feet, Math.min(PIT_SEARCH_WALK, opts.maxPathLength));
+  const farther = [...reach.values()]
+    .filter((f) => !tried.has(`${f.x},${f.y},${f.z}`))
+    .sort((a, b) => a.length - b.length || a.x - b.x || a.z - b.z)
+    .slice(0, PIT_SEARCH_SPOTS);
+  for (const f of farther) {
+    const next = pitAt(world, feet, { x: f.x, y: f.y, z: f.z }, inventory, opts);
+    if (next.ok) return next;
+  }
+  return {
+    ok: false,
+    reason: `no spot for a pit within ${PIT_SEARCH_WALK} blocks' walk (here: ${own.reason})`,
+  };
 }
+
+/** How far the agent walks, at most, to a spot for its night pit. */
+export const PIT_SEARCH_WALK = 12;
+/** Spots beyond the neighbours it looks at, nearest first (each plans a walk and the pit). */
+export const PIT_SEARCH_SPOTS = 40;
 
 /**
  * The rest of a pit the agent started at `site`, when the player is in its column below the
