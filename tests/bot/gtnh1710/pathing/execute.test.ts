@@ -118,6 +118,27 @@ describe('execution plans', () => {
     expect(down.steps.at(-1)).toMatchObject({ pos: { x: 0.5, y: 64, z: 0.5 }, onGround: true });
   });
 
+  it('climbs after any approach: the stop before a climb may leave a hair of motion', () => {
+    // A stop keeps a 1e-7 spare to its end (BRAKING_SPARE), so the tick that stands still on
+    // the centre can carry a few hundred-millionths of motion; a climb that wanted under 1e-9
+    // refused these (found by fuzzing, 2026-10-04).
+    for (const [len, x] of [
+      [8, 0.32],
+      [9, 0.3875],
+      [10, 0.275],
+    ] as const) {
+      const w = new TestWorld().fill(
+        { x: len + 1, y: 64, z: 0 },
+        { x: len + 1, y: 67, z: 0 },
+        B.stone,
+      );
+      for (let y = 64; y <= 67; y++) w.set(len, y, 0, B.ladder, 4);
+      const fence: Fence = { min: { x: -8, y: 50, z: 0 }, max: { x: len + 6, y: 72, z: 0 } };
+      const up = walk(w, fence, { x, y: 64, z: 0.5 }, [len + 1, 68, 0], { climb: true });
+      expect(kindsOf(up.segments)).toContain('climbUp');
+    }
+  });
+
   it("from a ladder's foot onto the block it hangs on: climbing off, never a jump into its slab", () => {
     // An independent review (2026-10-04): a one-high ladder on a one-high block; a jump from
     // the ladder's foot onto the block was planned, and its steps hit the ladder's slab.

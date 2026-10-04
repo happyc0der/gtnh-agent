@@ -1195,7 +1195,7 @@ function drive(
     const body = b.body;
     if (
       Math.hypot(body.x - (m.from.x + 0.5), body.z - (m.from.z + 0.5)) > 1e-6 ||
-      Math.hypot(body.cx, body.cz) > 1e-9
+      Math.hypot(body.cx, body.cz) > 1e-6
     ) {
       throw new Fail('not at rest at the start block centre');
     }
@@ -1208,7 +1208,7 @@ function drive(
     const body = b.body;
     if (
       Math.hypot(body.x - (m.from.x + 0.5), body.z - (m.from.z + 0.5)) > 1e-6 ||
-      Math.hypot(body.cx, body.cz) > 1e-9
+      Math.hypot(body.cx, body.cz) > 1e-6
     ) {
       throw new Fail('not at rest at the start block centre');
     }
