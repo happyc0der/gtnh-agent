@@ -38,6 +38,7 @@ describe('migrations', () => {
       { version: 7 },
       { version: 8 },
       { version: 9 },
+      { version: 10 },
     ]);
   });
 
@@ -215,6 +216,41 @@ describe('repositories', () => {
       { actionType: 'WAIT', fingerprint: 'fp', failures: 3 },
     ]);
     expect(() => repos.actions.update('nope', { status: 'failed' })).toThrow();
+  });
+
+  it('action logs: a task a human resumes counts only the failures after the resume', () => {
+    // Seen live: two refused meals in the reused standby task blocked every meal after them,
+    // even once the client could eat again; resuming the task did not help.
+    const clock = testClock();
+    const r = createRepositories(db, clock);
+    r.tasks.ensure({ id: 't9', goal: 'g', subgoal: null, status: 'active' });
+    const fail = (actionId: string): void => {
+      r.actions.insert({
+        actionId,
+        cycleId: 'c',
+        taskId: 't9',
+        actionType: 'EAT_FOOD',
+        origin: 'deterministic-router',
+        fingerprint: 'fp',
+        reason: 'r',
+        action: {},
+        status: 'proposed',
+        validation: { ok: true },
+      });
+      r.actions.update(actionId, { status: 'failed' });
+    };
+    fail('e1');
+    clock.advance(1000);
+    fail('e2');
+    expect(r.actions.countFailures('t9', 'fp')).toBe(2);
+    clock.advance(1000);
+    r.tasks.resetFailures('t9');
+    expect(r.actions.countFailures('t9', 'fp')).toBe(0);
+    expect(r.actions.failureSummary('t9', 5)).toEqual([]);
+    clock.advance(1000);
+    fail('e3');
+    expect(r.actions.countFailures('t9', 'fp')).toBe(1);
+    expect(() => r.tasks.resetFailures('nope')).toThrow(/No task nope/);
   });
 
   it("action logs: the agent's recent meals, newest first (Spice of Life's history)", () => {

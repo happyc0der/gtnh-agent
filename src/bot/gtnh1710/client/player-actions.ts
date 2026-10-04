@@ -133,7 +133,7 @@ export class PlayerActions {
     // failed). A click in the air does not end it; a click on a block does, as for a player
     // whose right-click with food in hand first lands on the ground.
     if (this.#world.damageDisabled === true) {
-      const still = await this.#endSpawnProtection();
+      const still = await this.#endSpawnProtection({ slot, item });
       if (still !== null) return refuse(still);
     }
     // Always (re)select it: the server eats what it thinks is in hand.
@@ -181,7 +181,7 @@ export class PlayerActions {
    * underfoot with an empty hand, which uses, places and opens nothing. Null once it has
    * ended, else why it is still on.
    */
-  async #endSpawnProtection(): Promise<string | null> {
+  async #endSpawnProtection(food: { slot: number; item: string }): Promise<string | null> {
     const on =
       'the server still protects the player after it joined (a protected player cannot eat; ' +
       'it ends after 90 s or a 5-block walk)';
@@ -200,14 +200,20 @@ export class PlayerActions {
     if (ground === undefined || !PLAIN_GROUND.has(ground)) {
       return `${on}, and the block underfoot (${ground ?? 'unknown'}) is not plain ground to click`;
     }
-    const hand = this.#core.inventory.emptyHotbarSlot();
-    if (hand === null) return `${on}, and no hotbar slot is empty to click the ground with`;
+    // An empty hand; else the food itself, which places nothing on the ground (it is no
+    // block: ItemFood has no use on a block); seen live: a full hotbar, and no meal at all.
+    const empty = this.#core.inventory.emptyHotbarSlot();
+    const placesNothing = !new Set(registry.blocks.values()).has(food.item.replace(/@d+$/, ''));
+    const hand = empty ?? (placesNothing ? food.slot : null);
+    if (hand === null) {
+      return `${on}, and no hotbar slot is empty to click the ground with (the ${food.item} could place a block)`;
+    }
     if (hand !== this.#world.heldSlot) {
       this.#core.send(outbound.selectHotbarSlot(hand));
       this.#world.setHeldSlot(hand);
     }
     this.#core.log(
-      `clicking the ${ground} underfoot with an empty hand: it ends the spawn protection`,
+      `clicking the ${ground} underfoot with ${empty === null ? `the ${food.item}` : 'an empty hand'}: it ends the spawn protection`,
     );
     this.#core.send(outbound.activateBlock(x, y, z, 1));
     await this.#core.waitFor(() => this.#world.damageDisabled === false, 1_000);

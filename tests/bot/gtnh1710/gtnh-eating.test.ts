@@ -140,7 +140,9 @@ describe('Gtnh1710Client eating', () => {
     expect(await apples(client)).toBe(2);
   });
 
-  it('refuses while protected when no hotbar slot is free to click the ground with', async () => {
+  it('clicks the ground with the food itself while protected when no hotbar slot is free', async () => {
+    // Seen live: a full hotbar, so no empty hand to end the protection, and no meal at all.
+    // An apple places nothing on the ground (ItemFood has no use on a block).
     const full = Array.from({ length: 9 }, (_, j) => ({
       slot: hotbar(j),
       id: j === 0 ? APPLE : 3,
@@ -149,10 +151,11 @@ describe('Gtnh1710Client eating', () => {
     }));
     const { server, client } = await start({ spawnProtection: true, inventory: full });
     const r = await eat(client, 'minecraft:apple');
-    expect(r).toMatchObject({ ok: false, code: 'REFUSED' });
-    expect(r.message).toMatch(/protects the player after it joined.*no hotbar slot is empty/);
-    expect(server.placeSim.placements).toHaveLength(0);
-    expect(server.eatsStarted).toBe(0);
+    expect(r, r.message).toMatchObject({ ok: true });
+    expect(server.spawnProtected).toBe(false);
+    const clicks = server.placeSim.placements.filter((p) => p.face !== 255);
+    expect(clicks).toMatchObject([{ x: -5, y: 105, z: -8, face: 1 }]);
+    expect(server.eatsStarted).toBe(1);
   });
 
   it('refuses at full food, without the food, or when the server never finishes', async () => {

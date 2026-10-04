@@ -86,6 +86,17 @@ export class TaskRepository {
     if (r.changes === 0) throw new Error(`No task ${id}`);
   }
 
+  /**
+   * A human resumed the task: from now on the repeated-failure rule counts only failures after
+   * this moment (ActionLogRepository.countFailures).
+   */
+  resetFailures(id: string): void {
+    const r = this.#db
+      .prepare('UPDATE tasks SET failures_reset_at = ? WHERE id = ?')
+      .run(now(this.#clock), id);
+    if (r.changes === 0) throw new Error(`No task ${id}`);
+  }
+
   /** Machines (observed ids) the task depends on; replaces any earlier list. */
   setRequiredMachines(taskId: string, machineIds: readonly string[]): void {
     this.#db.transaction(() => {
@@ -376,14 +387,15 @@ export class ActionLogRepository implements FailureHistory {
    * task, by the agent itself: failures of actions a human requested directly (origin
    * 'user', e.g. a stopped test walk) do not count against the agent's own attempts, nor do
    * actions the client could not even try (NOT_IMPLEMENTED: seen live, EAT_FOOD before the
-   * client could eat, which then refused every meal of a task id reused each night).
+   * client could eat, which then refused every meal of a task id reused each night), nor
+   * failures before a human last resumed the task (task-resume: TaskRepository.resetFailures).
    */
   countFailures(taskId: string | null, fingerprint: string): number {
     const row = this.#db
       .prepare(
         `SELECT COUNT(*) AS n FROM action_logs
           WHERE task_id IS ? AND fingerprint = ? AND status IN ('failed','verification_failed')
-            AND origin <> 'user' AND ${NOT_UNTRIED}`,
+            AND origin <> 'user' AND ${NOT_UNTRIED} AND ${SINCE_RESET}`,
       )
       .get(taskId, fingerprint) as { n: number };
     return row.n;
@@ -397,6 +409,7 @@ export class ActionLogRepository implements FailureHistory {
       .prepare(
         `SELECT action_type AS actionType, fingerprint, COUNT(*) AS failures FROM action_logs
             WHERE task_id IS ? AND status IN ('failed','verification_failed') AND ${NOT_UNTRIED}
+              AND ${SINCE_RESET}
             GROUP BY action_type, fingerprint ORDER BY failures DESC, fingerprint LIMIT ?`,
       )
       .all(taskId, limit) as Array<{ actionType: string; fingerprint: string; failures: number }>;
@@ -404,6 +417,10 @@ export class ActionLogRepository implements FailureHistory {
 }
 
 /** SQL: the action was tried (not refused by the client as NOT_IMPLEMENTED). */
+/** Not before the task's last resume by a human (tasks.failures_reset_at). */
+const SINCE_RESET =
+  "created_at > COALESCE((SELECT failures_reset_at FROM tasks WHERE tasks.id = action_logs.task_id), '')";
+
 const NOT_UNTRIED =
   "(execution_json IS NULL OR json_extract(execution_json, '$.code') IS NOT 'NOT_IMPLEMENTED')";
 

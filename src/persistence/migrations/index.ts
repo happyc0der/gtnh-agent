@@ -7,6 +7,7 @@ import { migration006WindowLayouts } from './006-window-layouts.ts';
 import { migration007WorldMemoryNear } from './007-world-memory-near.ts';
 import { migration008OwnerCommands } from './008-owner-commands.ts';
 import { migration009PlayerBuilds } from './009-player-builds.ts';
+import { migration010TaskFailuresReset } from './010-task-failures-reset.ts';
 
 export interface Migration {
   version: number;
@@ -28,4 +29,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration007WorldMemoryNear,
   migration008OwnerCommands,
   migration009PlayerBuilds,
+  migration010TaskFailuresReset,
 ];

@@ -157,7 +157,10 @@ export function commandsCommand(cli: Cli): number {
   }
 }
 
-/** `task-resume --task <id>`: marks a paused or blocked task active again. */
+/**
+ * `task-resume --task <id>`: marks a paused or blocked task active again, and starts its
+ * failure counts afresh (the repeated-failure rule counts only failures after it).
+ */
 export function taskResumeCommand(cli: Cli): number {
   const { values, dbPath, print } = cli;
   if (values.task === undefined) {
@@ -173,7 +176,9 @@ export function taskResumeCommand(cli: Cli): number {
     return 1;
   }
   repos.tasks.setStatus(task.id, TaskStatusSchema.parse('active'));
-  print({ task: task.id, previousStatus: task.status, status: 'active' });
+  // The repeated-failure rule starts its count afresh: the human has looked at the task.
+  repos.tasks.resetFailures(task.id);
+  print({ task: task.id, previousStatus: task.status, status: 'active', failuresReset: true });
   db.close();
   return 0;
 }

@@ -440,7 +440,8 @@ agent memory (`task_steps:<taskId>`) with how many are done.
 6. **Repeated failures.** Once an identical action (type + canonical args) chosen by the agent
    has failed `maxFailuresPerActionPerTask` (default 2) times for the same task, the next attempt is
    refused with `REPEATED_FAILURE` (pause) and the task is blocked until a human resumes it
-   (`node src/app/cli.ts task-resume --task <id>`). An action a human requested directly (origin
+   (`node src/app/cli.ts task-resume --task <id>`), which starts the task's failure counts afresh:
+   only failures after the resume count. An action a human requested directly (origin
    `user`, e.g. `cli move`) is the human's decision each time: this rule does not apply to it, and
    its failures do not count against the agent's own attempts. Every other rule still applies.
 
