@@ -89,6 +89,8 @@ export function scanResources(
   radius = RESOURCE_SCAN_RADIUS,
   max = MAX_REPORTED_RESOURCES,
   seeThrough?: Uint8Array,
+  /** Blocks never listed (a player's build: never dug). */
+  skip?: (x: number, y: number, z: number) => boolean,
 ): ResourceScan {
   const r2 = radius * radius;
   const minX = Math.floor(feet.x - radius);
@@ -157,6 +159,7 @@ export function scanResources(
           z >= (ownZ[0] as number) &&
           z <= (ownZ[1] as number);
         if (block === undefined || support || !exposed(x, y, z)) continue;
+        if (skip?.(x, y, z) === true) continue;
         const resource = { block, position: { x, y, z }, distance: Math.sqrt(h2 + dy * dy) };
         if (y >= feetLevel || GROUND_RESOURCES.has(block)) found.push(resource);
         else if (GROUND_DIRT.has(block)) groundDirt.push(resource);

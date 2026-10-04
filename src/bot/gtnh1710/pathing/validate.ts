@@ -175,7 +175,8 @@ class Replay {
     if (blocksX(v, s.x, y, s.z, mx)) return 'the move across runs into a block (X)';
     if (blocksZ(v, s.x + mx, y, s.z, mz)) return 'the move across runs into a block (Z)';
     const problem =
-      this.#cells(s.x, Math.min(s.y, y), Math.max(s.y, y), s.z) ?? this.#cells(p.x, p.y, p.y, p.z);
+      this.cellsAt(s.x, Math.min(s.y, y), Math.max(s.y, y), s.z) ??
+      this.cellsAt(p.x, p.y, p.y, p.z);
     if (problem !== null) return problem;
     // The server's fall accounting.
     const damage = this.fall.packet(inWater(v, s.x, s.y, s.z), p.y - s.y, step.onGround);
@@ -209,7 +210,7 @@ class Replay {
   }
 
   /** Why a box at (x, z) spanning feet heights y0..y1 touches a cell it must not, or null. */
-  #cells(x: number, y0: number, y1: number, z: number): string | null {
+  cellsAt(x: number, y0: number, y1: number, z: number): string | null {
     const f = this.#fence;
     if (
       x - HALF_WIDTH < f.min.x - 1e-9 ||
@@ -366,6 +367,40 @@ export function validatePlan(
     }
   }
   return { ok: true, ticks };
+}
+
+/**
+ * Why the box going from feet `a` to feet `b` (one step of a plan) would touch a cell it
+ * must not, on the blocks as they are now, or null: a cell the box (and the Y move's sweep at
+ * a's x and z) touches that is not passable (or calm one-deep water, with `water`), is next
+ * to a hazard or an unloaded block, or lies outside the fence, or the feet in a vine. The
+ * validator's own rule for a step, for the executor to check each step just before it sends
+ * it: the world may have changed since the plan was made.
+ */
+export function stepProblem(
+  world: WalkWorld,
+  fence: Fence,
+  a: Vec3,
+  b: Vec3,
+  water = false,
+): string | null {
+  const box: CellBox = {
+    min: {
+      x: Math.floor(Math.min(a.x, b.x)) - 3,
+      y: Math.floor(Math.min(a.y, b.y)) - 3,
+      z: Math.floor(Math.min(a.z, b.z)) - 3,
+    },
+    max: {
+      x: Math.floor(Math.max(a.x, b.x)) + 3,
+      y: Math.floor(Math.max(a.y, b.y)) + 5,
+      z: Math.floor(Math.max(a.z, b.z)) + 3,
+    },
+  };
+  const replay = new Replay(world, box, fence, water);
+  return (
+    replay.cellsAt(a.x, Math.min(a.y, b.y), Math.max(a.y, b.y), a.z) ??
+    replay.cellsAt(b.x, b.y, b.y, b.z)
+  );
 }
 
 /** Why a block may not be placed into `cell` by clicking face `face` of `against`, or null. */

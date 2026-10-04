@@ -251,6 +251,11 @@ function lineOf(m: Movement): Line {
   return { ox: m.from.x + 0.5, oz: m.from.z + 0.5, ux: m.dir.x / len, uz: m.dir.z / len };
 }
 
+/** A block's centre across (where a movement ends). */
+function centreOf(c: Cell): { x: number; z: number } {
+  return { x: c.x + 0.5, z: c.z + 0.5 };
+}
+
 /** The run's end along its line: the end block's centre. */
 function lengthOf(m: Movement): number {
   return Math.hypot(m.to.x - m.from.x, m.to.z - m.from.z);
@@ -384,15 +389,23 @@ class StepBuilder {
     });
   }
 
-  /** Standing still for a tick (the carried motion is taken off). */
-  hold(): void {
+  /**
+   * Standing still for a tick (the carried motion is taken off), on `at` when given: a run that
+   * stops short of its end by a hair (it brakes with a hair to spare) comes to rest exactly on
+   * the block's centre, where a walk is said to end.
+   */
+  hold(at?: { readonly x: number; readonly z: number }): void {
     const b = this.body;
     const mode = modeOf(this.view, b);
     if (Math.hypot(b.cx, b.cz) > keyAccel(mode, false) + 1e-12) {
       throw new Fail('moving too fast to stop');
     }
-    const next = physicsTick(this.view, b, 0, 0, false);
-    if (next === null || !next.onGround) throw new Fail('cannot stand still here');
+    const mx = at === undefined ? 0 : at.x - b.x;
+    const mz = at === undefined ? 0 : at.z - b.z;
+    if (Math.hypot(mx, mz) > 1e-6) throw new Fail('internal: standing still would move');
+    const moved = physicsTick(this.view, b, mx, mz, false);
+    if (moved === null || !moved.onGround) throw new Fail('cannot stand still here');
+    const next = at === undefined ? moved : { ...moved, x: at.x, z: at.z };
     this.body = next;
     this.steps.push({
       pos: { x: next.x, y: next.y, z: next.z },
@@ -513,7 +526,13 @@ class StepBuilder {
    * allowed, braking just in time (each tick keeps the rest of the way at least the braking
    * distance). Stays on the ground at its level.
    */
-  run(l: Line, sEnd: number, exit: Exit, p: RunParams): void {
+  run(
+    l: Line,
+    sEnd: number,
+    exit: Exit,
+    p: RunParams,
+    end?: { readonly x: number; readonly z: number },
+  ): void {
     const level = this.body.y;
     const vEnd = exit.kind === 'exact' ? exit.v : exit.kind === 'stop' ? stopSpeed(p) : Infinity;
     for (let guard = 0; guard < 4000; guard++) {
@@ -522,14 +541,14 @@ class StepBuilder {
       if (exit.kind !== 'flow' && Math.abs(r) <= ARRIVED) {
         // There, and slow enough for what comes next (a landing may arrive too fast).
         if (Math.hypot(this.body.cx, this.body.cz) <= p.drag * vEnd + 1e-9) {
-          if (exit.kind === 'stop') this.hold();
+          if (exit.kind === 'stop') this.hold(end);
           return;
         }
-        this.#reverse(l, sEnd, p);
+        this.#reverse(l, sEnd, p, end);
         return;
       }
       if (r < 0) {
-        this.#reverse(l, sEnd, p);
+        this.#reverse(l, sEnd, p, end);
         return;
       }
       const bnd = this.bounds(l, p.sprint, false);
@@ -568,7 +587,12 @@ class StepBuilder {
   }
 
   /** Past the end of a run (after a landing): brake to rest, then come back to it and stop. */
-  #reverse(l: Line, sEnd: number, p: RunParams): void {
+  #reverse(
+    l: Line,
+    sEnd: number,
+    p: RunParams,
+    end?: { readonly x: number; readonly z: number },
+  ): void {
     for (let guard = 0; guard < 100; guard++) {
       const bnd = this.bounds(l, false, false);
       if (bnd.lo <= 0 && bnd.hi >= 0) break;
@@ -576,7 +600,7 @@ class StepBuilder {
     }
     this.hold();
     const back: Line = { ox: l.ox, oz: l.oz, ux: -l.ux, uz: -l.uz };
-    this.run(back, -sEnd, { kind: 'stop' }, p);
+    this.run(back, -sEnd, { kind: 'stop' }, p, end);
   }
 
   /** Ticks the vertical alone (no move across) from the current state until it lands, counting them. */
@@ -690,7 +714,7 @@ function build(
         first === undefined || needsRest(first) || restBefore.has(0)
           ? { kind: 'stop' }
           : { kind: 'exact', v: cornerSpeed(l, lineOf(first), startWet, p.vmax) };
-      b.run(l, dist, exit, p);
+      b.run(l, dist, exit, p, { x: cx, z: cz });
       if (Math.hypot(b.body.x - cx, b.body.z - cz) > 1e-6) {
         throw new Fail('centring missed the centre');
       }
@@ -769,7 +793,7 @@ function drive(
   switch (m.kind) {
     case 'traverse':
     case 'diagonal':
-      b.run(l, end, exit, after);
+      b.run(l, end, exit, after, centreOf(m.to));
       return { places: [], fallback: null };
     case 'bridge':
       return bridge(b, m, l, exit);
@@ -813,7 +837,7 @@ function bridge(
   const place = m.place;
   if (place === null) throw new Fail('internal: a bridge with nothing to place');
   b.change({ cell: place.cell, block: place.block });
-  b.run(l, lengthOf(m), exit, WALK_RUN);
+  b.run(l, lengthOf(m), exit, WALK_RUN, centreOf(m.to));
   return { places: [placeOf(m, afterStep, afterStep + 1)], fallback: null };
 }
 
@@ -929,7 +953,7 @@ function ascend(b: StepBuilder, m: Movement, l: Line, exit: Exit): void {
         if (!b.body.onGround || Math.abs(b.body.y - (y0 + 1)) > 1e-9) {
           throw new Fail('the jump did not land on the step');
         }
-        b.run(l, 1, exit, WALK_RUN);
+        b.run(l, 1, exit, WALK_RUN, centreOf(m.to));
         return;
       } catch (e) {
         if (!(e instanceof Fail)) throw e;
@@ -957,7 +981,7 @@ function waterExit(b: StepBuilder, m: Movement, l: Line, exit: Exit): void {
   if (!b.body.onGround || Math.abs(b.body.y - top) > 1e-9) {
     throw new Fail('did not climb out onto the bank');
   }
-  b.run(l, 1, exit, WALK_RUN);
+  b.run(l, 1, exit, WALK_RUN, centreOf(m.to));
 }
 
 /**
@@ -993,7 +1017,7 @@ function fall(b: StepBuilder, m: Movement, l: Line, exit: Exit, after: RunParams
   }
   if (!b.body.onGround || Math.abs(b.body.y - m.to.y) > 1e-9)
     throw new Fail('the fall did not land');
-  b.run(l, 1, exit, after);
+  b.run(l, 1, exit, after, centreOf(m.to));
 }
 
 /**
@@ -1049,5 +1073,5 @@ function parkour(b: StepBuilder, m: Movement, l: Line, exit: Exit): void {
   if (!b.body.onGround || Math.abs(b.body.y - m.to.y) > 1e-9 || s <= gap + 0.2 || s > gap + 1.2) {
     throw new Fail('the jump did not land on the far side');
   }
-  b.run(l, gap + 1, exit, p);
+  b.run(l, gap + 1, exit, p, centreOf(m.to));
 }

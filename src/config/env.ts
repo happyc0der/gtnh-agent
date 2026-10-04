@@ -28,6 +28,42 @@ export const MAX_EXPLORATION_SIDE = 2048;
 export const MOVEMENT_MODES = ['fixed', 'follow'] as const;
 
 /**
+ * How walks over terrain move: what the pathfinder (src/bot/gtnh1710/pathing/) may plan for
+ * a MOVE_TO, an EXPLORE, a retreat or an owner's travel, as Baritone's allowBreak,
+ * allowPlace, allowParkour and allowSprint settings do (the ideas; src/bot/gtnh1710/
+ * path-policy.ts holds the rules). Each still needs its own ability switched on, and every
+ * break and place is checked like DIG_BLOCK's and PLACE_BLOCK's.
+ */
+export const PathConfigSchema = z.strictObject({
+  /**
+   * Break natural blocks in the way, as the dig rules allow, with the best tool carried
+   * (stone only with a pickaxe that harvests it; never ores, a player's build, or a block near
+   * another player). Only with digging enabled (MC_ENABLE_DIGGING).
+   */
+  allowBreak: z.boolean().default(true),
+  /**
+   * Pillar up and bridge gaps with throwaway blocks (dirt, cobblestone, netherrack the player
+   * carries, never a protected item; never near another player). Only with placing enabled
+   * (MC_ENABLE_PLACING).
+   */
+  allowPlace: z.boolean().default(true),
+  /** Running jumps over a gap of 1-2 blocks (3 sprinting) to the same level. */
+  allowParkour: z.boolean().default(true),
+  /** Parkour also over gaps that falling into would hurt (deep, or with no floor near). */
+  parkourOverDeepGaps: z.boolean().default(false),
+  /**
+   * Sprint on long walks, while the food bar is above 10. Off by default: HungerOverhaul
+   * makes sprinting cost food on this server.
+   */
+  allowSprint: z.boolean().default(false),
+  /** Wade through calm one-deep water, and drop into it from a height that does not hurt. */
+  allowWater: z.boolean().default(false),
+  /** Dirt never placed on a walk: kept for the night shelter's roof. */
+  throwawayReserve: z.int().min(0).max(64).default(4),
+});
+export type PathConfig = z.infer<typeof PathConfigSchema>;
+
+/**
  * Walking (the only world-changing ability of the live client). Off by default: the
  * client walks only with `enabled` true AND a fence, on the fence's single level.
  */
@@ -60,8 +96,14 @@ export const MovementConfigSchema = z
     stopFile: z.string().min(1).max(500).default('./data/STOP'),
     /** A hostile or unidentified entity this close stops a MOVE_TO walk. */
     threatRadius: z.number().min(1).max(64).default(10),
-    /** Longest single walk (path length in blocks). */
+    /**
+     * Longest single walk on a fence of one level (path length in blocks). Over terrain, how
+     * far stand spots and travel steps are looked for: about twice this many blocks of
+     * walking (path-policy.ts).
+     */
     maxPathLength: z.number().min(1).max(128).default(32),
+    /** How walks over terrain move (PathConfigSchema). */
+    path: PathConfigSchema.prefault({}),
   })
   .superRefine((m, ctx) => {
     if (m.fence === null) return;
@@ -450,6 +492,19 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   if ((v = e('MC_MOVEMENT_FENCE_MAX')))
     set(['minecraft', 'movement', 'fence', 'max'], xyz('MC_MOVEMENT_FENCE_MAX', v));
   if ((v = e('MC_MOVEMENT_STOP_FILE'))) set(['minecraft', 'movement', 'stopFile'], v);
+  const path = (name: string, key: string): void => {
+    const value = e(name);
+    if (value !== undefined) set(['minecraft', 'movement', 'path', key], value === 'true');
+  };
+  path('MC_PATH_ALLOW_BREAK', 'allowBreak');
+  path('MC_PATH_ALLOW_PLACE', 'allowPlace');
+  path('MC_PATH_ALLOW_PARKOUR', 'allowParkour');
+  path('MC_PATH_PARKOUR_DEEP_GAPS', 'parkourOverDeepGaps');
+  path('MC_PATH_ALLOW_SPRINT', 'allowSprint');
+  path('MC_PATH_ALLOW_WATER', 'allowWater');
+  if ((v = e('MC_PATH_THROWAWAY_RESERVE'))) {
+    set(['minecraft', 'movement', 'path', 'throwawayReserve'], num('MC_PATH_THROWAWAY_RESERVE', v));
+  }
   if ((v = e('MC_ENABLE_CONTAINERS'))) set(['minecraft', 'containers', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_DIGGING'))) set(['minecraft', 'digging', 'enabled'], v === 'true');
   if ((v = e('MC_ENABLE_PLACING'))) set(['minecraft', 'placing', 'enabled'], v === 'true');

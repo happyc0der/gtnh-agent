@@ -56,6 +56,16 @@ export function digChecks(
   const blocks = state.nearbyBlocks.value;
   const same = (p: BlockPosition, q: BlockPosition): boolean =>
     p.x === q.x && p.y === q.y && p.z === q.z;
+  // A player's build (src/domain/player-builds.ts): never dug, whatever the block.
+  if ((blocks.playerBuilt ?? []).some((p) => same(p, target))) {
+    v.push({
+      code: 'NOT_DIGGABLE',
+      severity: 'pause',
+      message: `The block at ${where} was built by a player (seen placed while one stood near): the agent never breaks a player's build`,
+      details,
+    });
+    return v;
+  }
   const listed = blocks.resources.find((r) => same(r.position, target));
   if (listed === undefined) {
     v.push({

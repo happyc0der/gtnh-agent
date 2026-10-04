@@ -23,6 +23,7 @@ import {
 import { FakeCombatSim, type FakeCombatOptions } from './fake-combat.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
 import { FakeItemSim } from './fake-items.ts';
+import { FakeMoveSim } from './fake-movement.ts';
 import { FakePlaceSim, type FakeBody, type FakePlaceOptions } from './fake-placing.ts';
 import {
   blockChangeFrame,
@@ -143,6 +144,12 @@ export interface FakeServerOptions {
   dayTicks?: number;
   /** Mobs with health, and how the server treats attacks (C02); see fake-combat.ts. */
   combat?: FakeCombatOptions;
+  /**
+   * Check every move as a 1.7.10 server does (fake-movement.ts): a move into a block, or one
+   * the server's own move does not reproduce, is reset with S08, and a hard landing hurts.
+   * Default true.
+   */
+  checkMoves?: boolean;
 }
 
 export interface ReceivedPacket {
@@ -171,6 +178,9 @@ export const DEFAULT_MODS = [
   { modid: 'modularui', version: '1.2.20' },
   { modid: 'neid', version: '2.1.10' },
 ];
+
+/** 1.7.10's eye height above the feet, as S08 and C06 carry it (packets.ts). */
+const PLAYER_EYE_Y = 1.6200000047683716;
 
 const plugin = (channel: string, data: Buffer): Buffer =>
   encodeFrame(0x3f, Buffer.concat([encodeString(channel), encodeVarShort(data.length), data]));
@@ -331,6 +341,8 @@ export class FakeGtnhServer {
   readonly placeSim: FakePlaceSim;
   /** Fighting (C02): mobs with health, the attacks, kills, explosions, the player's health. */
   readonly combatSim: FakeCombatSim;
+  /** The server's side of the player's moves (C06): corrections and fall damage. */
+  readonly moveSim: FakeMoveSim;
   /** Better Questing, when the server runs it (questBook option). */
   readonly questBookSim: FakeQuestBookSim | null;
   readonly keepAliveEchoes: number[] = [];
@@ -339,7 +351,10 @@ export class FakeGtnhServer {
   logins = 0;
   handshakeHosts: string[] = [];
   readonly #opts: Required<
-    Omit<FakeServerOptions, 'kickOnLogin' | 'world' | 'biomeAt' | 'dayTicks' | 'light'>
+    Omit<
+      FakeServerOptions,
+      'kickOnLogin' | 'world' | 'biomeAt' | 'dayTicks' | 'light' | 'checkMoves'
+    >
   > & {
     kickOnLogin: string | null;
     world: BlockFn | null;
@@ -348,6 +363,8 @@ export class FakeGtnhServer {
   };
   /** The time of day the server reports (null: it sends no time updates). */
   #dayTicks: number | null;
+  /** Moves are checked as a 1.7.10 server does (options.checkMoves). */
+  readonly #checkMoves: boolean;
   /** Columns sent to each play connection ("cx,cz"), and the chunk it was centred on. */
   readonly #views = new Map<Socket, { sent: Set<string>; centre: string }>();
   readonly #server: Server;
@@ -421,6 +438,7 @@ export class FakeGtnhServer {
       combat: options.combat ?? {},
     };
     this.#dayTicks = options.dayTicks ?? null;
+    this.#checkMoves = options.checkMoves ?? true;
     this.chestSim = new FakeChestSim({
       chests: this.#opts.chests,
       tables: this.#opts.tables,
@@ -494,6 +512,10 @@ export class FakeGtnhServer {
       health: this.#opts.health.health,
       food: this.#opts.health.food,
     });
+    this.moveSim = new FakeMoveSim({
+      blockAt: world,
+      blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
+    });
     this.questBookSim =
       options.questBook === undefined
         ? null
@@ -560,6 +582,18 @@ export class FakeGtnhServer {
 
   /** Eats the server started (a C08 in the air with an edible stack in hand). */
   eatsStarted = 0;
+  /**
+   * C0B Entity Actions the client sent (4 START_SPRINTING, 5 STOP_SPRINTING), with the number
+   * of play packets received before each (to check what came before and after).
+   */
+  readonly entityActions: Array<{
+    entityId: number;
+    action: number;
+    jumpBoost: number;
+    at: number;
+  }> = [];
+  /** Whether the server counts the player as sprinting (the last C0B). */
+  sprinting = false;
   /** Client Status actions received (C16; 0 = Perform Respawn). */
   readonly clientStatus: number[] = [];
   /** The player is under spawn protection (options.spawnProtection, until a block click). */
@@ -612,6 +646,7 @@ export class FakeGtnhServer {
   /** S08: the server places the player, as after a teleport or a move it rejected. */
   placePlayer(x: number, eyeY: number, z: number): void {
     this.placements.push({ x, eyeY, z });
+    this.moveSim.placed(x, eyeY - PLAYER_EYE_Y, z);
     this.broadcast(
       encodeFrame(
         0x08,
@@ -880,6 +915,7 @@ export class FakeGtnhServer {
             break;
           case 0x03:
             this.idleTicks += 1;
+            this.moveSim.stand(r.bool());
             this.itemSim.onPlayerTick();
             this.questBookSim?.onPlayerTick();
             if (!healthSent && this.confirmedPositions.length > 0) {
@@ -908,6 +944,7 @@ export class FakeGtnhServer {
               onGround: r.bool(),
             };
             this.confirmedPositions.push(p);
+            this.#checkMove(p);
             this.itemSim.onPlayerTick();
             this.questBookSim?.onPlayerTick();
             const centre = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`;
@@ -923,6 +960,13 @@ export class FakeGtnhServer {
             if (channel === 'BQ_NET_CHAN') this.questBookSim?.handle(Buffer.from(data));
             break;
           }
+          case 0x05: {
+            // C05 Player Look: no position, only its onGround (the fall accounting).
+            r.f32();
+            r.f32();
+            this.moveSim.stand(r.bool());
+            break;
+          }
           case 0x07:
             this.digSim.handle(r);
             break;
@@ -936,6 +980,17 @@ export class FakeGtnhServer {
           case 0x02:
             this.combatSim.handle(r);
             break;
+          case 0x0b: {
+            // C0B Entity Action (NetHandlerPlayServer.processEntityAction): 4 starts
+            // sprinting, 5 stops it.
+            const entityId = r.i32();
+            const action = r.u8();
+            const jumpBoost = r.i32();
+            this.entityActions.push({ entityId, action, jumpBoost, at: this.received.length });
+            if (action === 4) this.sprinting = true;
+            if (action === 5) this.sprinting = false;
+            break;
+          }
           case 0x16: {
             // Client Status: 0 = Perform Respawn (ServerConfigurationManager.respawnPlayer).
             const action = r.u8();
@@ -951,11 +1006,24 @@ export class FakeGtnhServer {
     });
   }
 
+  /**
+   * A position packet, as the server's movement check sees it (fake-movement.ts): a move it
+   * does not accept puts the player back where it was (S08), and a hard landing hurts.
+   */
+  #checkMove(p: ConfirmedPosition): void {
+    const falls = this.moveSim.falls.length;
+    const reset = this.moveSim.move(p);
+    if (!this.#checkMoves) return;
+    for (const f of this.moveSim.falls.slice(falls)) this.combatSim.hurtPlayer(f.damage);
+    if (reset !== null) this.placePlayer(reset.x, reset.y + PLAYER_EYE_Y, reset.z);
+  }
+
   /** A dead player respawns at the spawn: S07 Respawn, its position, full health. */
   #respawn(send: (frame: Buffer) => void): void {
     const o = this.#opts;
     send(encodeFrame(0x07, Buffer.concat([i32(0), Buffer.from([3, 0]), encodeString('RWG')])));
     this.placements.push({ x: o.spawn.x, eyeY: o.spawn.eyeY, z: o.spawn.z });
+    this.moveSim.placed(o.spawn.x, o.spawn.eyeY - PLAYER_EYE_Y, o.spawn.z);
     send(
       encodeFrame(
         0x08,
@@ -1025,6 +1093,7 @@ export class FakeGtnhServer {
     );
     send(encodeFrame(0x05, Buffer.concat([i32(0), i32(64), i32(0)])));
     this.placements.push({ x: o.spawn.x, eyeY: o.spawn.eyeY, z: o.spawn.z });
+    this.moveSim.placed(o.spawn.x, o.spawn.eyeY - PLAYER_EYE_Y, o.spawn.z);
     send(
       encodeFrame(
         0x08,

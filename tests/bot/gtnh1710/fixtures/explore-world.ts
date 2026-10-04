@@ -88,6 +88,9 @@ export function explorerHarness() {
       movement?: Partial<MovementConfig>;
       dayTicks?: number | null;
       boundary?: boolean;
+      /** Digging and placing (both off by default). */
+      digging?: boolean;
+      placing?: boolean;
     } = {},
   ) => {
     const dayTicks = opts.dayTicks === undefined ? 6000 : opts.dayTicks;
@@ -118,6 +121,8 @@ export function explorerHarness() {
           stopFile: join(dir, 'STOP'),
           ...opts.movement,
         },
+        digging: { enabled: opts.digging ?? false },
+        placing: { enabled: opts.placing ?? false },
       },
       safety: { boundary: { ...BOUNDARY, allowedDimensions: ['overworld'] } },
     });

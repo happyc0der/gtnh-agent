@@ -2,12 +2,14 @@ import type { MinecraftConfig } from '../../config/env.ts';
 import type { Position } from '../../domain/common.ts';
 import type { GameState } from '../../domain/game-state.ts';
 import { assertValidatedAction, type ValidatedAction } from '../../domain/validated-action.ts';
+import type { PlayerBuild, PlayerBuildChanges } from '../../domain/player-builds.ts';
 import type { SeenChunk } from '../../domain/world-memory.ts';
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
 import { failed, ok, type ClientActionResult, type MinecraftClient } from '../minecraft-client.ts';
 import type { OwnerMessage } from './client/chat-actions.ts';
 import { ClientCore } from './client/core.ts';
+import type { PathOptions } from './pathing/search.ts';
 import type { PointBox } from './play-area.ts';
 import type { Fence, WalkPlan } from './walking.ts';
 import type { WorldModel } from './world-model.ts';
@@ -65,7 +67,8 @@ export interface ConnectionInfo {
  *    host is private, and the server's status ping shows that marker, Forge and GregTech;
  *  - can only send: handshake, status request, login start, keep-alive, FML handshake /
  *    channel registration, idle ticks, confirmations of server-assigned positions, walking
- *    steps, the window packets chests and crafting need (empty-hand block activation,
+ *    steps (and C0B start/stop sprinting around the steps of a walk that sprints), the window
+ *    packets chests and crafting need (empty-hand block activation,
  *    hotbar selection, predictable clicks, confirmations, closing a window), digging
  *    start/cancel/finish, a block placement with the held block item, attacks on one checked
  *    entity (C02, attack only), the cosmetic head look and arm swing, and Better Questing's
@@ -77,8 +80,9 @@ export interface ConnectionInfo {
  *    or public chat starting with ! or # or the bot's name; a stop stops the action in
  *    progress at once (interrupt());
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
- *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
- *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
+ *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops, each
+ *    planned again on the pathfinder) when the play area follows the player (movement mode
+ *    'follow'), OPEN_CONTAINER /
  *    DEPOSIT_ITEM / WITHDRAW_ITEM when containers are enabled, CRAFT_ITEM when crafting is
  *    enabled, DIG_BLOCK when digging is enabled (and DIG_DOWN, the night pit's dig under the
  *    feet, when walking is enabled too), PLACE_BLOCK when placing is enabled,
@@ -90,9 +94,13 @@ export interface ConnectionInfo {
  *    boundary: client/core.ts fence()), and every step is re-checked just before it is sent;
  *    it stops on a server correction, a health drop, a nearby threat (MOVE_TO, EXPLORE), a
  *    blocked or dangerous way ahead, the stop file, halt(), or a lost connection;
- *  - a MOVE_TO over terrain may break a few leaves in its way when digging is enabled, each
- *    one as DIG_BLOCK digs (checkWalkBreak re-checked before and during the dig, success only
- *    on the server's change to air); a break refused or not confirmed stops the walk;
+ *  - over terrain a walk plans on the pathfinder (pathing/, client/path-actions.ts) under the
+ *    walk policy (path-policy.ts): MOVE_TO and EXPLORE may break natural blocks in their way
+ *    when digging is enabled, each one as DIG_BLOCK digs (checkPathBreak re-checked before and
+ *    during the dig, success only on the server's change to air), and pillar or bridge with
+ *    a throwaway block when placing is enabled (checkPathPlace just before the click, success
+ *    only on the server's block change); never an ore, a player's build, or near another
+ *    player; a break or placement refused or not confirmed stops the walk;
  *  - window work never leaves items on the cursor or in a crafting grid when it can help it
  *    (the server drops both when a window closes or the player leaves);
  *  - a dig breaks one allowlisted block that digging.ts has checked, and re-checks it every
@@ -116,8 +124,8 @@ export class Gtnh1710Client implements MinecraftClient {
    * inventory-actions.ts (chests, windows and clicks), craft-actions.ts, interact-actions.ts
    * (block windows, SMELT, TAKE_OUTPUT), dig-actions.ts, drop-actions.ts (picking up what a
    * dig or a kill dropped), place-actions.ts, combat-actions.ts, quest-book-actions.ts,
-   * player-actions.ts (WAIT, EAT_FOOD), movement-actions.ts (walking, idle ticks, gravity) and
-   * travel-actions.ts (EXPLORE, retreats).
+   * player-actions.ts (WAIT, EAT_FOOD), movement-actions.ts (walking, idle ticks, gravity),
+   * path-actions.ts (walks on the pathfinder) and travel-actions.ts (EXPLORE, retreats).
    */
   readonly #core: ClientCore;
 
@@ -159,6 +167,25 @@ export class Gtnh1710Client implements MinecraftClient {
     return this.#core.observation.takeSeenChunks();
   }
 
+  /** Players' builds seen (and cells that became air) since the last call, for agent memory. */
+  takePlayerBuilds(): PlayerBuildChanges {
+    return this.#core.world.takePlayerBuilds();
+  }
+
+  /** The players' builds agent memory keeps: never broken (walks, DIG_BLOCK, GATHER). */
+  knowPlayerBuilds(builds: readonly PlayerBuild[]): void {
+    this.#core.world.knowPlayerBuilds(builds);
+  }
+
+  /**
+   * A MOVE_TO's walk policy now, as the pathfinder's options (client/path-actions.ts): for code
+   * that plans a step with the client's own rules (owners' travel); null without a fence or
+   * blocks.
+   */
+  walkOptions(): PathOptions | null {
+    return this.#core.paths.moveOptions();
+  }
+
   /**
    * The fence walks, digs and placements use right now (client/core.ts fence()), read-only,
    * for code that plans with the client's own rules (the night shelter); null when there is
@@ -181,14 +208,16 @@ export class Gtnh1710Client implements MinecraftClient {
         // Recorded by the agent; deliberately not sent as in-game chat.
         return Promise.resolve(ok('pause recorded (not sent in-game)', { acknowledged: true }));
       case 'MOVE_TO':
-        // Over terrain with digging enabled it may break a few leaves in its way.
+        // Over terrain it walks on the pathfinder, breaking what is in its way as the walk
+        // policy allows (client/path-actions.ts).
         return this.#core.movement.walkTo(action.args.target, {
           stopForThreats: true,
-          breakLeaves: true,
+          work: true,
           protectedItems: new Set(validated.protectedItems),
         });
       case 'EXPLORE':
-        return this.#core.travel.explore(action.args);
+        // In segments on the pathfinder, breaking and placing as the walk policy allows.
+        return this.#core.travel.explore(action.args, new Set(validated.protectedItems));
       case 'RETURN_TO_SAFE_LOCATION':
         // A retreat is how the agent gets away from a threat, so threats do not stop it.
         return this.#core.travel.retreat(validated.resolvedTarget);
@@ -307,12 +336,12 @@ export class Gtnh1710Client implements MinecraftClient {
   /**
    * Plans a walk without moving (for previews and dry runs), with a text map of the fence.
    * Works whether or not movement is enabled; null when no fence is configured. With
-   * `breakLeaves` it plans as MOVE_TO does (client/movement-actions.ts walkBreaks).
+   * `work` it plans as MOVE_TO does (breaking on its way as the walk policy allows).
    */
   previewWalk(
     target: Position | null,
-    breakLeaves = false,
+    work = false,
   ): { plan: WalkPlan | null; map: string[] } | null {
-    return this.#core.movement.previewWalk(target, breakLeaves);
+    return this.#core.movement.previewWalk(target, work);
   }
 }

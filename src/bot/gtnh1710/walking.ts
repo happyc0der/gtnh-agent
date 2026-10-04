@@ -78,6 +78,12 @@ export interface WalkWorld {
   blockName(id: number): string | undefined;
   /** Hazard code (block-hazards.ts BLOCK_CODE) of a block id. */
   hazardCode(id: number): number;
+  /**
+   * Whether a player built the block at (x, y, z): the client saw it placed while another
+   * player stood near, and did not place it itself (world-model.ts). The agent never breaks
+   * such a block. Absent: no builds are known.
+   */
+  builtByPlayer?(x: number, y: number, z: number): boolean;
 }
 
 export type CellProblem =

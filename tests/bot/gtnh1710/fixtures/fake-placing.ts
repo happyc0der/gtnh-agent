@@ -1,5 +1,5 @@
 import { readItemStack, VANILLA_DECODING } from '../../../../src/bot/gtnh1710/packets.ts';
-import type { Reader } from '../../../../src/bot/gtnh1710/wire.ts';
+import { Reader as ReaderOf, type Reader } from '../../../../src/bot/gtnh1710/wire.ts';
 import { blockChangeFrame } from './chunk-fixtures.ts';
 import type { FakeChestSim, FakeStack } from './fake-chests.ts';
 
@@ -62,6 +62,11 @@ export interface FakePlaceOptions {
   cancelPlace?: boolean;
   /** The server's reach for clicks (vanilla 5 + 1); lower it to have clicks refused. */
   reach?: number;
+  /**
+   * A server that lags: every C08 is handled this many ms after it arrives (the placement and
+   * its answers come that late; the moves meanwhile are handled at once).
+   */
+  lagMs?: number;
 }
 
 export interface FakePlaceWorld {
@@ -145,8 +150,19 @@ export class FakePlaceSim {
     this.#timers.clear();
   }
 
-  /** C08 Player Block Placement. */
+  /** C08 Player Block Placement (late, with lagMs). */
   handle(r: Reader, modularUi: boolean): void {
+    const lag = this.#opts.lagMs ?? 0;
+    if (lag <= 0) {
+      this.#handle(r, modularUi);
+      return;
+    }
+    // Read it now (the reader is the frame's), handle it later.
+    const copy = Buffer.from(r.bytes(r.remaining));
+    this.#later(lag, () => this.#handle(new ReaderOf(copy), modularUi));
+  }
+
+  #handle(r: Reader, modularUi: boolean): void {
     const x = r.i32();
     const y = r.u8();
     const z = r.i32();

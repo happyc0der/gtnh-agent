@@ -117,6 +117,12 @@ export function movementStatus(config: AgentConfig): Record<string, unknown> {
         : null,
     stopFile: resolve(m.stopFile),
     halted: existsSync(resolve(m.stopFile)),
+    // How walks over terrain move (the walk policy); breaking and placing need their abilities.
+    path: {
+      ...m.path,
+      breaks: m.path.allowBreak && d.enabled,
+      places: m.path.allowPlace && p.enabled,
+    },
     digging: {
       enabled: d.enabled,
       heights:
@@ -199,7 +205,7 @@ export async function runLiveMove(
         const onInterrupt = (): void => client.halt('interrupted (Ctrl+C)');
         process.once('SIGINT', onInterrupt);
         try {
-          // Planned as the action walks: a MOVE_TO may break leaves in its way.
+          // Planned as the action walks: a MOVE_TO may break and place on its way.
           const before = client.previewWalk(target, spec.type === 'MOVE_TO');
           if (options.dryRun) {
             return {

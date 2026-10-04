@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { planTravelStep, type TravelInput } from '../../../src/app/play/owner-travel.ts';
 import { BLOCK_CODE } from '../../../src/bot/gtnh1710/block-hazards.ts';
 import type { PlayArea } from '../../../src/bot/gtnh1710/play-area.ts';
+import { walkPolicy, type WalkSettings } from '../../../src/bot/gtnh1710/path-policy.ts';
+import { goalNear } from '../../../src/bot/gtnh1710/pathing/goals.ts';
+import { planPath } from '../../../src/bot/gtnh1710/pathing/search.ts';
 import type { WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 
-const ID = { air: 0, stone: 1, grass: 2, water: 9 } as const;
+const ID = { air: 0, stone: 1, grass: 2, dirt: 3, water: 9 } as const;
 const NAMES = new Map<number, string>([
   [ID.air, 'minecraft:air'],
   [ID.stone, 'minecraft:stone'],
   [ID.grass, 'minecraft:grass'],
+  [ID.dirt, 'minecraft:dirt'],
   [ID.water, 'minecraft:water'],
 ]);
 
@@ -146,5 +150,96 @@ describe('planning an owner travel step', () => {
       planTravelStep(input({ target, area: { fence: null, problem: 'no fence here' } })),
     ).toEqual({ kind: 'refused', reason: 'no fence here' });
     expect(planTravelStep(input({ target, world: null }))).toMatchObject({ kind: 'refused' });
+  });
+});
+
+describe('owner travel on the pathfinder', () => {
+  it('follow walks about a second of its way at a time; come walks all the way', () => {
+    const owner = { x: 20.5, y: 64, z: 0.5 };
+    const follow = planTravelStep(
+      input({ target: { kind: 'near', point: owner, within: 3, step: true } }),
+    );
+    if (follow.kind !== 'step' || follow.spec.type !== 'MOVE_TO') throw new Error('no walk');
+    // About a second at walking pace (4.3 blocks), then the next cycle plans again.
+    expect(follow.spec.args.target.x).toBeGreaterThan(2);
+    expect(follow.spec.args.target.x).toBeLessThanOrEqual(6.5);
+    expect(follow.text).toMatch(/on the way near/);
+    const come = planTravelStep(input({ target: { kind: 'near', point: owner, within: 3 } }));
+    if (come.kind !== 'step' || come.spec.type !== 'MOVE_TO') throw new Error('no walk');
+    expect(
+      Math.hypot(come.spec.args.target.x - owner.x, come.spec.args.target.z - owner.z),
+    ).toBeLessThanOrEqual(3);
+  });
+
+  it("plans with the client's walk policy: through a wall far from the owner, never next to it", () => {
+    // A dirt wall two high across the whole area at x = 5.
+    const wall: Record<string, number> = {};
+    for (let z = -31; z <= 32; z++) {
+      wall[`5,64,${z}`] = ID.dirt;
+      wall[`5,65,${z}`] = ID.dirt;
+    }
+    const world = flat(wall);
+    const settings: WalkSettings = {
+      allowBreak: true,
+      allowPlace: false,
+      allowParkour: true,
+      parkourOverDeepGaps: false,
+      allowSprint: false,
+      allowWater: false,
+      throwawayReserve: 4,
+    };
+    const policy = (players: Array<{ x: number; y: number; z: number }>) =>
+      walkPolicy({
+        world,
+        boundary: null,
+        players,
+        settings,
+        breaking: true,
+        placing: false,
+        digHeight: 4,
+        digTicks: () => ({ ticks: 21 }),
+        throwaway: null,
+        sprint: false,
+      }).options;
+    const fixed = { enabled: true, canExplore: false, maxPathLength: 32 };
+    // Going to a point beyond the wall: through it (the owner far away).
+    const through = planTravelStep(
+      input({
+        world,
+        movement: fixed,
+        path: policy([{ x: 30.5, y: 64, z: 25.5 }]),
+        target: { kind: 'point', point: { x: 9, y: 64, z: 0 } },
+      }),
+    );
+    expect(through).toMatchObject({
+      kind: 'step',
+      spec: { type: 'MOVE_TO', args: { target: { x: 9.5, y: 64, z: 0.5 } } },
+    });
+    // Coming to the owner just behind the wall: the wall next to the owner is never broken;
+    // the way goes through it farther along, more than 4 blocks from the owner.
+    const owner = { x: 7.5, y: 64, z: 0.5 };
+    const options = policy([owner]);
+    const near = planTravelStep(
+      input({
+        world,
+        movement: fixed,
+        path: options,
+        target: { kind: 'near', point: owner, within: 2.5 },
+      }),
+    );
+    if (near.kind !== 'step' || near.spec.type !== 'MOVE_TO') throw new Error('no walk');
+    expect(near.spec.args.target.x).toBeGreaterThan(5);
+    const path = planPath(
+      world,
+      AREA.fence,
+      { x: 0.5, y: 64, z: 0.5 },
+      goalNear(owner, 2.5),
+      options,
+    );
+    const broken = path.movements.flatMap((m) => m.breaks.map((b) => b.cell));
+    expect(broken.length).toBeGreaterThan(0);
+    for (const c of broken) {
+      expect(Math.hypot(c.x + 0.5 - owner.x, c.z + 0.5 - owner.z)).toBeGreaterThan(4);
+    }
   });
 });

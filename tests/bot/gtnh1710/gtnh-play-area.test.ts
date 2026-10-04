@@ -74,8 +74,10 @@ describe('the play area follows the player (movement mode follow)', { timeout: 3
     expect(await positionOf(client)).toEqual(home);
   });
 
-  it('retreats in hops when its path is longer than one walk may take, inside the window too', async () => {
-    // Seen live: home 49 path blocks away inside the play area, the limit 32: refused twice.
+  it('retreats inside the window in one hop, however long its path (no length limit over terrain)', async () => {
+    // Seen live: home 49 path blocks away inside the play area, the limit 32: refused twice,
+    // and play stopped. On the pathfinder a walk over terrain is bounded by the play area, not
+    // by maxPathLength (the flat pen's limit); a retreat in mode follow travels in hops, here one.
     const { client } = await harness.start({ movement: { maxPathLength: 6 } });
     expect(await perform(client, moveTo(SPAWN.x, SPAWN.z - 4))).toMatchObject({ ok: true });
     expect(await perform(client, moveTo(SPAWN.x, SPAWN.z - 7))).toMatchObject({ ok: true });
@@ -83,7 +85,7 @@ describe('the play area follows the player (movement mode follow)', { timeout: 3
     const retreat: ActionSpec = { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } };
     const r = await perform(client, retreat, home);
     expect(r, r.message).toMatchObject({ ok: true });
-    expect(r.message).toMatch(/^retreated [\d.]+ blocks in \d+ hop\(s\)/);
+    expect(r.message).toMatch(/^retreated 7\.0 blocks in 1 hop\(s\): at the safe location/);
     expect(await positionOf(client)).toEqual(home);
   });
 

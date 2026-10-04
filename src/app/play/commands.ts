@@ -635,6 +635,8 @@ function travelTarget(
           kind: 'near',
           point: at,
           within: c.verb === 'come' ? COME_WITHIN : FOLLOW_WITHIN,
+          // Follow walks about a second at a time and plans again: the owner moves on.
+          ...(c.verb === 'follow' ? { step: true } : {}),
         },
       };
     }

@@ -18,6 +18,7 @@ import { InteractActions } from './interact-actions.ts';
 import { InventoryActions } from './inventory-actions.ts';
 import { MovementActions } from './movement-actions.ts';
 import { Observation } from './observation.ts';
+import { PathActions } from './path-actions.ts';
 import { PlaceActions } from './place-actions.ts';
 import { PlayerActions } from './player-actions.ts';
 import { QuestBookActions } from './quest-book-actions.ts';
@@ -30,8 +31,9 @@ type Phase = 'idle' | 'connecting' | 'login' | 'play' | 'closed';
  * state and plumbing (send, close, waitFor, log), the fence of the moment, the flags that keep
  * walking, window work, digging, placing and fighting apart, and the feature modules, so that
  * each can use the others (a dig or a kill picks up its drops with drops.collect, which walks
- * with movement.walkTo; a walk breaks leaves with dig.digChecked; and whatever holds an item
- * arranges the hotbar with inventory clicks).
+ * with movement.walkTo; a walk on the pathfinder, paths.walk, breaks with dig.digChecked and
+ * holds its throwaway block with place.holdBlockItem; and whatever holds an item arranges the
+ * hotbar with inventory clicks).
  */
 export class ClientCore {
   readonly opts: Gtnh1710ClientOptions;
@@ -116,6 +118,8 @@ export class ClientCore {
   readonly questBook: QuestBookActions;
   readonly player: PlayerActions;
   readonly movement: MovementActions;
+  /** Walks over terrain on the pathfinder (path-actions.ts). */
+  readonly paths: PathActions;
   readonly travel: TravelActions;
 
   constructor(opts: Gtnh1710ClientOptions) {
@@ -133,6 +137,7 @@ export class ClientCore {
     this.questBook = new QuestBookActions(this);
     this.player = new PlayerActions(this);
     this.movement = new MovementActions(this);
+    this.paths = new PathActions(this);
     this.travel = new TravelActions(this);
   }
 

@@ -14,6 +14,7 @@ import {
   MAX_REPORTED_ENTITIES,
   MAX_REPORTED_PLACEABLE,
   MAX_REPORTED_PLACED,
+  MAX_REPORTED_PLAYER_BUILT,
   MAX_REPORTED_REMOVED,
   MAX_REPORTED_RESOURCES,
   worldTime,
@@ -21,7 +22,13 @@ import {
   type NearbyEntity as StateEntity,
   type WorldTime,
 } from '../../domain/game-state.ts';
+import {
+  PLAYER_BUILD_RADIUS,
+  type PlayerBuild,
+  type PlayerBuildChanges,
+} from '../../domain/player-builds.ts';
 import { chooseWeapon, listedCategory, vitalsOf, type HotbarSlot } from './combat.ts';
+import { PASSABLE_BLOCKS, PASSABLE_BY_METADATA } from './passable.ts';
 import { known, unknown, type Known } from '../../domain/known.ts';
 import { toolInfo, usesLeft } from '../../domain/tools.ts';
 import { PLACE_TARGETS, scanPlaceable } from './placing.ts';
@@ -409,6 +416,35 @@ const MAX_REMEMBERED_REMOVALS = 64;
 const MAX_REMEMBERED_PLACEMENTS = 64;
 /** Entities this close to the player are passed to the placeable-cell scan. */
 const PLACE_SCAN_ENTITY_RADIUS = 12;
+/**
+ * After the agent's own placement click or dig, a change of that cell within this long is its
+ * own doing, never a player's build (the server answers in a tick or two; a pillar's late
+ * block too).
+ */
+const OWN_CHANGE_MS = 5_000;
+/** What a block may be put into for a player's build: air, and the plants a block replaces. */
+const BUILD_OPEN: ReadonlySet<string> = new Set([
+  'minecraft:air',
+  'minecraft:tallgrass',
+  'minecraft:deadbush',
+  'minecraft:vine',
+  'minecraft:snow_layer',
+]);
+
+/**
+ * Whether a block has a collision box (a solid block, for players' builds): anything but air,
+ * the plants the walker passes, fluids, fire and thin snow.
+ */
+function hasCollisionBox(name: string): boolean {
+  return (
+    name !== 'minecraft:air' &&
+    name !== 'minecraft:fire' &&
+    name !== 'minecraft:snow_layer' &&
+    !PASSABLE_BLOCKS.has(name) &&
+    !PASSABLE_BY_METADATA.has(name) &&
+    !/water|lava|fluid/i.test(name)
+  );
+}
 
 /** A placeable block the observer saw appear in an empty cell, and its registry id. */
 interface PlacedRecord {
@@ -511,6 +547,16 @@ export class WorldModel {
   #dug: Array<{ x: number; y: number; z: number }> = [];
   /** Where the server turned an empty cell into a placeable block, most recent first. */
   #placed: PlacedRecord[] = [];
+  /**
+   * Players' builds (src/domain/player-builds.ts) by "dimension|x,y,z": seen on this
+   * connection, and given back from agent memory (knowPlayerBuilds).
+   */
+  readonly #playerBuilds = new Map<string, PlayerBuild>();
+  /** Builds seen, and recorded cells seen turning back into air, since takePlayerBuilds(). */
+  #newBuilds: PlayerBuild[] = [];
+  #goneBuilds: PlayerBuildChanges['removed'][number][] = [];
+  /** Cells the agent is filling or digging ("x,y,z"), and until when (ms) a change is its own. */
+  readonly #ownChanges = new Map<string, number>();
   readonly #watches = new Set<BlockWatch>();
   /** Counts the updates recorded by every watch (BlockWatch.order). */
   #watchedUpdates = 0;
@@ -594,11 +640,123 @@ export class WorldModel {
   }
 
   /**
-   * A single block changed (to `id` with metadata `meta`): remember removed diggable blocks
-   * and placed blocks, and tell the watchers.
+   * The agent is about to change `cell` itself: fill it (PLACE_BLOCK, a walk's pillar or
+   * bridge), or break it (C07 finish, or the start of a dig the server breaks at once). The
+   * server's changes of it in the next OWN_CHANGE_MS are its own, never a player's build: a
+   * placed block, and the block a cancelled break puts back (Forge sends the digging player
+   * "air" before a mod may cancel the break, then the block again).
    */
-  #onBlockChanged(x: number, y: number, z: number, id: number, meta: number): void {
+  expectOwnChange(cell: { x: number; y: number; z: number }, at: Date): void {
+    const now = at.getTime();
+    for (const [k, until] of this.#ownChanges) if (until < now) this.#ownChanges.delete(k);
+    this.#ownChanges.set(`${cell.x},${cell.y},${cell.z}`, now + OWN_CHANGE_MS);
+  }
+
+  /** Whether a player built the block at (x, y, z) in the current dimension (never broken). */
+  builtByPlayer(x: number, y: number, z: number): boolean {
+    const dim = this.dimension;
+    return dim !== null && this.#playerBuilds.has(`${dim}|${x},${y},${z}`);
+  }
+
+  /** The builds agent memory keeps (a new connection): known from now on, never broken. */
+  knowPlayerBuilds(builds: readonly PlayerBuild[]): void {
+    for (const b of builds) {
+      const { x, y, z } = b.position;
+      const key = `${b.dimension}|${x},${y},${z}`;
+      if (!this.#playerBuilds.has(key)) this.#playerBuilds.set(key, b);
+    }
+  }
+
+  /** Builds seen, and recorded cells that turned back into air, since the last call. */
+  takePlayerBuilds(): PlayerBuildChanges {
+    const out = { added: this.#newBuilds, removed: this.#goneBuilds };
+    this.#newBuilds = [];
+    this.#goneBuilds = [];
+    return out;
+  }
+
+  /**
+   * A player's build, or the end of one: a cell that turned from air (or a plant a block
+   * replaces) into a block with a collision box while another player stood within
+   * PLAYER_BUILD_RADIUS of it, and the agent did not change it itself (expectOwnChange: its
+   * placements, and the block a cancelled dig of its own puts back); a recorded one that
+   * turned back into air (or such a plant) is forgotten. Only single block changes count (a
+   * player's placement is one); a chunk sent again says nothing about who changed it.
+   */
+  #notePlayerBuild(
+    x: number,
+    y: number,
+    z: number,
+    before: number | undefined,
+    id: number,
+    at: Date,
+  ): void {
+    const dim = this.dimension;
+    const registry = this.#registry;
+    if (dim === null || registry === null) return;
+    const nameOf = (i: number): string | undefined =>
+      i === 0 ? 'minecraft:air' : registry.blocks.get(i);
+    const after = nameOf(id);
+    const open = (name: string | undefined): boolean => name !== undefined && BUILD_OPEN.has(name);
+    const key = `${dim}|${x},${y},${z}`;
+    if (this.#playerBuilds.has(key)) {
+      if (open(after)) {
+        this.#playerBuilds.delete(key);
+        this.#goneBuilds.push({ dimension: dim, position: { x, y, z } });
+      }
+      return;
+    }
+    if (before === undefined || !open(nameOf(before))) return;
+    if (after === undefined || !hasCollisionBox(after)) return;
+    const own = this.#ownChanges.get(`${x},${y},${z}`);
+    if (own !== undefined && own >= at.getTime()) return;
+    const cx = x + 0.5;
+    const cy = y + 0.5;
+    const cz = z + 0.5;
+    const player = [...this.#entities.values()].find((e) => {
+      if (e.kind !== 'player' || e.diedAt != null) return false;
+      const dy = Math.max(0, e.y - cy, cy - (e.y + 1.8));
+      return Math.hypot(e.x - cx, dy, e.z - cz) <= PLAYER_BUILD_RADIUS;
+    });
+    if (player === undefined) return;
+    const build: PlayerBuild = {
+      dimension: dim,
+      position: { x, y, z },
+      block: after,
+      seenAt: at.toISOString(),
+    };
+    this.#playerBuilds.set(key, build);
+    this.#newBuilds.push(build);
+  }
+
+  /** Players' builds within `radius` of `feet`, nearest first, at most `max`. */
+  #playerBuildsNear(
+    feet: Vec3,
+    radius: number,
+    max: number,
+  ): Array<{ x: number; y: number; z: number }> {
+    const dim = this.dimension;
+    if (dim === null) return [];
+    const near: Array<{ x: number; y: number; z: number; d: number }> = [];
+    for (const b of this.#playerBuilds.values()) {
+      if (b.dimension !== dim) continue;
+      const { x, y, z } = b.position;
+      const d = Math.hypot(x + 0.5 - feet.x, y + 0.5 - feet.y, z + 0.5 - feet.z);
+      if (d <= radius) near.push({ x, y, z, d });
+    }
+    return near
+      .sort((a, b) => a.d - b.d)
+      .slice(0, max)
+      .map(({ x, y, z }) => ({ x, y, z }));
+  }
+
+  /**
+   * A single block changed (to `id` with metadata `meta`): remember removed diggable blocks,
+   * placed blocks and players' builds, and tell the watchers.
+   */
+  #onBlockChanged(x: number, y: number, z: number, id: number, meta: number, at: Date): void {
     const before = this.#store.blockAt(x, y, z);
+    this.#notePlayerBuild(x, y, z, before, id, at);
     this.#store.setBlock(x, y, z, id, meta);
     const table = this.#diggable;
     if (
@@ -1644,12 +1802,12 @@ export class WorldModel {
         for (const c of packet.columns) this.#onColumnChanged(c.chunkX, c.chunkZ);
         return;
       case 'block-change':
-        this.#onBlockChanged(packet.x, packet.y, packet.z, packet.blockId, packet.blockMeta);
+        this.#onBlockChanged(packet.x, packet.y, packet.z, packet.blockId, packet.blockMeta, at);
         this.#forgetReplacedMachine(packet.x, packet.y, packet.z, packet.blockId);
         return;
       case 'multi-block-change':
         for (const r of packet.records) {
-          this.#onBlockChanged(r.x, r.y, r.z, r.blockId, r.blockMeta);
+          this.#onBlockChanged(r.x, r.y, r.z, r.blockId, r.blockMeta, at);
           this.#forgetReplacedMachine(r.x, r.y, r.z, r.blockId);
         }
         return;
@@ -2217,6 +2375,7 @@ export class WorldModel {
     const table = this.#diggable;
     if (table === null) return unknown('block registry not received yet');
     const feet = { x: pos.x, y: pos.feetY, z: pos.z };
+    // A player's build is never dug: it is not a resource.
     const scan = scanResources(
       this.#store,
       table,
@@ -2224,6 +2383,7 @@ export class WorldModel {
       RESOURCE_SCAN_RADIUS,
       MAX_REPORTED_RESOURCES,
       this.#seeThrough ?? undefined,
+      (x, y, z) => this.builtByPlayer(x, y, z),
     );
     if (!scan.ok) return unknown(scan.reason);
     const near = (p: { x: number; y: number; z: number }): boolean =>
@@ -2253,6 +2413,7 @@ export class WorldModel {
         takesFalling,
       })),
       placed: placed.map(({ block, x, y, z }) => ({ block, position: { x, y, z } })),
+      playerBuilt: this.#playerBuildsNear(feet, RESOURCE_SCAN_RADIUS, MAX_REPORTED_PLAYER_BUILT),
     });
   }
 
@@ -2315,6 +2476,7 @@ export class WorldModel {
       metaAt: (x, y, z) => (this.#hazardProblem === null ? this.#store.metaAt(x, y, z) : undefined),
       blockName: (id) => registry.blocks.get(id),
       hazardCode: (id) => codes[id] ?? BLOCK_CODE.unknown,
+      builtByPlayer: (x, y, z) => this.builtByPlayer(x, y, z),
     };
   }
 

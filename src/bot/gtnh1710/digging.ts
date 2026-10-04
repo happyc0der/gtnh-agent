@@ -220,6 +220,11 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
     return refuse(`${fmt(target)} holds block id ${id}, which the registry does not name`);
   if (!isDiggableBlock(name))
     return refuse(`${fmt(target)} is ${name}, which is not on the dig allowlist`);
+  if (world.builtByPlayer?.(x, y, z) === true) {
+    return refuse(
+      `${fmt(target)} was built by a player (seen placed while one stood near): the agent never breaks a player's build`,
+    );
+  }
   const facts = digFacts(name, world.metaAt?.(x, y, z));
   if ('problem' in facts) return refuse(`${fmt(target)}: ${facts.problem}`);
   const allowed = (blockId: number, reach: number): DigCheck => ({
@@ -387,7 +392,10 @@ export function standSpotFor(
 }
 
 // ---------------------------------------------------------------------------
-// Breaking leaves on a walk's way (MOVE_TO over terrain, with digging enabled)
+// Breaking leaves on a walk's way: terrain.ts's walker (planTerrainWalk and reachableFeet
+// given walkBreaks). The client's own walks no longer break this way: they plan on the
+// pathfinder and break by the walk policy (path-policy.ts checkPathBreak, which keeps every
+// rule of checkDig).
 
 /**
  * What a walk may break on its way: leaves, which a bare hand breaks in half a second. A
@@ -423,9 +431,8 @@ export const MAX_WALK_BREAKS = 12;
  * from where it stands, never its own support or a block over its head that falls, only air
  * and plain full blocks touching it and plants only beside it, nothing to fall into the
  * hole, no hazard near, nothing unloaded or unnamed), and wholly inside the safety boundary
- * when the client knows it (the safety policy's own rule for DIG_BLOCK). Checked by the
- * walker for every break it plans, and by the client again just before each dig and every
- * tick while digging.
+ * when the client knows it (the safety policy's own rule for DIG_BLOCK). Checked by
+ * terrain.ts's walker for every break it plans (walkBreaks).
  */
 export function checkWalkBreak(
   world: WalkWorld,
@@ -457,9 +464,9 @@ export function walkBreakCost(block: DiggableBlock): number {
 }
 
 /**
- * The walker's rule for breaking on the way (terrain.ts WalkBreaks): checkWalkBreak, its
- * cost, and at most MAX_WALK_BREAKS per walk. The client builds it once per observation and
- * per walk with the same area, so reachableFeet's stand spots and MOVE_TO's plan agree.
+ * terrain.ts's rule for breaking on the way (WalkBreaks): checkWalkBreak, its cost, and at
+ * most MAX_WALK_BREAKS per walk, the same for planTerrainWalk and reachableFeet so their walks
+ * agree.
  */
 export function walkBreaks(area: DigArea, boundary: PointBox | null = null): WalkBreaks {
   return {
@@ -492,7 +499,12 @@ function digDownSurroundingOk(world: WalkWorld, n: BlockPos, name: string): bool
  * live: tall grass beside the ground block ruled out every night pit around. A plant hangs on
  * the block under it, so only one on top of the dug block would drop.
  */
-function digDoesNotDisturb(world: WalkWorld, n: BlockPos, name: string, dy: number): boolean {
+export function digDoesNotDisturb(
+  world: WalkWorld,
+  n: BlockPos,
+  name: string,
+  dy: number,
+): boolean {
   return DIG_NEIGHBOURS.has(name) || (dy === 0 && passProblem(world, n.x, n.y, n.z) === null);
 }
 
@@ -610,6 +622,9 @@ export function checkDigDown(
     return refuse(
       `${fmt(target)} is ${name}: digging down takes only dirt, grass, sand, gravel or clay`,
     );
+  }
+  if (world.builtByPlayer?.(x, y, z) === true) {
+    return refuse(`${fmt(target)} was built by a player: the agent never breaks a player's build`);
   }
 
   // Exactly one block down, onto something that stays put.

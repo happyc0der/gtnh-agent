@@ -29,6 +29,7 @@ import {
   GameStateSchema,
   MAX_REPORTED_PLACEABLE,
   MAX_REPORTED_PLACED,
+  MAX_REPORTED_PLAYER_BUILT,
   MAX_REPORTED_INTERACTABLES,
   MAX_REPORTED_DEATHS,
   MAX_REPORTED_ENTITIES,
@@ -285,6 +286,11 @@ export interface MockWorld {
   removedBlocks: BlockPosition[];
   /** Blocks the agent placed, most recent first (diggable ones are resource blocks too). */
   placedBlocks: MockPlacedBlock[];
+  /**
+   * Blocks a player built (src/domain/player-builds.ts): reported, never listed as resources,
+   * so never dug. None by default.
+   */
+  playerBuiltBlocks?: BlockPosition[];
   containers: MockContainer[];
   generators: MockGenerator[];
   machines: MockMachine[];
@@ -408,8 +414,18 @@ export class MockMinecraftClient implements MinecraftClient {
     const nearbyHazards = w.hazards.filter((h) => distance(pos, h.position) <= HAZARD_SCAN_RADIUS);
     const near = (b: BlockPosition): number => distance(pos, blockCentre(b));
     // Like the live client: at or above the feet level (never the ground it stands on).
+    const built = (w.playerBuiltBlocks ?? [])
+      .filter((p) => near(p) <= BLOCK_SCAN_RADIUS)
+      .sort((a, b) => near(a) - near(b));
+    const isBuilt = (p: BlockPosition): boolean =>
+      built.some((b) => b.x === p.x && b.y === p.y && b.z === p.z);
     const resources = w.resourceBlocks
-      .filter((r) => r.position.y >= Math.floor(pos.y) && near(r.position) <= BLOCK_SCAN_RADIUS)
+      .filter(
+        (r) =>
+          r.position.y >= Math.floor(pos.y) &&
+          near(r.position) <= BLOCK_SCAN_RADIUS &&
+          !isBuilt(r.position),
+      )
       .sort((a, b) => near(a.position) - near(b.position))
       .slice(0, MAX_REPORTED_RESOURCES);
     const removed = w.removedBlocks
@@ -482,6 +498,7 @@ export class MockMinecraftClient implements MinecraftClient {
             removed: removed.map((p) => ({ ...p })),
             placeable: this.#placeableCells().slice(0, MAX_REPORTED_PLACEABLE),
             placed: placed.map((p) => ({ block: p.block, position: { ...p.position } })),
+            playerBuilt: built.slice(0, MAX_REPORTED_PLAYER_BUILT).map((p) => ({ ...p })),
           }),
       time: known(worldTime(w.timeOfDay ?? 6000, true)),
       questBook: unknown('mock: the quest book is not simulated'),

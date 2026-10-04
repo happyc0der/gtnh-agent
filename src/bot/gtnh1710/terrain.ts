@@ -24,10 +24,16 @@ import {
  * code, some only at certain metadata) or standable is never entered.
  */
 
-/** Natural full blocks the player may stand on, on top of the pen's list. */
+/**
+ * Natural full blocks the player may stand on, on top of the pen's list. Netherrack is a
+ * walk's throwaway block (path-policy.ts THROWAWAY_BLOCKS): a plain full block with no tile
+ * entity, like the dig allowlist's other natural stone (checked in the server's jars), on
+ * which a pillar stands.
+ */
 export const TERRAIN_SURFACES: ReadonlySet<string> = new Set([
   ...WALKABLE_SURFACES,
   'minecraft:mycelium',
+  'minecraft:netherrack',
 ]);
 
 export const MAX_DROP = 2;

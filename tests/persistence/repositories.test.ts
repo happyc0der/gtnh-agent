@@ -37,6 +37,7 @@ describe('migrations', () => {
       { version: 6 },
       { version: 7 },
       { version: 8 },
+      { version: 9 },
     ]);
   });
 
@@ -57,6 +58,7 @@ describe('migrations', () => {
         'named_locations',
         'protected_items',
         'owner_commands',
+        'player_builds',
       ]),
     );
   });
@@ -66,6 +68,44 @@ describe('migrations', () => {
     expect(() => runMigrations(fresh, [...MIGRATIONS, ...MIGRATIONS])).toThrow(
       /strictly increasing/,
     );
+  });
+});
+
+describe("players' builds (migration 009)", () => {
+  const build = (x: number, y: number, z: number, dimension = 'overworld') => ({
+    dimension,
+    position: { x, y, z },
+    block: 'minecraft:planks',
+    seenAt: '2026-10-03T12:00:00.000Z',
+  });
+
+  it('are stored by chunk, kept, and forgotten when the cell became air', () => {
+    expect(
+      repos.playerBuilds.apply({
+        added: [build(1, 64, 2), build(-1, 64, -17), build(1, 64, 2, 'the_nether')],
+        removed: [],
+      }),
+    ).toBe(3);
+    expect(repos.playerBuilds.all('overworld').map((b) => b.position)).toEqual([
+      { x: -1, y: 64, z: -17 },
+      { x: 1, y: 64, z: 2 },
+    ]);
+    expect(repos.playerBuilds.inChunk('overworld', -1, -2)).toEqual([build(-1, 64, -17)]);
+    expect(repos.playerBuilds.inChunk('overworld', 0, 0)).toEqual([build(1, 64, 2)]);
+    // The same cell again replaces it; a removal forgets it in that dimension only.
+    repos.playerBuilds.apply({
+      added: [{ ...build(1, 64, 2), block: 'minecraft:dirt' }],
+      removed: [],
+    });
+    expect(repos.playerBuilds.inChunk('overworld', 0, 0)[0]?.block).toBe('minecraft:dirt');
+    expect(
+      repos.playerBuilds.apply({
+        added: [],
+        removed: [{ dimension: 'overworld', position: { x: 1, y: 64, z: 2 } }],
+      }),
+    ).toBe(1);
+    expect(repos.playerBuilds.count()).toBe(2);
+    expect(repos.playerBuilds.all().map((b) => b.dimension)).toEqual(['overworld', 'the_nether']);
   });
 });
 

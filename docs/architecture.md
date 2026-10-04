@@ -448,14 +448,21 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   only food actions run) are not ended: travel and goals wait for them and say so, while instant
   commands are answered meanwhile (also from the shelter, `whileSheltered`).
 - **Travel** (come, follow, goto, home, waypoints) runs as code-made steps, like the night
-  shelter's: `planTravelStep` (`owner-travel.ts`) picks a MOVE_TO to a stand spot a walk reaches
-  (`reachableFeet`, the walker's own rules, within the hazard scan a MOVE_TO needs), or an
-  EXPLORE toward a point beyond that (play area mode `follow`), and the command's task holds it as
-  its one known step. System 1 still decides first (a mob, low health, a meal), the executor
-  validates, executes and verifies the step, and after every cycle the next one is planned from
-  what the client now knows (`onCycle`), so a moving owner is followed: a walk toward the player,
-  or a 1 s WAIT near it. Not seeing the player ends come and follow; anything else fails after 3
-  steps in a row that could not be planned or did not succeed.
+  shelter's: `planTravelStep` (`owner-travel.ts`) plans with the client's own pathfinder and
+  `MOVE_TO` walk policy (`Gtnh1710Client.walkOptions`, see
+  [Walking on the pathfinder](#walking-on-the-pathfinder)): goalNear the player for come and
+  follow, the point's block (or its column) for goto. The step is a MOVE_TO to where the path
+  ends (never within a block of the player, and within the hazard scan a MOVE_TO needs), or an
+  EXPLORE toward a point the play area does not reach (play area mode `follow`), and the
+  command's task holds it as its one known step. System 1 still decides first (a mob, low
+  health, a meal), the executor validates, executes and verifies the step, and after every
+  cycle the next one is planned from what the client now knows (`onCycle`), so a moving owner is
+  followed: a walk toward the player, or a 1 s WAIT near it. Follow walks about a second of its
+  path per step (`FOLLOW_STEP_TICKS`, 24 ticks), so it plans again about every second and keeps
+  about 3 blocks from its owner; the walk policy breaks nothing within 4 blocks and places
+  nothing within 3 blocks of another player, so never near the owner. Not seeing the player
+  ends come and follow; anything else fails after 3 steps in a row that could not be planned or
+  did not succeed.
 - **Goals** (get, mine) are FreeGoals under the command's task, pursued exactly like
   `cli play --needs` (`runGoalSession`: the planner plans from the route, GATHER digs), done when
   the inventory holds them, failed after `maxStuckSessions` sessions without progress.
@@ -660,8 +667,8 @@ anew: no code was taken from Baritone (LGPL-3.0).
   (dangers, vitals, upkeep). When it decides `REQUEST_PLANNER`, code picks the action from the
   fresh observation, without a model:
   - from the listed blocks of that kind that have a stand spot (`standAt`: one a walk reaches,
-    perhaps by breaking leaves on its way, see [Walking](#walking)), minus the ones the step has
-    skipped;
+    perhaps breaking or pillaring on its way, see [Walking](#walking-on-the-pathfinder)), minus
+    the ones the step has skipped;
   - one within reach (4.5 from the eyes) is dug (`DIG_BLOCK`), nearest first; otherwise the
     agent walks to the nearest stand spot (`MOVE_TO`, tolerance 0.5);
   - logs are felled trunk by trunk from the base, standing beside the trunk, so every drop
@@ -753,27 +760,32 @@ the session (the lines also stay the task's blueprint, the planner's route, as b
 
 ## Walking
 
-Walking was the live client's first world-changing ability (`src/bot/gtnh1710/walking.ts` plans
-and checks; `Gtnh1710Client` sends). It needs `MC_ENABLE_MOVEMENT=true` **and** a fence: whole
-blocks at the player's feet level, all on one level (a fence with a height range walks terrain:
-`terrain.ts`; in movement mode `follow` the fence is a play area that moves with the player, see
-[Exploring and world memory](#exploring-and-world-memory)). Defence in depth:
+Walking was the live client's first world-changing ability. It needs `MC_ENABLE_MOVEMENT=true`
+**and** a fence. On a fence of one level (the test pen: whole blocks at the player's feet level)
+the flat walker plans and checks (`src/bot/gtnh1710/walking.ts`). On a fence with a height
+range (terrain; in movement mode `follow` the fence is a play area that moves with the player,
+see [Exploring and world memory](#exploring-and-world-memory)) every walk plans on the
+pathfinder ([Pathfinding](#pathfinding)), and `client/path-actions.ts` carries the plan out
+([Walking on the pathfinder](#walking-on-the-pathfinder)). Defence in depth:
 
 1. The executor validates `MOVE_TO` / `RETURN_TO_SAFE_LOCATION` as usual: the target is inside the
    safety boundary, the target's surroundings were scanned, it keeps clear of known hazards, and
    the state is reliable.
-2. The walker plans on the blocks the server sent: A* inside the fence (no corner cutting), then
-   straight stretches where clear. A position is walkable only if every block the player's body
-   touches is air or a plant it passes through (below), every block under it is a known full
-   block, and nothing dangerous (or unloaded, or unnamed) touches those blocks. Stretches are
-   checked exactly: the swept body, not samples.
-3. Every 0.2-block step is re-checked just before it is sent (the world may have changed). The walk
+2. The walk is planned on the blocks the server sent. A position is walkable only if every block
+   the player's body touches is air or a plant it passes through (below), the block under it is
+   a known full block, and nothing dangerous (or unloaded, or unnamed) touches those blocks. The
+   flat walker plans A* inside the fence (no corner cutting), then straight stretches where
+   clear, checked exactly (the swept body, not samples), and walks them in 0.2-block steps. The
+   pathfinder plans movements and their steps, one per tick at the vanilla pace, which the step
+   validator checks against the game's physics and the server's own checks before anything is
+   sent.
+3. Every step is re-checked just before it is sent (the world may have changed). The walk
    stops on a server correction, a health drop (not at food 0, where the drops are hunger's), a
-   hostile (not a calm spider: see
-   [Combat](#combat)) or unidentified entity within `threatRadius` (not for a retreat, which is
-   how the agent escapes one), the stop file, `halt()`
-   (Ctrl+C) or a lost connection. After the last step it waits 5 ticks for a server correction
-   before reporting success, and the executor then verifies the position.
+   hostile (not a calm spider: see [Combat](#combat)) or unidentified entity within
+   `threatRadius` (not for a retreat, which is how the agent escapes one; being hit does not stop
+   a retreat either), the stop file, `halt()` (Ctrl+C) or a lost connection. After the last step
+   it waits 5 ticks for a server correction before reporting success, and the executor then
+   verifies the position.
 
 **Plants.** The body passes only through air and plants checked in the code the server runs
 (`src/bot/gtnh1710/passable.ts`; evidence in
@@ -788,8 +800,8 @@ burning blossom, BOP plants but thorns and cactus, and a snow layer only one lay
 thicker one would lift the feet). Everything else, an unnamed id, or a variant whose metadata
 is not known, is a wall. A harmful variant hurts only a body inside its cell, so it is no
 hazard to stand beside: it simply stays a wall. The same rule decides what the body occupies
-in the flat walker, the terrain walker (feet and head cells, every step, drops, and the
-gravity check's landing) and the plants allowed around a dig down or a placed block.
+in the flat walker, the pathfinder (every cell the body passes: `pathing/cells.ts`), the
+gravity check's landing and the plants allowed around a dig down or a placed block.
 
 **Gravity.** The client does not otherwise simulate physics, and the server kicks a player that
 floats for 4 seconds ("Flying is not enabled on this server"; seen live when a walk stopped in the
@@ -804,69 +816,136 @@ player stands on: the one under the centre of its feet, or, on the edge of a nei
 0.3 each way, reaches over it), that neighbour (`standingCell`; seen live: a walk stopped at
 z 9.1 over air, on the edge of the block at z 8, and every walk from there was refused).
 
-**Breaking leaves on the way** (2026-10-01; live since: walks broke 3-4 leaves at a time). Seen live: in a Hot Forest
-the logs the agent needed stood 7 blocks away, walled in by one- and two-block-high leaf bushes;
-no walk reached a stand spot, GATHER found nothing it could reach, and the agent gave up on the
-forest. A person punches through a leaf or two (by hand in half a second), and Baritone's paths
-break soft blocks, with the break time in the cost (the idea only; no code was taken). So with
-digging enabled, a `MOVE_TO` over terrain may break `minecraft:leaves` and `leaves2` in its way:
+### Walking on the pathfinder
 
-- **Which.** Only on straight moves (a diagonal keeps the corner rule), the cells the body
-  passes: a level move's destination (head, then feet), a step up's head-room above the player
-  and its destination, the column a drop passes and its landing; the upper block first. Each must
-  pass `checkWalkBreak` (`digging.ts`) from where the player will stand when it digs: leaves
-  only, and every rule of `checkDig` (the dig area and heights, reach, never its own support,
-  nothing to fall into the hole, only air and plain blocks touching it and plants only beside
-  it, no hazard near, nothing unloaded or unnamed), wholly inside the safety boundary. At most
-  4 per walk (`MAX_WALK_BREAKS`).
-- **The cost.** Each break costs its time at the walking pace: the dig by hand (`digWaitTicks`:
-  10 ticks for leaves) and the server's verdict (about 6 ticks), 3.2 blocks. The walker goes
-  round a bush when that is at most about 3 blocks longer per leaf, and punches through when the
-  way round is much longer.
-- **Stand spots and walks agree.** `planTerrainWalk` (A*) and `reachableFeet` (Dijkstra) share
-  `terrainEdges` and the same costs and limits (blocks walked, breaks), applied while searching,
-  so they settle the same walk to each feet block. The observation offers a stand spot behind
-  leaves (`standSpotFor`, the cheapest walk first) only when a `MOVE_TO` there plans the same
-  way: the client builds one rule for both (`walkBreaks` in `client/movement-actions.ts`), only with digging enabled, on a
-  terrain fence, with an empty hotbar slot (leaves are broken by hand).
-- **The walk.** Before a move that needs breaks, it stops and digs each block exactly as
-  `DIG_BLOCK` does (one shared routine): the walk's own checks first (the stop file, `halt()`, a
-  correction, health, threats), then `checkWalkBreak` on the blocks the server sent, before the
-  dig and every tick during it, with the walk's guard; the dig time; C07 start and finish;
-  success only on the server's change to air with no re-send. Presence ticks go on while it
-  stands. A break refused or not confirmed stops the walk (`FAILED`, with the reason, after C07
-  cancel if it had started), and the agent re-plans; a leaf that is gone already is passed over.
-  The fence, every step's re-check, threats and gravity are as for any walk.
-- **The result** says what it broke ("broke 2 leaves on the way: ..."). Leaves drop a sapling
-  or an apple now and then: after its last break the walk stays until those could be picked up
-  (15 ticks) and reports them, so they arrive during the walk and do not pass for the next
-  dig's drop. `MOVE_TO`'s verification is unchanged: the player near the target.
-- Only `MOVE_TO` breaks (and `cli move --dry-run` plans it so). `EXPLORE`'s hops, retreats (a
-  threat stops every dig, and a retreat runs from one) and the walk to a drop do not.
+Over terrain, `MOVE_TO`, `EXPLORE`'s hops, retreats, the flee, the walk to a drop and owners'
+travel steps all walk the same way (`PathActions.walk` in `client/path-actions.ts`): toward a
+goal (`pathing/goals.ts`), doing work (breaking and placing) or not, stopping for threats or
+not, with a partial path allowed or not. It replaced the terrain walker (`terrain.ts`), which
+walked, stepped up one block, dropped at most two and broke only leaves; it has run on the
+fake server only so far.
 
-The `move` command runs one such action for a human (origin `user`). The repeated-failure rule does
-not apply to it (it is the human's decision each time), and its failures do not count against the
-agent's own attempts.
+Seen live with the terrain walker: in a Hot Forest the logs the agent needed stood 7 blocks
+away, walled in by leaf bushes, and it gave up on the forest until walks could break leaves. A
+person also digs through a dirt bank, pillars up a ledge and bridges a gap, and so do
+Baritone's paths (the ideas only; no code was taken).
+
+**The walk policy** (`path-policy.ts`) turns the config's `minecraft.movement.path`
+(`MC_PATH_*`, after Baritone's allowBreak, allowPlace, allowParkour and allowSprint) and the
+moment (the inventory, the other players, the boundary) into the pathfinder's options:
+
+- **Breaking** (`allowBreak`, on by default) only on a walk that works (`MOVE_TO`, `EXPLORE`),
+  with digging enabled, on a terrain fence whose dig heights reach 2 above the feet (an ascend
+  breaks there). `canBreak` takes a block on the dig allowlist that passes the rules of
+  `checkDig` that do not depend on where the player stands (only air, plain blocks and, beside
+  it, plants touching it), never an ore (ores are mined, not broken on a walk), never a player's
+  build ([Players' builds](#players-builds)), never within 4 blocks of another player's body
+  (`PLAYER_BREAK_DISTANCE`) and never outside the safety boundary. It costs the dig time with
+  the tool the dig would hold (`DigActions.digTicksFor`, the same choice as `DIG_BLOCK`'s: stone
+  only with a carried pickaxe that harvests it, natural metadata only). At most 24 per walk
+  (`MAX_PATH_BREAKS`).
+- **Placing** (`allowPlace`, on) only on a walk that works, with placing enabled, on a terrain
+  fence: pillars and bridges of throwaway blocks (`chooseThrowaway`: cobblestone, netherrack or
+  dirt, whichever the player carries most of, never a protected item, dirt counted less
+  `throwawayReserve`, 4, kept for the night shelter's roof). `canPlace` keeps them inside the
+  safety boundary, 3 blocks from other players (`PLAYER_PLACE_DISTANCE`), with only air, plants
+  and plain blocks around (`PLACE_BLOCK`'s neighbour rule; the pathfinder itself keeps
+  placements away from fluids and hazards).
+- **Parkour** (`allowParkour`, on) only over gaps that falling into would not hurt
+  (`parkourOverDeepGaps`, off); **sprinting** (`allowSprint`, off) as below; **wading**
+  (`allowWater`, off) in calm one-deep water; falls of at most 3 blocks. Walks never dig down
+  (that is the night pit's `DIG_DOWN`).
+- A walk that does no work (a retreat, the flee, the walk to a drop: threats do not stop them,
+  and a dig or a placement would) breaks and places nothing.
+
+**The plan.** `planPath` (at most 60,000 nodes and 500 ms: it runs between packets), cut to the
+walk's `maxLength` (blocks) or `maxTicks`, a partial path only where the walk allows one
+(`EXPLORE`, retreats, the flee); then `planExecution`, and `validatePlan` once more. A walk that
+cannot be planned says why, and nothing is sent.
+
+**Carrying it out**, movement by movement:
+
+- **Breaks first**, standing still, upper blocks first: each dug exactly as `DIG_BLOCK` digs
+  (`digChecked`: the best tool carried, the dig time, success only on the server's change to air
+  with no re-send), with `checkPathBreak` (every rule of `checkDig` from where the player stands,
+  plus the policy's) before the dig and every tick, and the walk's own checks first (the stop
+  file, `halt()`, a correction, health, threats). Presence ticks go on while it stands. A block
+  that is open already (a leaf that decayed) is passed over.
+- **Then the steps**, one C06 per tick with the step's own onGround, facing along the move.
+  Before each step on the ground: the walk's checks, and `stepProblem` (`pathing/validate.ts`)
+  for the cells the body passes, on the blocks as they are now. A step that leaves the ground is
+  checked together with every step to its landing, because a jump cannot be held in mid-air; in
+  the air only a correction or a lost connection stops the steps.
+- **Placements.** The throwaway block is put in hand before the first step (moving a stack into
+  the hotbar takes window clicks, never while the player moves), and again before a movement
+  that places (a dig held another slot). Right after the step it follows (`afterStep`):
+  `checkPathPlace` (`PLACE_BLOCK`'s rules for the cell; the clicked block a plain full block or
+  one this walk placed, its face touching the cell; the reach the client keeps to; never the
+  player's body or an entity, dropped items aside) and the walk's guard, then C08 against the
+  planned block and face with its cursor, looking at that point, and the arm swing. The cell is
+  marked as the agent's own placement first, so it never passes for a player's build. The
+  server's answer is read as `PLACE_BLOCK` reads it (S23 for the clicked block, then the cell).
+  - A pillar's block must be confirmed before the step that lands on it (`neededBy`). If it is
+    not, the movement's `fallback` is sent (the same jump coming back down where it began) and
+    the walk stops. A lagging server may place the block even then, into the cell the feet came
+    back down into (the server leaves the placer out of its entity check, and a player stands
+    in such a block freely): the client waits a second for that answer and, when the block
+    came, jumps onto it (the pillar's own jump) before it stops. The fake server's lag test
+    found this.
+  - A bridge's block: the player stands at the edge and waits for the server's answer, a second
+    at most, before stepping onto it.
+- **Sprinting** (`MC_PATH_ALLOW_SPRINT`, off by default: HungerOverhaul makes sprinting cost
+  food on this server) is planned only for a walk whose goal is at least 16 blocks away, with
+  food above 10. The client sends C0B START_SPRINTING when the steps start sprinting, and
+  STOP_SPRINTING before every dig and placement, at the end and whenever the walk stops; a
+  sprinting step with food at 10 or less stops the walk.
+- **The result**: "walked 23.41 blocks in 112 steps; broke 2 dirt on the way: ...; placed 1
+  block(s): ...; picked up ...; sprinted 80 of the steps" ("toward" the goal for a partial
+  path), with `reached`, `broken`, `placed` and `sprinted` in its data. After its last break
+  the walk stays until the drops could be picked up (15 ticks), so they arrive during the walk
+  and do not pass for the next dig's drop. A walk that stops says after how many steps and why,
+  and what it broke and placed by then. `MOVE_TO`'s verification is unchanged: the player near
+  the target.
+
+**Stand spots and walks agree.** The observation floods the play area once with `MOVE_TO`'s
+own walk policy (`PathActions.reachable`: `floodPath` within about twice `maxPathLength`
+blocks of walking, at most 40,000 nodes and 250 ms), and a resource's `standAt` is the
+cheapest flooded spot in the 8 columns around it, the feet from 1 above the block to 4 below
+it, from which `checkDig` allows the dig (`standSpotOnPath` in `stand-spots.ts`, with
+goalGetToBlock's test): a log walled in by leaves gets a spot the walk reaches by breaking
+them, one on a ledge a spot it pillars up to. On the pen's one-level fence, or when the flood
+cannot run, the spots are `standSpotFor`'s, as before.
+
+The `move` command runs one such action for a human (origin `user`); `cli move --dry-run`
+plans the walk as the action would. The repeated-failure rule does not apply to it (it is the
+human's decision each time), and its failures do not count against the agent's own attempts.
 
 ## Pathfinding
 
-`src/bot/gtnh1710/pathing/` is the terrain walker's successor: a pure pathfinder (no I/O, no
-client code) that plans where to walk and how, tick by tick. Nothing calls it yet. The executor
-(`walkTo` in `client/movement-actions.ts`) still plans with `terrain.ts`, and can switch over
-gradually: a path converts to terrain moves (walk, step-up, drop) wherever it has them
-(`toTerrainMoves`). The design follows Baritone, the Minecraft pathfinding bot (LGPL-3.0): A*
-with a binary heap and packed node keys, movements checked against the blocks with costs in
-ticks from the game's physics (its ActionCosts), penalties for breaking and placing, its goal
-kinds and its best-so-far partial paths. Only the ideas were taken: no Baritone code was copied,
-and every rule and number was worked out anew for 1.7.10 and this walker.
+`src/bot/gtnh1710/pathing/` is a pure pathfinder (no I/O, no client code) that plans where to
+walk and how, tick by tick. The client walks with it over terrain
+([Walking on the pathfinder](#walking-on-the-pathfinder), `client/path-actions.ts`): `MOVE_TO`,
+`EXPLORE`'s hops, retreats and the flee, the walk to a drop, owners' travel steps
+(`app/play/owner-travel.ts` plans them with the client's own options), and `GATHER`'s stand
+spots (`floodPath`). The pen's one-level fence keeps the flat walker. The design follows
+Baritone, the Minecraft pathfinding bot (LGPL-3.0): A* with a binary heap and packed node keys,
+movements checked against the blocks with costs in ticks from the game's physics (its
+ActionCosts), penalties for breaking and placing, its goal kinds and its best-so-far partial
+paths. Only the ideas were taken: no Baritone code was copied, and every rule and number was
+worked out anew for 1.7.10 and this walker.
 
 ```ts
-const found = planPath(world, fence, from, goalBlock(x, y, z), { canBreak, maxNodes: 100_000 });
+const policy = walkPolicy({ world, settings, breaking, placing, digTicks, throwaway /* ... */ });
+const found = planPath(world, fence, from, goalBlock(x, y, z), {
+  ...policy.options,
+  maxNodes: 60_000,
+  maxTimeMs: 500,
+});
 if (found.status === 'none') return failed(`not walking: ${found.reason}`);
 const plan = planExecution(world, fence, from, found.movements);
-// For each segment: dig plan.breaks standing still, then send each step (C06 position and
-// onGround), clicking each place right after its afterStep; on 'partial', plan again from
-// its end once new chunks have come.
+// validatePlan(world, fence, from, plan); then for each segment: dig plan.breaks standing
+// still, then send each step (C06 position and onGround), clicking each place right after its
+// afterStep; on 'partial', plan again from its end once new chunks have come.
 ```
 
 **The search** (`search.ts`) is A\* over feet blocks inside the search area (the fence, a hard
@@ -875,9 +954,10 @@ bound: at most 2^21 feet blocks, a 64 x 64 x 32 play area is 131,072).
 - Node keys are the feet block's index in the area box; costs, parents, the blocks broken and
   placed so far, and the open/closed state live in typed arrays, and the open list is a binary
   heap with decrease-key (`heap.ts`).
-- Limits: `maxNodes` (100,000) and `maxTimeMs` (1,000). The result says `reached`, `partial` or
-  `none`, why it stopped (`goal`, `exhausted`, `node-limit`, `time-limit`, `refused`) and, in
-  words, why (`reason`).
+- Limits: `maxNodes` (100,000) and `maxTimeMs` (1,000); the client's walks use 60,000 and 500
+  ms, its floods and owners' travel steps 40,000 and 250 ms. The result says `reached`,
+  `partial` or `none`, why it stopped (`goal`, `exhausted`, `node-limit`, `time-limit`,
+  `refused`) and, in words, why (`reason`).
 - When the goal cannot be reached inside the area (beyond the loaded chunks or the area itself)
   or a limit stops the search, the result is Baritone's best-so-far partial path: for each of
   its coefficients K (1.5 to 10), the node that minimises heuristic + cost / K, taking the
@@ -891,6 +971,11 @@ bound: at most 2^21 feet blocks, a 64 x 64 x 32 play area is 131,072).
   world as it is; the found path is then replayed over the blocks it breaks and places, each
   movement checked again, and cut where one no longer holds. A pillar or bridge after another
   clicks the block the one before placed.
+
+**The flood** (`floodPath`, `search.ts`): the same search with no goal (Dijkstra), within a cost:
+every feet block a walk reaches, what it costs, and its breaks and places on the way, with the
+same movements, options and limits. Where to stand to dig a block is a look-up in it
+(`stand-spots.ts`), so a stand spot offered is one a walk plans a path to.
 
 **Blocks** (`cells.ts`): each block of the search box is read once into typed arrays and
 classified with the walkers' own rules (what the body passes is `passable.ts`'s, what can be
@@ -935,7 +1020,9 @@ client's wait for the server's verdict (6) and a penalty (4), plus 2 once for st
 going round wins unless breaking is clearly cheaper (`penalties` changes them). Breaking and
 placing are policies the caller passes: `canBreak(cell)` (dig ticks or null), `canPlace(cell)`,
 `throwaway` (how many blocks, which: a surface the walker stands on, whether it falls), and the
-flags `parkour`, `pillar`, `bridge`, `downward`, `sprint` and `water`, all off by default.
+flags `parkour`, `pillar`, `bridge`, `downward`, `sprint` and `water`, all off by default. The
+client's walk policy sets them from its config (`downward` never: walks do not dig down); see
+[Walking on the pathfinder](#walking-on-the-pathfinder).
 
 **Safety the search enforces**, whatever the caller allows:
 
@@ -986,8 +1073,8 @@ position the click goes (`afterStep`) and the first step that stands on it (`nee
 - A pillar jumps straight up from rest and places the block in the cell the feet left right
   after the first step with the feet above it (the third); it lands on the block six ticks
   later (four under a block that cuts the jump short). If the server has not confirmed the
-  block before that landing step is due, the
-  executor sends the segment's `fallback` instead: the same jump coming back down where it began.
+  block before that landing step is due, the client sends the segment's `fallback` instead: the
+  same jump coming back down where it began.
 - A bridge walks to 0.6 past the centre (the eyes beyond the edge, so the side of the block
   underfoot faces them), stops for a tick, places against that side, and walks on once the server
   confirms (`neededBy` is the next step).
@@ -1013,32 +1100,37 @@ against a solid block touching the face clicked. Every test plan goes through it
 tests plan, execute and validate several hundred random paths on rough terrain and mazes (a
 larger run of the same, done once, validated about 70,000 movements).
 
-**What the executor must still do** (the plan cannot check it):
+**What the client adds** (the plan cannot check it; details in
+[Walking on the pathfinder](#walking-on-the-pathfinder)):
 
-- every step: re-check the blocks the server sent (as `walkTo` does today) and stop on a
-  correction, a threat, a health drop or the stop file; send the yaw toward the motion;
-- sprinting: send C0B START/STOP_SPRINTING when `sprint` changes (packets.ts has no C0B yet,
-  so keep `sprint` off until it does) and only with food above 6, where the game allows it;
-- parkour: send the steps without pausing (a jump cannot be held in mid-air), and before the
-  take-off make sure nothing stopped it; a correction in mid-air ends in the gap, which the
-  search only allows where that fall is safe;
-- pillar: hold the block in the hotbar and look down; send the click after `afterStep` and wait
-  for the server's block change; if it has not come before `neededBy`, send the fallback;
-- bridge: hold the block, face the side of the block underfoot, click, and wait for the
-  server's confirmation before sending `neededBy`;
-- breaks and digging down: dig each with the client's dig routine and its checks (for digging
-  down `checkDigDown`), standing still, before the segment's steps; a dig refused or not
-  confirmed ends the walk, and the agent plans again.
+- every step: the blocks the server sent re-checked (`stepProblem`, and for a step that leaves
+  the ground, every step to its landing first), and the walk's checks (a correction, a threat,
+  a health drop, the stop file); the yaw toward the motion;
+- sprinting: C0B START/STOP_SPRINTING when `sprint` changes, and only with food above 10;
+- parkour: the steps sent without a pause (a jump cannot be held in mid-air), everything checked
+  before the take-off; a correction in mid-air ends in the gap, which the search only allows
+  where that fall is safe;
+- pillar: the block held, looking at the click point; the click after `afterStep`, the server's
+  block change awaited; if it has not come before `neededBy`, the fallback (and a block that
+  comes late after all is jumped onto);
+- bridge: the block held, facing the side of the block underfoot; the click, and the server's
+  confirmation awaited (a second at most) before `neededBy`;
+- breaks: each dug with the client's dig routine and its checks (`checkPathBreak`), standing
+  still, before the segment's steps; a dig refused or not confirmed ends the walk, and the agent
+  plans again.
 
 **Performance** (`scripts/path-bench.ts`, on the bench terrain of hills, a forest, a desert, a
-river and a lake; medians of warm runs on the agent's laptop): a path across a 64 x 64 x 32 play
-area takes 2-14 ms to plan walking (225-3,700 nodes), and its execution plan and validation
-about 1 ms each; with bridges and pillars allowed, a search that needs them expands more
-(5,000-42,000 nodes, 18-165 ms), and one whose goal is out of reach even with blocks expands
-every spot the blocks open (100,000 nodes, about 0.5 s: keep `maxNodes` and `maxTimeMs` for
-that). 100,000 nodes take about 0.4 s with placing allowed (about 3 µs a node walking). Each
-block is read about twice per node expanded in all (the cell cache); `performance.test.ts`
-checks that, with time bounds loose enough for a busy test run.
+river and a lake; medians of warm runs on the agent's laptop, 2026-10-03): a path across a 64 x
+64 x 32 play area takes 3-13 ms to plan walking (225-3,700 nodes), and its execution plan and
+validation 0.3-3 ms each. With bridges and pillars allowed, a search that needs them expands
+more (4,900-42,000 nodes, 17-157 ms), and one whose goal is out of reach even with blocks
+expands every spot the blocks open (100,000 nodes, about 0.5 s: the client's walks stop at
+60,000 nodes or 500 ms). 100,000 nodes take about 0.4 s with placing allowed (a walking search
+of the bench terrain runs out of spots at 38,800 nodes, in 0.12 s). The stand-spot flood each
+observation makes takes 8-16 ms with breaking (3,200-6,700 feet blocks) and 53-81 ms with
+breaking and placing (15,600-24,900). Each block is read about twice per node expanded in all
+(the cell cache); `performance.test.ts` checks that, with time bounds loose enough for a busy
+test run.
 
 **Not covered yet:**
 
@@ -1237,10 +1329,13 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
      kind not listed has none within the declared radius; that radius shrinks only when more
      kinds are found than the list holds. Seen live: 31 grass, 27 sand and 6 leaves filled the
      64 nearest, and the logs a `GATHER` wanted were never listed. The block the player stands
-     on is never listed. `standAt` is a spot a walk from the player reaches
-     (`reachableFeet` in `src/bot/gtnh1710/terrain.ts`: the walker's own moves, flooded from the
-     feet), so a block walled in by leaves, plants or water has none.
+     on is never listed, nor a player's build. `standAt` is a spot a walk from the player
+     reaches (`standSpotOnPath`: the pathfinder's flood with `MOVE_TO`'s own walk policy, see
+     [Walking on the pathfinder](#walking-on-the-pathfinder)), so a block walled in by water or
+     by blocks no walk may break has none.
    - `removed`: positions where the client saw such a block turn into air, while they stay air.
+   - `playerBuilt`: players' builds near the player (at most 64; see
+     [Players' builds](#players-builds)).
 
    The planner gets 32 resources, shared between kinds the same way, and `tools`: the allowlisted tools the player
    carries (from the inventory names, where a worn tool shows its damage), with the digs each
@@ -1251,7 +1346,8 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
 2. **The executor validates as usual.**
    - The whole block must be inside the safety boundary.
    - It must be listed in `nearbyBlocks.resources` (`NOT_DIGGABLE` otherwise, pause), so
-     nothing off the allowlist can even be asked for.
+     nothing off the allowlist can even be asked for, and must not be a player's build
+     (`nearbyBlocks.playerBuilt`: `NOT_DIGGABLE`, pause).
    - It must clear known hazards by `hazardAvoidanceRadius`.
    - It must not be under the player or in its body's cells, must not be sand or gravel over
      the player's head, and must not have a listed sand or gravel block on top (`UNSAFE_DIG`).
@@ -1267,7 +1363,7 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
      never the floor;
    - loaded, named and allowlisted; for stone and ores, with a natural metadata (never bricks
      or chiseled stone), from which a GT ore's level and hardness come (`digFacts` in
-     `src/domain/dig-time.ts`);
+     `src/domain/dig-time.ts`); never a player's build;
    - within 4.5 of the eyes;
    - not in the player's own columns at or below its head, and not sand or gravel above it.
    - Everything touching the block's six faces must be air, an allowlisted block, or one of the
@@ -1329,9 +1425,10 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
 7. **Verification:** `BLOCK_REMOVED` passes only if the new observation lists the position in
    `nearbyBlocks.removed` (seen turning into air, still air) and not among the resources.
 
-Walking, chests and digging never run at the same time (the leaves a `MOVE_TO` breaks on its way
+Walking, chests and digging never run at the same time (the blocks a walk breaks on its way
 are digs inside the walk, with this same routine: see
-[Breaking leaves on the way](#walking)). `halt()` and the stop file stop them all.
+[Walking on the pathfinder](#walking-on-the-pathfinder)). `halt()` and the stop file stop them
+all.
 
 **Not covered yet:**
 
@@ -1425,6 +1522,27 @@ A `GATHER` of logs (`log`, `log2`) chooses its digs that way (`chooseGatherActio
 Other blocks keep [GATHER](#gather-gathering-in-one-plan-step)'s order: the nearest in reach,
 then the nearest stand spot. On the fake server, a four-log tree three columns off is walked to,
 felled from y 106 to 109, and each drop falls to the base and is picked up without a walk.
+
+### Players' builds
+
+A player plays alongside the agent, and what a player builds must stay. The client remembers a
+player's build (`world-model.ts`): a cell that turned from air (or tall grass, a dead bush,
+vines or a snow layer, which a block replaces) into a block with a collision box, by a single
+block change (a player places one block at a time; a chunk sent again says nothing about who
+changed what), while another player's body was within 8 blocks of it (`PLAYER_BUILD_RADIUS`),
+and that the agent had not changed itself in the last 5 s (`expectOwnChange`, set before every
+`PLACE_BLOCK`, every block a walk places and every dig's finish: a break the server cancels
+sends the digging player "air", then the block again). A build that turns back into air (or
+such a plant) is forgotten.
+
+- **Kept.** Agent memory stores them after every observation and action (`player_builds`,
+  migration 009: one row per block, keyed by chunk too), and gives them to each new client once,
+  before its first observation (`seedPlayerBuilds`), so a restart or a reconnect keeps them.
+- **Never broken.** The resource scan leaves them out of `nearbyBlocks.resources` (so `GATHER`
+  never picks one), the observation lists those near the player as `nearbyBlocks.playerBuilt`,
+  the safety policy refuses a `DIG_BLOCK` of one (`NOT_DIGGABLE`), the client's `checkDig` and
+  `checkDigDown` refuse one, and the walk policy never breaks one: a walk goes round, over
+  (pillaring) or not at all.
 
 ## Digging down: the night pit
 
@@ -1556,8 +1674,10 @@ of the way. In layers:
    like any found one; a placed furnace is a furnace in the interactables, for `SMELT` and
    `TAKE_OUTPUT`. The mock world and the fake server do the same.
 
-Walking, chests, crafting, digging and placing never run at the same time. `halt()` and the
-stop file stop them all.
+Walking, chests, crafting, digging and placing never run at the same time; a walk's own
+pillars and bridges are placements inside the walk, with the same click and verdict and their
+own checks (`checkPathPlace`: see [Walking on the pathfinder](#walking-on-the-pathfinder)).
+`halt()` and the stop file stop them all.
 
 **The planner** gets the cell to use: when a route needs a crafting table or furnace the player
 holds, its station line ends with the exact `PLACE_BLOCK` (`src/planner/planner-provider.ts`
@@ -1701,35 +1821,42 @@ planner that knows both.
 
 Every use of the fence in the client goes through one function, `fence()` in `client/core.ts`. A walk
 or dig takes its fence once, when it starts, and every step or tick is checked against that same
-fence, so the moving area never changes the per-step rules: walking, its 0.2-block steps, every
-step re-checked, threats stopping `MOVE_TO`, digging's checks, all as above.
+fence, so the moving area never changes the per-step rules: walking, its steps, every step
+re-checked, threats stopping `MOVE_TO`, digging's checks, all as above.
 
-### EXPLORE (`src/bot/gtnh1710/explore.ts`)
+### EXPLORE (`src/bot/gtnh1710/explore.ts`, `client/travel-actions.ts`)
 
 `EXPLORE { toward: <direction> | {x, z}, maxDistance: 8..96 }` walks over land, in hops:
 
 1. The goal is the point, or `maxDistance` blocks in the compass direction (north is -z), pulled
-   in to stay 1.5 blocks inside the boundary.
+   in to stay 1.5 blocks inside the boundary; on the pathfinder, the feet in any column within
+   1.5 blocks of it, at any height (`goalXZ` for each).
 2. Each hop: the client waits until the chunks and entities around its spot have arrived, then
-   a search over the play area with the walker's own move rules (level moves without cutting
-   corners, one block up with headroom, drops of at most 2, never into water, lava, unloaded
-   chunks or next to a hazard) finds the reachable spots closest to the goal, within
-   `maxPathLength` and the distance left. The best one becomes an ordinary checked walk
-   (`walkTo` in `client/movement-actions.ts`, MOVE_TO's rules: threats stop it). If the walker will not plan it, the next
-   candidate is tried.
-3. It stops, OK, at the goal, after `maxDistance` blocks walked (or nearly: when the few blocks
-   left are too short for a hop that a full-length one would make, it says "walked nearly the
-   whole maxDistance", not "no way further"), at the boundary, when no spot gets closer (water, a
-   cliff, a wall), when two hops in a row gain less than a block (stuck),
-   when it gets dark, or at 12 hops / 3 minutes; it fails on anything that stops a walk (a threat,
-   a correction, health, the stop file, `halt()`, the connection). The result says how far it got
-   and what it saw.
+   walks toward the goal on the pathfinder, inside the play area of the moment
+   ([Walking on the pathfinder](#walking-on-the-pathfinder), `MOVE_TO`'s rules: threats stop it,
+   and it breaks and places on its way as the walk policy allows): the whole way when the goal
+   lies inside the play area, else the best partial path toward it, cut to the distance left.
+   Then the play area has moved with the player, new chunks have come, and the next hop is
+   planned from there.
+3. It stops, OK, at the goal, after `maxDistance` blocks walked (or nearly: when the blocks
+   left are fewer than the next movement takes, it says "walked nearly the whole maxDistance",
+   not "no way further"), at the boundary, when no walk gets closer (water, a cliff or a wall
+   it may not climb, bridge or break through), when two hops in a row gain less than a block
+   (stuck), when it gets dark, or at 12 hops / 3 minutes; it fails on anything that stops a
+   walk (a threat, a correction, health, the stop file, `halt()`, the connection). The result
+   says how far it got and what it saw.
 
-The same hops bring the agent back: in mode `follow`, a `RETURN_TO_SAFE_LOCATION` whose location
-lies outside the current play area travels in hops to within 6 blocks of it (at most 768 blocks
-walked, 48 hops, 6 minutes), then walks onto it. Threats do not stop a retreat (it is how the
-agent gets away from them) and it is not limited to daylight: it is the escape. Every step is
-still checked for terrain and hazards, and a health drop still stops it.
+The same hops bring the agent back: in mode `follow`, a `RETURN_TO_SAFE_LOCATION` travels in
+hops toward the location (goalNear, 0.75 blocks) and ends on its block, at most 768 blocks
+walked, 48 hops, 6 minutes. Threats do not stop a retreat (it is how the agent gets away from
+them), being hit does not either, it is not limited to daylight (it is the escape), and it
+breaks and places nothing (a dig or a placement stops for a threat). Every step is still checked
+for terrain and hazards. When it cannot get on (no walk gets closer: a river, a cliff) and a
+threat is near, it flees instead: a walk on the pathfinder to goalAway (at least 6 blocks
+farther from every hostile or unidentified entity near than the nearest is now), or as far
+toward it as the play area allows, at most 32 blocks, as an escape. Seen live: a fishing zombie
+2.3 blocks off and a husk 11, the trail too close to them, home 90 blocks back over a cliff; the
+retreat home failed four times on the spot, and play stopped.
 
 This is the long-distance idea of Baritone (path to the best reachable node toward a goal beyond
 the loaded area, then re-plan as chunks arrive) and of mineflayer-pathfinder's `GoalXZ`
@@ -1975,33 +2102,35 @@ creeper: System 1 retreats home instead).
 
 ## Enforced boundaries
 
-| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; placing: C08 with the held block item, faces 0-5 only (never "use the item in the air"), an NBT-free stack, clicking only a block `placing.ts` checked; a whisper to an owner: C01 with exactly `/tell <owner> <plain text>`, never public chat or another command; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured or found crafting tables); digging (`DIG_BLOCK`, and the leaves a `MOVE_TO` over terrain breaks on its way) needs `MC_ENABLE_DIGGING=true` and the fence; placing needs `MC_ENABLE_PLACING=true` and the fence; block windows (`INTERACT_BLOCK`, `SMELT`, `TAKE_OUTPUT`) need `MC_ENABLE_INTERACT=true` and a block with an interaction profile, or one on the observe-only list, which is only looked at; every other world-changing action returns `NOT_IMPLEMENTED`. EXPLORE walks in hops with the same walking steps. |
-| Quest-book messages                | On Better Questing's channel the client can send only four typed messages: the empty main_sync answer (reading the quest book) and, with `MC_ENABLE_QUEST_BOOK=true`, quest_action (submit or claim), task_checkbox and choice_reward, for the Age 0 quests only. The forced claim (random choice) and every editing message cannot be expressed; plans never contain these clicks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps (and C0B Entity Action, START_SPRINTING and STOP_SPRINTING only, around the steps of a walk that sprints), the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; placing: C08 with the held block item, faces 0-5 only (never "use the item in the air"), an NBT-free stack, clicking only a block `placing.ts` checked; a whisper to an owner: C01 with exactly `/tell <owner> <plain text>`, never public chat or another command; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured or found crafting tables); digging (`DIG_BLOCK`, and what a walk over terrain breaks on its way) needs `MC_ENABLE_DIGGING=true` and the fence; placing (`PLACE_BLOCK`, and a walk's pillars and bridges) needs `MC_ENABLE_PLACING=true` and the fence; sprinting needs `MC_PATH_ALLOW_SPRINT=true`; block windows (`INTERACT_BLOCK`, `SMELT`, `TAKE_OUTPUT`) need `MC_ENABLE_INTERACT=true` and a block with an interaction profile, or one on the observe-only list, which is only looked at; every other world-changing action returns `NOT_IMPLEMENTED`. EXPLORE walks in hops with the same walking steps. |
+| Quest-book messages                | On Better Questing's channel the client can send only four typed messages: the empty main_sync answer (reading the quest book) and, with `MC_ENABLE_QUEST_BOOK=true`, quest_action (submit or claim), task_checkbox and choice_reward, for the Age 0 quests only. The forced claim (random choice) and every editing message cannot be expressed; plans never contain these clicks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 Fighting adds one packet to the live client's list: C02 Use Entity with the "attack" action
 (never "interact"), only with `MC_ENABLE_COMBAT=true` and the fence. Digging down (`DIG_DOWN`,
 the night pit only) adds no packet: it sends a dig's C07 start and finish, then the fall as
-walking steps (C06), with digging and walking enabled and a fence with a height range.
+walking steps (C06), with digging and walking enabled and a fence with a height range. Nor do
+a walk's breaks and placements: a dig's C07, a placement's C08 and arm swing, and the hotbar
+selection and window clicks that hold the tool or the throwaway block, between its C06 steps.
 
 ## Directory map
 
 ```
 src/config       env + JSON config loading (Zod), private-network guard
-src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Known<T>, interaction profiles, owner commands
+src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Known<T>, interaction profiles, owner commands, players' builds
 src/safety       safety policy (evaluateAction) and its per-action checks (dig, place, interact, explore, combat, quest book), boundaries, protected items, forbidden-action classifier
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider and the model's cadence: decision points), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner, owner-command translator (opt-in)
-src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: chat (owners' commands in, whispers out), inventory and chests, crafting, block windows, digging, picking up drops, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, drops, placing, crafting, combat, world surveys, the world model, packets), and pathing/: the pathfinder (search, movements, goals, execution plans, the step validator)
+src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: chat (owners' commands in, whispers out), inventory and chests, crafting, block windows, digging, picking up drops, placing, combat, quest book, eating, walking, walks on the pathfinder (path-actions), travel) beside the pure rules it uses (walking, terrain, the walk policy (path-policy), stand spots, digging, drops, placing, crafting, combat, world surveys, the world model, packets), and pathing/: the pathfinder (search, the flood, movements, goals, execution plans, the step validator)
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)

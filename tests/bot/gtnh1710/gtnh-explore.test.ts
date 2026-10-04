@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runUserAction } from '../../../src/app/loop/agent-loop.ts';
+import { WALK_SPEED } from '../../../src/bot/gtnh1710/pathing/physics.ts';
 import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
 import { createRepositories } from '../../../src/persistence/repositories.ts';
@@ -36,15 +37,18 @@ describe('EXPLORE', { timeout: 30_000 }, () => {
     expect(r.data['progress']).toBeGreaterThan(16);
     expect((await positionOf(client)).z).toBeGreaterThan(SPAWN.z + 16);
     expect(r.message).toMatch(/Hot Forest/);
-    // Open ground ahead: it stopped because maxDistance was spent, not for want of a way (seen
-    // live: "no way further" a few blocks short, remembered as a dead end each time).
-    expect(String(r.data['stoppedBecause'])).toMatch(/^walked (nearly )?the whole maxDistance/);
-    // Every step was an ordinary walking step, at most 0.2 blocks from the one before.
+    // Open ground ahead: on the pathfinder it walks all the way to the point 24 blocks south
+    // (seen live, with the hops: "no way further" a few blocks short, remembered as a dead end
+    // each time).
+    expect(r.data['stoppedBecause']).toBe('went 24 blocks south');
+    // Every step was an ordinary walking step: on the pathfinder, at most vanilla's walking
+    // pace (0.216 blocks a tick) from the one before.
     let prev = { x: SPAWN.x, z: SPAWN.z };
     for (const s of server.walkSteps()) {
-      expect(Math.hypot(s.x - prev.x, s.z - prev.z)).toBeLessThanOrEqual(0.2 + 1e-9);
+      expect(Math.hypot(s.x - prev.x, s.z - prev.z)).toBeLessThanOrEqual(WALK_SPEED + 1e-9);
       prev = s;
     }
+    expect(server.moveSim.corrections).toEqual([]);
     // World memory: the forest's chunks, with their biome and the trees seen (the examples
     // are real log positions).
     const seen = client.takeSeenChunks();

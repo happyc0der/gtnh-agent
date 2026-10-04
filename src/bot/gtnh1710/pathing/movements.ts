@@ -442,6 +442,9 @@ const ascend: Evaluate = (ctx, x, y, z, d, detail) => {
     if (detail !== null) detail.water = true;
     return ctx.costs.waterExit;
   }
+  // Sand or gravel over the head is never broken (the client's dig rules refuse it: digging.ts
+  // checkDig), so the planner does not count on it either.
+  if (c.has(x, y + 2, z, CELL.FALLING)) return Infinity;
   const above = ctx.open(x, y + 2, z, detail);
   if (above < 0) return Infinity;
   const head = ctx.open(nx, y + 2, nz, detail);
@@ -566,6 +569,8 @@ const pillar: Evaluate = (ctx, x, y, z, _d, detail) => {
   const c = ctx.cells;
   if (!o.pillar || c.has(x, y, z, CELL.WATER) || !ctx.inFence(x, y + 1, z)) return Infinity;
   if (!ctx.canPlaceAt(x, y, z, x, y - 1, z)) return Infinity;
+  // As for an ascend: sand or gravel over the head is never broken.
+  if (c.has(x, y + 2, z, CELL.FALLING)) return Infinity;
   const head = ctx.open(x, y + 2, z, detail);
   if (head < 0) return Infinity;
   if (c.nearHazard(x, y + 2, z) || c.has(x, y + 1, z, CELL.LADDER)) return Infinity;

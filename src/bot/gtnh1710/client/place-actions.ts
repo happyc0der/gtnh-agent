@@ -172,6 +172,8 @@ export class PlaceActions {
         this.#core.send(outbound.playerLook(look.yaw, look.pitch, ON_GROUND));
         this.#core.lastYaw = look.yaw;
         this.#core.log(`placing ${args.item} at ${where} against ${against}`);
+        // The cell's change is the agent's own: never a player's build.
+        this.#world.expectOwnChange(target, this.#opts.clock.now());
         const sent = {
           clicked: clickedWatch.updates.length,
           cell: cellWatch.updates.length,
@@ -227,6 +229,26 @@ export class PlaceActions {
     } finally {
       this.#core.placing = false;
     }
+  }
+
+  /**
+   * Holds the block item `name` (its plain item, no NBT data) in the selected hotbar slot, for
+   * a walk's placements (path-actions.ts): an open chest window closed first, then as
+   * PLACE_BLOCK holds its item (#holdForPlacing): the slot it holds it in, or why not.
+   */
+  async holdBlockItem(
+    name: string,
+  ): Promise<{ ok: true; slot: number; moved: string | null } | { ok: false; reason: string }> {
+    if (this.#world.openWindow !== null) {
+      const closed = this.#core.inventory.closeOpenWindow();
+      if (closed !== null) return { ok: false, reason: closed.message };
+    }
+    const item = resolveItemName(this.#world.registry, name);
+    if (item === null) return { ok: false, reason: `${name} is not in this world's registry` };
+    const hand = await this.#holdForPlacing(item, name);
+    return hand.ok
+      ? { ok: true, slot: hand.slot, moved: hand.moved }
+      : { ok: false, reason: hand.result.message };
   }
 
   /**

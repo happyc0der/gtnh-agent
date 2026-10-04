@@ -34,6 +34,7 @@ import {
   overlayAgentMemory,
   rememberContainers,
   rememberSeen,
+  seedPlayerBuilds,
   taskPlanFacts,
 } from './agent-memory.ts';
 import {
@@ -162,6 +163,8 @@ async function observeState(
   note: Record<string, unknown> = {},
 ): Promise<{ state: GameState; stateSnapshotId: number } | { error: string }> {
   const { client, repos } = deps;
+  // The blocks a player built, from agent memory, before the client's first observation.
+  seedPlayerBuilds(deps, cycleId);
   let raw: unknown;
   try {
     raw = given ?? (await client.observe());

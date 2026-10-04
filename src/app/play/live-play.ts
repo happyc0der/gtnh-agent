@@ -226,6 +226,11 @@ export function liveCommands(
           config.safety.maxMoveDistance,
           HAZARD_SCAN_RADIUS - config.safety.hazardAvoidanceRadius - 0.5,
         ),
+        // The client's own walk policy, so a step plans as its MOVE_TO will walk.
+        ...(() => {
+          const path = client.walkOptions();
+          return path === null ? {} : { path };
+        })(),
       }),
     owners: config.minecraft.owners,
     homeName: config.routing.homeLocationName,

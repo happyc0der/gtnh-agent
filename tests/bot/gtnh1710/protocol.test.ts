@@ -107,6 +107,23 @@ describe('outbound packets', () => {
       true,
     ]);
   });
+
+  it('C0B Entity Action: only start and stop sprinting (never crouching, beds or horses)', () => {
+    for (const [action, id] of [
+      ['start-sprinting', 4],
+      ['stop-sprinting', 5],
+    ] as const) {
+      const packet = outbound.entityAction(42, action);
+      expect(packet.kind).toBe('entity-action');
+      const frame = new FrameDecoder().push(packet.frame)[0];
+      expect(frame?.packetId).toBe(0x0b);
+      const r = frame?.body;
+      expect([r?.i32(), r?.u8(), r?.i32()]).toEqual([42, id, 0]);
+    }
+    expect(() => outbound.entityAction(42, 'crouch' as unknown as 'start-sprinting')).toThrow(
+      /refusing entity action/,
+    );
+  });
 });
 
 describe('inbound packets', () => {

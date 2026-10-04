@@ -20,6 +20,7 @@ import type { Db } from './database.ts';
 import { PlanRepository } from './plan-repository.ts';
 import { MemoryRepository } from './memory-repository.ts';
 import { OwnerCommandRepository } from './owner-command-repository.ts';
+import { PlayerBuildRepository } from './player-build-repository.ts';
 import { WorldMemoryRepository } from './world-memory-repository.ts';
 import { WindowLayoutRepository } from './window-layout-repository.ts';
 
@@ -676,6 +677,8 @@ export interface Repositories {
   windowLayouts: WindowLayoutRepository;
   /** The owners' commands, from chat and `cli command` (src/domain/owner-commands.ts). */
   commands: OwnerCommandRepository;
+  /** Blocks the agent saw a player put down, which it never breaks (src/domain/player-builds.ts). */
+  playerBuilds: PlayerBuildRepository;
   /** Runs `fn` in a single SQLite transaction (nested calls become savepoints). */
   transaction<T>(fn: () => T): T;
 }
@@ -695,6 +698,7 @@ export function createRepositories(db: Db, clock: Clock): Repositories {
     worldMemory: new WorldMemoryRepository(db),
     windowLayouts: new WindowLayoutRepository(db),
     commands: new OwnerCommandRepository(db, clock),
+    playerBuilds: new PlayerBuildRepository(db),
     transaction: <T>(fn: () => T): T => db.transaction(fn)(),
   };
 }
