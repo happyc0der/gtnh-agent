@@ -66,7 +66,8 @@ export interface ConnectionInfo {
  *    host is private, and the server's status ping shows that marker, Forge and GregTech;
  *  - can only send: handshake, status request, login start, keep-alive, FML handshake /
  *    channel registration, idle ticks, confirmations of server-assigned positions, walking
- *    steps, the window packets chests and crafting need (empty-hand block activation,
+ *    steps (and C0B start/stop sprinting around the steps of a walk that sprints), the window
+ *    packets chests and crafting need (empty-hand block activation,
  *    hotbar selection, predictable clicks, confirmations, closing a window), digging
  *    start/cancel/finish, a block placement with the held block item, attacks on one checked
  *    entity (C02, attack only), the cosmetic head look and arm swing, and Better Questing's

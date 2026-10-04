@@ -376,6 +376,18 @@ export class PathActions {
     const itemsBefore = toBreak > 0 ? this.#world.inventoryItems() : null;
     let at: Vec3 = from;
     let taken = 0;
+    let sprinted = 0;
+    /**
+     * Sprinting as the server sees it (C0B START/STOP_SPRINTING): on while the steps sprint,
+     * off before every dig and placement, at the end, and whenever the walk stops.
+     */
+    let sprinting = false;
+    const self = this.#world.selfEntityId;
+    const setSprint = (on: boolean): void => {
+      if (on === sprinting || self === null || this.#core.phase !== 'play') return;
+      this.#core.send(outbound.entityAction(self, on ? 'start-sprinting' : 'stop-sprinting'));
+      sprinting = on;
+    };
     const stopped = (reason: string): ClientActionResult => {
       const where = this.#world.ownPosition ?? at;
       this.#core.log(`walk stopped after ${taken}/${total} steps: ${reason}`);
@@ -410,6 +422,8 @@ export class PathActions {
         yaw = lookAt(at, { x: next.x, y: at.y, z: next.z }).yaw;
       }
       this.#core.lastYaw = yaw;
+      setSprint(step.sprint);
+      if (step.sprint) sprinted += 1;
       this.#core.send(
         outbound.playerMove({ x: next.x, feetY: next.y, z: next.z, yaw, pitch }, step.onGround),
       );
@@ -450,6 +464,7 @@ export class PathActions {
     try {
       for (const seg of exec.segments) {
         if (seg.breaks.length > 0) {
+          setSprint(false);
           const before = broken.length;
           const problem = await this.#breakAll(
             seg.breaks.map((b) => b.cell),
@@ -462,6 +477,7 @@ export class PathActions {
           if (problem !== null) return stopped(problem);
         }
         if (seg.places.length > 0 && placeBlock !== null) {
+          setSprint(false);
           // Breaks hold another slot; and a stack placed to its end leaves the slot empty.
           const slot = await this.#holdAgain(holding, placeBlock);
           if (typeof slot === 'string') return stopped(slot);
@@ -499,6 +515,13 @@ export class PathActions {
             // the air.
             const why = this.#flightProblem(fence, at, seg.steps, i, policy.water);
             if (why !== null) return stopped(`the way ahead is not clear: ${why}`);
+            // Sprinting only while the food bar stays above 10 (HungerOverhaul: it costs food).
+            const food = this.#world.food;
+            if (step.sprint && (food === null || food <= SPRINT_MIN_FOOD)) {
+              return stopped(
+                `the food bar is at ${food ?? 'an unknown level'}: no sprinting with food at ${SPRINT_MIN_FOOD} or less`,
+              );
+            }
           }
           const placing = seg.places.filter((p) => p.afterStep === i);
           const point =
@@ -511,6 +534,7 @@ export class PathActions {
                 };
           send(step, point);
           airborne = !step.onGround;
+          if (placing.length > 0) setSprint(false);
           for (const p of placing) {
             const why = this.#placeProblem(p, placeArea, guard, ownPlaced);
             if (why !== null) {
@@ -527,6 +551,7 @@ export class PathActions {
           await delay(WALK_TICK_MS);
         }
       }
+      setSprint(false);
       // A correction (S08) or a kick arrives within a few ticks of a move the server rejects.
       // After breaks it also stays until what they dropped could be picked up.
       const until = lastBreakAt === null ? 0 : lastBreakAt + BREAK_DROP_WAIT_MS;
@@ -559,7 +584,8 @@ export class PathActions {
           (placed.length === 0
             ? ''
             : `; placed ${placed.length} block(s): ${placed.map(fmt).join(', ')}`) +
-          (gained.length === 0 ? '' : `; picked up ${drops}`)
+          (gained.length === 0 ? '' : `; picked up ${drops}`) +
+          (sprinted === 0 ? '' : `; sprinted ${sprinted} of the steps`)
         ).slice(0, 500),
         {
           steps: taken,
@@ -568,11 +594,13 @@ export class PathActions {
           y: at.y,
           z: at.z,
           reached: planned.reached,
+          ...(sprinted === 0 ? {} : { sprinted }),
           ...(broken.length === 0 ? {} : { broken: broken.length, drops }),
           ...(placed.length === 0 ? {} : { placed: placed.length }),
         },
       );
     } finally {
+      setSprint(false);
       for (const c of clicks.values()) {
         this.#world.unwatch(c.clicked);
         this.#world.unwatch(c.cell);

@@ -582,6 +582,18 @@ export class FakeGtnhServer {
 
   /** Eats the server started (a C08 in the air with an edible stack in hand). */
   eatsStarted = 0;
+  /**
+   * C0B Entity Actions the client sent (4 START_SPRINTING, 5 STOP_SPRINTING), with the number
+   * of play packets received before each (to check what came before and after).
+   */
+  readonly entityActions: Array<{
+    entityId: number;
+    action: number;
+    jumpBoost: number;
+    at: number;
+  }> = [];
+  /** Whether the server counts the player as sprinting (the last C0B). */
+  sprinting = false;
   /** Client Status actions received (C16; 0 = Perform Respawn). */
   readonly clientStatus: number[] = [];
   /** The player is under spawn protection (options.spawnProtection, until a block click). */
@@ -968,6 +980,17 @@ export class FakeGtnhServer {
           case 0x02:
             this.combatSim.handle(r);
             break;
+          case 0x0b: {
+            // C0B Entity Action (NetHandlerPlayServer.processEntityAction): 4 starts
+            // sprinting, 5 stops it.
+            const entityId = r.i32();
+            const action = r.u8();
+            const jumpBoost = r.i32();
+            this.entityActions.push({ entityId, action, jumpBoost, at: this.received.length });
+            if (action === 4) this.sprinting = true;
+            if (action === 5) this.sprinting = false;
+            break;
+          }
           case 0x16: {
             // Client Status: 0 = Perform Respawn (ServerConfigurationManager.respawnPlayer).
             const action = r.u8();

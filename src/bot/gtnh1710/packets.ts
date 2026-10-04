@@ -26,7 +26,9 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // Outbound: the ONLY packets this client can ever send. Anything that could change
 // the world (public chat and commands, using items, attacking, dropping items) is
 // intentionally absent. The exceptions are walking ('player-move', only for steps walking.ts
-// has checked), vanilla chests, crafting and block windows ('activate-block', 'select-slot',
+// or the pathfinder's step validator has checked; 'entity-action': C0B with START_SPRINTING or
+// STOP_SPRINTING only, around the steps of a walk the walk policy lets sprint), vanilla chests,
+// crafting and block windows ('activate-block', 'select-slot',
 // 'click-window', 'confirm-transaction', 'close-window', only as container.ts, crafting.ts
 // and interact.ts plan them), digging one block ('dig-block' with status start/cancel/finish
 // only, for targets digging.ts has checked), placing one block ('place-block': C08 with
@@ -64,7 +66,8 @@ export type OutboundKind =
   | 'attack-entity'
   | 'client-status'
   | 'quest-book'
-  | 'whisper';
+  | 'whisper'
+  | 'entity-action';
 
 /**
  * C02 Use Entity actions (C02PacketUseEntity.Action, read as values()[byte % 2]). Only ATTACK
@@ -72,6 +75,15 @@ export type OutboundKind =
  * is deliberately not representable.
  */
 export const USE_ENTITY_ATTACK = 1;
+
+/**
+ * C0B Entity Action actions the client may send (C0BPacketEntityAction, read by
+ * NetHandlerPlayServer.processEntityAction in the vanilla server jar: 4 starts sprinting, 5 stops
+ * it). 1.7.10 also uses this packet to crouch (1, 2), leave a bed (3), make a ridden horse jump
+ * (6) and open its inventory (7): those are deliberately not representable here.
+ */
+export const ENTITY_ACTION = { 'start-sprinting': 4, 'stop-sprinting': 5 } as const;
+export type EntityActionKind = keyof typeof ENTITY_ACTION;
 
 /**
  * C07 Player Digging statuses the client may send. 1.7.10 also uses this packet for 3 (drop
@@ -424,6 +436,22 @@ export const outbound = {
     return {
       kind: 'attack-entity',
       frame: encodeFrame(0x02, Buffer.concat([i32(entityId), Buffer.from([USE_ENTITY_ATTACK])])),
+    };
+  },
+
+  /**
+   * C0B Entity Action (i32 own entity id, i8 action, i32 jump boost; verified against the
+   * 1.7.10 server's packet class): only START_SPRINTING (4) and STOP_SPRINTING (5), as a
+   * client sends when its player starts and stops sprinting. The server then counts the
+   * player's moves as sprinting (food: HungerOverhaul makes that cost more).
+   */
+  entityAction(entityId: number, action: EntityActionKind): OutboundPacket {
+    if (!Number.isInteger(entityId)) throw new ProtocolError('bad entity id');
+    const id = ENTITY_ACTION[action] as number | undefined;
+    if (id !== 4 && id !== 5) throw new ProtocolError(`refusing entity action ${String(action)}`);
+    return {
+      kind: 'entity-action',
+      frame: encodeFrame(0x0b, Buffer.concat([i32(entityId), Buffer.from([id]), i32(0)])),
     };
   },
 
