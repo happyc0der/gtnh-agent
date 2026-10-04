@@ -427,5 +427,7 @@ describe('Gtnh1710Client walking over terrain', () => {
       known: true,
       value: { x: -2.5, y: FEET_Y + 1, z: -7.5 },
     });
+    // A real jump (the pathfinder's physics): the server's own move check takes every step.
+    expect(server.moveSim.corrections).toEqual([]);
   });
 });

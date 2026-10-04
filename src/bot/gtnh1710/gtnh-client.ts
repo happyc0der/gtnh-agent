@@ -181,10 +181,11 @@ export class Gtnh1710Client implements MinecraftClient {
         // Recorded by the agent; deliberately not sent as in-game chat.
         return Promise.resolve(ok('pause recorded (not sent in-game)', { acknowledged: true }));
       case 'MOVE_TO':
-        // Over terrain with digging enabled it may break a few leaves in its way.
+        // Over terrain it walks on the pathfinder, breaking what is in its way as the walk
+        // policy allows (client/path-actions.ts).
         return this.#core.movement.walkTo(action.args.target, {
           stopForThreats: true,
-          breakLeaves: true,
+          work: true,
           protectedItems: new Set(validated.protectedItems),
         });
       case 'EXPLORE':
@@ -307,12 +308,12 @@ export class Gtnh1710Client implements MinecraftClient {
   /**
    * Plans a walk without moving (for previews and dry runs), with a text map of the fence.
    * Works whether or not movement is enabled; null when no fence is configured. With
-   * `breakLeaves` it plans as MOVE_TO does (client/movement-actions.ts walkBreaks).
+   * `work` it plans as MOVE_TO does (breaking on its way as the walk policy allows).
    */
   previewWalk(
     target: Position | null,
-    breakLeaves = false,
+    work = false,
   ): { plan: WalkPlan | null; map: string[] } | null {
-    return this.#core.movement.previewWalk(target, breakLeaves);
+    return this.#core.movement.previewWalk(target, work);
   }
 }

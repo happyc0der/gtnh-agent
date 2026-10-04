@@ -157,31 +157,31 @@ export function cacheBox(area: Fence): CellBox {
   };
 }
 
+/** A search ready to run: its options, cells and movements, and where it starts. */
+interface Prepared {
+  readonly resolved: ResolvedPathOptions;
+  readonly cells: CellCache;
+  readonly ctx: MoveContext;
+  readonly start: Cell;
+  /** Ticks to centre on the start block (a walk begins so). */
+  readonly startCost: number;
+  readonly sx: number;
+  readonly sy: number;
+  readonly sz: number;
+}
+
 /**
- * Plans a path from `from` (feet on a block top) to `goal`, over the blocks of `world`, inside
- * `area`. See the file comment; `options` choose the movements and the limits.
+ * What planPath and floodPath share before they search: the options resolved, the area
+ * checked, the blocks read, and the player's start checked (feet on a block top, on a feet
+ * block it may stand in, its body clear). A string says why no search can start.
  */
-export function planPath(
+function prepare(
   world: WalkWorld,
   area: Fence,
   from: Vec3,
-  goal: Goal,
-  options: PathOptions = {},
-): PathResult {
-  const now = options.now ?? (() => performance.now());
-  const t0 = now();
-  const refused = (reason: string, start: Cell | null = null): PathResult => ({
-    status: 'none',
-    stop: 'refused',
-    reason,
-    movements: [],
-    start,
-    end: null,
-    cost: 0,
-    nodesExpanded: 0,
-    nodesOpened: 0,
-    elapsedMs: now() - t0,
-  });
+  options: PathOptions,
+): Prepared | { refused: string; start: Cell | null } {
+  const refused = (reason: string, start: Cell | null = null) => ({ refused: reason, start });
   const resolved = resolvePathOptions(options);
   if (typeof resolved === 'string') return refused(resolved);
   const { move, costs } = resolved;
@@ -224,6 +224,44 @@ export function planPath(
       }
     }
   }
+  const wet = cells.has(start.x, start.y, start.z, CELL.WATER);
+  const startCost =
+    Math.hypot(start.x + 0.5 - from.x, start.z + 0.5 - from.z) *
+    (wet ? WADE_ONE_BLOCK : WALK_ONE_BLOCK);
+  return { resolved, cells, ctx, start, startCost, sx, sy, sz };
+}
+
+/**
+ * Plans a path from `from` (feet on a block top) to `goal`, over the blocks of `world`, inside
+ * `area`. See the file comment; `options` choose the movements and the limits.
+ */
+export function planPath(
+  world: WalkWorld,
+  area: Fence,
+  from: Vec3,
+  goal: Goal,
+  options: PathOptions = {},
+): PathResult {
+  const now = options.now ?? (() => performance.now());
+  const t0 = now();
+  const prepared = prepare(world, area, from, options);
+  if ('refused' in prepared) {
+    return {
+      status: 'none',
+      stop: 'refused',
+      reason: prepared.refused,
+      movements: [],
+      start: prepared.start,
+      end: null,
+      cost: 0,
+      nodesExpanded: 0,
+      nodesOpened: 0,
+      elapsedMs: now() - t0,
+    };
+  }
+  const { resolved, cells, ctx, start, startCost, sx, sy, sz } = prepared;
+  const { move, costs } = resolved;
+  const volume = sx * sy * sz;
   const rates = heuristicRates(costs, {
     pillar: move.pillar,
     downward: move.downward,
@@ -258,10 +296,6 @@ export function planPath(
 
   const startIndex = indexOf(start.x, start.y, start.z);
   // A walk begins by centring on its start block.
-  const wet = cells.has(start.x, start.y, start.z, CELL.WATER);
-  const startCost =
-    Math.hypot(start.x + 0.5 - from.x, start.z + 0.5 - from.z) *
-    (wet ? WADE_ONE_BLOCK : WALK_ONE_BLOCK);
   g[startIndex] = startCost;
   const startH = target.heuristic(start.x, start.y, start.z);
   heap.push(startIndex, startCost + startH);
@@ -431,6 +465,167 @@ export function planPath(
     nodesExpanded: expanded,
     nodesOpened: opened,
     elapsedMs: now() - t0,
+  };
+}
+
+/** A feet block a flood reached, and the cheapest way there. */
+export interface FloodSpot {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** Ticks, as planPath counts them (centring on the start block, then the movements). */
+  readonly cost: number;
+  /** Blocks broken and placed on that way. */
+  readonly breaks: number;
+  readonly places: number;
+}
+
+/** Every feet block a walk from the start reaches within a cost (floodPath). */
+export interface PathFlood {
+  /** Why nothing was searched (the player cannot walk from where it stands...), or null. */
+  readonly refused: string | null;
+  readonly start: Cell | null;
+  /** The settled feet blocks. */
+  readonly size: number;
+  readonly nodesExpanded: number;
+  readonly elapsedMs: number;
+  /** Whether the flood stopped at its node or time limit (farther spots may exist). */
+  readonly cut: boolean;
+  /** The spot with its feet in (x, y, z), when reached. */
+  get(x: number, y: number, z: number): FloodSpot | undefined;
+  /** Every spot reached, cheapest first. */
+  spots(): FloodSpot[];
+}
+
+/**
+ * Every feet block inside `area` a walk from `from` reaches within `maxCost` ticks, with what
+ * the cheapest way there costs: Dijkstra over planPath's own movements, options and limits
+ * (the blocks broken and placed travel with each block's best way, capped alike), so a spot
+ * the flood reaches is one planPath finds a path to at that cost. Where to stand to dig a
+ * block (GATHER's stand spots, goalGetToBlock's test) is then a look-up, not one search per
+ * block. Pure.
+ */
+export function floodPath(
+  world: WalkWorld,
+  area: Fence,
+  from: Vec3,
+  options: PathOptions & { readonly maxCost: number },
+): PathFlood {
+  const now = options.now ?? (() => performance.now());
+  const t0 = now();
+  const prepared = prepare(world, area, from, options);
+  if ('refused' in prepared) {
+    return {
+      refused: prepared.refused,
+      start: prepared.start,
+      size: 0,
+      nodesExpanded: 0,
+      elapsedMs: now() - t0,
+      cut: false,
+      get: () => undefined,
+      spots: () => [],
+    };
+  }
+  const { resolved, ctx, start, startCost, sx, sy, sz } = prepared;
+  const volume = sx * sy * sz;
+  const maxNodes = Math.max(1, Math.floor(options.maxNodes ?? DEFAULT_MAX_NODES));
+  const maxTimeMs = options.maxTimeMs ?? DEFAULT_MAX_TIME_MS;
+  const maxCost = options.maxCost;
+  const x0 = area.min.x;
+  const y0 = area.min.y;
+  const z0 = area.min.z;
+  const indexOf = (x: number, y: number, z: number): number =>
+    ((y - y0) * sz + (z - z0)) * sx + (x - x0);
+
+  const g = new Float64Array(volume).fill(Infinity);
+  const viaPlaces = new Uint8Array(volume);
+  const broken = new Uint16Array(volume);
+  const placed = new Uint16Array(volume);
+  const closed = new Uint8Array(volume);
+  const settled: number[] = [];
+  const heap = new NodeHeap(volume);
+  const startIndex = indexOf(start.x, start.y, start.z);
+  g[startIndex] = startCost;
+  heap.push(startIndex, startCost);
+
+  let currentCost = 0;
+  let currentBroken = 0;
+  let currentPlaced = 0;
+  const emit: Emit = (nx, ny, nz, cost, code, nBreaks, nPlaces) => {
+    const i = indexOf(nx, ny, nz);
+    if (closed[i] === 1) return;
+    const b = currentBroken + nBreaks;
+    const p = currentPlaced + nPlaces;
+    if (b > resolved.maxBreaks || p > resolved.maxPlaced) return;
+    const cost2 = currentCost + cost;
+    if (cost2 > maxCost || cost2 >= (g[i] as number) - TIE) return;
+    g[i] = cost2;
+    broken[i] = b;
+    placed[i] = p;
+    viaPlaces[i] = placesFloor(code) ? 1 : 0;
+    heap.push(i, cost2);
+  };
+  let expanded = 0;
+  let cut = false;
+  while (heap.size > 0) {
+    if ((expanded & 127) === 0 && now() - t0 > maxTimeMs) {
+      cut = true;
+      break;
+    }
+    const i = heap.pop();
+    if (closed[i] === 1) continue;
+    closed[i] = 1;
+    settled.push(i);
+    if (expanded >= maxNodes) {
+      cut = true;
+      break;
+    }
+    expanded++;
+    currentCost = g[i] as number;
+    currentBroken = broken[i] as number;
+    currentPlaced = placed[i] as number;
+    const x = i % sx;
+    const rest = (i - x) / sx;
+    const z = rest % sz;
+    const y = (rest - z) / sz + y0;
+    // Reached by a pillar or a bridge: its floor is a block the walk places.
+    ctx.floorPlaced = i !== startIndex && viaPlaces[i] === 1;
+    expand(ctx, x + x0, y, z + z0, emit);
+  }
+  ctx.floorPlaced = false;
+  const spotOf = (i: number): FloodSpot => {
+    const x = i % sx;
+    const rest = (i - x) / sx;
+    const z = rest % sz;
+    return {
+      x: x + x0,
+      y: (rest - z) / sz + y0,
+      z: z + z0,
+      cost: g[i] as number,
+      breaks: broken[i] as number,
+      places: placed[i] as number,
+    };
+  };
+  const inside = (x: number, y: number, z: number): boolean =>
+    x >= area.min.x &&
+    x <= area.max.x &&
+    y >= area.min.y &&
+    y <= area.max.y &&
+    z >= area.min.z &&
+    z <= area.max.z;
+  return {
+    refused: null,
+    start,
+    size: settled.length,
+    nodesExpanded: expanded,
+    elapsedMs: now() - t0,
+    cut,
+    get: (x, y, z) => {
+      if (!inside(x, y, z)) return undefined;
+      const i = indexOf(x, y, z);
+      return closed[i] === 1 ? spotOf(i) : undefined;
+    },
+    spots: () => settled.map(spotOf),
   };
 }
 

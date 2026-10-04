@@ -492,7 +492,12 @@ function digDownSurroundingOk(world: WalkWorld, n: BlockPos, name: string): bool
  * live: tall grass beside the ground block ruled out every night pit around. A plant hangs on
  * the block under it, so only one on top of the dug block would drop.
  */
-function digDoesNotDisturb(world: WalkWorld, n: BlockPos, name: string, dy: number): boolean {
+export function digDoesNotDisturb(
+  world: WalkWorld,
+  n: BlockPos,
+  name: string,
+  dy: number,
+): boolean {
   return DIG_NEIGHBOURS.has(name) || (dy === 0 && passProblem(world, n.x, n.y, n.z) === null);
 }
 

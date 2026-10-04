@@ -1,23 +1,18 @@
 import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
-import type { BlockPosition, Position } from '../../../domain/common.ts';
-import { TICK_MS } from '../../../domain/dig-time.ts';
+import type { Position } from '../../../domain/common.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
-import { checkWalkBreak, walkBreaks, type DigArea, type DigCheck } from '../digging.ts';
+import { walkBreaks } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { outbound } from '../packets.ts';
-import { passProblem } from '../passable.ts';
+import { goalBlock } from '../pathing/goals.ts';
 import { fenceHolds } from '../play-area.ts';
 import {
-  bodyProblem,
   checkSupport,
   fallDistances,
   landingHazard,
   MAX_SAFE_FALL,
-  planTerrainWalk,
   restingY,
-  terrainSteps,
-  type TerrainStep,
   type WalkBreaks,
 } from '../terrain.ts';
 import {
@@ -29,39 +24,29 @@ import {
   type Fence,
   type Vec3,
   type WalkPlan,
-  type WalkWorld,
 } from '../walking.ts';
 import type { WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
-import { delay, describeGain, ON_GROUND, SETTLE_TICKS, WALK_TICK_MS } from './shared.ts';
+import { delay, ON_GROUND, SETTLE_TICKS, WALK_TICK_MS } from './shared.ts';
 
 /** Vanilla clients send one "player" packet per tick (20 per second). */
 const IDLE_TICK_MS = 50;
 /** Idle ticks between two checks that something still holds the player up (gravity). */
 const SUPPORT_CHECK_TICKS = 10;
-/**
- * After a walk broke leaves on its way: how long after the last break it waits before it
- * reports (the drop's 10-tick pickup delay, plus 5), so what they drop now and then (a
- * sapling, an apple) reaches the inventory during the walk, not during the next action,
- * whose own drop and inventory checks it would confuse.
- */
-const BREAK_DROP_WAIT_MS = 15 * TICK_MS;
-/** A threat this close stops a walk whichever way it goes (#walkInterruption). */
+/** A threat this close stops a walk whichever way it goes (walkInterruption). */
 const CLOSE_THREAT_RADIUS = 6;
 
-/** What a walk broke: "2 leaves on the way: (1, 64, 0), (1, 65, 0)". */
-function describeBroken(cells: readonly BlockPosition[]): string {
-  const n = cells.length;
-  return (
-    `${n === 1 ? 'a leaf block' : `${n} leaves`} on the way: ` +
-    cells.map((c) => `(${c.x}, ${c.y}, ${c.z})`).join(', ')
-  );
-}
+/** The block a walk to `target` ends in: its feet block. */
+const blockOf = (target: Readonly<Position>): { x: number; y: number; z: number } => ({
+  x: Math.floor(target.x),
+  y: Math.floor(target.y + 1e-6),
+  z: Math.floor(target.z),
+});
 
 /**
- * Walking: MOVE_TO's checked walk (on one level, or over terrain, where it may break leaves in
- * its way), previews of a walk, and what keeps a standing player present and on the ground:
- * idle ticks and gravity.
+ * Walking: MOVE_TO's checked walk (on one level in the flat pen; over terrain on the
+ * pathfinder, path-actions.ts, where it may break and place on its way), previews of a walk,
+ * and what keeps a standing player present and on the ground: idle ticks and gravity.
  */
 export class MovementActions {
   readonly #core: ClientCore;
@@ -81,12 +66,12 @@ export class MovementActions {
 
   /**
    * Plans a walk without moving (for previews and dry runs), with a text map of the fence.
-   * Works whether or not movement is enabled; null when no fence is configured. With
-   * `breakLeaves` it plans as MOVE_TO does (walkBreaks).
+   * Works whether or not movement is enabled; null when no fence is configured. With `work`
+   * it plans as MOVE_TO does (breaking and placing on its way as the walk policy allows).
    */
   previewWalk(
     target: Position | null,
-    breakLeaves = false,
+    work = false,
   ): { plan: WalkPlan | null; map: string[] } | null {
     const m = this.#opts.config.movement;
     const fence = this.#core.fence().fence;
@@ -98,18 +83,26 @@ export class MovementActions {
     }
     if (fence.min.y !== fence.max.y) {
       // Terrain fences: plan only (the text map shows a single level).
-      const breaks = breakLeaves ? this.walkBreaks(fence) : undefined;
-      const t =
-        target === null
-          ? null
-          : planTerrainWalk(world, fence, from, target, m.maxPathLength, breaks);
+      if (target === null) return { plan: null, map: [] };
+      if (!fenceHolds(fence, target)) {
+        return { plan: { ok: false, reason: 'the target is outside the movement fence' }, map: [] };
+      }
+      const b = blockOf(target);
+      const planned = this.#core.paths.plan(world, fence, from, {
+        goal: goalBlock(b.x, b.y, b.z),
+        what: 'the target',
+        stopForThreats: true,
+        work,
+        partial: false,
+        protectedItems: new Set(),
+      });
+      const waypoints = planned.ok
+        ? planned.movements.map((mv) => ({ x: mv.to.x + 0.5, y: mv.to.y, z: mv.to.z + 0.5 }))
+        : [];
       return {
-        plan:
-          t === null
-            ? null
-            : t.ok
-              ? { ok: true, waypoints: [from, ...t.moves.map((x) => x.to)], length: t.length }
-              : t,
+        plan: planned.ok
+          ? { ok: true, waypoints: [from, ...waypoints], length: planned.length }
+          : planned,
         map: [],
       };
     }
@@ -153,12 +146,10 @@ export class MovementActions {
   }
 
   /**
-   * The leaves a terrain walk may break on its way (digging.ts walkBreaks), or undefined:
-   * only with digging enabled (and presence ticks, which digging needs), on a fence with a
-   * height range, and with an empty hotbar slot to break them with (no allowlisted tool is
-   * faster on leaves, so the hand is empty; without one every break would be refused).
-   * observation.ts #withWorkAreas offers stand spots with it and MOVE_TO plans with it, so a
-   * stand spot a walk reaches by breaking leaves is one a MOVE_TO plans to the same way.
+   * The leaves the terrain walker's flood may break on its way (digging.ts walkBreaks), or
+   * undefined: only with digging enabled (and presence ticks, which digging needs), on a fence
+   * with a height range, and with an empty hotbar slot to break them with. observation.ts
+   * #withWorkAreas offers stand spots with it.
    */
   walkBreaks(fence: Fence): WalkBreaks | undefined {
     const cfg = this.#opts.config;
@@ -172,12 +163,18 @@ export class MovementActions {
     );
   }
 
+  /**
+   * MOVE_TO's walk (and the walks a retreat or the fetching of a drop make): to the block of
+   * `target`. Over terrain (a fence with a height range, or the play area) it walks on the
+   * pathfinder (path-actions.ts), breaking and placing on its way as the walk policy allows
+   * when `work` is set; on a fence of one level, the flat pen walker, as before.
+   */
   async walkTo(
     target: Readonly<Position> | null,
     options: {
       stopForThreats: boolean;
-      /** MOVE_TO: over terrain, with digging enabled, break leaves in the way (walkBreaks). */
-      breakLeaves?: boolean;
+      /** MOVE_TO: over terrain, break and place on the way as the walk policy allows. */
+      work?: boolean;
       /** Never held for a break (the validated action's protected items). */
       protectedItems?: ReadonlySet<string>;
     },
@@ -190,123 +187,73 @@ export class MovementActions {
     }
     if (target === null) return failed('not walking: no resolved target', 'ERROR');
     if (this.#core.walking) return failed('not walking: a walk is already in progress', 'REFUSED');
+    if (fence.min.y !== fence.max.y) {
+      if (!fenceHolds(fence, target)) {
+        return failed('not walking: the target is outside the movement fence', 'REFUSED');
+      }
+      const b = blockOf(target);
+      return this.#core.paths.walk({
+        goal: goalBlock(b.x, b.y, b.z),
+        what: 'the target',
+        stopForThreats: options.stopForThreats,
+        work: options.work === true,
+        partial: false,
+        protectedItems: options.protectedItems ?? new Set(),
+      });
+    }
     const world = this.#world.walkWorld();
     const from = this.#world.ownPosition;
     if (world === null || from === null) {
       return failed('not walking: block data or position unknown', 'REFUSED');
     }
-    // A fence on one level walks the flat pen way; a fence with a height range walks terrain.
-    const terrain = fence.min.y !== fence.max.y;
-    // The steps, move by move, each with what to break before it (terrain walks only).
-    let moves: Array<{ breaks: readonly BlockPosition[]; steps: TerrainStep[] }>;
-    let length: number;
-    if (terrain) {
-      const breaks = options.breakLeaves === true ? this.walkBreaks(fence) : undefined;
-      const plan = planTerrainWalk(world, fence, from, target, m.maxPathLength, breaks);
-      if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
-      let end = from;
-      moves = plan.moves.map((move) => {
-        const steps = terrainSteps(end, [move]);
-        end = move.to;
-        return { breaks: move.breaks ?? [], steps };
-      });
-      length = plan.length;
-      const kinds = plan.moves.map((x) => x.kind);
-      const toBreak = moves.reduce((n, mv) => n + mv.breaks.length, 0);
-      this.#core.log(
-        `walking ${length.toFixed(2)} blocks over terrain in ${moves.reduce((n, mv) => n + mv.steps.length, 0)} steps ` +
-          `(${kinds.filter((k) => k === 'step-up').length} up, ${kinds.filter((k) => k === 'drop').length} down)` +
-          (toBreak > 0 ? `, breaking ${toBreak} block(s) on the way` : ''),
-      );
-    } else {
-      const plan = planWalk(world, fence, from, target, m.maxPathLength);
-      if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
-      const steps = stepsAlong(plan.waypoints).map((pos) => ({ pos, onGround: true }));
-      moves = [{ breaks: [], steps }];
-      length = plan.length;
-      this.#core.log(
-        `walking ${length.toFixed(2)} blocks in ${steps.length} steps (${plan.waypoints.length - 1} stretch(es))`,
-      );
-    }
-    const steps = moves.flatMap((mv) => mv.steps);
+    // A fence on one level walks the flat pen way.
+    const plan = planWalk(world, fence, from, target, m.maxPathLength);
+    if (!plan.ok) return failed(`not walking: ${plan.reason}`, 'REFUSED');
+    const steps = stepsAlong(plan.waypoints);
+    const length = plan.length;
+    this.#core.log(
+      `walking ${length.toFixed(2)} blocks in ${steps.length} steps (${plan.waypoints.length - 1} stretch(es))`,
+    );
     const guard = {
       placementsAtStart: this.#core.confirmedPositions,
       // An escape (threats do not stop it) keeps going when hit, too (seen live: a retreat
       // from a skeleton stopped at its first arrow, and the next walk led back into range).
       healthAtStart: options.stopForThreats ? this.#world.health : null,
       stopForThreats: options.stopForThreats,
-      terrain,
     };
-    // What it broke on its way, when it broke the last one, and the inventory before the
-    // walk: what the leaves dropped (a sapling, an apple) is reported with the walk.
-    const broken: BlockPosition[] = [];
-    let lastBreakAt: number | null = null;
-    const itemsBefore = moves.some((mv) => mv.breaks.length > 0)
-      ? this.#world.inventoryItems()
-      : null;
     let at: Vec3 = from;
     let taken = 0;
     const stopped = (reason: string): ClientActionResult => {
       const where = this.#world.ownPosition ?? at;
       this.#core.log(`walk stopped after ${taken}/${steps.length} steps: ${reason}`);
       return failed(
-        (
-          `walk stopped after ${taken} of ${steps.length} steps: ${reason}` +
-          (broken.length === 0 ? '' : `; it broke ${describeBroken(broken)}`)
-        ).slice(0, 500),
+        `walk stopped after ${taken} of ${steps.length} steps: ${reason}`.slice(0, 500),
         'FAILED',
-        {
-          stepsTaken: taken,
-          stepsPlanned: steps.length,
-          x: where.x,
-          y: where.y,
-          z: where.z,
-          ...(broken.length === 0 ? {} : { broken: broken.length }),
-        },
+        { stepsTaken: taken, stepsPlanned: steps.length, x: where.x, y: where.y, z: where.z },
       );
     };
 
     this.#core.walking = true;
     this.stopIdle();
     try {
-      for (const move of moves) {
-        if (move.breaks.length > 0) {
-          const before = broken.length;
-          const problem = await this.#breakOnTheWay(
-            move.breaks,
-            fence,
-            guard,
-            options.protectedItems ?? new Set(),
-            broken,
-          );
-          if (broken.length > before) lastBreakAt = this.#opts.clock.now().getTime();
-          if (problem !== null) return stopped(problem);
-        }
-        for (const step of move.steps) {
-          const next = step.pos;
-          const reason = this.#stepProblem(world, fence, at, next, guard);
-          if (reason !== null) return stopped(reason);
-          const facing =
-            Math.hypot(next.x - at.x, next.z - at.z) > 1e-9
-              ? yawTowards(at, next)
-              : this.#core.lastYaw;
-          this.#core.lastYaw = facing;
-          this.#core.send(
-            outbound.playerMove(
-              { x: next.x, feetY: next.y, z: next.z, yaw: facing, pitch: 0 },
-              step.onGround,
-            ),
-          );
-          this.#world.setOwnPosition(next);
-          at = next;
-          taken += 1;
-          await delay(WALK_TICK_MS);
-        }
+      for (const next of steps) {
+        const reason = this.#stepProblem(fence, at, next, guard);
+        if (reason !== null) return stopped(reason);
+        const facing =
+          Math.hypot(next.x - at.x, next.z - at.z) > 1e-9
+            ? yawTowards(at, next)
+            : this.#core.lastYaw;
+        this.#core.lastYaw = facing;
+        this.#core.send(
+          outbound.playerMove({ x: next.x, feetY: next.y, z: next.z, yaw: facing, pitch: 0 }, true),
+        );
+        this.#world.setOwnPosition(next);
+        at = next;
+        taken += 1;
+        await delay(WALK_TICK_MS);
       }
       // A correction (S08) or a kick arrives within a few ticks of a move the server rejects.
-      // After breaks it also stays until what they dropped could be picked up.
-      const until = lastBreakAt === null ? 0 : lastBreakAt + BREAK_DROP_WAIT_MS;
-      for (let i = 0; i < SETTLE_TICKS || this.#opts.clock.now().getTime() < until; i++) {
+      for (let i = 0; i < SETTLE_TICKS; i++) {
         if (this.#core.phase !== 'play') return stopped('the connection closed');
         if (this.#core.confirmedPositions !== guard.placementsAtStart) {
           return stopped('the server corrected the final position');
@@ -318,109 +265,31 @@ export class MovementActions {
       if (this.#core.confirmedPositions !== guard.placementsAtStart) {
         return stopped('the server corrected the final position');
       }
-      const gained =
-        itemsBefore === null || broken.length === 0
-          ? []
-          : this.#core.dig.gainSince(itemsBefore, null);
-      const drops = describeGain(gained);
-      return ok(
-        (
-          `walked ${length.toFixed(2)} blocks in ${steps.length} steps` +
-          (broken.length === 0 ? '' : `; broke ${describeBroken(broken)}`) +
-          (gained.length === 0 ? '' : `; picked up ${drops}`)
-        ).slice(0, 500),
-        {
-          steps: steps.length,
-          distance: Number(length.toFixed(3)),
-          x: at.x,
-          y: at.y,
-          z: at.z,
-          ...(broken.length === 0 ? {} : { broken: broken.length, drops }),
-        },
-      );
+      return ok(`walked ${length.toFixed(2)} blocks in ${steps.length} steps`, {
+        steps: steps.length,
+        distance: Number(length.toFixed(3)),
+        x: at.x,
+        y: at.y,
+        z: at.z,
+      });
     } finally {
       this.#core.walking = false;
       if (this.#core.phase === 'play') this.startIdle();
     }
   }
 
-  /**
-   * Breaks what a terrain walk's next move needs out of its way (planned by planTerrainWalk
-   * with walkBreaks: leaves only), standing where the walk has got to, exactly as DIG_BLOCK
-   * digs (dig-actions.ts digChecked): checkWalkBreak (checkDig's rules, leaves only, inside
-   * the safety boundary) on the blocks the server sent just before each dig and every tick
-   * while digging, with the walk's own guard; the dig time; C07 start and finish; success
-   * only on the server's change to air with no re-send. The walk's checks come first
-   * (#walkInterruption: the stop file, halt(), a correction, health, threats), and presence
-   * ticks go on while the player stands and digs. A cell that is open already (a leaf
-   * decayed) is passed over. Null when the way is open, else why the walk must stop;
-   * `broken` collects what it broke.
-   */
-  async #breakOnTheWay(
-    cells: readonly BlockPosition[],
-    fence: Fence,
-    guard: { placementsAtStart: number; healthAtStart: number | null; stopForThreats: boolean },
-    protectedItems: ReadonlySet<string>,
-    broken: BlockPosition[],
-  ): Promise<string | null> {
-    const cfg = this.#opts.config;
-    const area: DigArea = { fence, maxHeightAboveFence: cfg.digging.maxHeightAboveFence };
-    const boundary = this.#opts.explorationBoundary ?? null;
-    for (const cell of cells) {
-      const where = `(${cell.x}, ${cell.y}, ${cell.z})`;
-      if (!cfg.digging.enabled) return 'digging is disabled (MC_ENABLE_DIGGING)';
-      const interrupted = this.#walkInterruption(guard);
-      if (interrupted !== null) return interrupted;
-      const world = this.#world.walkWorld();
-      if (world === null) return 'the block data became unknown';
-      if (passProblem(world, cell.x, cell.y, cell.z) === null) continue;
-      this.#core.digging = true;
-      // The player stands while it digs: presence ticks go on, as for any dig.
-      const presence = setInterval(
-        () => this.#core.send(outbound.playerIdle(ON_GROUND)),
-        IDLE_TICK_MS,
-      );
-      try {
-        const rule = (w: WalkWorld, feet: Vec3): DigCheck =>
-          checkWalkBreak(w, area, feet, cell, boundary);
-        const dug = await this.#core.dig.digChecked(cell, rule, protectedItems, 'digging', guard);
-        if (!dug.ok) {
-          // A leaf that decayed while it was dug (its log was just chopped) is out of the way
-          // all the same (seen live: "the server sent the block again while digging (id 0)").
-          const now = this.#world.walkWorld();
-          if (now !== null && passProblem(now, cell.x, cell.y, cell.z) === null) continue;
-          return `breaking ${where} out of the way failed: ${dug.result.message}`;
-        }
-        broken.push({ x: cell.x, y: cell.y, z: cell.z });
-        this.#core.log(`broke the ${dug.check.block} at ${where} out of the way`);
-      } finally {
-        clearInterval(presence);
-        this.#core.digging = false;
-      }
-    }
-    return null;
-  }
-
-  /** Why the next step must not be taken, or null. Checked immediately before every step. */
+  /** Why the flat walker's next step must not be taken, or null; checked just before it. */
   #stepProblem(
-    world: NonNullable<ReturnType<WorldModel['walkWorld']>>,
     fence: Fence,
     from: Vec3,
     to: Vec3,
-    guard: {
-      placementsAtStart: number;
-      healthAtStart: number | null;
-      stopForThreats: boolean;
-      terrain: boolean;
-    },
+    guard: { placementsAtStart: number; healthAtStart: number | null; stopForThreats: boolean },
   ): string | null {
-    const interrupted = this.#walkInterruption(guard, { from, to });
+    const interrupted = this.walkInterruption(guard, { from, to });
     if (interrupted !== null) return interrupted;
-    // Terrain steps change height (steps up, drops), so check the body where it will be,
-    // at that height; the flat walker checks the whole swept stretch.
-    const problem = guard.terrain
-      ? bodyProblem(world, fence, to)
-      : segmentProblem(world, fence, from, to);
+    const world = this.#world.walkWorld();
+    if (world === null) return 'the block data became unknown';
+    const problem = segmentProblem(world, fence, from, to);
     return problem === null ? null : `the way ahead is not clear: ${problem}`;
   }
 
@@ -430,7 +299,7 @@ export class MovementActions {
    * file, halt()...), a server correction or a health drop since it started, and with
    * `stopForThreats` a hostile (not a calm spider) or unidentified entity within threatRadius.
    */
-  #walkInterruption(
+  walkInterruption(
     guard: {
       placementsAtStart: number;
       healthAtStart: number | null;

@@ -1,7 +1,15 @@
 import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import type { BlockPosition } from '../../../domain/common.ts';
-import { BARE_HAND_SPEED, digWaitTicks, instantDig, TICK_MS } from '../../../domain/dig-time.ts';
+import type { DiggableBlock } from '../../../domain/blocks.ts';
+import {
+  BARE_HAND_SPEED,
+  digFacts,
+  digWaitTicks,
+  instantDig,
+  TICK_MS,
+  type HarvestRule,
+} from '../../../domain/dig-time.ts';
 import {
   bestTool,
   describeHarvest,
@@ -65,6 +73,15 @@ interface Hand {
   damage: number;
   /** Tools for the block that were passed over, and why (or null). */
   note: string | null;
+}
+
+/** A usable tool in the inventory for one dig (#planHand). */
+interface HandCandidate {
+  tool: ToolInfo;
+  damage: number;
+  /** 0-26 main inventory, 27-35 hotbar (playerStorage order). */
+  index: number;
+  stack: Stack;
 }
 
 const centreOf = (b: BlockPosition): Vec3 => ({ x: b.x + 0.5, y: b.y + 0.5, z: b.z + 0.5 });
@@ -538,17 +555,35 @@ export class DigActions {
     target: Extract<DigCheck, { ok: true }>,
     protectedItems: ReadonlySet<string>,
   ): Promise<Hand | { ok: false; reason: string; code: 'REFUSED' | 'FAILED' | 'ERROR' }> {
+    const plan = this.#planHand(target, protectedItems);
+    if (plan.kind === 'refuse') return { ok: false, reason: plan.reason, code: 'REFUSED' };
+    if (plan.kind === 'hand') return plan.hand;
+    const { from, to, hand } = plan;
+    const moved = await this.#core.inventory.moveToHotbar(9 + from.index, to, from.stack);
+    if (moved === null) return hand;
+    return {
+      ok: false,
+      reason: `the ${from.tool.item} could not be moved into the hotbar: ${moved}`,
+      code: moved.startsWith('ITEMS MAY') ? 'ERROR' : 'FAILED',
+    };
+  }
+
+  /**
+   * What #chooseHand would hold for the checked block, without doing anything: a hotbar slot
+   * (a tool, an empty hand or a plain block item), a tool to move into an empty hotbar slot
+   * first, or why there is nothing to dig it with.
+   */
+  #planHand(
+    target: { block: DiggableBlock; harvest: HarvestRule | null; hardness: number },
+    protectedItems: ReadonlySet<string>,
+  ):
+    | { kind: 'hand'; hand: Hand }
+    | { kind: 'move'; from: HandCandidate; to: number; hand: Hand }
+    | { kind: 'refuse'; reason: string } {
     const { block, harvest } = target;
     const storage = this.#world.playerStorage();
     const registry = this.#world.registry;
-    interface Candidate {
-      tool: ToolInfo;
-      damage: number;
-      /** 0-26 main inventory, 27-35 hotbar (playerStorage order). */
-      index: number;
-      stack: Stack;
-    }
-    const candidates: Candidate[] = [];
+    const candidates: HandCandidate[] = [];
     const passedOver: string[] = [];
     if (storage !== null && registry !== null) {
       const heldIndex = 27 + this.#world.heldSlot;
@@ -565,8 +600,8 @@ export class DigActions {
       }
     }
     const note = passedOver.length === 0 ? null : `not used: ${passedOver.slice(0, 2).join('; ')}`;
-    const inHotbar = (c: Candidate): boolean => c.index >= 27;
-    const use = (c: Candidate, slot: number): Hand => ({
+    const inHotbar = (c: HandCandidate): boolean => c.index >= 27;
+    const use = (c: HandCandidate, slot: number): Hand => ({
       ok: true,
       slot,
       tool: c.tool,
@@ -575,51 +610,63 @@ export class DigActions {
     });
 
     const best = bestTool(block, candidates, () => true);
-    if (best !== null && inHotbar(best)) return use(best, best.index - 27);
+    if (best !== null && inHotbar(best)) return { kind: 'hand', hand: use(best, best.index - 27) };
     if (best !== null) {
       const free = this.#core.inventory.emptyHotbarSlot();
-      if (free !== null) {
-        const moved = await this.#core.inventory.moveToHotbar(9 + best.index, free, best.stack);
-        if (moved === null) return use(best, free);
-        return {
-          ok: false,
-          reason: `the ${best.tool.item} could not be moved into the hotbar: ${moved}`,
-          code: moved.startsWith('ITEMS MAY') ? 'ERROR' : 'FAILED',
-        };
-      }
+      if (free !== null) return { kind: 'move', from: best, to: free, hand: use(best, free) };
       // No room to move it: a slower tool already in the hotbar, else nothing to dig with.
       const slower = bestTool(block, candidates.filter(inHotbar), () => true);
-      if (slower !== null) return use(slower, slower.index - 27);
+      if (slower !== null) return { kind: 'hand', hand: use(slower, slower.index - 27) };
       return {
-        ok: false,
+        kind: 'refuse',
         reason:
           harvest === null
             ? `no empty hotbar slot (to move the ${best.tool.item} into, or to dig with an empty hand)`
             : `no empty hotbar slot to move the ${best.tool.item} into`,
-        code: 'REFUSED',
       };
     }
     if (harvest !== null) {
       // Stone or an ore: a hand (or a tool that does not harvest it) would leave nothing.
       return {
-        ok: false,
+        kind: 'refuse',
         reason:
           `no carried tool harvests ${block}: it needs ${describeHarvest(harvest)}` +
           (note === null ? '' : `; ${note}`),
-        code: 'REFUSED',
       };
     }
     const empty = this.#core.inventory.emptyHotbarSlot() ?? this.#plainHotbarSlot();
     if (empty === null) {
       return {
-        ok: false,
+        kind: 'refuse',
         reason:
           'no empty hotbar slot (with no usable tool for this block, the agent digs with an empty hand)' +
           (note === null ? '' : `; ${note}`),
-        code: 'REFUSED',
       };
     }
-    return { ok: true, slot: empty, tool: null, damage: 0, note };
+    return { kind: 'hand', hand: { ok: true, slot: empty, tool: null, damage: 0, note } };
+  }
+
+  /**
+   * How many ticks the dig of `block` (with world metadata `meta`) would take with what
+   * #chooseHand would hold now (digWaitTicks at the tool's speed, for this very block's
+   * hardness), or why it could not be dug: a block whose metadata is not a natural one, or
+   * stone with no carried pickaxe that harvests it. For a walk's planner (path-policy.ts), so
+   * the time it weighs is the dig the walk then makes.
+   */
+  digTicksFor(
+    block: DiggableBlock,
+    meta: number | undefined,
+    protectedItems: ReadonlySet<string>,
+  ): { ticks: number } | { problem: string } {
+    const facts = digFacts(block, meta);
+    if ('problem' in facts) return facts;
+    if (instantDig(block)) return { ticks: 0 };
+    const plan = this.#planHand({ block, ...facts }, protectedItems);
+    if (plan.kind === 'refuse') return { problem: plan.reason };
+    const tool = plan.hand.tool;
+    return {
+      ticks: digWaitTicks(block, tool === null ? BARE_HAND_SPEED : tool.speed, facts.hardness),
+    };
   }
 
   /**
@@ -632,7 +679,7 @@ export class DigActions {
   #toolFor(
     s: Stack,
     index: number,
-    target: Extract<DigCheck, { ok: true }>,
+    target: { block: DiggableBlock; harvest: HarvestRule | null; hardness: number },
     protectedItems: ReadonlySet<string>,
     registry: Registry,
   ): { tool: ToolInfo; damage: number } | { problem: string } | null {

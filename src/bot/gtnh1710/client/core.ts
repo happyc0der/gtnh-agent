@@ -18,6 +18,7 @@ import { InteractActions } from './interact-actions.ts';
 import { InventoryActions } from './inventory-actions.ts';
 import { MovementActions } from './movement-actions.ts';
 import { Observation } from './observation.ts';
+import { PathActions } from './path-actions.ts';
 import { PlaceActions } from './place-actions.ts';
 import { PlayerActions } from './player-actions.ts';
 import { QuestBookActions } from './quest-book-actions.ts';
@@ -116,6 +117,8 @@ export class ClientCore {
   readonly questBook: QuestBookActions;
   readonly player: PlayerActions;
   readonly movement: MovementActions;
+  /** Walks over terrain on the pathfinder (path-actions.ts). */
+  readonly paths: PathActions;
   readonly travel: TravelActions;
 
   constructor(opts: Gtnh1710ClientOptions) {
@@ -133,6 +136,7 @@ export class ClientCore {
     this.questBook = new QuestBookActions(this);
     this.player = new PlayerActions(this);
     this.movement = new MovementActions(this);
+    this.paths = new PathActions(this);
     this.travel = new TravelActions(this);
   }
 

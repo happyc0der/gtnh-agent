@@ -13,8 +13,9 @@
  *     before it and the block to place after a given step.
  *  3. validatePlan (validate.ts): checks a plan against those physics and the server's
  *     movement and fall checks, tick by tick (the tests run every plan through it).
- *  4. toTerrainMoves (terrain-moves.ts): a path in terrain.ts's move kinds, for the executor's
- *     current walk loop.
+ *  4. floodPath (search.ts): every feet block a walk reaches within a cost, with the same
+ *     movements and options: where to stand to dig a block is a look-up in it.
+ *  5. toTerrainMoves (terrain-moves.ts): a path in terrain.ts's move kinds.
  *
  * The design follows Baritone (the Minecraft pathfinding bot, LGPL-3.0): A* with a binary
  * heap and packed node keys, movements checked against the blocks with their costs in ticks
@@ -28,9 +29,12 @@ export {
   cacheBox,
   DEFAULT_MAX_NODES,
   DEFAULT_MAX_TIME_MS,
+  floodPath,
   MAX_AREA_CELLS,
   planPath,
   resolvePathOptions,
+  type FloodSpot,
+  type PathFlood,
   type PathOptions,
   type PathResult,
   type PathStatus,
@@ -65,7 +69,7 @@ export {
   type Segment,
   type StepPlace,
 } from './execute.ts';
-export { validatePlan, type StepFault, type Validation } from './validate.ts';
+export { stepProblem, validatePlan, type StepFault, type Validation } from './validate.ts';
 export { toTerrainMoves, type TerrainConversion } from './terrain-moves.ts';
 export {
   ASCEND_TICKS,

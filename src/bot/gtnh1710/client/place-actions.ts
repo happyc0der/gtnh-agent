@@ -230,6 +230,26 @@ export class PlaceActions {
   }
 
   /**
+   * Holds the block item `name` (its plain item, no NBT data) in the selected hotbar slot, for
+   * a walk's placements (path-actions.ts): an open chest window closed first, then as
+   * PLACE_BLOCK holds its item (#holdForPlacing): the slot it holds it in, or why not.
+   */
+  async holdBlockItem(
+    name: string,
+  ): Promise<{ ok: true; slot: number; moved: string | null } | { ok: false; reason: string }> {
+    if (this.#world.openWindow !== null) {
+      const closed = this.#core.inventory.closeOpenWindow();
+      if (closed !== null) return { ok: false, reason: closed.message };
+    }
+    const item = resolveItemName(this.#world.registry, name);
+    if (item === null) return { ok: false, reason: `${name} is not in this world's registry` };
+    const hand = await this.#holdForPlacing(item, name);
+    return hand.ok
+      ? { ok: true, slot: hand.slot, moved: hand.moved }
+      : { ok: false, reason: hand.result.message };
+  }
+
+  /**
    * Holds `item` (registry id and damage; never a stack with NBT data) in the selected
    * hotbar slot: the held slot if it holds it, else the first hotbar slot that does, else a
    * stack from the main inventory is moved into the first empty hotbar slot with two
