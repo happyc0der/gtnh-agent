@@ -366,12 +366,16 @@ export function simulateCrafts(
 
 /**
  * Slots (and the cursor) where two views of the same window differ, e.g. the client's
- * prediction and the server's sync. `ignore` lists slots to skip (the result slot).
+ * prediction and the server's sync. `ignore` lists slots to skip (the result slot). With
+ * `pickups` (the player's own slots, an inclusive range), a slot there that only grew (the same
+ * item, more of it, or a stack where there was none) is no difference: an item the player
+ * picked up meanwhile (seen live: a sapling from leaves decaying by the felled tree, mid-craft).
  */
 export function windowDifferences(
   expected: WindowSnapshot,
   actual: WindowSnapshot,
   ignore: ReadonlySet<number> = new Set(),
+  pickups?: readonly [number, number],
 ): string[] {
   const out: string[] = [];
   const show = (s: Stack | null | undefined): string =>
@@ -381,7 +385,15 @@ export function windowDifferences(
     if (ignore.has(i)) continue;
     const a = expected.slots[i] ?? null;
     const b = actual.slots[i] ?? null;
-    if (!sameStack(a, b)) out.push(`slot ${i}: expected ${show(a)}, server has ${show(b)}`);
+    if (sameStack(a, b)) continue;
+    const grew =
+      pickups !== undefined &&
+      i >= pickups[0] &&
+      i <= pickups[1] &&
+      b !== null &&
+      !b.hasNbt &&
+      (a === null || (a.id === b.id && a.damage === b.damage && !a.hasNbt && b.count > a.count));
+    if (!grew) out.push(`slot ${i}: expected ${show(a)}, server has ${show(b)}`);
   }
   if (!sameStack(expected.cursor, actual.cursor)) {
     out.push(`cursor: expected ${show(expected.cursor)}, server has ${show(actual.cursor)}`);

@@ -402,4 +402,27 @@ describe('checking a whole action up front', () => {
       'cursor: expected empty, server has 1 x 17@0',
     ]);
   });
+
+  it('takes an item picked up meanwhile (a player slot that only grew) for no difference', () => {
+    // Seen live: a sapling from leaves decaying by the felled tree, picked up mid-craft.
+    const a = win(INVENTORY_GRID, {
+      9: stack('minecraft:log', 3),
+      41: stack('minecraft:stick', 11),
+    });
+    const picked = win(INVENTORY_GRID, {
+      9: stack('minecraft:log', 3),
+      41: stack('minecraft:stick', 12),
+      20: stack('minecraft:planks', 1),
+    });
+    expect(windowDifferences(a, picked, new Set([0]), [9, 44])).toEqual([]);
+    // Without the player's range, or a stack that shrank or changed: a difference.
+    expect(windowDifferences(a, picked, new Set([0]))).toHaveLength(2);
+    const lost = win(INVENTORY_GRID, {
+      9: stack('minecraft:log', 2),
+      41: stack('minecraft:stick', 11),
+    });
+    expect(windowDifferences(a, lost, new Set([0]), [9, 44])).toEqual([
+      'slot 9: expected 3 x 17@0, server has 2 x 17@0',
+    ]);
+  });
 });

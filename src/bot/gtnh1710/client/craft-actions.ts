@@ -9,7 +9,7 @@ import {
 } from '../../../domain/recipes.ts';
 import { errorMessage } from '../../../util/json.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
-import { containerRange, type Stack, type WindowSnapshot } from '../container.ts';
+import { containerRange, playerRange, type Stack, type WindowSnapshot } from '../container.ts';
 import {
   applyTakeResult,
   gridEmpty,
@@ -300,7 +300,12 @@ export class CraftActions {
       if (predicted === null || actual === null) {
         return stop(`${n}: the crafting window went away`, 'FAILED');
       }
-      const diffs = windowDifferences(predicted, actual, new Set([layout.resultSlot]));
+      const diffs = windowDifferences(
+        predicted,
+        actual,
+        new Set([layout.resultSlot]),
+        playerRange(actual),
+      );
       if (diffs.length > 0) {
         return stop(
           `${n}: the server's window differs from the agent's (${diffs.slice(0, 3).join('; ')})`,
@@ -352,7 +357,7 @@ export class CraftActions {
     const diffs =
       predicted === null || actual === null
         ? ['the crafting window went away']
-        : windowDifferences(predicted, actual, new Set([layout.resultSlot]));
+        : windowDifferences(predicted, actual, new Set([layout.resultSlot]), playerRange(actual));
     if (
       diffs.length > 0 ||
       actual === null ||
