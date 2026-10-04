@@ -16,8 +16,10 @@ import { HAZARD_SCAN_RADIUS } from '../../bot/gtnh1710/hazard-scan.ts';
 import { playArea } from '../../bot/gtnh1710/play-area.ts';
 import type { AgentConfig } from '../../config/env.ts';
 import type { Decision } from '../../domain/decisions.ts';
+import { diggableInfo } from '../../domain/dig-time.ts';
 import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
 import type { GameState } from '../../domain/game-state.ts';
+import { carriedHarvester } from '../../domain/tools.ts';
 import type { Abilities } from '../../goals/quest-goals.ts';
 import type { CommandTranslator } from '../../llm/ollama-command-provider.ts';
 import { openDatabase } from '../../persistence/database.ts';
@@ -113,6 +115,13 @@ export function liveShelter(
         : {
             area: { fence, maxHeightAboveFence: config.minecraft.digging.maxHeightAboveFence },
             maxPathLength: config.minecraft.movement.maxPathLength,
+            // Only digs a carried tool can harvest (the safety policy's own rule).
+            canHarvest: (block) => {
+              const rule = diggableInfo(block).harvest;
+              if (rule === null) return null;
+              const tool = carriedHarvester(inventory, rule);
+              return tool.ok ? null : tool.reason;
+            },
           };
     if (purpose === 'morning') {
       if (site !== null && !inPit) repos.memory.setValue(NIGHT_PIT_KEY, null);

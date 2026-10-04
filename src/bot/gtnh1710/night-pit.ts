@@ -49,6 +49,14 @@ export interface PitOptions {
   area: DigArea;
   /** The walker's longest path (movement.maxPathLength). */
   maxPathLength: number;
+  /**
+   * Why the player could not harvest `block` with what it carries (a block that needs a
+   * pickaxe, and none is carried), or null when it can. Digs the way out plans are left to
+   * blocks it can harvest: seen live, a staircase out through cobblestone, which only a
+   * pickaxe may dig, was refused at every try and the agent stayed in its pit. Without it,
+   * every block checkDig allows counts.
+   */
+  canHarvest?: (block: DiggableBlock) => string | null;
 }
 
 export type PitPlan =
@@ -475,7 +483,7 @@ export function planShelterExit(world: WalkWorld, feet: Vec3, opts: PitOptions):
 /** A dig of the way out, if the cell is not open already: checked, then done on `w`. */
 function exitDig(
   w: PlannedWorld,
-  area: DigArea,
+  opts: PitOptions,
   feet: Vec3,
   cell: BlockPos,
   label: string,
@@ -484,8 +492,10 @@ function exitDig(
   const solid = solidAt(w, cell);
   if (solid === null) return `${label} ${fmt(cell)} is not loaded`;
   if (!solid) return null;
-  const c = checkDig(w, area, feet, cell);
+  const c = checkDig(w, opts.area, feet, cell);
   if (!c.ok) return `${label} ${fmt(cell)}: ${c.reason}`;
+  const harvest = opts.canHarvest?.(c.block) ?? null;
+  if (harvest !== null) return `${label} ${fmt(cell)} is ${c.block}: ${harvest}`;
   for (const [dx, dz] of SIDES) {
     const n = { x: cell.x + dx, y: cell.y, z: cell.z + dz };
     const name = nameAt(w, n);
@@ -545,7 +555,7 @@ function levelExit(
     [1, 'the wall at head level'],
     [0, 'the wall at feet level'],
   ] as const) {
-    const problem = exitDig(w, opts.area, feet, { x: x + dx, y: y + dy, z: z + dz }, label, steps);
+    const problem = exitDig(w, opts, feet, { x: x + dx, y: y + dy, z: z + dz }, label, steps);
     if (problem !== null) return { ok: false, reason: problem };
   }
   const walk = walkOut(w, feet, out, opts);
@@ -568,7 +578,7 @@ function stairExit(
     // Headroom above where the player steps up from (the roof, for the first step).
     const headroom = exitDig(
       w,
-      opts.area,
+      opts,
       feet,
       { x: col.x, y: y + 2, z: col.z },
       step === 1 ? 'the roof' : 'the headroom',
@@ -597,7 +607,7 @@ function stairExit(
       [head, `step ${step}, upper block`],
       [body, `step ${step}, lower block`],
     ] as const) {
-      const problem = exitDig(w, opts.area, feet, cell, label, steps);
+      const problem = exitDig(w, opts, feet, cell, label, steps);
       if (problem !== null) return { ok: false, reason: problem };
     }
     col = next;

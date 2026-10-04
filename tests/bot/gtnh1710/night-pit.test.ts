@@ -419,6 +419,41 @@ describe('the way out in the morning', () => {
     ]);
   });
 
+  it('digs the way out only through blocks a carried tool harvests (no pickaxe: no cobble)', () => {
+    // Seen live: a staircase out through cobblestone, which only a pickaxe may dig, was
+    // refused at every try, and the agent stayed in its pit.
+    const noPickaxe = {
+      ...OPTS,
+      canHarvest: (b: string) =>
+        b === 'minecraft:cobblestone' ? 'it needs a pickaxe, and the player carries none' : null,
+    };
+    const cobble = (sides: ReadonlyArray<readonly [number, number]>): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const [dx, dz] of sides) {
+        out[k(dx, 63, dz)] = ID.cobblestone;
+        out[k(dx, 62, dz)] = ID.cobblestone;
+      }
+      return out;
+    };
+    const east = pit(cobble([[1, 0]]));
+    // Without the rule, the first side (east) would do, through the cobblestone.
+    expect(planShelterExit(east, BOTTOM, OPTS)).toMatchObject({ ok: true });
+    const r = planShelterExit(east, BOTTOM, noPickaxe);
+    if (!r.ok) throw new Error(r.reason);
+    const dug = specs(r.steps).flatMap((st) => (st.type === 'DIG_BLOCK' ? [st.args.position] : []));
+    expect(dug.some((p) => p.x === 1 && p.z === 0)).toBe(false);
+    // Cobblestone on every side: no way out it may dig.
+    const all = pit(
+      cobble([
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ]),
+    );
+    expect(planShelterExit(all, BOTTOM, noPickaxe).ok).toBe(false);
+  });
+
   it('says why when there is no way out (stone all around)', () => {
     const stone = land(
       { [k(0, 62, 0)]: ID.air, [k(0, 61, 0)]: ID.air, [k(0, 63, 0)]: ID.dirt },
