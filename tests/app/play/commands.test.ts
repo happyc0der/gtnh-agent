@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CycleResult } from '../../../src/app/loop/agent-loop.ts';
 import { nextKnownStep, setKnownSteps } from '../../../src/app/loop/known-steps.ts';
 import type { SessionResult, SessionStopKind } from '../../../src/app/loop/live-session.ts';
-import { NOT_UNDERSTOOD, type CommandDeps } from '../../../src/app/play/commands.ts';
+import { chatItemName, NOT_UNDERSTOOD, type CommandDeps } from '../../../src/app/play/commands.ts';
 import type { FoodStatus } from '../../../src/app/play/food.ts';
 import { describePlayEvent } from '../../../src/app/play/narration.ts';
 import type { TravelStep, TravelTarget } from '../../../src/app/play/owner-travel.ts';
@@ -539,7 +539,7 @@ describe("owners' commands in play", () => {
     );
     expect(said(sim)).toEqual([
       'It is night: I stay in my shelter until morning, then I come to you',
-      'at 0 64 0, health 20/20, food 20/20; idle',
+      'at 0 64 0, health 20/20, food 20/20; sheltered for the night (morning in about 5 min)',
       'OK: coming to you',
       'Done: here, 1 block from you',
     ]);
@@ -565,5 +565,14 @@ describe("owners' commands in play", () => {
       'Done: here, 1 block from you',
     ]);
     expect(sim.sessions).toEqual([FOOD_TASK_ID, 'command-1']);
+  });
+});
+
+describe('item names in chat', () => {
+  it('drops the namespace, the item prefix and the damage value, and splits the words', () => {
+    expect(chatItemName('minecraft:dirt')).toBe('dirt');
+    expect(chatItemName('minecraft:log@2')).toBe('log');
+    expect(chatItemName('dreamcraft:item.CoinForestry')).toBe('coin forestry');
+    expect(chatItemName('minecraft:wooden_pickaxe')).toBe('wooden pickaxe');
   });
 });

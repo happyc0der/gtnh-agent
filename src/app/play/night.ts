@@ -164,7 +164,17 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
           kind: 'night',
           message: `sheltered: waiting for the morning (${untilSunrise(clock)} min)`,
         });
-        const stop = await waitForMorning(deps, hooks, limits, started, now, play.whileSheltered);
+        play.sheltered = { until: now() + untilSunrise(clock) * 60_000 };
+        const stop = await waitForMorning(
+          deps,
+          hooks,
+          limits,
+          started,
+          now,
+          play.whileSheltered,
+        ).finally(() => {
+          play.sheltered = null;
+        });
         if (stop !== null) return done(play, stop);
         emit({ kind: 'night', message: 'morning: leaving the shelter' });
         play.wakeNote =

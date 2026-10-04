@@ -559,6 +559,20 @@ function deleteLocation(play: PlayState, cmd: OwnerCommandRecord, name: string):
 }
 
 /** Position, health, food, what it is doing, and a few items it carries. */
+/**
+ * An item's registry name as a chat line shows it: no namespace, "item."/"tile." prefix or
+ * damage value, words split ("dreamcraft:item.CoinForestry" -> "coin forestry").
+ */
+export function chatItemName(item: string): string {
+  const path = item.slice(item.indexOf(':') + 1).replace(/@\d+$/, '');
+  return path
+    .replace(/^(item|tile)\./, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_.]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 function statusText(play: PlayState): string {
   const { repos } = play.deps;
   const view = (play.deps.commands as CommandDeps).view();
@@ -569,18 +583,21 @@ function statusText(play: PlayState): string {
   const off = autonomyOff(repos);
   const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
   const task = taskId === null ? null : repos.tasks.get(taskId);
+  const shelter = play.sheltered;
   const doing =
     running?.command != null
       ? `doing: ${describeCommand(running.command)}`
       : off !== null
         ? off
-        : task !== null && task.status === 'active'
-          ? `working on: ${task.goal.slice(0, 80)}`
-          : 'idle';
+        : shelter !== null
+          ? `sheltered for the night (morning in about ${Math.max(1, Math.round((shelter.until - play.now()) / 60_000))} min)`
+          : task !== null && task.status === 'active'
+            ? `working on: ${task.goal.slice(0, 80)}`
+            : 'idle';
   const items = Object.entries(view.inventory ?? {})
     .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1))
     .slice(0, 4)
-    .map(([item, n]) => `${n} ${item.replace(/^minecraft:/, '')}`);
+    .map(([item, n]) => `${n} ${chatItemName(item)}`);
   return `${where}, ${vitals}; ${doing}${items.length === 0 ? '' : `; carrying ${items.join(', ')}`}`;
 }
 

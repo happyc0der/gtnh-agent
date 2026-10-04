@@ -67,6 +67,8 @@ export interface PlayState {
    * are heard and answered meanwhile (commands.ts; set by runPlay).
    */
   whileSheltered: () => Promise<void>;
+  /** In the night shelter, waiting for the morning: until when (play.now's clock), else null. */
+  sheltered: { until: number } | null;
 }
 
 /** How an owner's running command is going (commands.ts). */
@@ -122,6 +124,7 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     idle: null,
     idleNote: null,
     whileSheltered: () => Promise.resolve(),
+    sheltered: null,
   };
 }
 
