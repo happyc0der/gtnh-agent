@@ -159,6 +159,52 @@ describe('planning an owner travel step', () => {
   });
 });
 
+describe('a target below', () => {
+  it('a walk part of the way down gets nearer, though not across (it digs down)', () => {
+    // Lava under the target: digging down stops short of it, so the step is a part of the way.
+    const LAVA = 11;
+    const ground = flat();
+    const world: WalkWorld = {
+      blockAt: (x, y, z) =>
+        y === 56 && Math.abs(x) <= 6 && Math.abs(z) <= 6 ? LAVA : ground.blockAt(x, y, z),
+      blockName: (id) => (id === LAVA ? 'minecraft:lava' : ground.blockName(id)),
+      hazardCode: (id) => (id === LAVA ? BLOCK_CODE.lava : BLOCK_CODE.safe),
+    };
+    const policy = walkPolicy({
+      world,
+      boundary: null,
+      players: [],
+      fence: AREA.fence ?? undefined,
+      settings: {
+        allowBreak: true,
+        allowPlace: false,
+        allowParkour: false,
+        parkourOverDeepGaps: false,
+        allowSprint: false,
+        allowWater: false,
+        allowDoors: false,
+        throwawayReserve: 4,
+      },
+      breaking: true,
+      placing: false,
+      digHeight: 4,
+      digTicks: () => ({ ticks: 20 }),
+      throwaway: null,
+      sprint: false,
+    }).options;
+    const step = planTravelStep(
+      input({
+        world,
+        path: policy,
+        movement: { enabled: true, canExplore: false, maxPathLength: 32 },
+        target: { kind: 'near', point: { x: 2.5, y: 55, z: 0.5 }, within: 2.5 },
+      }),
+    );
+    if (step.kind !== 'step' || step.spec.type !== 'MOVE_TO') throw new Error(JSON.stringify(step));
+    expect(step.spec.args.target.y).toBeLessThan(64);
+  });
+});
+
 describe('the surface (Baritone #surface)', () => {
   const base: Omit<TravelInput, 'target'> = {
     world: flat(),

@@ -283,12 +283,25 @@ export function planTravelStep(input: TravelInput): TravelStep {
     }
     moves = kept;
   }
+  /**
+   * How far a feet cell is from the target: across, and up or down too when the target's height
+   * is known (a walk down toward a block below gets nearer: seen live, "!goto stone" to stone 9
+   * blocks below, the walk that dug half way down was refused as getting no nearer across).
+   */
+  const away = (c: { x: number; y: number; z: number }): number =>
+    goalPoint.y === null
+      ? acrossFrom(c)
+      : Math.hypot(c.x + 0.5 - goalPoint.x, c.y - goalPoint.y, c.z + 0.5 - goalPoint.z);
+  const awayNow =
+    goalPoint.y === null
+      ? across
+      : Math.hypot(feet.x - goalPoint.x, feet.y - goalPoint.y, feet.z - goalPoint.z);
   /** The part of the path within what a MOVE_TO may reach, if it gets nearer; else null. */
   const nearer = (): { x: number; y: number; z: number } | null => {
     const within = [...moves];
     while (within.length > 0 && beyondReach((within.at(-1) as Movement).to)) within.pop();
     const last = within.at(-1)?.to;
-    return last !== undefined && acrossFrom(last) <= across - MIN_GAIN ? last : null;
+    return last !== undefined && away(last) <= awayNow - MIN_GAIN ? last : null;
   };
   const end = moves.at(-1)?.to;
   if (end !== undefined && reached) {
