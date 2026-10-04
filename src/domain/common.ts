@@ -61,3 +61,25 @@ export const TimestampSchema = z.iso.datetime();
 
 export const ItemCountsSchema = z.record(ItemNameSchema, z.int().min(0).max(1_000_000_000));
 export type ItemCounts = z.infer<typeof ItemCountsSchema>;
+
+/** An item's name without its damage value: `minecraft:log@2` is a `minecraft:log`. */
+export function itemBase(name: string): string {
+  return name.replace(/@\d+$/, '');
+}
+
+/**
+ * How many `item` the inventory holds; with `anyKind`, of every kind and wear of it (all its
+ * damage values: an owner's "logs" are oak, spruce, birch and jungle alike, and a worn
+ * pickaxe is a pickaxe).
+ */
+export function heldOf(
+  inventory: Readonly<Record<string, number>>,
+  item: string,
+  anyKind = false,
+): number {
+  if (!anyKind) return inventory[item] ?? 0;
+  const base = itemBase(item);
+  let n = 0;
+  for (const [name, count] of Object.entries(inventory)) if (itemBase(name) === base) n += count;
+  return n;
+}

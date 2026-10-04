@@ -181,6 +181,11 @@ export interface FreeGoal {
   /** Shown to the planner and in messages, e.g. "get 100 minecraft:diamond". */
   name: string;
   requirements: Readonly<Record<string, number>>;
+  /**
+   * Requirement items of which every kind and wear counts (all their damage values): an
+   * owner's "get 16 logs" is any wood. Others count exactly.
+   */
+  anyKind?: readonly string[];
 }
 
 export type PlayEvent =

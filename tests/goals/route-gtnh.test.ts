@@ -171,6 +171,48 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     ).toBe(true);
   });
 
+  it('any kind: the logs of every wood held count, and planks are made of the kind held', () => {
+    const logs = planRoute(
+      { 'minecraft:log': 16 },
+      { 'minecraft:log@2': 10 },
+      ROUTE_BOOK,
+      () => [],
+      [],
+      ['crafting_table'],
+      new Set(['minecraft:log']),
+    );
+    expect(logs.stock).toEqual([
+      { item: 'minecraft:log', have: 10, stored: 0, need: 16, missing: 6, anyKind: true },
+    ]);
+    expect(logs.raw).toEqual({ 'minecraft:log': 6 });
+    expect(describeRoute(logs)[0]).toBe('stock: minecraft:log (any kind) have 10 / need 16');
+    // Exactly: birch logs are no oak logs.
+    const exact = planRoute({ 'minecraft:log': 16 }, { 'minecraft:log@2': 10 }, ROUTE_BOOK);
+    expect(exact.raw).toEqual({ 'minecraft:log': 16 });
+    const planks = planRoute(
+      { 'minecraft:planks': 4 },
+      { 'minecraft:log@2': 2 },
+      ROUTE_BOOK,
+      () => [],
+      [],
+      ['crafting_table'],
+      new Set(['minecraft:planks']),
+    );
+    expect(steps(planks)).toEqual(['craft minecraft:planks@2']);
+    // A worn pickaxe is a pickaxe.
+    const pickaxe = planRoute(
+      { 'minecraft:wooden_pickaxe': 1 },
+      { 'minecraft:wooden_pickaxe@7': 1 },
+      ROUTE_BOOK,
+      () => [],
+      [],
+      ['crafting_table'],
+      new Set(['minecraft:wooden_pickaxe']),
+    );
+    expect(pickaxe.legs).toEqual([]);
+    expect(pickaxe.fromInventory).toEqual({ 'minecraft:wooden_pickaxe@7': 1 });
+  });
+
   it('a worn wooden pickaxe (its damage is its wear) still digs', () => {
     const route = planRoute(
       { 'gregtech:gt.metatool.01@24': 1 },

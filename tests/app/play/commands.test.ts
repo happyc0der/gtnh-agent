@@ -384,10 +384,38 @@ describe("owners' commands in play", () => {
     ]);
     expect(sim.sessions).toEqual(['command-1', 'command-1']);
     expect(repos.memory.taskRequirements('command-1')).toEqual({ 'minecraft:log': 6 });
+    expect(repos.memory.taskAnyKind('command-1')).toEqual(['minecraft:log']);
     expect(repos.tasks.get('command-1')?.status).toBe('completed');
     expect(repos.memory.journal('command-1').at(-1)?.text).toBe(
       'GOAL "get minecraft:log until I have 6 (owner command #1 from DankAxon)" reached',
     );
+  });
+
+  it('a name without a damage value counts every kind: birch logs are logs', async () => {
+    // "get 16 logs" in a birch forest counted oak only, and would have felled it all.
+    const sim = newSim({
+      heard: [whisper('!get 6 logs')],
+      inventory: { 'minecraft:log@2': 4, 'minecraft:log': 2 },
+    });
+    await runPlay(deps(open(), sim), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: getting minecraft:log until I have 6 (I have 6)',
+      'Done: I have 6 minecraft:log',
+    ]);
+    expect(sim.sessions).toEqual([]);
+  });
+
+  it('a name with a damage value counts that kind only', async () => {
+    const repos = open();
+    const sim = newSim({
+      heard: [whisper('!get 2 minecraft:log@2')],
+      inventory: { 'minecraft:log': 6 },
+      gain: { 'minecraft:log@2': 1 },
+    });
+    await runPlay(deps(repos, sim), LIMITS, noStop);
+    expect(said(sim)[0]).toBe('OK: getting minecraft:log@2 until I have 2 (I have 0)');
+    expect(said(sim).at(-1)).toBe('Done: I have 3 minecraft:log@2');
+    expect(repos.memory.taskAnyKind('command-1')).toEqual([]);
   });
 
   it('halfway counts from what was held when the command began', async () => {

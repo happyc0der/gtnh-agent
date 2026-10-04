@@ -180,6 +180,8 @@ export interface StockLine {
   need: number;
   /** Not held and not stored. */
   missing: number;
+  /** Every kind of the item counts (planRoute's anyKind): have and stored are of all kinds. */
+  anyKind?: true;
 }
 
 /** A tool the route needs: for digging (a kind and level) or for crafting (a tool item). */
@@ -290,6 +292,8 @@ interface BookIndex {
   toolsByKind: Map<string, RouteTool[]>;
   /** Tools by exact item name, and by base name (vanilla tools wear: "x:pick@37"). */
   toolsByItem: Map<string, RouteTool[]>;
+  /** The book's kinds of each item by base name: minecraft:log -> oak, @1, @2, @3. */
+  kinds: Map<string, string[]>;
   stationItems: Readonly<Record<string, string>>;
   graph: CostGraph;
 }
@@ -318,11 +322,19 @@ function indexBook(book: RouteBook): BookIndex {
     push(toolsByItem, t.item, t);
   }
   for (const list of toolsByKind.values()) list.sort((a, b) => a.level - b.level);
+  const kinds = new Map<string, string[]>();
+  for (const item of new Set([...recipes.keys(), ...sources.keys()])) {
+    push(kinds, item.replace(/@\d+$/, ''), item);
+  }
+  // The plain name first, then by damage value.
+  const damage = (item: string): number => Number(/@(\d+)$/.exec(item)?.[1] ?? 0);
+  for (const list of kinds.values()) list.sort((a, b) => damage(a) - damage(b));
   const ix: BookIndex = {
     recipes,
     sources,
     toolsByKind,
     toolsByItem,
+    kinds,
     stationItems: book.stationItems ?? {},
     graph: buildGraph(recipes, sources, toolsByKind),
   };
@@ -622,6 +634,9 @@ function optionsOf(ix: BookIndex, item: string): Option[] {
 /**
  * Plans how to get `goal` from `inventory`. `stations`: the stations the agent can use now
  * (e.g. a known crafting table); when omitted, stations are listed as needed but not judged.
+ * `anyKind`: goal items of which every kind counts (all their damage values: an owner's "16
+ * logs" are any wood): what is held of every kind counts, and the rest is got as the kind
+ * cheapest now (birch planks from birch logs held).
  */
 export function planRoute(
   goal: Readonly<Record<string, number>>,
@@ -630,8 +645,9 @@ export function planRoute(
   places: PlaceLookup = () => [],
   storage: readonly StoredContainer[] = [],
   stations?: readonly string[],
+  anyKind: ReadonlySet<string> = new Set(),
 ): Route {
-  const first = planRouteOnce(goal, inventory, book, places, storage, stations);
+  const first = planRouteOnce(goal, inventory, book, places, storage, stations, anyKind);
   // A station the crafts need with none usable or held, that the book makes: the route makes
   // its item first, as a person does (seen live 2026-10-04: "make a crafting table: 2 flint,
   // 2 logs, then place it" with no flint held, and nothing in the route to get any; the
@@ -644,7 +660,7 @@ export function planRoute(
   const withStations: Record<string, number> = {};
   for (const s of make) withStations[s.item] = 1;
   for (const [item, n] of Object.entries(goal)) withStations[item] = (withStations[item] ?? 0) + n;
-  const second = planRouteOnce(withStations, inventory, book, places, storage, stations);
+  const second = planRouteOnce(withStations, inventory, book, places, storage, stations, anyKind);
   // Only when the station's own tree can be had: else listed as missing, as before.
   if (Object.keys(second.unresolved).some((item) => !(item in first.unresolved))) return first;
   const made = new Set(make.map((s) => s.item));
@@ -671,6 +687,7 @@ function planRouteOnce(
   places: PlaceLookup,
   storage: readonly StoredContainer[],
   stations: readonly string[] | undefined,
+  anyKind: ReadonlySet<string>,
 ): Route {
   const ix = indexBook(book);
   const pool = new Map(Object.entries(inventory).filter(([, n]) => n > 0));
@@ -1266,15 +1283,33 @@ function planRouteOnce(
     return `${best.recipe.id}: ${parts.join(', ')} (${best.recipe.station})`;
   };
 
+  /**
+   * The kinds a goal item may be had as: for an any-kind one, the item, the book's other kinds
+   * of it and the kinds held (worn tools are kinds the book does not list); else the item.
+   */
+  const goalKinds = (item: string): string[] => {
+    if (!anyKind.has(item)) return [item];
+    const base = baseName(item);
+    const held = Object.keys(inventory).filter((i) => baseName(i) === base);
+    return [...new Set([item, ...(ix.kinds.get(base) ?? []), ...held])];
+  };
   const stock: StockLine[] = Object.entries(goal)
     .filter(([, n]) => n > 0)
     .map(([item, need]) => {
-      const have = inventory[item] ?? 0;
-      const stored = storage.reduce((sum, c) => sum + (c.items[item] ?? 0), 0);
-      return { item, have, stored, need, missing: Math.max(0, need - have - stored) };
+      const kinds = goalKinds(item);
+      const have = kinds.reduce((sum, k) => sum + (inventory[k] ?? 0), 0);
+      const stored = storage.reduce(
+        (sum, c) => sum + kinds.reduce((s, k) => s + (c.items[k] ?? 0), 0),
+        0,
+      );
+      const line = { item, have, stored, need, missing: Math.max(0, need - have - stored) };
+      return anyKind.has(item) ? { ...line, anyKind: true as const } : line;
     });
   for (const [item, n] of Object.entries(goal)) {
-    if (n > 0) acquire(item, n, 0, new Set(), undefined);
+    if (n <= 0) continue;
+    const kinds = goalKinds(item);
+    if (kinds.length > 1) acquireAny(kinds, n, 0, new Set(), {}, undefined);
+    else acquire(item, n, 0, new Set(), undefined);
   }
   const stationsUsed = [
     ...new Set(legs.flatMap((l) => (l.kind === 'craft' && l.station !== '2x2' ? [l.station] : []))),
@@ -1324,7 +1359,8 @@ export function describeRoute(route: Route): string[] {
     `stock: ${route.stock
       .map(
         (x) =>
-          `${x.item} have ${x.have}${x.stored > 0 ? ` + ${x.stored} stored` : ''} / need ${x.need}`,
+          `${x.item}${x.anyKind === true ? ' (any kind)' : ''} have ${x.have}` +
+          `${x.stored > 0 ? ` + ${x.stored} stored` : ''} / need ${x.need}`,
       )
       .join('; ')}`,
   );

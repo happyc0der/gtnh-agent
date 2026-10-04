@@ -259,7 +259,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   explore: 'usage: !explore [direction] [blocks], e.g. !explore north 100 (8-256 blocks)',
   tunnel:
     'usage: !tunnel <north|south|east|west> [blocks] [down], e.g. !tunnel east 20, or !tunnel east 20 down for stairs (1-64 blocks)',
-  get: 'usage: !get <count> <item>, e.g. !get 20 logs',
+  get: 'usage: !get <count> <item>, e.g. !get 20 logs (any wood; minecraft:log@2: birch only)',
   mine: 'usage: !mine <count> <block>, e.g. !mine 10 sand or !mine 16 iron ore',
   quests: 'usage: !quests on or !quests off',
   waypoint: 'usage: !waypoint <name>, !waypoint delete <name> or !waypoints',

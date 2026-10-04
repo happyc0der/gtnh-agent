@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ItemCountsSchema } from '../domain/common.ts';
+import { ItemCountsSchema, ItemNameSchema } from '../domain/common.ts';
 import { MAX_JOURNAL_LINE } from '../planner/plan-schema.ts';
 import type { Clock } from '../util/clock.ts';
 import type { Db } from './database.ts';
@@ -8,6 +8,8 @@ import type { Db } from './database.ts';
 export const CURRENT_TASK_KEY = 'current_task';
 /** agent_state key prefix for a task's item requirements: `task_requirements:<taskId>`. */
 export const TASK_REQUIREMENTS_PREFIX = 'task_requirements:';
+/** agent_state key prefix for the requirement items any kind of counts: `task_any_kind:<taskId>`. */
+export const TASK_ANY_KIND_PREFIX = 'task_any_kind:';
 /** agent_state key prefix for a building task's blueprint lines: `task_blueprint:<taskId>`. */
 export const TASK_BLUEPRINT_PREFIX = 'task_blueprint:';
 /** agent_state key prefix for a task's journal: `task_journal:<taskId>`. */
@@ -28,6 +30,7 @@ export const QUESTS_OFF_KEY = 'quests_off';
 /** Journal lines kept in full; older ones are folded into one summary line. */
 export const JOURNAL_KEEP = 16;
 
+const AnyKindSchema = z.array(ItemNameSchema).max(16);
 const JournalSchema = z.array(z.strictObject({ at: z.string(), text: z.string().max(300) }));
 
 /**
@@ -81,13 +84,28 @@ export class MemoryRepository {
     return raw === null ? null : ItemCountsSchema.parse(JSON.parse(raw));
   }
 
-  setTaskRequirements(taskId: string, items: Record<string, number> | null): void {
+  /** `anyKind`: requirement items of which every kind and wear counts (an owner's "logs"). */
+  setTaskRequirements(
+    taskId: string,
+    items: Record<string, number> | null,
+    anyKind: readonly string[] = [],
+  ): void {
+    const none = items === null || Object.keys(items).length === 0;
     this.setValue(
       `${TASK_REQUIREMENTS_PREFIX}${taskId}`,
-      items === null || Object.keys(items).length === 0
-        ? null
-        : JSON.stringify(ItemCountsSchema.parse(items)),
+      none ? null : JSON.stringify(ItemCountsSchema.parse(items)),
     );
+    const kinds = none ? [] : anyKind.filter((item) => item in items);
+    this.setValue(
+      `${TASK_ANY_KIND_PREFIX}${taskId}`,
+      kinds.length === 0 ? null : JSON.stringify(AnyKindSchema.parse(kinds)),
+    );
+  }
+
+  /** The task's requirement items of which every kind counts (setTaskRequirements), or []. */
+  taskAnyKind(taskId: string): string[] {
+    const raw = this.getValue(`${TASK_ANY_KIND_PREFIX}${taskId}`);
+    return raw === null ? [] : AnyKindSchema.parse(JSON.parse(raw));
   }
 
   /**

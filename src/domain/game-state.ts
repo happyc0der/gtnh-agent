@@ -468,6 +468,11 @@ export const CurrentTaskSchema = z.strictObject({
    * The planner gets an exact route for them (src/goals/route.ts).
    */
   requirements: ItemCountsSchema.optional(),
+  /**
+   * Requirement items of which every kind and wear counts (all their damage values): an
+   * owner's "logs" are any wood. Others count exactly.
+   */
+  anyKind: z.array(ItemNameSchema).max(16).optional(),
   /** A building task's blueprint: the blocks to place, in order (the planner's route). */
   blueprint: z.array(z.string().max(300)).max(32).optional(),
 });

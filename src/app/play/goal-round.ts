@@ -1,3 +1,4 @@
+import { heldOf } from '../../domain/common.ts';
 import type { GameState, WorldTime } from '../../domain/game-state.ts';
 import {
   missingText,
@@ -36,14 +37,18 @@ import {
  * first); whether it is stuck; and one session on it, and what follows the session.
  */
 
-/** What `requirements` still needs beyond `inventory` (item -> missing count). */
+/**
+ * What `requirements` still needs beyond `inventory` (item -> missing count); of the items in
+ * `anyKind`, every kind held counts (FreeGoal.anyKind).
+ */
 export function missingFor(
   requirements: Readonly<Record<string, number>>,
   inventory: Readonly<Record<string, number>>,
+  anyKind: readonly string[] = [],
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [item, n] of Object.entries(requirements)) {
-    const need = n - (inventory[item] ?? 0);
+    const need = n - heldOf(inventory, item, anyKind.includes(item));
     if (need > 0) out[item] = need;
   }
   return out;
@@ -63,7 +68,7 @@ function adoptFreeGoal(
       subgoal: missingText(missing),
       status: 'active',
     });
-    repos.memory.setTaskRequirements(goal.taskId, { ...goal.requirements });
+    repos.memory.setTaskRequirements(goal.taskId, { ...goal.requirements }, goal.anyKind);
     if (t.status === 'active') repos.memory.setValue(CURRENT_TASK_KEY, goal.taskId);
     return t;
   });
@@ -148,7 +153,7 @@ async function freeGoal(play: PlayState, free: FreeGoal): Promise<RoundGoal | Pl
   const { deps } = play;
   const inventory = await deps.inventory();
   if (inventory === null) return done(play, 'the inventory is unknown, so progress is unknown');
-  const missing = missingFor(free.requirements, inventory);
+  const missing = missingFor(free.requirements, inventory, free.anyKind);
   if (total(missing) === 0) {
     reachGoal(deps.repos, free);
     return done(play, `the goal "${free.name}" is reached`);
@@ -172,7 +177,7 @@ export function freeRoundGoal(
     missing,
     met: (after) =>
       after.inventory.known
-        ? total(missingFor(free.requirements, after.inventory.value.items)) === 0
+        ? total(missingFor(free.requirements, after.inventory.value.items, free.anyKind)) === 0
         : null,
     adopt: () => adoptFreeGoal(repos, free, missing),
   };

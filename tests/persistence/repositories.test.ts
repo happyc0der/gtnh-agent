@@ -335,6 +335,24 @@ describe('repositories', () => {
     expect(repos.protectedItems.items()).toEqual(['minecraft:diamond', 'minecraft:emerald']);
   });
 
+  it('task requirements keep the items of which any kind counts, and clear them', () => {
+    repos.memory.setTaskRequirements('t', { 'minecraft:log': 6, 'minecraft:stick': 2 }, [
+      'minecraft:log',
+      'minecraft:planks', // not a requirement: dropped
+    ]);
+    expect(repos.memory.taskRequirements('t')).toEqual({
+      'minecraft:log': 6,
+      'minecraft:stick': 2,
+    });
+    expect(repos.memory.taskAnyKind('t')).toEqual(['minecraft:log']);
+    repos.memory.setTaskRequirements('t', { 'minecraft:log': 6 });
+    expect(repos.memory.taskAnyKind('t')).toEqual([]);
+    repos.memory.setTaskRequirements('t', { 'minecraft:log': 6 }, ['minecraft:log']);
+    repos.memory.setTaskRequirements('t', null, ['minecraft:log']);
+    expect(repos.memory.taskRequirements('t')).toBeNull();
+    expect(repos.memory.taskAnyKind('t')).toEqual([]);
+  });
+
   it('transactions roll back every write on error', () => {
     expect(() =>
       repos.transaction(() => {

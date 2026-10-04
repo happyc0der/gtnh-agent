@@ -711,6 +711,7 @@ export function goalRouteOf(state: GameState, exploration?: ExplorationSummary):
     knownPlaces(state, exploration),
     storage,
     usableStations(state),
+    new Set(state.currentTask?.anyKind ?? []),
   );
 }
 

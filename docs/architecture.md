@@ -502,13 +502,17 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   `cli play --needs` (`runGoalSession`: the planner plans from the route, GATHER digs; when
   every step of the route is an exact action, code follows it without asking the model:
   [Following the route](#following-the-route)), done when the inventory holds them, failed
-  after `maxStuckSessions` sessions in a row without progress. Progress is fewer missing, new
-  ground seen, or more of anything held than at the session's start: work on the way (a
-  wooden pickaxe from nothing takes gravel, flint, logs and a table first; seen live
-  2026-10-04, such sessions counted as none and the command failed). A session System 1 ended
-  with a reflex (a retreat from a mob, a fight, a meal, a rest) was interrupted, not stuck: it
-  counts neither way (seen live the same day: three retreats from mobs failed a pickaxe
-  command for "no progress").
+  after `maxStuckSessions` sessions in a row without progress. An item named without a damage
+  value counts every kind and wear of it (`FreeGoal.anyKind`, the task's `anyKind`): "!get 16
+  logs" is any wood, a worn pickaxe is a pickaxe, and the route makes what is missing of the
+  kind cheapest now (birch planks from birch logs held); before, it counted oak only, and in a
+  birch forest it would have felled tree after tree. `minecraft:log@2` is birch only.
+  Progress is fewer missing, new ground seen, or more of anything held than at the session's
+  start: work on the way (a wooden pickaxe from nothing takes gravel, flint, logs and a table
+  first; seen live 2026-10-04, such sessions counted as none and the command failed). A
+  session System 1 ended with a reflex (a retreat from a mob, a fight, a meal, a rest) was
+  interrupted, not stuck: it counts neither way (seen live the same day: three retreats from
+  mobs failed a pickaxe command for "no progress").
 - **Stop.** The client's `interrupt()` makes `haltReason` (which every walk, EXPLORE hop, dig,
   placement, fight and window checks before it starts and at every step or tick) report the stop,
   without `halt()`'s lasting latch: the action in progress stops at its next tick, and the one a

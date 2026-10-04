@@ -47,10 +47,15 @@ const FINISHED_TASK_STATUSES = new Set(['completed', 'failed']);
 function requirementsOf(
   repos: Repositories,
   taskId: string,
-): { requirements?: Record<string, number>; blueprint?: string[] } {
+): { requirements?: Record<string, number>; anyKind?: string[]; blueprint?: string[] } {
   const r = repos.memory.taskRequirements(taskId);
+  const k = r === null ? [] : repos.memory.taskAnyKind(taskId);
   const b = repos.memory.taskBlueprint(taskId);
-  return { ...(r === null ? {} : { requirements: r }), ...(b === null ? {} : { blueprint: b }) };
+  return {
+    ...(r === null ? {} : { requirements: r }),
+    ...(k.length === 0 ? {} : { anyKind: k }),
+    ...(b === null ? {} : { blueprint: b }),
+  };
 }
 
 /**

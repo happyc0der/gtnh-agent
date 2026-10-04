@@ -203,7 +203,7 @@ export class PlayerActions {
     // An empty hand; else the food itself, which places nothing on the ground (it is no
     // block: ItemFood has no use on a block); seen live: a full hotbar, and no meal at all.
     const empty = this.#core.inventory.emptyHotbarSlot();
-    const placesNothing = !new Set(registry.blocks.values()).has(food.item.replace(/@d+$/, ''));
+    const placesNothing = !new Set(registry.blocks.values()).has(food.item.replace(/@\d+$/, ''));
     const hand = empty ?? (placesNothing ? food.slot : null);
     if (hand === null) {
       return `${on}, and no hotbar slot is empty to click the ground with (the ${food.item} could place a block)`;

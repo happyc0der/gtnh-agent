@@ -2,7 +2,7 @@ import { MIN_EXPLORE_DISTANCE } from '../../domain/actions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import { COMPASS, summarizeExploration, wanderTarget } from '../../domain/world-memory.ts';
 import { gtOreByItem, gtOreByName, gtOreHeights } from '../../goals/ore-names.ts';
-import type { Position } from '../../domain/common.ts';
+import { heldOf, type Position } from '../../domain/common.ts';
 import {
   describeCommand,
   HELP_TEXT,
@@ -470,7 +470,7 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
     }
     case 'get':
     case 'mine': {
-      const have = view.inventory?.[c.item] ?? 0;
+      const have = heldOf(view.inventory ?? {}, c.item, anyKindOf(c).includes(c.item));
       const what =
         c.verb === 'get' || c.block === c.item
           ? `${c.verb === 'get' ? 'getting' : 'mining'} ${c.verb === 'get' ? c.item : c.block} until I have ${c.count}`
@@ -1088,7 +1088,16 @@ function freeGoalOf(cmd: OwnerCommandRecord, c: GoalCommand): FreeGoal {
     taskId: commandTaskId(cmd.id),
     name: `${describeCommand(c)} (owner command #${cmd.id} from ${cmd.sender})`.slice(0, 300),
     requirements: { [c.item]: c.count },
+    anyKind: anyKindOf(c),
   };
+}
+
+/**
+ * A goal command's items of which every kind and wear counts: one named without a damage
+ * value ("logs": any wood).
+ */
+function anyKindOf(c: GoalCommand): string[] {
+  return c.item.includes('@') ? [] : [c.item];
 }
 
 /**
@@ -1113,7 +1122,7 @@ async function goalCommandRound(
     }
     return 'next-round';
   }
-  const have = inventory[command.item] ?? 0;
+  const have = heldOf(inventory, command.item, free.anyKind?.includes(command.item) === true);
   if (have >= command.count) {
     reachGoal(deps.repos, free);
     finish(play, cmd, 'done', `Done: I have ${have} ${command.item}`);
@@ -1125,7 +1134,7 @@ async function goalCommandRound(
   if (have > run.startHave && (have - run.startHave) * 2 >= command.count - run.startHave) {
     sayOnce(play, cmd, 'half', `Halfway: ${have}/${command.count} ${command.item}`);
   }
-  const missing = missingFor(free.requirements, inventory);
+  const missing = missingFor(free.requirements, inventory, free.anyKind);
   const left = total(missing);
   // Progress: fewer missing, new ground seen, or work on the way there (more of anything: a
   // pickaxe from nothing takes logs, flint, a table... before the pickaxe itself; seen live
