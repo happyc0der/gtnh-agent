@@ -451,7 +451,7 @@ const BLOCK_ALIASES: Readonly<Record<string, string>> = {
  * (resolveItemName) as typed or with its words joined by `_` ("crafting_table"); null when
  * it is none of these.
  */
-function blockName(words: readonly string[]): string | null {
+export function blockName(words: readonly string[]): string | null {
   const text = words.join(' ');
   return (
     BLOCK_ALIASES[text.toLowerCase()] ?? resolveItemName(text) ?? resolveItemName(words.join('_'))

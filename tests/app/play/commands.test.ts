@@ -694,6 +694,26 @@ describe("owners' commands in play", () => {
       'Done: at chest',
     ]);
     expect(sim.steps).toEqual(['MOVE_TO 5.5 0.5']);
+    // A word for a block, not its name: "!goto lake" is water.
+    const lake = newSim({ heard: [whisper('!goto lake')] });
+    const lakeBase = deps(open(), lake);
+    const asked: string[][] = [];
+    await runPlay(
+      {
+        ...lakeBase,
+        commands: {
+          ...(lakeBase.commands as CommandDeps),
+          findBlock: (names) => {
+            asked.push([...names]);
+            return [{ position: { x: 3, y: 63, z: 0 }, distance: 2.6 }];
+          },
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(asked[0]).toEqual(['minecraft:water', 'minecraft:flowing_water']);
+    expect(said(lake)[0]).toBe('OK: going to the minecraft:water at 3 63 0');
     // With no such block in view or remembered, and no waypoint of that name: it says so.
     const none = newSim({ heard: [whisper('!goto anvil')] });
     const noneBase = deps(open(), none);

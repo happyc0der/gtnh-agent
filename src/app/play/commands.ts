@@ -14,8 +14,8 @@ import {
   isActionCommand,
   isStructured,
   isTravelCommand,
+  blockName,
   parseOwnerCommand,
-  resolveItemName,
   type ActionCommand,
   type GoalCommand,
   type HeardCommand,
@@ -426,7 +426,7 @@ function checkAction(
       const at = locations(play).get(name);
       if (at === undefined && command.verb === 'goto-waypoint') {
         // No waypoint of that name: perhaps a block ("!goto chest").
-        const block = resolveItemName(name);
+        const block = blockName([name]);
         const to = block === null ? null : blockTarget(play, cmd, block);
         if (to !== null && !('problem' in to)) return null;
         const looked = commands.findBlock === undefined ? '' : `, and I see no ${name} near here`;
