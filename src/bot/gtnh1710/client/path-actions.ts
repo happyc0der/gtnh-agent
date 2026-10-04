@@ -39,7 +39,15 @@ import type { PlaceArea } from '../placing.ts';
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
 import type { BlockWatch, WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
-import { delay, describeGain, lookAt, ON_GROUND, SETTLE_TICKS, WALK_TICK_MS } from './shared.ts';
+import {
+  delay,
+  describeGain,
+  lookAt,
+  ON_GROUND,
+  SETTLE_TICKS,
+  THREAT_STOP,
+  WALK_TICK_MS,
+} from './shared.ts';
 
 /**
  * Walking on the pathfinder (pathing/): every walk over terrain (a fence with a height range,
@@ -474,6 +482,7 @@ export class PathActions {
           z: where.z,
           ...(broken.length === 0 ? {} : { broken: broken.length }),
           ...(placed.length === 0 ? {} : { placed: placed.length }),
+          ...(THREAT_STOP.test(reason) ? { threat: true } : {}),
         },
       );
     };

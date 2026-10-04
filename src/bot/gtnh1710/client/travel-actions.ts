@@ -10,6 +10,7 @@ import { OVER_BUDGET } from './path-actions.ts';
 import { ENTITY_SCAN_RADIUS, type WorldModel } from '../world-model.ts';
 import { describeSightings } from '../world-survey.ts';
 import type { ClientCore } from './core.ts';
+import { THREAT_STOP } from './shared.ts';
 
 /** EXPLORE's own limits, on top of maxDistance: segments, time, and the wait for chunks per segment. */
 const MAX_EXPLORE_HOPS = 12;
@@ -257,6 +258,7 @@ export class TravelActions {
       z: end.z,
       stoppedBecause: why.slice(0, 200),
       chunksSeen: trip.seen.size,
+      ...(THREAT_STOP.test(why) ? { threat: true } : {}),
     };
     if (trip.hops === 0) return failed(`not exploring: ${why}`.slice(0, 500), 'REFUSED', data);
     const message =

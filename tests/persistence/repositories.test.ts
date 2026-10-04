@@ -199,6 +199,25 @@ describe('repositories', () => {
       status: 'failed',
       execution: { ok: false, code: 'NOT_IMPLEMENTED', message: 'not available', data: {} },
     });
+    // Nor a walk a hostile stopped: the way was not at fault (seen live: a follow refused).
+    repos.actions.insert({
+      ...base,
+      actionId: 'a6',
+      taskId: 't1',
+      actionType: 'WAIT',
+      fingerprint: 'fp',
+      status: 'proposed',
+    });
+    repos.actions.update('a6', {
+      status: 'failed',
+      execution: {
+        ok: false,
+        code: 'FAILED',
+        message:
+          'walk stopped after 7 of 27 steps: hostile entity minecraft:Zombie 10.0 blocks away',
+        data: { stepsTaken: 7, threat: true },
+      },
+    });
 
     expect(repos.actions.countFailures('t1', 'fp')).toBe(2);
     expect(repos.actions.failureSummary('t1', 10)).toEqual([

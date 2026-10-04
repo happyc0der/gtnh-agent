@@ -276,6 +276,8 @@ describe('Gtnh1710Client walking', () => {
     const result = await walk;
     expect(result).toMatchObject({ ok: false, code: 'FAILED' });
     expect(result.message).toMatch(/hostile entity minecraft:Zombie/);
+    // Marked: the policy's repeated-failure count leaves such a stop out.
+    expect(result.data['threat']).toBe(true);
 
     const retreat = await perform(
       client,

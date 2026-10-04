@@ -387,15 +387,16 @@ export class ActionLogRepository implements FailureHistory {
    * task, by the agent itself: failures of actions a human requested directly (origin
    * 'user', e.g. a stopped test walk) do not count against the agent's own attempts, nor do
    * actions the client could not even try (NOT_IMPLEMENTED: seen live, EAT_FOOD before the
-   * client could eat, which then refused every meal of a task id reused each night), nor
-   * failures before a human last resumed the task (task-resume: TaskRepository.resetFailures).
+   * client could eat, which then refused every meal of a task id reused each night), nor walks
+   * a hostile stopped (NOT_THREAT), nor failures before a human last resumed the task
+   * (task-resume: TaskRepository.resetFailures).
    */
   countFailures(taskId: string | null, fingerprint: string): number {
     const row = this.#db
       .prepare(
         `SELECT COUNT(*) AS n FROM action_logs
           WHERE task_id IS ? AND fingerprint = ? AND status IN ('failed','verification_failed')
-            AND origin <> 'user' AND ${NOT_UNTRIED} AND ${SINCE_RESET}`,
+            AND origin <> 'user' AND ${NOT_UNTRIED} AND ${NOT_THREAT} AND ${SINCE_RESET}`,
       )
       .get(taskId, fingerprint) as { n: number };
     return row.n;
@@ -409,20 +410,29 @@ export class ActionLogRepository implements FailureHistory {
       .prepare(
         `SELECT action_type AS actionType, fingerprint, COUNT(*) AS failures FROM action_logs
             WHERE task_id IS ? AND status IN ('failed','verification_failed') AND ${NOT_UNTRIED}
-              AND ${SINCE_RESET}
+              AND ${NOT_THREAT} AND ${SINCE_RESET}
             GROUP BY action_type, fingerprint ORDER BY failures DESC, fingerprint LIMIT ?`,
       )
       .all(taskId, limit) as Array<{ actionType: string; fingerprint: string; failures: number }>;
   }
 }
 
-/** SQL: the action was tried (not refused by the client as NOT_IMPLEMENTED). */
 /** Not before the task's last resume by a human (tasks.failures_reset_at). */
 const SINCE_RESET =
   "created_at > COALESCE((SELECT failures_reset_at FROM tasks WHERE tasks.id = action_logs.task_id), '')";
 
+/** SQL: the action was tried (not refused by the client as NOT_IMPLEMENTED). */
 const NOT_UNTRIED =
   "(execution_json IS NULL OR json_extract(execution_json, '$.code') IS NOT 'NOT_IMPLEMENTED')";
+
+/**
+ * SQL: not a walk a hostile stopped (path-actions.ts: data.threat). The way was not at fault,
+ * and with combat off a mob near keeps stopping walks to the same spot: seen live 2026-10-04,
+ * a follow to a player standing still was refused as a repeated failure after a zombie had
+ * stopped two of its walks.
+ */
+const NOT_THREAT =
+  "(execution_json IS NULL OR json_extract(execution_json, '$.data.threat') IS NOT 1)";
 
 function toRecord(raw: unknown): ActionLogRecord {
   const r = ActionLogRowSchema.parse(raw);

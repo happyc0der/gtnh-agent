@@ -21,6 +21,13 @@ export const DROP_WAIT_MS = 2_000;
  */
 export const ON_GROUND = true;
 
+/**
+ * A walk's stop for a hostile, in walkInterruption's words (movement-actions.ts). Such a stop
+ * is marked (data.threat) in the walk's result: the way was not at fault, and the policy's
+ * repeated-failure count leaves it out (persistence/repositories.ts NOT_THREAT).
+ */
+export const THREAT_STOP = /\b(?:hostile|unclassified) entity \S+ [\d.]+ blocks away\b/;
+
 /** "2 x minecraft:sand, 1 x minecraft:flint" (at most 200 characters). */
 export function describeGain(gained: ReadonlyArray<[string, number]>): string {
   return gained

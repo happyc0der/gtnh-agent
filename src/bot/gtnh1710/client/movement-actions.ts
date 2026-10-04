@@ -26,7 +26,7 @@ import {
 } from '../walking.ts';
 import type { WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
-import { delay, ON_GROUND, SETTLE_TICKS, WALK_TICK_MS } from './shared.ts';
+import { delay, ON_GROUND, SETTLE_TICKS, THREAT_STOP, WALK_TICK_MS } from './shared.ts';
 
 /** Vanilla clients send one "player" packet per tick (20 per second). */
 const IDLE_TICK_MS = 50;
@@ -210,7 +210,14 @@ export class MovementActions {
       return failed(
         `walk stopped after ${taken} of ${steps.length} steps: ${reason}`.slice(0, 500),
         'FAILED',
-        { stepsTaken: taken, stepsPlanned: steps.length, x: where.x, y: where.y, z: where.z },
+        {
+          stepsTaken: taken,
+          stepsPlanned: steps.length,
+          x: where.x,
+          y: where.y,
+          z: where.z,
+          ...(THREAT_STOP.test(reason) ? { threat: true } : {}),
+        },
       );
     };
 
