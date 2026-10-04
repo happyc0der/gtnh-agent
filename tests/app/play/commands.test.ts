@@ -333,15 +333,46 @@ describe("owners' commands in play", () => {
     why: string,
     fails: number,
     over: Partial<Sim> = {},
+    retreats = false,
   ) => {
     const sim = newSim({ heard: [whisper(text)], ...over });
     const base = deps(open(), sim);
     let failed = 0;
-    await runPlay(
+    let retreated = false;
+    const result = await runPlay(
       {
         ...base,
         session: (limits, hooks) => {
           if (failed >= fails) return base.session(limits, hooks);
+          if (retreats && !retreated) {
+            // System 1 retreats from the mob, and the retreat goes.
+            retreated = true;
+            hooks.onCycle(
+              {
+                summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> succeeded',
+                status: 'succeeded',
+                decision: {
+                  decision: 'RETREAT_HOME',
+                  confidence: 0.95,
+                  reasonCodes: ['HOSTILES_NEARBY'],
+                  factsUsed: {},
+                  requiresHumanConfirmation: false,
+                  provider: 'test',
+                },
+                outcome: { execution: { ok: true, code: 'OK', message: 'retreated', data: {} } },
+              } as unknown as CycleResult,
+              1,
+            );
+            return Promise.resolve({
+              cycles: [{ cycleId: 'c0', summary: 'RETREAT_HOME -> succeeded' }],
+              stopReason: 'stopped after a non-task decision: RETREAT_HOME -> succeeded',
+              stopKind: 'non-task-decision',
+              taskId: 'command-1',
+              taskStatus: 'active',
+              elapsedMs: 1,
+            });
+          }
+          retreated = false;
           failed += 1;
           hooks.onCycle(
             {
@@ -365,7 +396,7 @@ describe("owners' commands in play", () => {
       LIMITS,
       noStop,
     );
-    return { sim, failed };
+    return { sim, failed, result };
   };
 
   it("a travel command that fails says why, in the walk's own words", async () => {
@@ -386,6 +417,20 @@ describe("owners' commands in play", () => {
     const stuck = await failingWalks('!goto 20 64 0', why, Infinity);
     expect(said(stuck.sim)).toEqual(['OK: going to 20 64 0', told, `Failed: ${why} (20 tries)`]);
     expect(stuck.failed).toBe(21);
+    // Then it waits offline for the mob to leave, rather than stand idle beside it.
+    expect(stuck.result.mobNearby).toBe('Zombie in the way');
+    // A retreat that went between the stops is no way past the mob: the count goes on (an
+    // independent review, 2026-10-04: it never ended).
+    const alternating = await failingWalks('!goto 20 64 0', why, Infinity, {}, true);
+    expect(said(alternating.sim).at(-1)).toBe(`Failed: ${why} (20 tries)`);
+    expect(alternating.failed).toBe(21);
+    // A mob close by: tried again at once (System 1 sees it first), no blind wait beside it.
+    const near =
+      'walk stopped after 2 of 27 steps: hostile entity minecraft:Zombie 4.0 blocks away';
+    const far = await failingWalks('!goto 20 64 0', why, 5);
+    const close = await failingWalks('!goto 20 64 0', near, 5);
+    expect(said(close.sim).at(-1)).toBe('Done: at 20 64 0');
+    expect(far.sim.clock.t - close.sim.clock.t).toBeGreaterThanOrEqual(5 * 2_000);
     // A follow keeps trying as long as the owner is in sight (here, 40 tries, then it walks).
     const follow = await failingWalks('!follow', why, 40, { owner: { x: 5.5, y: 64, z: 0.5 } });
     expect(said(follow.sim)).toEqual(['OK: following you', told]);

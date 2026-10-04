@@ -187,10 +187,15 @@ export function stepFailureOf(r: CycleResult): string | null {
   return null;
 }
 
-/** Walks a hostile stopped in a row a trip or a dig tries again before it fails (follow: no end). */
+/**
+ * Walks a hostile stopped a trip or a dig tries again before it fails (follow: no end); only
+ * a step of its own that went starts the count again, never a retreat that went.
+ */
 export const MAX_MOB_STOPS = 20;
-/** After a walk a hostile stopped, the next try waits this long. */
+/** After a walk a hostile stopped, the next try waits this long, unless the mob is close. */
 export const MOB_RETRY_MS = 2_000;
+/** A mob this close (the walk's own close radius): the next try at once, System 1 first. */
+const CLOSE_MOB = 6;
 /** The walk's own words when a hostile stops it (movement-actions.ts walkInterruption). */
 const MOB_STOP = /\b(?:hostile|unclassified) entity (\S+) ([\d.]+) blocks away/;
 
@@ -200,9 +205,11 @@ const MOB_STOP = /\b(?:hostile|unclassified) entity (\S+) ([\d.]+) blocks away/;
  * and the next round tries again a moment later, System 1 seeing the mob first (it may retreat
  * or flee). Seen live 2026-10-04: a zombie in the Hot Forest's shade stopped a follow's walks
  * three times in 15 s, and the follow failed. (A retreat from a mob that fails is no such stop:
- * play then waits offline, play-state.ts mobPause.) 'retry' after MOB_RETRY_MS; 'give-up'
- * after MAX_MOB_STOPS in a row (`endless`: never, as for a follow); null when `why` is no
- * mob's stop.
+ * play then waits offline, play-state.ts mobPause.) 'retry' after MOB_RETRY_MS (at once when
+ * the mob is within CLOSE_MOB: no blind wait beside it, an independent review, 2026-10-04);
+ * 'give-up' after MAX_MOB_STOPS (`endless`: never, as for a follow), and play then waits
+ * offline for the mob to leave rather than stand idle beside it; null when `why` is no mob's
+ * stop.
  */
 export async function mobInTheWay(
   play: PlayState,
@@ -214,15 +221,19 @@ export async function mobInTheWay(
   if (m === null) return null;
   const run = runOf(play, cmd.id);
   run.mobStops += 1;
-  if (!endless && run.mobStops > MAX_MOB_STOPS) return 'give-up';
   const name = (m[1] ?? 'mob').replace(/^.*[:.]/, '');
+  if (!endless && run.mobStops > MAX_MOB_STOPS) {
+    play.mobAlarm = `${name} in the way`;
+    return 'give-up';
+  }
+  const distance = Number(m[2]);
   sayOnce(
     play,
     cmd,
     'mob-in-way',
-    `A ${name} ${Math.round(Number(m[2]))} blocks off is in my way: I keep away (I do not fight) and try again`,
+    `A ${name} ${Math.round(distance)} blocks off is in my way: I keep away (I do not fight) and try again`,
   );
-  await play.sleep(MOB_RETRY_MS);
+  if (!(distance <= CLOSE_MOB)) await play.sleep(MOB_RETRY_MS);
   return 'retry';
 }
 

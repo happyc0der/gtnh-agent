@@ -537,15 +537,19 @@ function statusText(play: PlayState): string {
   const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
   const task = taskId === null ? null : repos.tasks.get(taskId);
   const shelter = play.sheltered;
+  const sheltered =
+    shelter === null
+      ? null
+      : 'mobs' in shelter
+        ? `staying in my shelter until the hostiles near it go (${shelter.mobs.slice(0, 80)})`
+        : `sheltered for the night (morning in about ${Math.max(1, Math.round((shelter.until - play.now()) / 60_000))} min)`;
   const doing =
     running?.command != null
-      ? `doing: ${describeCommand(running.command)}`
+      ? `doing: ${describeCommand(running.command)}${sheltered === null ? '' : `, but first ${sheltered}`}`
       : off !== null
         ? off
-        : shelter !== null
-          ? 'mobs' in shelter
-            ? `staying in my shelter until the hostiles near it go (${shelter.mobs.slice(0, 80)})`
-            : `sheltered for the night (morning in about ${Math.max(1, Math.round((shelter.until - play.now()) / 60_000))} min)`
+        : sheltered !== null
+          ? sheltered
           : task !== null && task.status === 'active'
             ? `working on: ${clip(task.goal, 80)}`
             : 'idle';

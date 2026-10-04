@@ -53,6 +53,7 @@ import {
   lookAt,
   ON_GROUND,
   SETTLE_TICKS,
+  THREAT_STOP,
   WALK_TICK_MS,
 } from './shared.ts';
 
@@ -528,6 +529,9 @@ export class DigActions {
               y,
               z,
               block: check.block,
+              // A hostile stopped it: no repeated failure of the dig (repositories.ts
+              // NOT_THREAT; an independent review, 2026-10-04).
+              ...(THREAT_STOP.test(problem) ? { threat: true } : {}),
             }),
           );
         }

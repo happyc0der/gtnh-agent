@@ -29,6 +29,7 @@ import {
   say,
   sayOnce,
   mobInTheWay,
+  reflexEnded,
   stepFailureOf,
   TRAVEL_RETRY_MS,
   type CommandDeps,
@@ -297,6 +298,11 @@ export async function travelRound(
     finish(play, cmd, 'done', arrivedText(play, command, end.distance));
     return 'next-round';
   }
+  // A retreat from a mob that failed goes offline first, whatever became of the way (an
+  // independent review, 2026-10-04: a retreat that lost sight of the player failed a follow,
+  // and the bot stood idle by the mob).
+  const mob = mobPause(result.stopKind, play.lastDecision);
+  if (mob !== null) return waitOutMob(play, taskId, mob);
   if (end?.kind === 'refused') return travelFailed(play, cmd, end.reason);
   if (dark !== null) {
     sayOnce(
@@ -307,8 +313,6 @@ export async function travelRound(
     );
     return 'next-round';
   }
-  const mob = mobPause(result.stopKind, play.lastDecision);
-  if (mob !== null) return waitOutMob(play, taskId, mob);
   if (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') {
     // Seen live: "Failed: stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed", when
     // the walk had said why (a hostile 9.7 blocks off stopped its pillar).
@@ -321,9 +325,11 @@ export async function travelRound(
     }
     return travelFailed(play, cmd, why.slice(0, 300));
   }
-  // A step went: the failures in a row are over. A long trip says how far is left.
+  // A step went: the failures in a row are over. A long trip says how far is left. Not a
+  // retreat that went, though: walk, mob, retreat, walk... is no way past the mob (an
+  // independent review, 2026-10-04: the count of mob stops never ended).
   run.failures = 0;
-  run.mobStops = 0;
+  if (!reflexEnded(play)) run.mobStops = 0;
   if (!follow && command.verb !== 'come') {
     if (run.reportedDistance === null) run.reportedDistance = distance;
     else if (run.reportedDistance - distance >= PROGRESS_EVERY) {

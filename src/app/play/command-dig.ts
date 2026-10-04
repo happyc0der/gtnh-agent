@@ -342,7 +342,7 @@ async function digSession(
   }
   if (result.stopKind === 'needs-attention') return fail(`${why} (${dug})`);
   run.failures = 0;
-  run.mobStops = 0;
+  if (!reflexEnded(play)) run.mobStops = 0;
   return 'next-round';
 }
 

@@ -140,7 +140,7 @@ export async function goalCommandRound(
     return 'next-round';
   }
   if (mobbed === 'retry') run.interrupted = true;
-  else run.mobStops = 0;
+  else if (!run.interrupted) run.mobStops = 0;
   // Only a session that ran its course counts: one a new command, dusk, a food bar nearly
   // empty, a reflex or a mob cut short tried nothing (an independent review, 2026-10-04: a
   // !status abandoned a copper ore in view).
