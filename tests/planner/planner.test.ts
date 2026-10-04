@@ -517,6 +517,18 @@ describe('trimStaleSteps: no step runs on a view its own plan replaced', () => {
     expect(trimStaleSteps(planOf(eat, gather)).note).toBeNull();
   });
 
+  it('after a GATHER, drops a check-in with a person: play sees when the goal is held', () => {
+    // Seen live: "Have you gathered the required logs?" ran when the GATHER found nothing it
+    // could reach, and the owner's command failed with the pause.
+    const ask: Action = { type: 'PAUSE_AND_ASK_USER', args: { question: 'Done gathering?' } };
+    const r = trimStaleSteps(planOf(gather, ask));
+    expect(r.plan.steps.map((s) => s.action.type)).toEqual(['GATHER']);
+    expect(r.note).toBe('dropped step 2 after the GATHER at step 1');
+    // A pause on its own, or before any GATHER, stays: that is a real question.
+    expect(trimStaleSteps(planOf(ask)).note).toBeNull();
+    expect(trimStaleSteps(planOf(ask, gather)).note).toBeNull();
+  });
+
   it('drops a walk right before a GATHER (it walks to its blocks by itself)', () => {
     // Seen live: MOVE_TO the dirt block's own position (not walkable), then GATHER dirt.
     const r = trimStaleSteps(planOf(walk, gather));
