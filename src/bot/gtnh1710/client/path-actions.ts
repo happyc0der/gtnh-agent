@@ -12,7 +12,6 @@ import {
   walkPolicy,
   type PolicyContext,
   type WalkPolicy,
-  type WalkSettings,
 } from '../path-policy.ts';
 import { WALK_ONE_BLOCK } from '../pathing/costs.ts';
 import {
@@ -87,20 +86,6 @@ export interface PathWalk {
   /** Never held for a dig (the validated action's protected items). */
   readonly protectedItems: ReadonlySet<string>;
 }
-
-/**
- * How walks move for now: they break what is in the way as the dig rules allow (with digging
- * enabled), and drop up to three blocks; no placing, parkour, sprinting or wading yet.
- */
-const WALK_SETTINGS: WalkSettings = {
-  allowBreak: true,
-  allowPlace: false,
-  allowParkour: false,
-  parkourOverDeepGaps: false,
-  allowSprint: false,
-  allowWater: false,
-  throwawayReserve: 4,
-};
 
 /** Nodes and time a walk's search may take (it runs between packets). */
 const WALK_MAX_NODES = 60_000;
@@ -199,7 +184,7 @@ export class PathActions {
 
   /** Sprinting on this walk: allowed, the food bar high, and the goal far enough. */
   #sprintFor(goal: Goal, from: Vec3): boolean {
-    if (!WALK_SETTINGS.allowSprint) return false;
+    if (!this.#opts.config.movement.path.allowSprint) return false;
     const food = this.#world.food;
     return (
       food !== null && food > SPRINT_MIN_FOOD && goalDistance(goal, from) >= SPRINT_MIN_DISTANCE
@@ -222,7 +207,7 @@ export class PathActions {
     return walkPolicy({
       world,
       ...this.#context(),
-      settings: WALK_SETTINGS,
+      settings: cfg.movement.path,
       breaking: request.work && terrain && cfg.digging.enabled && cfg.presenceTicks,
       placing: request.work && terrain && cfg.placing.enabled && cfg.presenceTicks,
       digHeight: cfg.digging.maxHeightAboveFence,
@@ -230,7 +215,7 @@ export class PathActions {
       throwaway:
         items === null
           ? null
-          : chooseThrowaway(items, request.protectedItems, WALK_SETTINGS.throwawayReserve),
+          : chooseThrowaway(items, request.protectedItems, cfg.movement.path.throwawayReserve),
       sprint: request.sprint,
     });
   }

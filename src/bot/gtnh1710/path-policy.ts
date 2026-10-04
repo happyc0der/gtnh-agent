@@ -75,8 +75,8 @@ export interface WalkThrowaway {
 }
 
 /**
- * How walks move (the config's minecraft.movement.path: Baritone's allowBreak, allowPlace,
- * allowParkour and allowSprint, and wading).
+ * How walks move (the config's minecraft.movement.path, config/env.ts PathConfigSchema:
+ * Baritone's allowBreak, allowPlace, allowParkour and allowSprint, and wading).
  */
 export interface WalkSettings {
   readonly allowBreak: boolean;

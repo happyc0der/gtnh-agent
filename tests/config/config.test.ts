@@ -96,6 +96,42 @@ describe('configuration', () => {
     ).toThrow();
   });
 
+  it('walks break, place and jump gaps by default (each with its ability); sprint and wade only when set', () => {
+    expect(defaultConfig().minecraft.movement.path).toEqual({
+      allowBreak: true,
+      allowPlace: true,
+      allowParkour: true,
+      parkourOverDeepGaps: false,
+      allowSprint: false,
+      allowWater: false,
+      throwawayReserve: 4,
+    });
+    const { config } = loadConfig({
+      cwd: emptyDir(),
+      env: {
+        MC_PATH_ALLOW_BREAK: 'false',
+        MC_PATH_ALLOW_PLACE: 'false',
+        MC_PATH_ALLOW_PARKOUR: 'false',
+        MC_PATH_PARKOUR_DEEP_GAPS: 'true',
+        MC_PATH_ALLOW_SPRINT: 'true',
+        MC_PATH_ALLOW_WATER: 'true',
+        MC_PATH_THROWAWAY_RESERVE: '8',
+      },
+    });
+    expect(config.minecraft.movement.path).toEqual({
+      allowBreak: false,
+      allowPlace: false,
+      allowParkour: false,
+      parkourOverDeepGaps: true,
+      allowSprint: true,
+      allowWater: true,
+      throwawayReserve: 8,
+    });
+    expect(() =>
+      loadConfig({ cwd: emptyDir(), env: { MC_PATH_THROWAWAY_RESERVE: '-1' } }),
+    ).toThrow();
+  });
+
   it('placing is off unless enabled, and its heights are bounded', () => {
     expect(defaultConfig().minecraft.placing).toEqual({ enabled: false, maxHeightAboveFence: 4 });
     const { config } = loadConfig({ cwd: emptyDir(), env: { MC_ENABLE_PLACING: 'true' } });

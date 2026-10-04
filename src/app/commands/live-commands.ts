@@ -117,6 +117,12 @@ export function movementStatus(config: AgentConfig): Record<string, unknown> {
         : null,
     stopFile: resolve(m.stopFile),
     halted: existsSync(resolve(m.stopFile)),
+    // How walks over terrain move (the walk policy); breaking and placing need their abilities.
+    path: {
+      ...m.path,
+      breaks: m.path.allowBreak && d.enabled,
+      places: m.path.allowPlace && p.enabled,
+    },
     digging: {
       enabled: d.enabled,
       heights:
