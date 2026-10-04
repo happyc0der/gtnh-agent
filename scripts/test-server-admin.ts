@@ -13,6 +13,8 @@
  *   node scripts/test-server-admin.ts rcon "<command>"   Run one server command.
  *   node scripts/test-server-admin.ts pen show           Pen geometry and the matching agent settings.
  *   node scripts/test-server-admin.ts pen build          Build (or reset) the glass movement pen.
+ *   node scripts/test-server-admin.ts pen remove         Clear the pen and everything in it to air (its
+ *                                                        chest drops what it holds).
  *   node scripts/test-server-admin.ts pen tp [--wait N] [--to=x,y,z]  Teleport the agent's player to the pen (or to x,y,z)
  *                                                        centre, waiting up to N s for it to be online.
  *   node scripts/test-server-admin.ts pen chest          Place the test chest in the pen (only if there is
@@ -212,6 +214,24 @@ function penCommands(pen: Pen): string[] {
   return out;
 }
 
+/**
+ * The setblock commands that clear the pen to air: its floor, walls and interior, and the
+ * block above the walls. Seen 2026-10-04: built above the world spawn, the pen was where a
+ * respawn could land (the highest block of a column near spawn), 100 blocks up; the bot was
+ * stranded on its wall.
+ */
+function penRemoveCommands(pen: Pen): string[] {
+  const { center: c, radius: r } = pen;
+  const out: string[] = [];
+  for (let y = c.y + 3; y >= c.y - 1; y--) {
+    for (let x = c.x - r - 1; x <= c.x + r + 1; x++) {
+      for (let z = c.z - r - 1; z <= c.z + r + 1; z++)
+        out.push(`setblock ${x} ${y} ${z} minecraft:air`);
+    }
+  }
+  return out;
+}
+
 /** Blocks above the feet level that DIG_BLOCK may reach in the pen (its default dig height). */
 const PEN_DIG_HEIGHT = 4;
 
@@ -299,8 +319,9 @@ async function main(argv: string[]): Promise<number> {
     print(penSettings(penFromEnv(process.env)));
     return 0;
   }
-  if (command === 'pen' && sub === 'build') {
-    const commands = penCommands(penFromEnv(process.env));
+  if (command === 'pen' && (sub === 'build' || sub === 'remove')) {
+    const pen = penFromEnv(process.env);
+    const commands = sub === 'build' ? penCommands(pen) : penRemoveCommands(pen);
     const started = Date.now();
     const replies = new Map<string, number>();
     await withRcon(async (rcon) => {
