@@ -6,6 +6,7 @@ import { checkDig, type BlockPos } from './digging.ts';
 import { PlannedWorld, type PitOptions } from './night-pit.ts';
 import { isLiquidName } from './pathing/cells.ts';
 import { passProblem } from './passable.ts';
+import { standProblem } from './terrain.ts';
 import type { Vec3, WalkWorld } from './walking.ts';
 
 /**
@@ -130,6 +131,14 @@ export function planTunnel(
     }
     if (refused !== null) {
       problem = `the tunnel stops before ${fmt(cell)}: ${refused}`;
+      break;
+    }
+    // Dug out, the cell must be one the walker stands in (terrain.ts standProblem: a known
+    // floor, nothing harmful in the 3 x 3 columns around): seen live 2026-10-04, a cactus beside
+    // the next cell, and that step's walk failed until it was refused as a repeated failure.
+    const stand = standProblem(plan, cell.x, cell.y, cell.z);
+    if (stand !== null) {
+      problem = `the tunnel stops before ${fmt(cell)}: ${stand}`;
       break;
     }
     steps.push(...digs, {

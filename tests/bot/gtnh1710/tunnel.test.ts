@@ -4,13 +4,14 @@ import type { DigArea } from '../../../src/bot/gtnh1710/digging.ts';
 import { planTunnel, TUNNEL_SEGMENT } from '../../../src/bot/gtnh1710/tunnel.ts';
 import type { Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 
-const ID = { air: 0, stone: 1, grass: 2, dirt: 3, water: 9, gravel: 13 } as const;
+const ID = { air: 0, stone: 1, grass: 2, dirt: 3, water: 9, gravel: 13, cactus: 81 } as const;
 const NAMES = new Map<number, string>([
   [ID.stone, 'minecraft:stone'],
   [ID.grass, 'minecraft:grass'],
   [ID.dirt, 'minecraft:dirt'],
   [ID.water, 'minecraft:water'],
   [ID.gravel, 'minecraft:gravel'],
+  [ID.cactus, 'minecraft:cactus'],
 ]);
 const k = (x: number, y: number, z: number): string => `${x},${y},${z}`;
 
@@ -32,7 +33,12 @@ function land(blocks: Record<string, number> = {}): WalkWorld {
     },
     blockName: (id) => (id === 0 ? undefined : NAMES.get(id)),
     metaAt: () => 0,
-    hazardCode: (id) => (id === 0 || NAMES.has(id) ? BLOCK_CODE.safe : BLOCK_CODE.unknown),
+    hazardCode: (id) =>
+      id === ID.cactus
+        ? BLOCK_CODE.damaging_block
+        : id === 0 || NAMES.has(id)
+          ? BLOCK_CODE.safe
+          : BLOCK_CODE.unknown,
   };
 }
 
@@ -53,6 +59,17 @@ const dugTo = (n: number): Record<string, number> => {
 };
 
 describe('a tunnel one wide and two high, as Baritone digs one (tunnel.ts)', () => {
+  it('stops before a cell the walker would not stand in: a cactus beside it', () => {
+    // Seen live 2026-10-04: a cactus diagonally beside the next cell; the step's walk failed
+    // until the policy refused it as a repeated failure.
+    const world = land({ ...dugTo(4), [k(4, 61, 1)]: ID.cactus });
+    const plan = planTunnel(world, FEET, START, 'east', 6, { area: AREA });
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.problem).toMatch(/^the tunnel stops before \(3, 61, 0\): next to minecraft:cactus/);
+    // Up to the cell before it.
+    expect(plan.steps.at(-1)?.text).toBe('step into (2, 61, 0)');
+  });
+
   it('digs the head block, then the feet block, then steps in, a few cells at a time', () => {
     const plan = planTunnel(land(), FEET, START, 'east', 10, { area: AREA });
     if (!plan.ok) throw new Error(plan.reason);
