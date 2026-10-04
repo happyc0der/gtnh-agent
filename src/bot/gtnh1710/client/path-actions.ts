@@ -290,8 +290,12 @@ export class PathActions {
       protectedItems: this.#lastProtected,
       sprint: false,
     });
+    // Stand spots for what is in view: no digging down to them (each such move checks a dozen
+    // cells, and the flood's 250 ms then reached two thirds of the spots: an independent
+    // review, 2026-10-04); a walk to one may still dig down.
     return floodPath(world, fence, feet, {
       ...policy.options,
+      downward: false,
       maxCost: this.#opts.config.movement.maxPathLength * WALK_ONE_BLOCK * 2,
       maxNodes: FLOOD_MAX_NODES,
       maxTimeMs: FLOOD_MAX_MS,

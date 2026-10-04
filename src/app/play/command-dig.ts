@@ -35,6 +35,7 @@ import {
   TUNNEL_RETRY_MS,
   type CommandDeps,
   stripTaskId,
+  saveProgress,
 } from './command-base.ts';
 
 /**
@@ -85,6 +86,7 @@ export async function tunnelRound(
     const at = (deps.commands as CommandDeps).view().position;
     if (at === null) return fail('I do not know where I am');
     run.tunnelFrom = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-6), z: Math.floor(at.z) };
+    saveProgress(play, cmd.id);
   }
   const plan = await deps.tunnel({
     start: run.tunnelFrom,
@@ -249,6 +251,7 @@ export async function stripRound(
     const room = (d: TunnelDirection): number | undefined => summary?.directions[d]?.room;
     const direction = stripDirection(room);
     run.strip = { level, leg: firstLeg(feet, level, direction), dug: 0, turns: 0 };
+    saveProgress(play, cmd.id);
     say(
       play,
       cmd,
@@ -276,6 +279,7 @@ export async function stripRound(
   if (!plan.ok || plan.steps.length === 0) {
     // The leg is dug to its end, or may go no further: the next one, from here.
     run.strip = nextLeg(strip, feet, plan.ok ? plan.done : 0, blocked);
+    saveProgress(play, cmd.id);
     if (run.strip.turns >= STRIP_MAX_TURNS) {
       return fail(
         `every way is blocked (${plan.ok ? (plan.problem ?? 'nothing to dig') : plan.reason}; ${dug})`,

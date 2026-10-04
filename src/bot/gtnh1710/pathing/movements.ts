@@ -215,6 +215,7 @@ export class MoveContext {
   doorway = 0;
   // Per cell, made when first needed (a search that breaks, places or jumps gaps).
   #breakTicks: Float32Array | null = null;
+  #digDown: Map<string, boolean> | null = null;
   #placeOk: Int8Array | null = null;
   #gapSafe: Int8Array | null = null;
 
@@ -263,6 +264,19 @@ export class MoveContext {
     this.breaks++;
     detail?.breaks.push({ cell: { x, y, z }, ticks: t });
     return t + this.costs.breakExtra;
+  }
+
+  /** Whether the dig-down rules (options.canDigDown) allow the block at (x, y, z): cached. */
+  digDownOk(x: number, y: number, z: number): boolean {
+    const digDown = this.options.canDigDown;
+    if (digDown === null) return true;
+    const k = `${x},${y},${z}`;
+    this.#digDown ??= new Map();
+    const known = this.#digDown.get(k);
+    if (known !== undefined) return known;
+    const ok = digDown({ x, y, z });
+    this.#digDown.set(k, ok);
+    return ok;
   }
 
   /** The dig ticks for breaking the block at (x, y, z), or -1 when it may not be broken. */
@@ -667,10 +681,10 @@ const downward: Evaluate = (ctx, x, y, z, _d, detail) => {
     return Infinity;
   }
   if (!c.has(x, y - 2, z, CELL.SURFACE)) return Infinity;
-  const digDown = ctx.options.canDigDown;
-  if (digDown !== null && !digDown({ x, y: y - 1, z })) return Infinity;
   const t = ctx.breakTicks(x, y - 1, z);
   if (t < 0) return Infinity;
+  // After the cheap cached check: the dig-down rules look at a dozen cells (cached too).
+  if (!ctx.digDownOk(x, y - 1, z)) return Infinity;
   ctx.breaks = 1;
   detail?.breaks.push({ cell: { x, y: y - 1, z }, ticks: t });
   return ctx.costs.downward + t;

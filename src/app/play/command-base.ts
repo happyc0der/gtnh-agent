@@ -1,4 +1,5 @@
-import { type BlockPosition, type Position } from '../../domain/common.ts';
+import { z } from 'zod';
+import { BlockPositionSchema, type BlockPosition, type Position } from '../../domain/common.ts';
 import { type HeardCommand } from '../../domain/owner-commands.ts';
 import type { Boundary, NamedLocation } from '../../domain/safety.ts';
 import type { CommandTranslation } from '../../llm/ollama-command-provider.ts';
@@ -108,9 +109,60 @@ export const fmt = (p: { x: number; y: number | null; z: number }): string =>
     .map((v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)))
     .join(' ');
 
+/**
+ * What of a command's run outlives a restart of play (a wait offline for a mob, a reconnect, a
+ * night offline), kept in agent memory: its strip mine (the level, the leg, the cells dug, the
+ * ores passed over) and its tunnel's first cell. Else a restart chose a new level 6 blocks
+ * deeper and began the count again (an independent review, 2026-10-04).
+ */
+const PROGRESS_KEY = (id: number): string => `command_progress:${id}`;
+const LegSchema = z.strictObject({
+  start: BlockPositionSchema,
+  direction: z.enum(['north', 'south', 'east', 'west']),
+  slope: z.enum(['level', 'down']),
+  length: z.int().min(0),
+});
+const ProgressSchema = z.strictObject({
+  strip: z
+    .strictObject({
+      level: z.int(),
+      leg: LegSchema,
+      dug: z.int().min(0),
+      turns: z.int().min(0),
+    })
+    .nullable(),
+  stripSkipped: z.array(z.string().max(40)).max(256),
+  tunnelFrom: BlockPositionSchema.nullable(),
+});
+
+/** Keeps the run's lasting progress (PROGRESS_KEY) for a restart of play. */
+export function saveProgress(play: PlayState, id: number): void {
+  const run = runOf(play, id);
+  play.deps.repos.memory.setValue(
+    PROGRESS_KEY(id),
+    JSON.stringify({
+      strip: run.strip,
+      stripSkipped: [...run.stripSkipped].slice(-256),
+      tunnelFrom: run.tunnelFrom,
+    }),
+  );
+}
+
+function loadProgress(play: PlayState, id: number): z.infer<typeof ProgressSchema> | null {
+  const raw = play.deps.repos.memory.getValue(PROGRESS_KEY(id));
+  if (raw === null) return null;
+  try {
+    const parsed = ProgressSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export function runOf(play: PlayState, id: number): CommandRun {
   let run = play.commandRuns.get(id);
   if (run === undefined) {
+    const kept = loadProgress(play, id);
     run = {
       failures: 0,
       lastFailure: null,
@@ -122,9 +174,9 @@ export function runOf(play: PlayState, id: number): CommandRun {
       exploreTo: null,
       surfaceTo: null,
       blockTo: null,
-      strip: null,
-      stripSkipped: new Set(),
-      tunnelFrom: null,
+      strip: kept?.strip ?? null,
+      stripSkipped: new Set(kept?.stripSkipped ?? []),
+      tunnelFrom: kept?.tunnelFrom ?? null,
       tunnelDone: null,
       worked: false,
       interrupted: false,
@@ -173,6 +225,7 @@ export function finish(
  */
 export function endCommandTask(repos: Repositories, id: number, status: string): void {
   for (const taskId of [commandTaskId(id), stripTaskId(id)]) endTask(repos, taskId, status);
+  repos.memory.setValue(PROGRESS_KEY(id), null);
 }
 
 function endTask(repos: Repositories, taskId: string, status: string): void {

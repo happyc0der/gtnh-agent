@@ -13,6 +13,7 @@ import {
   reflexEnded,
   runOf,
   sayOnce,
+  saveProgress,
 } from './command-base.ts';
 import { stripMines, stripRound } from './command-dig.ts';
 import { cellKey, oreInView, oresFor } from './command-find.ts';
@@ -127,12 +128,28 @@ export async function goalCommandRound(
   run.worked =
     after !== null && Object.entries(after).some(([item, n]) => n > (inventory[item] ?? 0));
   run.interrupted = reflexEnded(play);
-  if (strip && after !== null && (after[command.item] ?? 0) <= (inventory[command.item] ?? 0)) {
+  // Only a session that ran its course counts: one a new command, dusk, a food bar nearly
+  // empty, a reflex or a mob cut short tried nothing (an independent review, 2026-10-04: a
+  // !status abandoned a copper ore in view).
+  const cutShort =
+    ended.dark !== null ||
+    ended.preempted !== null ||
+    ended.hungry !== null ||
+    run.interrupted ||
+    mobPause(ended.result.stopKind, play.lastDecision) !== null ||
+    ended.result.cycles.length === 0;
+  if (
+    strip &&
+    !cutShort &&
+    after !== null &&
+    (after[command.item] ?? 0) <= (inventory[command.item] ?? 0)
+  ) {
     // The ores in view gave none (out of reach, refused): passed over, and the strip mine
     // goes on past them.
     for (const o of oresFor(play, command.item, run.stripSkipped)) {
       run.stripSkipped.add(cellKey(o.position));
     }
+    saveProgress(play, cmd.id);
   }
   if (ended.dark !== null) {
     sayOnce(

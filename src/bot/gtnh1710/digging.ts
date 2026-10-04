@@ -655,6 +655,12 @@ export function checkDigDown(
   if (world.builtByPlayer?.(x, y, z) === true) {
     return refuse(`${fmt(target)} was built by a player: the agent never breaks a player's build`);
   }
+  if (opts.anyGround === true && world.metaAt !== undefined) {
+    // Natural metadata only, as checkDig (a walk digs what the planner checked: the block may
+    // have changed since). A world that reports no metadata at all (a test's) is not asked.
+    const facts = digFacts(name, world.metaAt(x, y, z));
+    if ('problem' in facts) return refuse(`${fmt(target)}: ${facts.problem}`);
+  }
 
   // Exactly one block down, onto something that stays put.
   const landing = landingProblem(world, x, y - 1, z);

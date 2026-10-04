@@ -114,6 +114,35 @@ function fakeStep(sim: Sim, t: TravelTarget): TravelStep {
   };
 }
 
+/** A fake tunnel planner: the cells ahead open, one step a plan, stairs one down a cell. */
+function stripTunnel(
+  sim: Sim,
+  requests: TunnelRequest[],
+): (req: TunnelRequest) => Promise<TunnelPlan> {
+  const STEP = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] } as const;
+  return (req) => {
+    requests.push(req);
+    const [dx, dz] = STEP[req.direction];
+    const done =
+      (Math.floor(sim.position.x) - req.start.x) * dx +
+      (Math.floor(sim.position.z) - req.start.z) * dz;
+    if (done >= req.length) {
+      return Promise.resolve({ ok: true, done: req.length, steps: [], problem: null });
+    }
+    const target = {
+      x: req.start.x + dx * (done + 1) + 0.5,
+      y: req.start.y - (req.slope === 'down' ? done + 1 : 0),
+      z: req.start.z + dz * (done + 1) + 0.5,
+    };
+    return Promise.resolve({
+      ok: true,
+      done,
+      steps: [{ spec: { type: 'MOVE_TO', args: { target, tolerance: 0.5 } }, text: 'step on' }],
+      problem: null,
+    });
+  };
+}
+
 function commandDeps(
   sim: Sim,
   over: { translate?: (text: string) => Promise<CommandTranslation> } = {},
@@ -935,6 +964,65 @@ describe("owners' commands in play", () => {
     expect(requests[0]).toMatchObject({ direction: 'north', slope: 'down', length: 6 });
     expect(requests.some((r) => r.slope === 'level' && r.start.y === 58)).toBe(true);
     // The fake gains one a cycle: the second cycle's GATHER of the ore in view makes 3.
+    expect(said(sim).at(-1)).toMatch(/^Done: I have [23] gregtech:gt.metaitem.03@5035$/);
+  });
+
+  it('a restart of play resumes the strip mine where it was: the same level, its cells counted', async () => {
+    // An independent review found a restart chose a level 6 deeper and began the count again.
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!mine 2 copper ore')] });
+    const requests: TunnelRequest[] = [];
+    const base = deps(repos, sim, { tunnel: stripTunnel(sim, requests) });
+    const play = { ...base, commands: { ...(base.commands as CommandDeps), gtOres: () => [] } };
+    await runPlay(play, LIMITS, {
+      stopRequested: () => (requests.length >= 3 ? 'a restart' : null),
+    });
+    const before = requests.length;
+    await runPlay(play, LIMITS, {
+      stopRequested: () => (requests.length >= before + 3 ? 'stop' : null),
+    });
+    expect(requests.length).toBeGreaterThan(before);
+    expect(said(sim).filter((l) => l.startsWith('No copper ore in view'))).toHaveLength(1);
+    expect(requests.every((r) => r.slope === 'down' && r.start.y === 64 && r.length === 6)).toBe(
+      true,
+    );
+  });
+
+  it('an ore in view is not passed over when its session is cut short', async () => {
+    // The review: an owner's !status ended the session with no cycle, and the ore in view was
+    // given up for a new strip mine.
+    const repos = open();
+    const sim = newSim({
+      heard: [whisper('!mine 2 copper ore')],
+      gain: { 'gregtech:gt.metaitem.03@5035': 1 },
+    });
+    const requests: TunnelRequest[] = [];
+    const base = deps(repos, sim, { tunnel: stripTunnel(sim, requests) });
+    let sessions = 0;
+    await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          gtOres: () => [{ position: { x: 1, y: 64, z: 0 }, ore: 35 }],
+        },
+        session: (limits, hooks) => {
+          sessions += 1;
+          if (sessions > 1) return base.session(limits, hooks);
+          return Promise.resolve({
+            cycles: [],
+            stopReason: 'cut short',
+            stopKind: 'non-task-decision',
+            taskId: 'command-1',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(requests).toEqual([]);
     expect(said(sim).at(-1)).toMatch(/^Done: I have [23] gregtech:gt.metaitem.03@5035$/);
   });
 
