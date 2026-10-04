@@ -392,16 +392,19 @@ describe("owners' commands in play", () => {
     expect(follow.sim.steps[0]).toBe('MOVE_TO 4.5 0.5');
   });
 
-  it('so is a retreat from mobs that fails (it fled instead): seen live past a blue slime', async () => {
+  it('a retreat from mobs that fails goes offline for them, and the trip goes on after', async () => {
+    // Seen live 2026-10-04: past a blue slime in a ravine of mobs, three failed retreats gave
+    // up a trip to water; the bot stood there idle and was killed.
+    const repos = open();
     const sim = newSim({ heard: [whisper('!goto 20 64 0')] });
-    const base = deps(open(), sim);
+    const base = deps(repos, sim);
     let failed = 0;
     const retreat = 'retreat stopped after 16.8 blocks in 1 hop(s): no way further';
-    await runPlay(
+    const offline = await runPlay(
       {
         ...base,
         session: (limits, hooks) => {
-          if (failed >= 4) return base.session(limits, hooks);
+          if (failed >= 1) return base.session(limits, hooks);
           failed += 1;
           hooks.onCycle(
             {
@@ -434,11 +437,14 @@ describe("owners' commands in play", () => {
       LIMITS,
       noStop,
     );
+    expect(offline.mobNearby).toBe('UNCLASSIFIED_ENTITY_NEARBY');
     expect(said(sim)).toEqual([
       'OK: going to 20 64 0',
-      'Mobs near me: I keep away from them (I do not fight) and try again',
-      'Done: at 20 64 0',
+      'A mob is near: I go offline a moment for it to leave',
     ]);
+    expect(repos.commands.get(1)?.status).toBe('running');
+    await runPlay(base, LIMITS, noStop); // back online
+    expect(said(sim).at(-1)).toBe('Done: at 20 64 0');
   });
 
   it('come and follow fail at once when the player is not seen, before any OK', async () => {
@@ -1273,8 +1279,9 @@ describe("owners' commands in play", () => {
     expect(sim.steps).toEqual(['MOVE_TO 1.5 0.5', 'MOVE_TO 2.5 0.5', 'MOVE_TO 3.5 0.5']);
     expect(repos.tasks.get('command-1')?.status).toBe('completed');
 
-    // A retreat from a mob that fails (no way home) interrupts it; it goes on after (seen live:
-    // a stairs command failed with 0 blocks dug).
+    // A retreat from a mob that fails (no way home) interrupts it: play waits offline for the
+    // mob (seen live 2026-10-04: the bot stayed where its retreats failed and was killed), and
+    // the tunnel goes on after (the same day: a stairs command failed with 0 blocks dug).
     const fled = newSim({ heard: [whisper('!tunnel east 2')] });
     const fledTunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
       const done = Math.floor(fled.position.x) - req.start.x;
@@ -1300,9 +1307,10 @@ describe("owners' commands in play", () => {
         problem: null,
       });
     };
-    const fledBase = deps(open(), fled, { tunnel: fledTunnel });
+    const fledRepos = open();
+    const fledBase = deps(fledRepos, fled, { tunnel: fledTunnel });
     let retreated = false;
-    await runPlay(
+    const offline = await runPlay(
       {
         ...fledBase,
         session: (limits, hooks) => {
@@ -1340,6 +1348,11 @@ describe("owners' commands in play", () => {
       noStop,
     );
     expect(retreated).toBe(true);
+    expect(offline.mobNearby).toBe('HOSTILES_NEARBY');
+    expect(said(fled).at(-1)).toBe('A mob is near: I go offline a moment for it to leave');
+    expect(fledRepos.commands.get(1)?.status).toBe('running');
+    // Back online, the command goes on.
+    await runPlay(fledBase, LIMITS, noStop);
     expect(said(fled).at(-1)).toBe('Done: dug a tunnel 2 blocks east');
     expect(fled.steps).toEqual(['MOVE_TO 1.5 0.5', 'MOVE_TO 2.5 0.5']);
 

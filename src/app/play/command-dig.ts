@@ -29,7 +29,6 @@ import {
   commandTaskId,
   finish,
   MAX_COMMAND_FAILURES,
-  mobReflexEnded,
   reflexEnded,
   runOf,
   say,
@@ -327,10 +326,10 @@ async function digSession(
     300,
   );
   if (result.stopKind === 'cycle-failed') {
-    // A walk a hostile stopped (a Mirage Enderman 4 blocks off, seen live 2026-10-04), or one
-    // of System 1's reflexes (a retreat with no way home: a stairs command failed with 0
-    // blocks dug the same day): interrupted by mobs, waited out (mobInTheWay).
-    const mobbed = await mobInTheWay(play, cmd, why, false, mobReflexEnded(play));
+    // A walk a hostile stopped (a Mirage Enderman 4 blocks off, seen live 2026-10-04):
+    // interrupted, waited out (mobInTheWay). A retreat from a mob that failed (a stairs command
+    // failed with 0 blocks dug the same day) went offline above (mobPause).
+    const mobbed = await mobInTheWay(play, cmd, why);
     if (mobbed === 'retry') return 'next-round';
     if (mobbed === 'give-up') return fail(`${why} (${run.mobStops - 1} tries; ${dug})`);
     // Any other step that failed: planned again from the world as it is next round, as a

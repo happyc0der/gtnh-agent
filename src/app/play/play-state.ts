@@ -250,13 +250,22 @@ const MOB_PAUSE_REASONS: ReadonlySet<string> = new Set([
 /**
  * The reasons of a session that ended on a pause only because a mob was near (System 1's
  * last decision: PAUSE_AND_ASK_USER with HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY, and
- * nothing but the home codes besides), else null. Mobs move on or burn in daylight, and an
- * offline player cannot be hurt: such a pause is waited out, not handed to a person.
+ * nothing but the home codes besides), or on an answer to a mob that failed (a retreat that
+ * found no way home, perhaps fleeing a little instead, or refused as a repeated failure; a
+ * fight back), else null. Mobs move on or burn in daylight, and an offline player cannot be
+ * hurt: such a session is waited out offline, not handed to a person, as the idle standby's
+ * failed retreat is (seen live 2026-10-04: after its retreats in a ravine of mobs failed, a
+ * trip gave up, the bot stood there idle and was killed).
  */
 export function mobPause(stopKind: SessionStopKind, last: DecisionResult | null): string | null {
-  if (stopKind !== 'needs-attention' || last === null) return null;
-  if (last.decision !== 'PAUSE_AND_ASK_USER') return null;
+  if (last === null) return null;
   const codes = last.reasonCodes;
   const mob = codes.includes('HOSTILES_NEARBY') || codes.includes('UNCLASSIFIED_ENTITY_NEARBY');
-  return mob && codes.every((c) => MOB_PAUSE_REASONS.has(c)) ? codes.join(', ') : null;
+  if (stopKind === 'needs-attention' && last.decision === 'PAUSE_AND_ASK_USER') {
+    return mob && codes.every((c) => MOB_PAUSE_REASONS.has(c)) ? codes.join(', ') : null;
+  }
+  const answer = last.decision === 'RETREAT_HOME' || last.decision === 'DEFEND';
+  const failed = stopKind === 'cycle-failed' || stopKind === 'needs-attention';
+  const mobs = mob || codes.includes('CREEPER_NEARBY') || codes.includes('TOO_MANY_HOSTILES');
+  return answer && failed && mobs ? codes.join(', ') : null;
 }

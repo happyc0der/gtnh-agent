@@ -29,7 +29,6 @@ import {
   say,
   sayOnce,
   mobInTheWay,
-  mobReflexEnded,
   stepFailureOf,
   TRAVEL_RETRY_MS,
   type CommandDeps,
@@ -314,8 +313,8 @@ export async function travelRound(
     // Seen live: "Failed: stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed", when
     // the walk had said why (a hostile 9.7 blocks off stopped its pillar).
     const why: string = stepFailure ?? result.stopReason;
-    const reflex = result.stopKind === 'cycle-failed' && mobReflexEnded(play);
-    const mobbed = await mobInTheWay(play, cmd, why, follow, reflex);
+
+    const mobbed = await mobInTheWay(play, cmd, why, follow);
     if (mobbed === 'retry') return 'next-round';
     if (mobbed === 'give-up') {
       return travelFailed(play, cmd, `${why} (${run.mobStops - 1} tries)`.slice(0, 300), true);

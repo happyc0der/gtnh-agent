@@ -1118,10 +1118,21 @@ describe('a mob near home', () => {
     expect(mobPause('needs-attention', pause(['HUNGRY', 'NO_APPROVED_FOOD']))).toBeNull();
     expect(mobPause('needs-attention', pause(['HOSTILES_NEARBY', 'LOW_HEALTH']))).toBeNull();
     expect(mobPause('cycle-failed', pause(['HOSTILES_NEARBY']))).toBeNull();
-    expect(
-      mobPause('needs-attention', { ...pause(['HOSTILES_NEARBY']), decision: 'RETREAT_HOME' }),
-    ).toBeNull();
     expect(mobPause('needs-attention', null)).toBeNull();
+    // An answer to a mob that failed (a retreat with no way home, or refused as a repeated
+    // failure; a fight back): waited out offline too (seen live 2026-10-04: the bot stayed
+    // where its retreats failed and was killed).
+    const retreat = { ...pause(['HOSTILES_NEARBY']), decision: 'RETREAT_HOME' as const };
+    expect(mobPause('needs-attention', retreat)).toBe('HOSTILES_NEARBY');
+    expect(mobPause('cycle-failed', retreat)).toBe('HOSTILES_NEARBY');
+    expect(
+      mobPause('cycle-failed', { ...pause(['UNCLASSIFIED_ENTITY_NEARBY']), decision: 'DEFEND' }),
+    ).toBe('UNCLASSIFIED_ENTITY_NEARBY');
+    // Not one that went, nor a retreat for something else.
+    expect(mobPause('non-task-decision', retreat)).toBeNull();
+    expect(
+      mobPause('cycle-failed', { ...pause(['LOW_HEALTH']), decision: 'RETREAT_HOME' }),
+    ).toBeNull();
   });
 });
 
