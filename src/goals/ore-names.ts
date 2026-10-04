@@ -122,3 +122,32 @@ export function gtOreLabel(ore: GtOreKind): string {
   const name = ore.material.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
   return `${ore.small ? 'small ' : ''}${name} ore`;
 }
+
+/** The GT ore whose raw ore item is `item` (gregtech:gt.metaitem.03@5032: iron), or null. */
+export function gtOreByItem(item: string): GtOre | null {
+  for (const ore of oreTable().values()) if (ore.item === item) return ore;
+  return null;
+}
+
+/**
+ * The heights at which the Overworld's GregTech veins hold `material` (any of a vein's four
+ * ores: primary, secondary, between, sporadic), as one range from the lowest vein's bottom to
+ * the highest's top; null when no Overworld vein holds it or there is no knowledge base.
+ */
+export function gtOreHeights(material: string): { minY: number; maxY: number } | null {
+  let range: { minY: number; maxY: number } | null = null;
+  try {
+    for (const v of loadKnowledge().veins) {
+      if (!v.dims.includes('Overworld')) continue;
+      const ores = [v.primary, v.secondary, v.between, v.sporadic];
+      if (!ores.some((o) => o !== null && o.material === material)) continue;
+      range =
+        range === null
+          ? { minY: v.minY, maxY: v.maxY }
+          : { minY: Math.min(range.minY, v.minY), maxY: Math.max(range.maxY, v.maxY) };
+    }
+  } catch {
+    return null;
+  }
+  return range;
+}

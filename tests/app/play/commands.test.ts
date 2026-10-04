@@ -410,6 +410,16 @@ describe("owners' commands in play", () => {
     expect(sim.sessions).toHaveLength(3);
   });
 
+  it('a GregTech ore asked for above its veins: says where they lie and how to dig to them', async () => {
+    const sim = newSim({ heard: [whisper('!mine 16 copper ore')] });
+    await runPlay(deps(open(), sim), LIMITS, noStop);
+    expect(said(sim)[0]).toBe(
+      'OK: mining gregtech:gt.blockores until I have 16 gregtech:gt.metaitem.03@5035 (I have 0); ' +
+        'its veins lie at y 5-60, I am at y 64: "!tunnel <direction> 4 down" digs down to them, ' +
+        'then "!tunnel <direction> 40" looks along',
+    );
+  });
+
   it('refuses what it may not do, saying why: outside the boundary, a non-owner, no home', async () => {
     const repos = open();
     const sim = newSim({

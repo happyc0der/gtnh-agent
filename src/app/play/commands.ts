@@ -1,7 +1,7 @@
 import { MIN_EXPLORE_DISTANCE } from '../../domain/actions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import { COMPASS, summarizeExploration, wanderTarget } from '../../domain/world-memory.ts';
-import { gtOreByName } from '../../goals/ore-names.ts';
+import { gtOreByItem, gtOreByName, gtOreHeights } from '../../goals/ore-names.ts';
 import type { Position } from '../../domain/common.ts';
 import {
   describeCommand,
@@ -415,6 +415,24 @@ function checkAction(
   }
 }
 
+/**
+ * For a GregTech ore asked for while the bot stands outside the heights its veins lie at:
+ * where they are, and how to dig there (GT ores lie underground, and the bot mines only ores
+ * it has seen exposed: no x-ray). Empty otherwise.
+ */
+function oreDepthHint(item: string, at: Position | null): string {
+  const ore = gtOreByItem(item);
+  const heights = ore === null ? null : gtOreHeights(ore.material);
+  if (heights === null || at === null) return '';
+  const y = Math.floor(at.y + 1e-6);
+  if (y >= heights.minY && y <= heights.maxY) return '';
+  const way = y > heights.maxY ? `!tunnel <direction> ${Math.min(64, y - heights.maxY)} down` : '';
+  return (
+    `; its veins lie at y ${heights.minY}-${heights.maxY}, I am at y ${y}` +
+    (way === '' ? '' : `: "${way}" digs down to them, then "!tunnel <direction> 40" looks along`)
+  );
+}
+
 /** What an action command's acknowledgement says it will do. */
 function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand): string {
   const view = (play.deps.commands as CommandDeps).view();
@@ -451,7 +469,7 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
         c.verb === 'get' || c.block === c.item
           ? `${c.verb === 'get' ? 'getting' : 'mining'} ${c.verb === 'get' ? c.item : c.block} until I have ${c.count}`
           : `mining ${c.block} until I have ${c.count} ${c.item}`;
-      return `${what} (I have ${have})`;
+      return `${what} (I have ${have})${c.verb === 'mine' ? oreDepthHint(c.item, view.position) : ''}`;
     }
   }
 }
