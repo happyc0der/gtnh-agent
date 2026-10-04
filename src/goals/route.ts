@@ -21,6 +21,9 @@
  * The route is information for the planner (a model), which decides what to do with it.
  */
 
+/** The route's line when nothing is missing (planner-provider.ts, plan-steps.ts read it). */
+export const EVERYTHING_HELD = 'everything the goal needs is already held';
+
 export interface RouteInput {
   /** Any mix of these items. */
   anyOf: readonly string[];
@@ -1316,7 +1319,7 @@ export function describeRoute(route: Route): string[] {
     }
   }
   if (route.legs.length === 0 && Object.keys(route.unresolved).length === 0) {
-    lines.push('everything the goal needs is already held');
+    lines.push(EVERYTHING_HELD);
   }
   // Lines stay short enough for the planner request (a step is at most 500 characters).
   return lines.map((l) => (l.length > MAX_LINE ? `${l.slice(0, MAX_LINE - 3)}...` : l));

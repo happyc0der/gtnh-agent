@@ -32,6 +32,7 @@ import {
 } from '../../planner/plan-schema.ts';
 import { trimStaleSteps, validatePlan } from '../../planner/plan-validator.ts';
 import { planFromRoute, ROUTE_PLANNER } from '../../planner/route-plan.ts';
+import { EVERYTHING_HELD } from '../../goals/route.ts';
 import {
   buildPlannerRequest,
   goalRouteOf,
@@ -226,6 +227,11 @@ function stepOf(
     planStep,
   };
 }
+
+/** Waits in a row, everything held, before the planner is asked (consultPlanner). */
+const HELD_WAITS = 2;
+/** Each wait: the server tells a completed crafting task within a second or two. */
+const HELD_WAIT_MS = 2_000;
 
 /** An observed table's id (crafting_table:<x>.<y>.<z>): where it stands. */
 const OBSERVED_TABLE = /^crafting_table:(-?\d+)\.(-?\d+)\.(-?\d+)$/;
@@ -829,6 +835,27 @@ export async function consultPlanner(
     });
   };
   const request = requestNow();
+
+  // Everything the goal needs is held, the goal not met yet: the server completes a quest's
+  // crafting task on the craft and tells the client a moment later (seen live 2026-10-04: the
+  // wooden sword crafted, the model was asked anyway and paused play, and "Monster Hunter"
+  // completed a second later). Wait a moment instead, twice at most in a row; the session's
+  // own check then sees the goal met. Only after that is the planner asked.
+  if (request.route?.steps.includes(EVERYTHING_HELD) === true) {
+    const recent = repos.actions.recent(HELD_WAITS, taskId);
+    const waits = recent.filter((a) => a.actionType === 'WAIT').length;
+    if (waits < HELD_WAITS) {
+      return {
+        chosen: {
+          spec: { type: 'WAIT', args: { durationMs: HELD_WAIT_MS } },
+          reason: 'everything the goal needs is held: waiting a moment for the server to count it',
+          origin: 'deterministic-router',
+        },
+        outcome: { kind: 'held', waits: waits + 1 },
+        planStep: null,
+      };
+    }
+  }
 
   const ask = async (req: PlannerRequest): Promise<PlannerResponse> => {
     try {

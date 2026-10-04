@@ -242,6 +242,39 @@ describe('world memory and exploring', () => {
     return { result, repos, planner, client };
   }
 
+  it('waits for the server, twice at most, before asking the planner when everything is held', async () => {
+    // Seen live 2026-10-04: the wooden sword crafted for "Monster Hunter" (a crafting task the
+    // server completes on the craft and reports a moment later), the model was asked anyway.
+    const clock = testClock();
+    const { client } = makeWorld((w) => {
+      w.inventory.items = { ...w.inventory.items, 'minecraft:wooden_sword': 1 };
+      if (w.task !== null) w.task.requirements = { 'minecraft:wooden_sword': 1 };
+    }, clock);
+    await client.connect();
+    const repos = memoryRepos(clock);
+    const config = testConfig();
+    syncConfigToDatabase(config, repos);
+    const planner = new MockPlannerProvider([{ name: 'explore', when: {}, response: explorePlan }]);
+    const deps = {
+      config,
+      client,
+      repos,
+      decisionProvider: planNeeded,
+      planner,
+      clock,
+      newId: sequentialIds(),
+    };
+    const first = await runSingleCycle(deps);
+    expect(first.planner).toEqual({ kind: 'held', waits: 1 });
+    expect(first.summary).toBe('REQUEST_PLANNER -> WAIT -> succeeded');
+    clock.advance(2_000);
+    expect((await runSingleCycle(deps)).planner).toEqual({ kind: 'held', waits: 2 });
+    expect(planner.requests).toHaveLength(0);
+    clock.advance(2_000);
+    await runSingleCycle(deps);
+    expect(planner.requests).toHaveLength(1);
+  });
+
   it('stores what the client saw, and offers EXPLORE with it when the play area follows', async () => {
     const { result, repos, planner, client } = await cycle({ enabled: true, mode: 'follow' });
     expect(repos.worldMemory.get('overworld', 0, 4)).toEqual(sighting);

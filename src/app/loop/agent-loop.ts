@@ -82,7 +82,9 @@ export type PlannerOutcome =
   | { kind: 'escalation'; reason: string; message: string }
   | { kind: 'unavailable' }
   /** A code-made blueprint's next step ran instead (known-steps.ts); no planner was asked. */
-  | { kind: 'known-step'; step: number; steps: number };
+  | { kind: 'known-step'; step: number; steps: number }
+  /** Everything the goal needs is held: code waited for the server to see it (plan-steps.ts). */
+  | { kind: 'held'; waits: number };
 
 export interface CycleResult {
   cycleId: string;
