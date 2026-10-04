@@ -1,4 +1,5 @@
 import type { BlockPosition } from '../../../domain/common.ts';
+import { mayExplode } from '../../../domain/combat.ts';
 import { TICK_MS } from '../../../domain/dig-time.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import { eyesOf, type DigArea } from '../digging.ts';
@@ -193,13 +194,23 @@ export class PathActions {
   }
 
   /** Hostile mobs the client sees (alive), where they stand: walks keep away from them. */
-  #hostiles(): Vec3[] {
+  #hostiles(): Array<Vec3 & { explodes: boolean }> {
     return this.#world
       .trackedEntities()
-      .filter(
-        (e) => e.kind === 'mob' && e.classification.category === 'hostile' && e.diedAt == null,
-      )
-      .map((e) => ({ x: e.x, y: e.y, z: e.z }));
+      .filter((e) => {
+        if (e.kind !== 'mob' || e.diedAt != null) return false;
+        const c = e.classification.category;
+        return c === 'hostile' || c === 'unclassified';
+      })
+      .map((e) => ({
+        x: e.x,
+        y: e.y,
+        z: e.z,
+        explodes: mayExplode(
+          e.classification.name,
+          e.classification.category === 'unclassified' ? 'unclassified' : 'hostile',
+        ),
+      }));
   }
 
   /** The policy's view of the world now: the boundary, and the other players. */

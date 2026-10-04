@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BLAST_AVOID_COEFFICIENT,
+  BLAST_AVOID_RADIUS,
   checkPathPlace,
   chooseThrowaway,
   MAX_PATH_BREAKS,
+  MOB_AVOID_COEFFICIENT,
+  MOB_AVOID_RADIUS,
   pathBreakProblem,
   pathPlaceProblem,
   playerNear,
@@ -77,6 +81,38 @@ describe('the walk policy (path-policy.ts)', () => {
     expect(off.options.canBreak).toBeUndefined();
     expect(off.options.canPlace).toBeUndefined();
     expect(off.summary).toBe('no breaking, no placing');
+  });
+
+  it('keeps away from hostiles, and far and hard from one that explodes or might', () => {
+    // Seen live 2026-10-04: a retreat walked past a concussion creeper, and the bot died.
+    const policy = walkPolicy(
+      input({
+        hostiles: [
+          { x: 8.5, y: 64, z: 1.5 },
+          { x: 8.5, y: 64, z: 9.5, explodes: true },
+        ],
+      }),
+    );
+    expect(policy.options.avoid).toEqual([
+      { x: 8.5, y: 64, z: 1.5, radius: MOB_AVOID_RADIUS, coefficient: MOB_AVOID_COEFFICIENT },
+      { x: 8.5, y: 64, z: 9.5, radius: BLAST_AVOID_RADIUS, coefficient: BLAST_AVOID_COEFFICIENT },
+    ]);
+    // A creeper beside the straight line: the walk keeps out of its blast where it can.
+    const creeper = { x: 8.5, y: 64, z: 3.5, explodes: true };
+    const r = planPath(
+      new TestWorld(),
+      area(20, 60, 70),
+      { x: 0.5, y: 64, z: 0.5 },
+      goalBlock(16, 64, 0),
+      {
+        ...walkPolicy(input({ breaking: false, placing: false, hostiles: [creeper] })).options,
+      },
+    );
+    expect(r.status).toBe('reached');
+    const closest = Math.min(
+      ...r.movements.map((m) => Math.hypot(m.to.x + 0.5 - creeper.x, m.to.z + 0.5 - creeper.z)),
+    );
+    expect(closest).toBeGreaterThan(6);
   });
 
   it('breaks natural blocks the dig rules allow, never ores, builds or near a player', () => {

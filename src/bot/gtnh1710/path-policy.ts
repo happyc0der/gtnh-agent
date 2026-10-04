@@ -44,7 +44,10 @@ import type { Vec3, WalkWorld } from './walking.ts';
  *    safety boundary; clicking only a plain full block (placing.ts CLICKABLE_SUPPORTS) or a
  *    block the same walk placed.
  *  - Hostile mobs: a path keeps MOB_AVOID_RADIUS from them where it can (movements near one
- *    cost MOB_AVOID_COEFFICIENT times as much), as Baritone avoids mobs.
+ *    cost MOB_AVOID_COEFFICIENT times as much), as Baritone avoids mobs; one that explodes or
+ *    might (a creeper, an unidentified hostile or entity: combat.ts mayExplode) is kept
+ *    BLAST_AVOID_RADIUS from at BLAST_AVOID_COEFFICIENT times the cost, nearly a wall (seen
+ *    live 2026-10-04: a retreat walked past a concussion creeper, and the bot died).
  *  - Doors (allowDoors): wooden doors and fence gates in the way are opened with a right-click
  *    and closed again once the walk is through (pathing/movements.ts door); never an iron one.
  *  - Parkour (allowParkour): only over gaps that falling into would not hurt, unless
@@ -59,6 +62,10 @@ import type { Vec3, WalkWorld } from './walking.ts';
 export const MOB_AVOID_RADIUS = 8;
 /** How much dearer (Baritone's mobAvoidanceCoefficient default, the idea). */
 export const MOB_AVOID_COEFFICIENT = 1.5;
+/** A mob that explodes or might is kept this far from: past a charged creeper's blast. */
+export const BLAST_AVOID_RADIUS = 10;
+/** How much dearer near it: any detour of a sane length is cheaper. */
+export const BLAST_AVOID_COEFFICIENT = 20;
 
 /** Blocks broken per walk at most: a tunnel of a dozen blocks, or a belt of leaves. */
 export const MAX_PATH_BREAKS = 24;
@@ -110,8 +117,11 @@ export interface PolicyContext {
 export interface WalkPolicyInput extends PolicyContext {
   readonly world: WalkWorld;
   readonly settings: WalkSettings;
-  /** Hostile mobs near, where they stand: paths keep away from them where they can. */
-  readonly hostiles?: readonly Vec3[];
+  /**
+   * Hostile mobs near, where they stand (and whether each explodes or might): paths keep away
+   * from them where they can, farther and harder from one that explodes.
+   */
+  readonly hostiles?: ReadonlyArray<Vec3 & { readonly explodes?: boolean }>;
   /** Digging may break on this walk: digging is enabled and the walk does work. */
   readonly breaking: boolean;
   /** Placing may place on this walk: placing is enabled and the walk does work. */
@@ -378,8 +388,8 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
             x: h.x,
             y: h.y,
             z: h.z,
-            radius: MOB_AVOID_RADIUS,
-            coefficient: MOB_AVOID_COEFFICIENT,
+            radius: h.explodes === true ? BLAST_AVOID_RADIUS : MOB_AVOID_RADIUS,
+            coefficient: h.explodes === true ? BLAST_AVOID_COEFFICIENT : MOB_AVOID_COEFFICIENT,
           })),
         }),
     maxFall: 3,
