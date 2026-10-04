@@ -1087,7 +1087,7 @@ describe("owners' commands in play", () => {
       noStop,
     );
     expect(said(sim)).toEqual([
-      'It is night: I stay in my shelter until morning, then I come to you',
+      'It is night: I stay in my shelter until morning (in about 5 min), then I come to you',
       'at 0 64 0, health 20/20, food 20/20; sheltered for the night (morning in about 5 min)',
       'OK: coming to you',
       'Done: here, 1 block from you',
@@ -1175,7 +1175,7 @@ describe("owners' commands in play", () => {
       noStop,
     );
     expect(said(night)).toEqual([
-      'It is night: I stay in my shelter until morning, then I come to you',
+      'It is night: I stay in my shelter until morning (in about 5 min), then I come to you',
       'OK: coming to you',
       'Done: here, 1 block from you',
     ]);

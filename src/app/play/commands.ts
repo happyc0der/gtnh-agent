@@ -175,10 +175,16 @@ async function handleQueued(
   play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: ack });
 }
 
-const nightNote = (play: PlayState, c: OwnerCommand): string =>
-  play.sheltered !== null && 'mobs' in play.sheltered
-    ? `Hostiles are near my shelter: I stay inside until they go, then I ${describeCommand(c)}`
-    : `It is night: I stay in my shelter until morning, then I ${describeCommand(c)}`;
+const nightNote = (play: PlayState, c: OwnerCommand): string => {
+  const shelter = play.sheltered;
+  if (shelter !== null && 'mobs' in shelter) {
+    return `Hostiles are near my shelter: I stay inside until they go, then I ${describeCommand(c)}`;
+  }
+  const minutes =
+    shelter === null ? null : Math.max(1, Math.round((shelter.until - play.now()) / 60_000));
+  const when = minutes === null ? 'morning' : `morning (in about ${minutes} min)`;
+  return `It is night: I stay in my shelter until ${when}, then I ${describeCommand(c)}`;
+};
 
 /** The say-once key of nightNote: its words change when the morning's wait is for mobs. */
 const nightKey = (play: PlayState): string =>
