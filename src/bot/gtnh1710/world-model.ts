@@ -1,4 +1,4 @@
-import { isPlaceableBlock, type PlaceableBlock } from '../../domain/blocks.ts';
+import { GT_ORE_BLOCK, isPlaceableBlock, type PlaceableBlock } from '../../domain/blocks.ts';
 import {
   BARE_HAND,
   calmSpiderBlocker,
@@ -529,6 +529,12 @@ export class WorldModel {
   readonly #machines = new Map<string, TrackedMachine>();
   /** Set when a GregTech message could not be decoded: machine states may be wrong. */
   #machineProblem: string | null = null;
+  /**
+   * GT ores' materials by "x,y,z" (gregtech.ts 'gt-ore': TileEntityOres.mMetaData), as the
+   * server sends them: for ores with an open face, as their chunk arrives or a neighbour opens
+   * them up. Kept while the block there is still a GT ore.
+   */
+  readonly #ores = new Map<string, number>();
   /** Registry id -> hazard code; rebuilt when the registry arrives (ids are per world). */
   #blockCodes: Uint8Array | null = null;
   /** Set when block data was lost: the hazard scan cannot be trusted for this session. */
@@ -756,6 +762,9 @@ export class WorldModel {
    */
   #onBlockChanged(x: number, y: number, z: number, id: number, meta: number, at: Date): void {
     const before = this.#store.blockAt(x, y, z);
+    if (this.#ores.size > 0 && this.#registry?.blocks.get(id) !== GT_ORE_BLOCK) {
+      this.#ores.delete(`${x},${y},${z}`);
+    }
     this.#notePlayerBuild(x, y, z, before, id, at);
     this.#store.setBlock(x, y, z, id, meta);
     const table = this.#diggable;
@@ -800,8 +809,15 @@ export class WorldModel {
     this.#gtNames = machineNamesFor(this.#modVersions.get('gregtech_nh'));
   }
 
-  /** GregTech channel messages: machine placements (tile entities) and state changes. */
+  /**
+   * GregTech channel messages: ore materials, machine placements (tile entities) and state
+   * changes.
+   */
   applyGregTech(message: GregTechMessage): void {
+    if (message.type === 'gt-ore') {
+      if (message.meta >= 0) this.#ores.set(`${message.x},${message.y},${message.z}`, message.meta);
+      return;
+    }
     const names = this.#gtNames;
     if (names === null || this.#machineProblem !== null) return;
     switch (message.type) {
@@ -1677,6 +1693,27 @@ export class WorldModel {
     return null;
   }
 
+  /** The ore materials kept for a column (it was unloaded, or arrives anew). */
+  #forgetOres(chunkX: number, chunkZ: number): void {
+    if (this.#ores.size === 0) return;
+    for (const key of this.#ores.keys()) {
+      const [x, , z] = key.split(',').map(Number) as [number, number, number];
+      if (Math.floor(x / 16) === chunkX && Math.floor(z / 16) === chunkZ) this.#ores.delete(key);
+    }
+  }
+
+  /**
+   * The material of the GT ore at (x, y, z) as the server sent it (TileEntityOres.mMetaData:
+   * gregtech.ts 'gt-ore'), or undefined: not sent (a hidden ore), or the block there is not a
+   * GT ore.
+   */
+  oreMetaAt(x: number, y: number, z: number): number | undefined {
+    const meta = this.#ores.get(`${x},${y},${z}`);
+    if (meta === undefined) return undefined;
+    const id = this.#store.blockAt(x, y, z);
+    return id !== undefined && this.#registry?.blocks.get(id) === GT_ORE_BLOCK ? meta : undefined;
+  }
+
   /** A machine's block became something else (broken or replaced): it is no longer a machine. */
   #forgetReplacedMachine(x: number, y: number, z: number, blockId: number): void {
     const key = `${x},${y},${z}`;
@@ -1711,6 +1748,7 @@ export class WorldModel {
         this.#spiders.clear();
         this.#deaths = [];
         this.#machines.clear();
+        this.#ores.clear();
         this.#weather = null;
         this.#loginWeather = 'awaiting-time';
         return;
@@ -1727,6 +1765,7 @@ export class WorldModel {
         this.#loginWeather = 'awaiting-time';
         this.#deaths = [];
         this.#machines.clear();
+        this.#ores.clear();
         this.#store.clear();
         this.#removed = [];
         this.#dug = [];
@@ -1744,6 +1783,7 @@ export class WorldModel {
               this.#machines.delete(key);
             }
           }
+          this.#forgetOres(chunkX, chunkZ);
           this.#onColumnChanged(chunkX, chunkZ);
           return;
         }
@@ -1755,6 +1795,8 @@ export class WorldModel {
             this.#chunkFormat,
           );
           if (packet.groundUp) {
+            // The column's ores send their materials again after it (as their chunk is sent).
+            this.#forgetOres(chunkX, chunkZ);
             this.#store.setColumn(chunkX, chunkZ, sections, at.getTime(), biomes, meta, light);
           } else {
             this.#store.updateSections(
@@ -1784,6 +1826,7 @@ export class WorldModel {
             packet.compressed,
             this.#chunkFormat,
           )) {
+            this.#forgetOres(c.header.chunkX, c.header.chunkZ);
             this.#store.setColumn(
               c.header.chunkX,
               c.header.chunkZ,
@@ -2384,6 +2427,7 @@ export class WorldModel {
       MAX_REPORTED_RESOURCES,
       this.#seeThrough ?? undefined,
       (x, y, z) => this.builtByPlayer(x, y, z),
+      (x, y, z) => this.oreMetaAt(x, y, z),
     );
     if (!scan.ok) return unknown(scan.reason);
     const near = (p: { x: number; y: number; z: number }): boolean =>
@@ -2406,7 +2450,9 @@ export class WorldModel {
       world === null ? [] : scanPlaceable(world, feet, entities, MAX_REPORTED_PLACEABLE);
     return known({
       scanRadius: scan.scanRadius,
-      resources: scan.resources.map(({ block, position }) => ({ block, position })),
+      resources: scan.resources.map(({ block, position, ore }) =>
+        ore === undefined ? { block, position } : { block, position, ore },
+      ),
       removed: removed.map((p) => ({ ...p })),
       placeable: placeable.map(({ position, takesFalling }) => ({
         position: { ...position },

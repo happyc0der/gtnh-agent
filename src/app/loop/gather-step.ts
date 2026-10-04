@@ -15,6 +15,7 @@ import {
   GatherProgressSchema,
   GATHER_MAX_ACTIONS,
   GATHER_REPORT_EVERY,
+  givesSame,
   progressSource,
   recordGatherAction,
   sourceName,
@@ -193,7 +194,8 @@ export function gatherTurn(
     const listed =
       'block' in source
         ? state.nearbyBlocks.known
-          ? state.nearbyBlocks.value.resources.filter((r) => r.block === source.block).length
+          ? state.nearbyBlocks.value.resources.filter((r) => givesSame(r.block, source, r.ore))
+              .length
           : 0
         : state.nearbyEntities.known
           ? state.nearbyEntities.value.entities.filter((e) => e.type === source.animal).length

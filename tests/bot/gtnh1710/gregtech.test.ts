@@ -10,11 +10,12 @@ import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { ProtocolError } from '../../../src/bot/gtnh1710/wire.ts';
 import { defaultConfig } from '../../../src/config/env.ts';
 import { systemClock } from '../../../src/util/clock.ts';
-import { BLOCK } from './fixtures/chunk-fixtures.ts';
+import { BLOCK, DIG_TEST_BLOCK_REGISTRY } from './fixtures/chunk-fixtures.ts';
 import {
   DEFAULT_MODS,
   FakeGtnhServer,
   gtBlockEventsMessage,
+  gtOreMessage,
   gtTileEntityMessage,
   type FakeServerOptions,
 } from './fixtures/fake-server.ts';
@@ -73,10 +74,24 @@ describe('GregTech channel decoding', () => {
     }
   });
 
+  it('decodes the material of an ore (PacketOres), as GregTech sends it for an exposed ore', () => {
+    // Iron (32) in black granite (+3000).
+    expect(decodeGregTechMessage(gtOreMessage(-120, 37, 455, 3032))).toEqual({
+      type: 'gt-ore',
+      x: -120,
+      y: 37,
+      z: 455,
+      meta: 3032,
+    });
+    expect(() => decodeGregTechMessage(gtOreMessage(1, 2, 3, 32).subarray(0, 9))).toThrow(
+      ProtocolError,
+    );
+  });
+
   it('counts other packet types, and refuses truncated or oversized messages', () => {
-    expect(decodeGregTechMessage(Buffer.from([3, 1, 2, 3]))).toEqual({
+    expect(decodeGregTechMessage(Buffer.from([4, 1, 2, 3]))).toEqual({
       type: 'gt-other',
-      packetType: 3,
+      packetType: 4,
     });
     const full = gtTileEntityMessage(1, 2, 3, MACERATOR_LV, IDLE);
     expect(() => decodeGregTechMessage(full.subarray(0, full.length - 2))).toThrow(ProtocolError);
@@ -208,5 +223,38 @@ describe('Gtnh1710Client machine observation', () => {
     server.sendGregTech(gtTileEntityMessage(-6, 106, -7, MACERATOR_LV, IDLE));
     await new Promise((r) => setTimeout(r, 200));
     expect(await machinesOf(client)).toEqual([]);
+  });
+});
+
+describe('Gtnh1710Client ore materials', () => {
+  const GT_ORES = 4200;
+  const oresOf = async (client: Gtnh1710Client): Promise<string[]> => {
+    const state = await client.observe();
+    if (!state.nearbyBlocks.known) return [];
+    return state.nearbyBlocks.value.resources
+      .filter((r) => r.block === 'gregtech:gt.blockores')
+      .map((r) => `${r.position.x},${r.position.y},${r.position.z} ${r.ore ?? '?'}`);
+  };
+
+  it('lists the material the server sent with its ore, and forgets it with the ore', async () => {
+    // Two ores on the ground beside the player (it stands at (-4.5, 106, -7.5)).
+    const { server, client } = await start({
+      blocks: [...DIG_TEST_BLOCK_REGISTRY, [GT_ORES, 'gregtech:gt.blockores']],
+      blockOverrides: new Map([
+        ['-3,106,-7', GT_ORES],
+        ['-6,106,-7', GT_ORES],
+      ]),
+    });
+    await vi.waitFor(async () => expect(await oresOf(client)).toHaveLength(2));
+    server.sendGregTech(gtOreMessage(-3, 106, -7, 32));
+    await vi.waitFor(async () =>
+      expect((await oresOf(client)).sort()).toEqual(['-3,106,-7 32', '-6,106,-7 ?']),
+    );
+    // Dug: no ore there, and no material with what replaces it.
+    server.setBlock(-3, 106, -7, BLOCK.air);
+    server.setBlock(-3, 106, -7, GT_ORES);
+    await vi.waitFor(async () =>
+      expect((await oresOf(client)).sort()).toEqual(['-3,106,-7 ?', '-6,106,-7 ?']),
+    );
   });
 });

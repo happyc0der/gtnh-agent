@@ -727,8 +727,18 @@ Checked in the same jars and configs as above (_verified_, not live):
     level; harvest tool "pickaxe" only below metadata 8. The metadata is
     `TileEntityOres.getHarvestData`: max(the stone's base level, 3 in black and red granite and
     else 0, min(7, the material's tool quality, less 1 for a small ore)). It reaches the client
-    in the chunk data. Which ore it is (the material) is in the tile entity, which GregTech
-    sends in its own packet that the client does not read: only a dig shows it.
+    in the chunk data. Which ore it is (the material) is in the tile entity (see "Ore
+    materials" below).
+- **Ore materials (2026-10-03).** `TileEntityOres.mMetaData` is the material id, plus 1000 x
+  the stone it sits in (`setOreBlock`: netherrack, end stone, the granites, marble, basalt),
+  plus 16000 for a small ore. GregTech sends it in its own channel, packet type 3
+  (`gregtech.common.blocks.PacketOres`: x int, y short, z int, meta short), and only for an ore
+  that is not blocked: `getDescriptionPacket` (as the chunk is sent) and `onUpdated` (when a
+  neighbour changes) send it when one of the six neighbours is not an opaque cube, to every
+  player watching the chunk. An ore hidden in the ground keeps its material from a client, as
+  from a player. The client keeps what arrives (`world-model.ts` `oreMetaAt`), forgets it with
+  the ore, its chunk or a new column, and the resource scan lists it with the ore
+  (`ResourceBlock.ore`), so GATHER digs only ores that drop the item it gathers.
 - **Pickaxes.** IguanaTweaks disables the stone, iron, golden and diamond pickaxes (speed 0, as
   the shovels), so the **wooden pickaxe** (level 0) is the only vanilla one that digs here, and
   Tinkers' Construct's are the way up (below).

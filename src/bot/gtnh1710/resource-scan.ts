@@ -1,4 +1,9 @@
-import { DIGGABLE_BLOCKS, nearestOfEachKind, type DiggableBlock } from '../../domain/blocks.ts';
+import {
+  DIGGABLE_BLOCKS,
+  GT_ORE_BLOCK,
+  nearestOfEachKind,
+  type DiggableBlock,
+} from '../../domain/blocks.ts';
 import { MAX_REPORTED_RESOURCES } from '../../domain/game-state.ts';
 import type { ChunkStore } from './chunk-data.ts';
 import type { Registry } from './registry.ts';
@@ -11,7 +16,13 @@ export interface FoundResource {
   block: DiggableBlock;
   position: { x: number; y: number; z: number };
   distance: number;
+  /** A GT ore's material, when the server sent it (world-model.ts oreMetaAt). */
+  ore?: number;
 }
+
+/** The kind a resource counts as in the fair share: its block, a GT ore by its material too. */
+const kindOf = (f: FoundResource): string =>
+  f.ore === undefined ? f.block : `${f.block}@${f.ore}`;
 
 export type ResourceScan =
   { ok: true; scanRadius: number; resources: FoundResource[] } | { ok: false; reason: string };
@@ -91,6 +102,8 @@ export function scanResources(
   seeThrough?: Uint8Array,
   /** Blocks never listed (a player's build: never dug). */
   skip?: (x: number, y: number, z: number) => boolean,
+  /** A GT ore's material, when known (world-model.ts oreMetaAt). */
+  oreMeta?: (x: number, y: number, z: number) => number | undefined,
 ): ResourceScan {
   const r2 = radius * radius;
   const minX = Math.floor(feet.x - radius);
@@ -160,7 +173,13 @@ export function scanResources(
           z <= (ownZ[1] as number);
         if (block === undefined || support || !exposed(x, y, z)) continue;
         if (skip?.(x, y, z) === true) continue;
-        const resource = { block, position: { x, y, z }, distance: Math.sqrt(h2 + dy * dy) };
+        const resource: FoundResource = {
+          block,
+          position: { x, y, z },
+          distance: Math.sqrt(h2 + dy * dy),
+        };
+        const ore = block === GT_ORE_BLOCK ? oreMeta?.(x, y, z) : undefined;
+        if (ore !== undefined) resource.ore = ore;
         if (y >= feetLevel || GROUND_RESOURCES.has(block)) found.push(resource);
         else if (GROUND_DIRT.has(block)) groundDirt.push(resource);
       }
@@ -173,9 +192,9 @@ export function scanResources(
     a.position.z - b.position.z;
   found.push(...groundDirt.sort(byDistance).slice(0, GROUND_DIRT_SAMPLE));
   found.sort(byDistance);
-  const listed = nearestOfEachKind(found, (f) => f.block, max);
-  const kinds = new Set(listed.map((f) => f.block));
-  const leftOut = found.find((f) => !kinds.has(f.block));
+  const listed = nearestOfEachKind(found, kindOf, max);
+  const kinds = new Set(listed.map(kindOf));
+  const leftOut = found.find((f) => !kinds.has(kindOf(f)));
   if (leftOut === undefined) return { ok: true, scanRadius: radius, resources: listed };
   const kept = listed.filter((f) => f.distance < leftOut.distance);
   const coverage = Math.max(0, Math.floor((leftOut.distance - 1e-6) * 1000) / 1000);

@@ -113,6 +113,41 @@ describe('GATHER for one drop of a block (a GT ore by its raw ore)', () => {
     expect(gatheredSoFar(progress, items({ [RAW_COPPER]: 6, [RAW_IRON]: 3 }))).toBe(1);
   });
 
+  it('passes ores the server says are of another material by; unknown ones come last', () => {
+    // Materials as GregTech sends them (TileEntityOres.mMetaData): copper 35, iron 32; iron
+    // in black granite 3032 (the stone adds 1000 x its kind); a small copper ore 16035.
+    const state = world([
+      { block: ORE, position: { x: 2, y: 64, z: 1 }, ore: 35 },
+      { block: ORE, position: { x: 1, y: 65, z: 3 }, ore: 16035 },
+      { block: ORE, position: { x: 3, y: 64, z: 2 } },
+      { block: ORE, position: { x: 4, y: 64, z: 1 }, ore: 3032 },
+    ]);
+    expect(givesSame(ORE, { block: ORE, item: RAW_IRON }, 35)).toBe(false);
+    expect(givesSame(ORE, { block: ORE, item: RAW_IRON }, 3032)).toBe(true);
+    expect(givesSame(ORE, { block: ORE, item: RAW_COPPER }, 16035)).toBe(false);
+    expect(givesSame(ORE, { block: ORE, item: RAW_IRON })).toBe(true);
+    // The iron ore, though the copper ones and an ore of no known material are nearer.
+    const progress = startGather(1, 0, ironOre(), state, NOW);
+    expect(chooseGatherAction(ironOre(), progress, state, opts())).toMatchObject({
+      kind: 'act',
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 4, y: 64, z: 1 } } },
+    });
+    // With the iron ore gone, the one not known (it may be iron); never the copper ones.
+    const rest = world([
+      { block: ORE, position: { x: 2, y: 64, z: 1 }, ore: 35 },
+      { block: ORE, position: { x: 3, y: 64, z: 2 } },
+    ]);
+    expect(chooseGatherAction(ironOre(), progress, rest, opts())).toMatchObject({
+      kind: 'act',
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 3, y: 64, z: 2 } } },
+    });
+    const copperOnly = world([{ block: ORE, position: { x: 2, y: 64, z: 1 }, ore: 35 }]);
+    expect(chooseGatherAction(ironOre(), progress, copperOnly, opts())).toMatchObject({
+      kind: 'end',
+      end: 'no-target',
+    });
+  });
+
   it('an item the block never drops ends the step at once, saying why', () => {
     const state = world([{ block: 'minecraft:stone', position: { x: 2, y: 64, z: 1 } }]);
     const step: GatherStep = {

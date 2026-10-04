@@ -3,12 +3,14 @@ import { GT_MACHINE_IDS_VERSION, GT_MACHINE_NAMES } from './gt-machine-ids.ts';
 import { ProtocolError, Reader } from './wire.ts';
 
 /**
- * GregTech (GTNH) machine state from the "GregTech" plugin channel. Verified against
- * gregtech_nh 5.09.51.482 with javap (see docs/gtnh-compatibility.md, "Machines"):
+ * GregTech (GTNH) machine state and ore materials from the "GregTech" plugin channel.
+ * Verified against gregtech_nh 5.09.51.482 with javap (see docs/gtnh-compatibility.md,
+ * "Machines", and "Pickaxes, stone and ores" for ore materials):
  *
  *   message      = packetType:u8 payload
  *   TILE_ENTITY  (0) = x:i32 y:i16 z:i32 mID:i16 cover:i32 x6 common:u8 update:u8 redstone:u8 color:u8
  *   BLOCK_EVENT  (2) = dimension:i32 count:i32 packedXYZ:i64 x count  (eventId<<8 | value):i16 x count
+ *   ORES         (3) = x:i32 y:i16 z:i32 meta:i16  (PacketOres: an ore's TileEntityOres.mMetaData)
  *
  * `common` is BaseMetaTileEntity's texture data: facing (bits 0-2) | active 8 | redstone 16 |
  * upgrade lock 32 | works 64 | muffler 128. When it changes, GregTech sends block event 0
@@ -17,6 +19,7 @@ import { ProtocolError, Reader } from './wire.ts';
 export const GT_CHANNEL = 'GregTech';
 const TILE_ENTITY = 0;
 const BLOCK_EVENT = 2;
+const ORES = 3;
 /** GregTechTileClientEvents.CHANGE_COMMON_DATA */
 export const GT_EVENT_CHANGE_COMMON_DATA = 0;
 const MAX_BLOCK_EVENTS = 65_536;
@@ -43,6 +46,20 @@ export type GregTechMessage =
       type: 'gt-block-events';
       dimension: number;
       events: Array<{ x: number; y: number; z: number; eventId: number; value: number }>;
+    }
+  | {
+      /**
+       * A GT ore's material (PacketOres). The server sends it only for an ore with a face
+       * open to a block that is not opaque (TileEntityOres.getDescriptionPacket, as the chunk
+       * is sent; onUpdated, once a neighbour opens it up): an ore hidden in the ground keeps
+       * its material to itself, as from a player. `meta` is TileEntityOres.mMetaData: the
+       * material id, plus 1000 x the stone it sits in, plus 16000 for a small ore.
+       */
+      type: 'gt-ore';
+      x: number;
+      y: number;
+      z: number;
+      meta: number;
     }
   | { type: 'gt-other'; packetType: number };
 
@@ -83,6 +100,13 @@ export function decodeGregTechMessage(data: Buffer): GregTechMessage {
         return { ...p, eventId: (packed >> 8) & 0xff, value: packed & 0xff };
       });
       return { type: 'gt-block-events', dimension, events };
+    }
+    case ORES: {
+      const x = r.i32();
+      const y = r.i16();
+      const z = r.i32();
+      const meta = r.i16();
+      return { type: 'gt-ore', x, y, z, meta };
     }
     default:
       return { type: 'gt-other', packetType };

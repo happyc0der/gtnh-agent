@@ -190,6 +190,13 @@ export const ResourceBlockSchema = z.strictObject({
    * adapter does not compute it.
    */
   standAt: PositionSchema.nullable().optional(),
+  /**
+   * A GregTech ore's material (gregtech:gt.blockores keeps it in a tile entity): its
+   * TileEntityOres.mMetaData, the material id plus 1000 x the stone it is in plus 16000 for
+   * a small ore, as the server sends it for an ore with an open face (a player sees its
+   * texture). Absent when not sent, and for every other block.
+   */
+  ore: z.int().min(0).max(32767).optional(),
 });
 export type ResourceBlock = z.infer<typeof ResourceBlockSchema>;
 

@@ -123,12 +123,14 @@ export const CompactStateSchema = z.strictObject({
   /**
    * Blocks DIG_BLOCK may target (allowlisted, observed), nearest first, with `reach` (blocks
    * from the eyes to the block centre; DIG_BLOCK needs at most 4.5) and `standAt` (where to
-   * stand to dig it, or null).
+   * stand to dig it, or null). A GregTech ore whose material the server sent says which ore it
+   * is (`ore`: "iron ore").
    */
   diggableBlocks: z
     .array(
       z.strictObject({
         block: DiggableBlockSchema,
+        ore: z.string().min(1).max(64).optional(),
         position: BlockPositionSchema,
         reach: z.number().min(0).nullable(),
         standAt: PositionSchema.nullable(),

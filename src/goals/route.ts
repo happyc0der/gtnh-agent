@@ -103,7 +103,7 @@ export interface KnownPlace {
 }
 
 /** Where `blocks` are known to be, nearest first. */
-export type PlaceLookup = (blocks: readonly string[]) => KnownPlace[];
+export type PlaceLookup = (blocks: readonly string[], item?: string) => KnownPlace[];
 
 /** A container whose contents the agent knows (it saw them, or remembers them). */
 export interface StoredContainer {
@@ -1102,7 +1102,7 @@ export function planRoute(
       }
       return;
     }
-    const known = places(source.blocks);
+    const known = places(source.blocks, item);
     const actions = Math.ceil(rest / source.perAction);
     const best = known.find((p) => p.amount >= actions) ?? known[0] ?? null;
     legs.push({

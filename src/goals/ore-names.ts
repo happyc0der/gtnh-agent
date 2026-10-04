@@ -1,3 +1,4 @@
+import { loadKnowledge } from './knowledge.ts';
 import { ROUTE_BOOK } from './route-book.ts';
 
 /**
@@ -53,4 +54,71 @@ export function gtOreByName(name: string): GtOre | null {
     .replace(/\s+/g, ' ');
   const table = oreTable();
   return table.get(key) ?? table.get(key.replace(/ /g, '')) ?? null;
+}
+
+/** A GT ore as its tile entity's metadata says: its material, and what a dig of it drops. */
+export interface GtOreKind {
+  /** The material's name as GregTech writes it ("BrownLimonite"). */
+  material: string;
+  /** A small ore (its drops are a mix of gems, crushed ore and dust). */
+  small: boolean;
+  /** What one dig drops without fortune: a vein ore its raw ore; a small ore its mix. */
+  drops: string[];
+}
+
+let byId: { vein: Map<number, GtOreKind>; small: Map<number, GtOreKind> } | null = null;
+
+/** The knowledge base's ores by material id (every dimension: the material decides). */
+function oresById(): { vein: Map<number, GtOreKind>; small: Map<number, GtOreKind> } {
+  if (byId !== null) return byId;
+  const vein = new Map<number, GtOreKind>();
+  const small = new Map<number, GtOreKind>();
+  const idOf = (block: string): number => Number(block.slice(block.indexOf('@') + 1));
+  try {
+    const data = loadKnowledge();
+    for (const v of data.veins) {
+      for (const o of [v.primary, v.secondary, v.between, v.sporadic]) {
+        if (o === null || o.block === null || o.drop === null) continue;
+        const id = idOf(o.block);
+        if (Number.isInteger(id) && !vein.has(id)) {
+          vein.set(id, { material: o.material, small: false, drops: [o.drop] });
+        }
+      }
+    }
+    for (const s of data.smallOres) {
+      if (s.block === null) continue;
+      const id = idOf(s.block) - SMALL_ORE_META;
+      const drops = s.drops.filter(([, perDig]) => perDig > 0).map(([item]) => item);
+      if (Number.isInteger(id) && !small.has(id)) {
+        small.set(id, { material: s.material, small: true, drops });
+      }
+    }
+  } catch {
+    // No knowledge base: no ore is known by its metadata.
+  }
+  byId = { vein, small };
+  return byId;
+}
+
+/** TileEntityOres.mMetaData of a small ore is 16000 more than its material id (+ stone). */
+const SMALL_ORE_META = 16000;
+
+/**
+ * The GT ore whose tile entity's metadata is `meta` (TileEntityOres.mMetaData, as the server
+ * sends it: the material id, plus 1000 x the stone it sits in, plus 16000 for a small ore;
+ * gregtech 5.09.51.482 TileEntityOres.setOreBlock), or null when the knowledge base has no
+ * such ore.
+ */
+export function gtOreOfMeta(meta: number): GtOreKind | null {
+  if (!Number.isInteger(meta) || meta < 0) return null;
+  const small = meta >= SMALL_ORE_META;
+  const id = meta % 1000;
+  const table = oresById();
+  return (small ? table.small : table.vein).get(id) ?? null;
+}
+
+/** "BrownLimonite" -> "brown limonite ore" (a small one: "small brown limonite ore"). */
+export function gtOreLabel(ore: GtOreKind): string {
+  const name = ore.material.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  return `${ore.small ? 'small ' : ''}${name} ore`;
 }

@@ -203,6 +203,17 @@ export function gtTileEntityMessage(
   return b;
 }
 
+/** GregTech ORES (type 3, PacketOres): an ore's TileEntityOres.mMetaData. */
+export function gtOreMessage(x: number, y: number, z: number, meta: number): Buffer {
+  const b = Buffer.alloc(1 + 4 + 2 + 4 + 2);
+  b.writeUInt8(3, 0);
+  b.writeInt32BE(x, 1);
+  b.writeInt16BE(y, 5);
+  b.writeInt32BE(z, 7);
+  b.writeInt16BE(meta, 11);
+  return b;
+}
+
 /** GregTech BLOCK_EVENT (type 2), coordinates packed like GTNHLib's CoordinatePacker. */
 export function gtBlockEventsMessage(
   dimension: number,

@@ -154,6 +154,11 @@ export interface MockResourceBlock {
   meta?: number;
   /** What a dig drops, instead of MOCK_DROPS (a GT ore's material, from its tile entity). */
   drop?: { item: string; count: number } | null;
+  /**
+   * A GT ore's material as the server sends it for an ore with an open face (ResourceBlock.ore:
+   * TileEntityOres.mMetaData); the observation shows it. Left out: not sent.
+   */
+  ore?: number;
 }
 
 export interface MockPlacedBlock {
@@ -494,6 +499,7 @@ export class MockMinecraftClient implements MinecraftClient {
               ...(r.standAt === undefined
                 ? {}
                 : { standAt: r.standAt === null ? null : { ...r.standAt } }),
+              ...(r.ore === undefined ? {} : { ore: r.ore }),
             })),
             removed: removed.map((p) => ({ ...p })),
             placeable: this.#placeableCells().slice(0, MAX_REPORTED_PLACEABLE),

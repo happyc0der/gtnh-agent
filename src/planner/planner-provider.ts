@@ -23,6 +23,7 @@ import {
 } from '../domain/recipes.ts';
 import { SafetyConfigSchema, type SafetyConfig } from '../domain/safety.ts';
 import { gtnhChangesFor } from '../goals/gtnh-changes.ts';
+import { gtOreLabel, gtOreOfMeta } from '../goals/ore-names.ts';
 import { ROUTE_BOOK } from '../goals/route-book.ts';
 import {
   describeRoute,
@@ -170,14 +171,20 @@ export function sanitizeStateForPlanner(
     // kinds, so every kind in view shows.
     diggableBlocks: nearestOfEachKind(
       (blocks?.resources ?? []).filter((r) => r.standAt !== null),
-      (r) => r.block,
+      (r) => (r.ore === undefined ? r.block : `${r.block}@${r.ore}`),
       MAX_COMPACT_RESOURCES,
-    ).map((r) => ({
-      block: r.block,
-      position: { ...r.position },
-      reach: position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
-      standAt: r.standAt ?? null,
-    })),
+    ).map((r) => {
+      // A GT ore whose material the server sent: which ore it is ("iron ore").
+      const ore = r.ore === undefined ? null : gtOreOfMeta(r.ore);
+      return {
+        block: r.block,
+        ...(ore === null ? {} : { ore: gtOreLabel(ore) }),
+        position: { ...r.position },
+        reach:
+          position === null ? null : Number(eyeDistanceToBlock(position, r.position).toFixed(2)),
+        standAt: r.standAt ?? null,
+      };
+    }),
     tools: inventory ? plannerTools(inventory.items, protectedItems) : [],
     placeableCells: (blocks?.placeable ?? []).slice(0, MAX_COMPACT_PLACEABLE).map((c) => ({
       position: { ...c.position },
@@ -463,12 +470,22 @@ function scanCovers(state: GameState): (b: BlockPosition) => boolean {
     b.y >= feetLevel && Math.hypot(b.x + 0.5 - at.x, b.y + 0.5 - at.y, b.z + 0.5 - at.z) <= radius;
 }
 
-/** The blocks in the current observation, as places (nearest first, with stand spots). */
+/**
+ * The blocks in the current observation, as places (nearest first, with stand spots); for an
+ * item, a GT ore only when its material is not known or drops it (an iron ore for raw iron).
+ */
 function placesInView(state: GameState): PlaceLookup {
   const blocks = state.nearbyBlocks.known ? state.nearbyBlocks.value.resources : [];
   const at = state.player.position.known ? state.player.position.value : null;
-  return (wanted) => {
-    const seen = blocks.filter((b) => wanted.includes(b.block) && b.standAt !== null);
+  return (wanted, item) => {
+    const seen = blocks.filter(
+      (b) =>
+        wanted.includes(b.block) &&
+        b.standAt !== null &&
+        (item === undefined ||
+          b.ore === undefined ||
+          (gtOreOfMeta(b.ore)?.drops.includes(item) ?? true)),
+    );
     const nearest = seen[0];
     if (nearest === undefined || at === null) return [];
     return [

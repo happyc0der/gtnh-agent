@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { MAX_EXPLORE_DISTANCE, MIN_EXPLORE_DISTANCE, type ActionSpec } from '../domain/actions.ts';
-import { DiggableBlockSchema, isGardenBlock, type DiggableBlock } from '../domain/blocks.ts';
+import {
+  DiggableBlockSchema,
+  GT_ORE_BLOCK,
+  isGardenBlock,
+  type DiggableBlock,
+} from '../domain/blocks.ts';
 import {
   attackRefusal,
   BARE_HAND,
@@ -19,6 +24,7 @@ import {
 import { animalDrops, FOOD_GARDENS, GARDEN_DROPS } from '../domain/food.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
+import { gtOreOfMeta } from '../goals/ore-names.ts';
 import { DIG_YIELDS } from '../goals/route-book.ts';
 
 /**
@@ -212,16 +218,27 @@ function ownDrops(block: DiggableBlock): string[] {
 const ALL_GARDEN_PRODUCE: string[] = [...new Set(FOOD_GARDENS.flatMap((g) => GARDEN_DROPS[g]))];
 
 /**
+ * What a dig of `block` drops: a GT ore whose material the server sent (`ore`, its tile
+ * entity's metadata: ResourceBlock.ore) only that ore's drops, else the block's own.
+ */
+function dropsOf(block: DiggableBlock, ore: number | undefined): string[] {
+  if (block !== GT_ORE_BLOCK || ore === undefined) return ownDrops(block);
+  return gtOreOfMeta(ore)?.drops ?? ownDrops(block);
+}
+
+/**
  * Whether digging `candidate` gives what a GATHER of `source` counts: grass gives dirt, so a
  * GATHER of dirt digs grass too (seen live: the floor around the player was all grass). With
- * an `item`, only blocks that can drop that item.
+ * an `item`, only blocks that can drop that item: a GT ore whose material is known (`ore`)
+ * only when it is that item's ore, so "16 raw iron ore" digs iron ore and passes tin ore by.
  */
 export function givesSame(
   candidate: DiggableBlock,
   source: DiggableBlock | { block: DiggableBlock; item?: string | undefined },
+  ore?: number,
 ): boolean {
   if (typeof source !== 'string' && source.item !== undefined) {
-    return ownDrops(candidate).includes(source.item);
+    return dropsOf(candidate, ore).includes(source.item);
   }
   const block = typeof source === 'string' ? source : source.block;
   if (candidate === block) return true;
@@ -492,6 +509,8 @@ export function chooseGatherAction(
     later: boolean;
     /** Felling: a log in reach in the column of the log dug last: the trunk goes on. */
     goesOn: boolean;
+    /** A GT ore whose material is not known, for one ore's item: perhaps that ore, after the known ones. */
+    maybe: boolean;
   }> = [];
   // Felling trunks (logs): the listed blocks a log's drop would stop on, and the log dug last.
   const resources = state.nearbyBlocks.value.resources;
@@ -510,7 +529,8 @@ export function chooseGatherAction(
   // In view, but with no spot a walk reaches to dig it from (standAt null).
   let unreachable = 0;
   for (const r of resources) {
-    if (!givesSame(r.block, gather.args) || skipped.has(key(r.position))) continue;
+    if (!givesSame(r.block, gather.args, r.ore) || skipped.has(key(r.position))) continue;
+    const maybe = r.block === GT_ORE_BLOCK && r.ore === undefined && gather.args.item !== undefined;
     if (r.standAt === null) {
       unreachable += 1;
       continue;
@@ -528,7 +548,7 @@ export function chooseGatherAction(
       !felling || r.standAt === undefined || walked || besideColumn(feet, r.position);
     if (reach <= opts.reach && fromHere) {
       const goesOn = lastDug !== null && lastDug.x === r.position.x && lastDug.z === r.position.z;
-      candidates.push({ position: r.position, walkTo: null, cost: reach, later, goesOn });
+      candidates.push({ position: r.position, walkTo: null, cost: reach, later, goesOn, maybe });
       continue;
     }
     // Out of reach: walk to its stand spot, unless the adapter computes none, or the last
@@ -544,12 +564,17 @@ export function chooseGatherAction(
       cost: opts.reach + distance(feet, r.standAt),
       later,
       goesOn: false,
+      maybe,
     });
   }
-  // Felling: a trunk from its base (no log or leaves under it) up, its next log first.
+  // Ores known to be the one wanted before those not known; felling: a trunk from its base
+  // (no log or leaves under it) up, its next log first.
   candidates.sort(
     (a, b) =>
-      Number(a.later) - Number(b.later) || Number(b.goesOn) - Number(a.goesOn) || a.cost - b.cost,
+      Number(a.maybe) - Number(b.maybe) ||
+      Number(a.later) - Number(b.later) ||
+      Number(b.goesOn) - Number(a.goesOn) ||
+      a.cost - b.cost,
   );
 
   let nearestRefusal: string | null = null;
