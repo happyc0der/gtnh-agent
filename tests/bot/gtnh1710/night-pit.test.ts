@@ -29,11 +29,13 @@ const ID = {
   coalOre: 16,
   log: 17,
   sandstone: 24,
+  sapling: 6,
   tallgrass: 31,
   foliage: 1102,
 } as const;
 const NAMES = new Map<number, string>([
   [ID.foliage, 'BiomesOPlenty:foliage'],
+  [ID.sapling, 'minecraft:sapling'],
   [ID.stone, 'minecraft:stone'],
   [ID.grass, 'minecraft:grass'],
   [ID.dirt, 'minecraft:dirt'],
@@ -139,9 +141,9 @@ describe('checkDigDown: the block under the feet, exactly one block down', () =>
       /minecraft:water at \(1, 64, 1\) is near it/,
     ],
     [
-      'tall grass where the feet are',
-      { [k(0, 64, 0)]: ID.tallgrass },
-      /touches minecraft:tallgrass/,
+      'a sapling where the feet are (a wild plant would drop with it: a planted one never)',
+      { [k(0, 64, 0)]: ID.sapling },
+      /touches minecraft:sapling/,
     ],
     [
       'sand beside it with nothing under it',
@@ -404,9 +406,9 @@ describe('the way out in the morning', () => {
     ).toBeNull();
   });
 
-  it('from the pit: the roof, then a staircase where no plant stands on the ground to dig', () => {
-    // Tall grass east of the pit: the dig under it is refused, so the staircase goes west.
-    const r = planShelterExit(pit({ [k(1, 64, 0)]: ID.tallgrass }), BOTTOM, OPTS);
+  it('from the pit: the roof, then a staircase where no planted plant stands on the ground to dig', () => {
+    // A sapling east of the pit: the dig under it is refused, so the staircase goes west.
+    const r = planShelterExit(pit({ [k(1, 64, 0)]: ID.sapling }), BOTTOM, OPTS);
     if (!r.ok) throw new Error(r.reason);
     expect(r.digs).toBe(4);
     expect(specs(r.steps)).toEqual([

@@ -79,13 +79,28 @@ export const DIG_SETTLE_TICKS = 5;
  * block, an unnamed id) refuses the dig: removing the block could flood the hole, drop an
  * attached block or change a build. Beside it (not on top), the plants the body walks through
  * are fine too (digDoesNotDisturb): they stand on the block under them, not on the dug one. A
- * garden is such a plant: on top of a dug block it would drop, so it is not in this set.
+ * garden is such a plant: on top of a dug block it would drop, so it is not in this set. On
+ * top, only WILD_PLANTS may stand.
  */
 export const DIG_NEIGHBOURS: ReadonlySet<string> = new Set<string>([
   'minecraft:air',
   ...WALKABLE_SURFACES,
   ...SOLID_DIGGABLE_BLOCKS,
   ...TOOL_DIGGABLE_BLOCKS,
+]);
+
+/**
+ * Wild plants that may stand on top of a dug block: they drop with it, as under any player's
+ * shovel, and nothing of worth goes (tall grass, a flower, a dead bush). Seen live 2026-10-04:
+ * tall grass on a hillside stopped "!tunnel east 6 down" after 2 blocks. Never a sapling, a
+ * mushroom, sugar cane, a crop or a garden: those are planted, farmed or food.
+ */
+export const WILD_PLANTS: ReadonlySet<string> = new Set([
+  'minecraft:tallgrass',
+  'minecraft:yellow_flower',
+  'minecraft:red_flower',
+  'minecraft:double_plant',
+  'minecraft:deadbush',
 ]);
 
 export interface BlockPos {
@@ -271,7 +286,7 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
       return refuse(`it touches block id ${nid} at ${fmt(n)}, which the registry does not name`);
     if (!digDoesNotDisturb(world, n, nname, dy)) {
       return refuse(
-        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, and plants only beside it)`,
+        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, plants only beside it, and wild ones on top)`,
       );
     }
   }
@@ -495,9 +510,10 @@ function digDownSurroundingOk(world: WalkWorld, n: BlockPos, name: string): bool
 
 /**
  * Whether block `name` at `n` may touch a dug block from a face `dy` above or below it:
- * DIG_NEIGHBOURS, or on a side face a plant the body passes (passable.ts, by metadata). Seen
- * live: tall grass beside the ground block ruled out every night pit around. A plant hangs on
- * the block under it, so only one on top of the dug block would drop.
+ * DIG_NEIGHBOURS, or on a side face a plant the body passes (passable.ts, by metadata), or on
+ * top a wild plant (WILD_PLANTS). Seen live: tall grass beside the ground block ruled out
+ * every night pit around. A plant hangs on the block under it, so only one on top of the dug
+ * block drops: a wild one may.
  */
 export function digDoesNotDisturb(
   world: WalkWorld,
@@ -505,7 +521,9 @@ export function digDoesNotDisturb(
   name: string,
   dy: number,
 ): boolean {
-  return DIG_NEIGHBOURS.has(name) || (dy === 0 && passProblem(world, n.x, n.y, n.z) === null);
+  if (DIG_NEIGHBOURS.has(name)) return true;
+  if (dy === 1 && WILD_PLANTS.has(name)) return true;
+  return dy === 0 && passProblem(world, n.x, n.y, n.z) === null;
 }
 
 const nameAt = (world: WalkWorld, x: number, y: number, z: number): string | undefined => {
@@ -640,7 +658,7 @@ export function checkDigDown(
       return refuse(`the block next to it at ${fmt(n)} is not loaded or not named`);
     if (!digDoesNotDisturb(world, n, nname, dy)) {
       return refuse(
-        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, and plants only beside it)`,
+        `it touches ${nname} at ${fmt(n)} (only air and plain full blocks may touch a dug block, plants only beside it, and wild ones on top)`,
       );
     }
     // Sand or gravel beside it, with nothing under it, would fall when the block goes.

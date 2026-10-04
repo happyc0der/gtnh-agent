@@ -25,10 +25,12 @@ const ID = {
   water: 9,
   lava: 11,
   leaves: 18,
+  sapling: 6,
   tallgrass: 31,
   foliage: 1102,
 } as const;
 const NAMES = new Map<number, string>([
+  [ID.sapling, 'minecraft:sapling'],
   [ID.air, 'minecraft:air'],
   [ID.stone, 'minecraft:stone'],
   [ID.grass, 'minecraft:grass'],
@@ -342,9 +344,9 @@ describe('breaking leaves on the way (WalkBreaks)', () => {
       BREAKS,
     );
     expect(brokenBy(plan)).toEqual([{ x: 2, y: 64, z: 0 }]);
-    // ...but a plant on top of a leaf would drop with it: none is.
+    // ...but a planted plant on top of a leaf would drop with it: none is (a wild one may).
     const onTop = wall(1);
-    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) onTop[`2,65,${z}`] = ID.tallgrass;
+    for (let z = FENCE.min.z; z <= FENCE.max.z; z++) onTop[`2,65,${z}`] = ID.sapling;
     expect(
       planTerrainWalk(
         terrain(() => 63, onTop),

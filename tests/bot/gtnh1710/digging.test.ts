@@ -246,6 +246,7 @@ const ID = {
   log: 17,
   leaves: 18,
   glass: 20,
+  sapling: 6,
   tallgrass: 31,
   torch: 50,
   chest: 54,
@@ -269,6 +270,7 @@ const NAMES = new Map<number, string>([
   [ID.log, 'minecraft:log'],
   [ID.leaves, 'minecraft:leaves'],
   [ID.tallgrass, 'minecraft:tallgrass'],
+  [ID.sapling, 'minecraft:sapling'],
   [ID.glass, 'minecraft:glass'],
   [ID.torch, 'minecraft:torch'],
   [ID.chest, 'minecraft:chest'],
@@ -462,14 +464,17 @@ describe('checkDig on terrain', () => {
 });
 
 describe('checkDig', () => {
-  it('a plant beside the block is fine; one on top of it would drop, so it refuses', () => {
-    // Seen live: tall grass beside the ground block ruled out every night pit around.
+  it('a plant beside the block is fine; on top only a wild one, which drops with it', () => {
+    // Seen live: tall grass beside the ground block ruled out every night pit around, and
+    // tall grass on top stopped stairs on a hillside.
     const beside = { [k(1, 200, 0)]: ID.dirt, [k(2, 200, 0)]: ID.tallgrass };
     expect(checkDig(world(beside), AREA, FEET, { x: 1, y: 200, z: 0 }).ok).toBe(true);
-    const onTop = { [k(1, 200, 0)]: ID.dirt, [k(1, 201, 0)]: ID.tallgrass };
-    expect(checkDig(world(onTop), AREA, FEET, { x: 1, y: 200, z: 0 })).toMatchObject({
+    const grassOnTop = { [k(1, 200, 0)]: ID.dirt, [k(1, 201, 0)]: ID.tallgrass };
+    expect(checkDig(world(grassOnTop), AREA, FEET, { x: 1, y: 200, z: 0 }).ok).toBe(true);
+    const saplingOnTop = { [k(1, 200, 0)]: ID.dirt, [k(1, 201, 0)]: ID.sapling };
+    expect(checkDig(world(saplingOnTop), AREA, FEET, { x: 1, y: 200, z: 0 })).toMatchObject({
       ok: false,
-      reason: expect.stringMatching(/touches minecraft:tallgrass at \(1, 201, 0\)/) as unknown,
+      reason: expect.stringMatching(/touches minecraft:sapling at \(1, 201, 0\)/) as unknown,
     });
   });
 
