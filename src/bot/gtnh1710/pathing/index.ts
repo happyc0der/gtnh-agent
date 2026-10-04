@@ -1,7 +1,9 @@
 /**
  * The pathfinder: where to walk, and how, tick by tick. Pure: it reads the blocks the server
- * sent (a WalkWorld) and returns plans; it sends nothing and runs no client code. The client's
- * executor (client/movement-actions.ts) carries plans out and re-checks every step.
+ * sent (a WalkWorld) and returns plans; it sends nothing and runs no client code. The client
+ * walks with it over terrain (client/path-actions.ts: MOVE_TO, EXPLORE, retreats, the flee,
+ * owners' travel steps), under the walk policy of path-policy.ts, carries the plans out and
+ * re-checks every step, break and placement just before it.
  *
  *  1. planPath (search.ts): A* over feet blocks inside the search area (the fence), with the
  *     movements of movements.ts (traverse, diagonal, ascend, descend, fall, parkour, pillar,
@@ -14,8 +16,7 @@
  *  3. validatePlan (validate.ts): checks a plan against those physics and the server's
  *     movement and fall checks, tick by tick (the tests run every plan through it).
  *  4. floodPath (search.ts): every feet block a walk reaches within a cost, with the same
- *     movements and options: where to stand to dig a block is a look-up in it.
- *  5. toTerrainMoves (terrain-moves.ts): a path in terrain.ts's move kinds.
+ *     movements and options: where to stand to dig a block is a look-up in it (stand-spots.ts).
  *
  * The design follows Baritone (the Minecraft pathfinding bot, LGPL-3.0): A* with a binary
  * heap and packed node keys, movements checked against the blocks with their costs in ticks
@@ -70,7 +71,6 @@ export {
   type StepPlace,
 } from './execute.ts';
 export { stepProblem, validatePlan, type StepFault, type Validation } from './validate.ts';
-export { toTerrainMoves, type TerrainConversion } from './terrain-moves.ts';
 export {
   ASCEND_TICKS,
   DEFAULT_PENALTIES,

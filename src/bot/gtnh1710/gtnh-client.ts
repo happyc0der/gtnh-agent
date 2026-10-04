@@ -80,8 +80,9 @@ export interface ConnectionInfo {
  *    or public chat starting with ! or # or the bot's name; a stop stops the action in
  *    progress at once (interrupt());
  *  - perform() supports OBSERVE_STATE, WAIT and PAUSE_AND_ASK_USER, plus MOVE_TO and
- *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops) when
- *    the play area follows the player (movement mode 'follow'), OPEN_CONTAINER /
+ *    RETURN_TO_SAFE_LOCATION as walks when movement is enabled, EXPLORE (walks in hops, each
+ *    planned again on the pathfinder) when the play area follows the player (movement mode
+ *    'follow'), OPEN_CONTAINER /
  *    DEPOSIT_ITEM / WITHDRAW_ITEM when containers are enabled, CRAFT_ITEM when crafting is
  *    enabled, DIG_BLOCK when digging is enabled (and DIG_DOWN, the night pit's dig under the
  *    feet, when walking is enabled too), PLACE_BLOCK when placing is enabled,
@@ -93,9 +94,13 @@ export interface ConnectionInfo {
  *    boundary: client/core.ts fence()), and every step is re-checked just before it is sent;
  *    it stops on a server correction, a health drop, a nearby threat (MOVE_TO, EXPLORE), a
  *    blocked or dangerous way ahead, the stop file, halt(), or a lost connection;
- *  - a MOVE_TO over terrain may break a few leaves in its way when digging is enabled, each
- *    one as DIG_BLOCK digs (checkWalkBreak re-checked before and during the dig, success only
- *    on the server's change to air); a break refused or not confirmed stops the walk;
+ *  - over terrain a walk plans on the pathfinder (pathing/, client/path-actions.ts) under the
+ *    walk policy (path-policy.ts): MOVE_TO and EXPLORE may break natural blocks in their way
+ *    when digging is enabled, each one as DIG_BLOCK digs (checkPathBreak re-checked before and
+ *    during the dig, success only on the server's change to air), and pillar or bridge with
+ *    a throwaway block when placing is enabled (checkPathPlace just before the click, success
+ *    only on the server's block change); never an ore, a player's build, or near another
+ *    player; a break or placement refused or not confirmed stops the walk;
  *  - window work never leaves items on the cursor or in a crafting grid when it can help it
  *    (the server drops both when a window closes or the player leaves);
  *  - a dig breaks one allowlisted block that digging.ts has checked, and re-checks it every
@@ -119,8 +124,8 @@ export class Gtnh1710Client implements MinecraftClient {
    * inventory-actions.ts (chests, windows and clicks), craft-actions.ts, interact-actions.ts
    * (block windows, SMELT, TAKE_OUTPUT), dig-actions.ts, drop-actions.ts (picking up what a
    * dig or a kill dropped), place-actions.ts, combat-actions.ts, quest-book-actions.ts,
-   * player-actions.ts (WAIT, EAT_FOOD), movement-actions.ts (walking, idle ticks, gravity) and
-   * travel-actions.ts (EXPLORE, retreats).
+   * player-actions.ts (WAIT, EAT_FOOD), movement-actions.ts (walking, idle ticks, gravity),
+   * path-actions.ts (walks on the pathfinder) and travel-actions.ts (EXPLORE, retreats).
    */
   readonly #core: ClientCore;
 

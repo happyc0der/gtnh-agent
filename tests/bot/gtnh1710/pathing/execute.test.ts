@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { changedWorld } from '../../../../src/bot/gtnh1710/pathing/cells.ts';
 import {
   planExecution,
   type ExecutionPlan,
@@ -13,9 +12,7 @@ import {
   WALK_SPEED,
 } from '../../../../src/bot/gtnh1710/pathing/physics.ts';
 import { planPath, type PathOptions } from '../../../../src/bot/gtnh1710/pathing/search.ts';
-import { toTerrainMoves } from '../../../../src/bot/gtnh1710/pathing/terrain-moves.ts';
 import { validatePlan } from '../../../../src/bot/gtnh1710/pathing/validate.ts';
-import { bodyProblem, terrainSteps } from '../../../../src/bot/gtnh1710/terrain.ts';
 import type { Fence, Vec3 } from '../../../../src/bot/gtnh1710/walking.ts';
 import { area, B, centre, poolWorld, TestWorld } from '../fixtures/path-worlds.ts';
 
@@ -290,39 +287,5 @@ describe('execution plans', () => {
     );
     expect(steps.length).toBeGreaterThan(cost * 0.8);
     expect(steps.length).toBeLessThan(cost * 1.4);
-  });
-
-  it("converts to terrain.ts's moves (walk, step-up, drop) when every movement has one", () => {
-    const w = new TestWorld((x) => (x >= 2 && x <= 4 ? 64 : x >= 5 ? 62 : 63)).set(
-      3,
-      65,
-      0,
-      B.leaves,
-    );
-    const r = planPath(w, STRIP, { x: 0.3, y: 64, z: 0.5 }, goalBlock(7, 63, 0), {
-      canBreak: () => 10,
-    });
-    expect(r.status).toBe('reached');
-    const t = toTerrainMoves(r.start!, r.movements);
-    if (!t.ok) throw new Error(t.reason);
-    expect(t.moves.map((m) => m.kind)).toEqual([
-      'walk',
-      'walk',
-      'step-up',
-      'walk',
-      'walk',
-      'drop',
-      'walk',
-      'walk',
-    ]);
-    expect(t.moves.find((m) => m.breaks !== undefined)?.breaks).toEqual([{ x: 3, y: 65, z: 0 }]);
-    // The existing walker's own steps along them keep the body clear (with the leaf broken).
-    const broken = changedWorld(w, [{ cell: { x: 3, y: 65, z: 0 }, block: null }]);
-    for (const s of terrainSteps({ x: 0.3, y: 64, z: 0.5 }, t.moves)) {
-      expect(bodyProblem(broken, STRIP, s.pos)).toBeNull();
-    }
-    const gap = new TestWorld((x) => (x === 1 ? 60 : 63));
-    const p = planPath(gap, STRIP, FROM, goalBlock(4, 64, 0), { parkour: true });
-    expect(toTerrainMoves(p.start!, p.movements)).toMatchObject({ ok: false, index: 0 });
   });
 });

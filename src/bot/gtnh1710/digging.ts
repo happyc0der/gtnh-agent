@@ -392,7 +392,10 @@ export function standSpotFor(
 }
 
 // ---------------------------------------------------------------------------
-// Breaking leaves on a walk's way (MOVE_TO over terrain, with digging enabled)
+// Breaking leaves on a walk's way: terrain.ts's walker (planTerrainWalk and reachableFeet
+// given walkBreaks). The client's own walks no longer break this way: they plan on the
+// pathfinder and break by the walk policy (path-policy.ts checkPathBreak, which keeps every
+// rule of checkDig).
 
 /**
  * What a walk may break on its way: leaves, which a bare hand breaks in half a second. A
@@ -428,9 +431,8 @@ export const MAX_WALK_BREAKS = 12;
  * from where it stands, never its own support or a block over its head that falls, only air
  * and plain full blocks touching it and plants only beside it, nothing to fall into the
  * hole, no hazard near, nothing unloaded or unnamed), and wholly inside the safety boundary
- * when the client knows it (the safety policy's own rule for DIG_BLOCK). Checked by the
- * walker for every break it plans, and by the client again just before each dig and every
- * tick while digging.
+ * when the client knows it (the safety policy's own rule for DIG_BLOCK). Checked by
+ * terrain.ts's walker for every break it plans (walkBreaks).
  */
 export function checkWalkBreak(
   world: WalkWorld,
@@ -462,9 +464,9 @@ export function walkBreakCost(block: DiggableBlock): number {
 }
 
 /**
- * The walker's rule for breaking on the way (terrain.ts WalkBreaks): checkWalkBreak, its
- * cost, and at most MAX_WALK_BREAKS per walk. The client builds it once per observation and
- * per walk with the same area, so reachableFeet's stand spots and MOVE_TO's plan agree.
+ * terrain.ts's rule for breaking on the way (WalkBreaks): checkWalkBreak, its cost, and at
+ * most MAX_WALK_BREAKS per walk, the same for planTerrainWalk and reachableFeet so their walks
+ * agree.
  */
 export function walkBreaks(area: DigArea, boundary: PointBox | null = null): WalkBreaks {
   return {
