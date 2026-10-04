@@ -524,6 +524,9 @@ describe('gravity: what holds the player up', () => {
     // Deeper than a safe fall: no landing.
     const pit = terrain((x) => (x >= 1 ? 63 : 55));
     expect(edgeLanding(pit, over)).toBeNull();
+    // Water under the way down is no floor: it stays rather than sink (no swimming).
+    const pond = terrain((x) => (x >= 1 ? 63 : 60), { '0,61,0': ID.water });
+    expect(edgeLanding(pond, over)).toBeNull();
   });
 
   it('a player left in the air by a stopped jump falls to the block below', () => {

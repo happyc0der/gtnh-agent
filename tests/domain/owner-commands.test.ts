@@ -373,6 +373,8 @@ describe('explore (Baritone #explore)', () => {
     for (const text of ['!waypoint north', '!waypoint ne']) {
       expect(parseOwnerCommand(text), text).toMatchObject({ ok: false, kind: 'usage' });
     }
+    // One saved before may still be deleted.
+    expect(parsed('!waypoint delete north')).toEqual({ verb: 'waypoint-delete', name: 'north' });
   });
 
   it('gives its usage for anything else (a word that is no direction, too far, too much)', () => {

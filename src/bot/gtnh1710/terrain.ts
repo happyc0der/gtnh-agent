@@ -737,7 +737,7 @@ export function restingY(world: WalkWorld, feet: Vec3): number | null {
  * hole it was stepping down into, where its walks then refused to start. The landing: the
  * highest level below with such a block under the footprint, MAX_SAFE_FALL + 1 levels down at
  * most. Null when something holds the feet up, when they are between levels (restingY), when
- * no floor is that near, or when a chunk is not loaded.
+ * no floor is that near, when a fluid lies under the way down, or when a chunk is not loaded.
  */
 export function edgeLanding(world: WalkWorld, feet: Vec3): number | null {
   const y = Math.round(feet.y);
@@ -745,13 +745,20 @@ export function edgeLanding(world: WalkWorld, feet: Vec3): number | null {
   const xs = cellsAcross(feet.x - 0.3, feet.x + 0.3);
   const zs = cellsAcross(feet.z - 0.3, feet.z + 0.3);
   for (let below = y - 1; below >= Math.max(0, y - 2 - MAX_SAFE_FALL); below--) {
+    let floor = false;
     for (const x of xs) {
       for (const z of zs) {
         const problem = passProblem(world, x, below, z);
         if (problem === 'chunk not loaded') return null;
-        if (problem !== null) return below === y - 1 ? null : below + 1;
+        // A fluid is no floor: the player would sink into it (an independent review,
+        // 2026-10-04: it "landed" on water, where every walk then refused to start).
+        const id = world.blockAt(x, below, z);
+        const block = id === undefined || id === 0 ? undefined : world.blockName(id);
+        if (block !== undefined && /water|lava|fluid/i.test(block)) return null;
+        if (problem !== null) floor = true;
       }
     }
+    if (floor) return below === y - 1 ? null : below + 1;
   }
   return null;
 }

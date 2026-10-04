@@ -38,6 +38,7 @@ import {
   stripTaskId,
   saveProgress,
   stepFailureOf,
+  mobInTheWay,
 } from './command-base.ts';
 
 /**
@@ -182,7 +183,12 @@ export async function tunnelRound(
     }
     return fail(`${problem} (${dug})`);
   }
-  run.stuck = run.tunnelDone !== null && plan.done <= run.tunnelDone ? run.stuck + 1 : 0;
+  const gained = run.tunnelDone === null || plan.done > run.tunnelDone;
+  // A session a hostile stopped (mobInTheWay) counts neither way.
+  if (run.mobStops === 0) run.stuck = gained ? 0 : run.stuck + 1;
+  // Cells gained end the failures in a row (an independent review, 2026-10-04: three sessions
+  // that each dug before a step failed would have failed a tunnel making progress).
+  if (gained) run.failures = 0;
   run.tunnelDone = plan.done;
   if (run.stuck >= limits.maxStuckSessions) {
     return fail(`no progress in ${run.stuck} sessions (${play.lastStop}; ${dug})`);
@@ -320,6 +326,9 @@ async function digSession(
     300,
   );
   if (result.stopKind === 'cycle-failed') {
+    const mobbed = await mobInTheWay(play, cmd, why);
+    if (mobbed === 'retry') return 'next-round';
+    if (mobbed === 'give-up') return fail(`${why} (${run.mobStops - 1} tries; ${dug})`);
     // A step failed: one of System 1's reflexes (a retreat with no way home, seen live
     // 2026-10-04: a stairs command failed with 0 blocks dug), or a walk a hostile stopped (a
     // Mirage Enderman 4 blocks off, the same day). The dig was interrupted: it is planned
@@ -332,6 +341,7 @@ async function digSession(
   }
   if (result.stopKind === 'needs-attention') return fail(`${why} (${dug})`);
   run.failures = 0;
+  run.mobStops = 0;
   return 'next-round';
 }
 

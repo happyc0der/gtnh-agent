@@ -114,6 +114,8 @@ export interface CommandRun {
   worked: boolean;
   /** A goal: its last session ended with one of System 1's reflexes (a retreat, a meal...). */
   interrupted: boolean;
+  /** Walks a hostile stopped in a row (mobInTheWay): not failures of the way. */
+  mobStops: number;
   /** Mine a GregTech ore none of which is in view: the strip mine (strip-mine.ts). */
   strip: StripState | null;
   /** Its ores in view a goal session got none from (`x,y,z`): the strip mine goes on past them. */

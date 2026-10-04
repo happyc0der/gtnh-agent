@@ -107,11 +107,7 @@ export const WaypointNameSchema = z
     WAYPOINT_NAME,
     'expected a waypoint name: lowercase letters, digits, - and _ (max 32, a letter in it)',
   )
-  .refine((n) => !RESERVED_WAYPOINTS.has(n), 'that word is the waypoint command itself')
-  .refine(
-    (n) => directionOf(n) === null,
-    'a compass direction: !goto <direction> explores that way',
-  );
+  .refine((n) => !RESERVED_WAYPOINTS.has(n), 'that word is the waypoint command itself');
 
 const Coordinate = z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT);
 /** How far an explore command goes when the owner names no distance (blocks). */
@@ -610,7 +606,11 @@ function waypointCommand(args: readonly string[]): CommandParse {
   if (args.length === 0 || (args.length === 1 && first === 'list')) command = { verb: 'waypoints' };
   else if (args.length === 2 && RESERVED_WAYPOINTS.has(first) && first !== 'list') {
     command = { verb: 'waypoint-delete', name: (args[1] ?? '').toLowerCase() };
-  } else if (args.length === 1) command = { verb: 'waypoint', name: first };
+  } else if (args.length === 1 && directionOf(first) === null) {
+    // Never a compass direction: !goto north explores. One saved before may still be deleted
+    // (an independent review, 2026-10-04).
+    command = { verb: 'waypoint', name: first };
+  }
   const parsed = OwnerCommandSchema.safeParse(command);
   return parsed.success ? { ok: true, command: parsed.data } : usage('waypoint');
 }

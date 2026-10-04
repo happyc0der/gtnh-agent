@@ -327,15 +327,22 @@ describe("owners' commands in play", () => {
     expect(repos.commands.get(1)?.status).toBe('done');
   });
 
-  it("a travel command that fails says why, in the walk's own words", async () => {
-    // Seen live: "Failed: stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed".
-    const sim = newSim({ heard: [whisper('!goto 20 64 0')] });
+  /** A travel command whose first `fails` sessions' walk fails with `why`, then walks on. */
+  const failingWalks = async (
+    text: string,
+    why: string,
+    fails: number,
+    over: Partial<Sim> = {},
+  ) => {
+    const sim = newSim({ heard: [whisper(text)], ...over });
     const base = deps(open(), sim);
-    const why = 'walk stopped after 7 of 88 steps: hostile entity minecraft:Zombie 9.7 blocks away';
+    let failed = 0;
     await runPlay(
       {
         ...base,
-        session: (_limits, hooks) => {
+        session: (limits, hooks) => {
+          if (failed >= fails) return base.session(limits, hooks);
+          failed += 1;
           hooks.onCycle(
             {
               summary: 'EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed',
@@ -358,7 +365,31 @@ describe("owners' commands in play", () => {
       LIMITS,
       noStop,
     );
+    return { sim, failed };
+  };
+
+  it("a travel command that fails says why, in the walk's own words", async () => {
+    // Seen live: "Failed: stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed".
+    const why = 'walk stopped after 7 of 88 steps: the way ahead is not clear: lava at (3, 63, 0)';
+    const { sim } = await failingWalks('!goto 20 64 0', why, Infinity);
     expect(said(sim).at(-1)).toBe(`Failed: ${why}`);
+  });
+
+  it('a hostile in the way is waited out: told once, a trip tries 20 times, a follow on and on', async () => {
+    // Seen live 2026-10-04: a zombie in the shade stopped a follow's walks 3 times in 15 s,
+    // and the follow failed.
+    const why =
+      'walk stopped after 7 of 27 steps: hostile entity minecraft:Zombie 10.0 blocks away';
+    const told = 'A Zombie 10 blocks off is in my way: I keep away (I do not fight) and try again';
+    const passed = await failingWalks('!goto 20 64 0', why, 5);
+    expect(said(passed.sim)).toEqual(['OK: going to 20 64 0', told, 'Done: at 20 64 0']);
+    const stuck = await failingWalks('!goto 20 64 0', why, Infinity);
+    expect(said(stuck.sim)).toEqual(['OK: going to 20 64 0', told, `Failed: ${why} (20 tries)`]);
+    expect(stuck.failed).toBe(21);
+    // A follow keeps trying as long as the owner is in sight (here, 40 tries, then it walks).
+    const follow = await failingWalks('!follow', why, 40, { owner: { x: 5.5, y: 64, z: 0.5 } });
+    expect(said(follow.sim)).toEqual(['OK: following you', told]);
+    expect(follow.sim.steps[0]).toBe('MOVE_TO 4.5 0.5');
   });
 
   it('come and follow fail at once when the player is not seen, before any OK', async () => {
@@ -1291,12 +1322,11 @@ describe("owners' commands in play", () => {
     );
   });
 
-  it('tries a dig step a hostile stopped again; three in a row fail it, in the walk’s own words', async () => {
+  it('tries a failed dig step again: three in a row fail it in the walk’s words; a mob is waited out', async () => {
     // Seen live 2026-10-04: a Mirage Enderman 4 blocks off stopped the stairs' first step, and
     // the command failed at once with "MOVE_TO -> failed".
-    const walkStopped =
-      'walk stopped after 5 of 11 steps: hostile entity SpecialMobs.MirageEnderman 4.0 blocks away';
-    const run = async (failures: number): Promise<Sim> => {
+    const walkStopped = 'walk stopped after 5 of 11 steps: the way ahead is not clear: lava';
+    const run = async (failures: number, message = walkStopped): Promise<Sim> => {
       const sim = newSim({ heard: [whisper('!tunnel east 2')] });
       const tunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
         const done = Math.floor(sim.position.x) - req.start.x;
@@ -1332,7 +1362,7 @@ describe("owners' commands in play", () => {
                   requiresHumanConfirmation: false,
                   provider: 'test',
                 },
-                outcome: { execution: { ok: false, message: walkStopped }, stateAfter: null },
+                outcome: { execution: { ok: false, message }, stateAfter: null },
               } as unknown as CycleResult,
               1,
             );
@@ -1355,6 +1385,14 @@ describe("owners' commands in play", () => {
     expect(said(once).at(-1)).toBe('Done: dug a tunnel 2 blocks east');
     const thrice = await run(3);
     expect(said(thrice).at(-1)).toBe(`Failed: ${walkStopped} (0 of 2 blocks dug)`);
+    // A hostile's stops are neither failures nor sessions without progress.
+    const mob =
+      'walk stopped after 5 of 11 steps: hostile entity SpecialMobs.MirageEnderman 4.0 blocks away';
+    const waited = await run(8, mob);
+    expect(said(waited).slice(-2)).toEqual([
+      'A MirageEnderman 4 blocks off is in my way: I keep away (I do not fight) and try again',
+      'Done: dug a tunnel 2 blocks east',
+    ]);
   });
 
   it('a step the safety rules reject is reported in their words, not just its code', () => {

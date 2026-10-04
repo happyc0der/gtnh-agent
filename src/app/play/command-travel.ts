@@ -28,6 +28,7 @@ import {
   runOf,
   say,
   sayOnce,
+  mobInTheWay,
   stepFailureOf,
   TRAVEL_RETRY_MS,
   type CommandDeps,
@@ -312,10 +313,16 @@ export async function travelRound(
     // Seen live: "Failed: stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed", when
     // the walk had said why (a hostile 9.7 blocks off stopped its pillar).
     const why: string = stepFailure ?? result.stopReason;
+    const mobbed = await mobInTheWay(play, cmd, why, follow);
+    if (mobbed === 'retry') return 'next-round';
+    if (mobbed === 'give-up') {
+      return travelFailed(play, cmd, `${why} (${run.mobStops - 1} tries)`.slice(0, 300), true);
+    }
     return travelFailed(play, cmd, why.slice(0, 300));
   }
   // A step went: the failures in a row are over. A long trip says how far is left.
   run.failures = 0;
+  run.mobStops = 0;
   if (!follow && command.verb !== 'come') {
     if (run.reportedDistance === null) run.reportedDistance = distance;
     else if (run.reportedDistance - distance >= PROGRESS_EVERY) {
@@ -335,11 +342,12 @@ async function travelFailed(
   play: PlayState,
   cmd: OwnerCommandRecord,
   reason: string,
+  final = false,
 ): Promise<'next-round'> {
   const run = runOf(play, cmd.id);
   run.failures += 1;
   run.lastFailure = reason;
-  if (/^I cannot see /.test(reason) || run.failures >= MAX_COMMAND_FAILURES) {
+  if (final || /^I cannot see /.test(reason) || run.failures >= MAX_COMMAND_FAILURES) {
     finish(play, cmd, 'failed', `Failed: ${reason}`);
   } else {
     await play.sleep(TRAVEL_RETRY_MS);

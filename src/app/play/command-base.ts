@@ -185,6 +185,43 @@ export function stepFailureOf(r: CycleResult): string | null {
   return null;
 }
 
+/** Walks a hostile stopped in a row a trip or a dig tries again before it fails (follow: no end). */
+export const MAX_MOB_STOPS = 20;
+/** After a walk a hostile stopped, the next try waits this long. */
+export const MOB_RETRY_MS = 2_000;
+/** The walk's own words when a hostile stops it (movement-actions.ts walkInterruption). */
+const MOB_STOP = /\b(?:hostile|unclassified) entity (\S+) ([\d.]+) blocks away/;
+
+/**
+ * A walk a hostile stopped (the walk's own rule: one within the threat radius on the way; the
+ * bot does not fight unless combat is on) is not a failure of the way: the owner is told once,
+ * and the next round tries again a moment later, System 1 seeing the mob first (it may retreat
+ * or flee). Seen live 2026-10-04: a zombie in the Hot Forest's shade stopped a follow's walks
+ * three times in 15 s, and the follow failed. 'retry' after MOB_RETRY_MS; 'give-up' after
+ * MAX_MOB_STOPS in a row (`endless`: never, as for a follow); null when `why` is no mob's stop.
+ */
+export async function mobInTheWay(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  why: string,
+  endless = false,
+): Promise<'retry' | 'give-up' | null> {
+  const m = MOB_STOP.exec(why);
+  if (m === null) return null;
+  const run = runOf(play, cmd.id);
+  run.mobStops += 1;
+  if (!endless && run.mobStops > MAX_MOB_STOPS) return 'give-up';
+  const name = (m[1] ?? 'mob').replace(/^.*[:.]/, '');
+  sayOnce(
+    play,
+    cmd,
+    'mob-in-way',
+    `A ${name} ${Math.round(Number(m[2]))} blocks off is in my way: I keep away (I do not fight) and try again`,
+  );
+  await play.sleep(MOB_RETRY_MS);
+  return 'retry';
+}
+
 export function runOf(play: PlayState, id: number): CommandRun {
   let run = play.commandRuns.get(id);
   if (run === undefined) {
@@ -210,6 +247,7 @@ export function runOf(play: PlayState, id: number): CommandRun {
       tunnelPrevious: kept?.tunnelPrevious ?? null,
       worked: false,
       interrupted: false,
+      mobStops: 0,
     };
     play.commandRuns.set(id, run);
   }

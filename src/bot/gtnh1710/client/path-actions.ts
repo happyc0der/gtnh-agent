@@ -565,6 +565,9 @@ export class PathActions {
         // tick falls (1.7.10 moves along y before x and z, so the step off an edge still lands
         // on it). Seen live 2026-10-04: a hostile stopped a walk there, and the bot hung in the
         // air over the hole it was stepping down into. The walk's own stops wait for the landing.
+        // Only where the plan itself falls next: ground that vanished under the way (a crater, a
+        // block dug) holds back no stop for long (an independent review, 2026-10-04); the idle
+        // gravity check brings the player down there.
         let overEdge = false;
         for (let i = 0; i < seg.steps.length; i++) {
           const step = seg.steps[i] as PathStep;
@@ -634,7 +637,8 @@ export class PathActions {
                 };
           send(step, point);
           airborne = !step.onGround;
-          overEdge = step.onGround && !this.#overBlock(step.pos);
+          overEdge =
+            step.onGround && seg.steps[i + 1]?.onGround === false && !this.#overBlock(step.pos);
           if (placing.length > 0) setSprint(false);
           for (const p of placing) {
             const why = this.#placeProblem(p, placeArea, guard, ownPlaced);
