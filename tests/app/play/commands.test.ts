@@ -909,6 +909,31 @@ describe("owners' commands in play", () => {
     expect(sim.sessions).toEqual(['command-1']);
   });
 
+  it('walled in with no way out code can plan: an owner command goes first (it may be the way out)', async () => {
+    // Seen live 2026-10-04: at the bottom of a shaft it dug, play ended every round before
+    // the command round, a busy loop at 100% CPU, and "!surface" waited forever.
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!come')] });
+    await runPlay(
+      deps(repos, sim, {
+        time: () => Promise.resolve(worldTime(1_000, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit' as const,
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: 'no open ground beyond the wall',
+            walled: true,
+            exit: [],
+          }),
+      }),
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual(['OK: coming to you', 'Done: here, 1 block from you']);
+  });
+
   it('strip-mines for a GregTech ore none of which is in view: stairs down to its veins, then a tunnel', async () => {
     const repos = open();
     const sim = newSim({

@@ -10,7 +10,7 @@ import { setKnownSteps } from '../loop/known-steps.ts';
 import type { CycleResult } from '../loop/agent-loop.ts';
 import type { SessionResult } from '../loop/live-session.ts';
 import { planOf } from './narration.ts';
-import { done, type PlayState, type RoundEnd } from './play-state.ts';
+import { commandWaiting, done, type PlayState, type RoundEnd } from './play-state.ts';
 import type { PlayDeps, PlayLimits } from './play.ts';
 
 /**
@@ -251,7 +251,14 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         message: 'morning: no hostile near any more: leaving the shelter',
       });
     }
+    // Walled in with no way out code can plan (a shaft deeper than a staircase out, seen live
+    // 2026-10-04 after digging down to stone), or no way out that worked: an owner's command
+    // goes first, since it may be the way out (!surface, !home pillar and dig). Before, play
+    // ended here every round, and with a command waiting the idle wait returned at once: a busy
+    // loop that never reached the command round.
+    const commanded = deps.repos.commands.running() !== null || commandWaiting(play) !== null;
     if (status !== null && status.walled && status.exit.length === 0) {
+      if (commanded) return null;
       return done(
         play,
         `the player is walled in, and code found no way out: ${status.problem ?? 'unknown'}`,
@@ -259,6 +266,7 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
     }
     if (status !== null && status.walled && status.exit.length > 0) {
       if (play.exitTries >= limits.maxStuckSessions) {
+        if (commanded) return null;
         return done(
           play,
           `the player could not dig out of its shelter in ${play.exitTries} sessions`,
