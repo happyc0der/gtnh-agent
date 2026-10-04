@@ -526,19 +526,25 @@ export class PathActions {
       return null;
     };
 
+    // The walk's own from here: idle's gravity check (a fall, a ladder's slide, swimming up)
+    // must not move the player while the block goes into its hand (an independent review,
+    // 2026-10-04: two senders of positions at once).
+    this.#core.walking = true;
+    this.#core.movement.stopIdle();
     // The throwaway block in hand before the first step (moving a stack into the hotbar takes
     // window clicks: none while the player moves).
     let holding: number | null = null;
     const placeBlock = exec.segments.flatMap((s) => s.places)[0]?.block ?? null;
     if (placeBlock !== null) {
       const held = await this.#core.place.holdBlockItem(placeBlock);
-      if (!held.ok)
+      if (!held.ok) {
+        this.#core.walking = false;
+        if (this.#core.phase === 'play') this.#core.movement.startIdle();
         return failed(`not walking: holding ${placeBlock} to place: ${held.reason}`, 'REFUSED');
+      }
       holding = held.slot;
     }
 
-    this.#core.walking = true;
-    this.#core.movement.stopIdle();
     try {
       // Whether the last step sent left the body where no stop may come (carried into the next
       // segment: a swim's last step may be one).
