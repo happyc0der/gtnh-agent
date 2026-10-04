@@ -129,7 +129,10 @@ export function trimStaleSteps(original: Plan): { plan: Plan; note: string | nul
   };
 }
 
-/** Drops the steps after a plan's first EXPLORE, or after a GATHER from the first step that names the view. */
+/**
+ * Drops the steps after a plan's first EXPLORE, or after a GATHER from the first step that
+ * names the view (or is a meal or a pause).
+ */
 function trimAfter(plan: Plan): { plan: Plan; note: string | null } {
   let keep = plan.steps.length;
   let after = '';
@@ -142,10 +145,15 @@ function trimAfter(plan: Plan): { plan: Plan; note: string | null } {
     }
     // A meal after a GATHER is System 1's to decide (it eats when hungry with food in hand):
     // planned now, it names produce not yet held, and is refused (seen live: "EAT_FOOD
-    // harvestcraft:beanItem" after a garden GATHER, again and again).
+    // harvestcraft:beanItem" after a garden GATHER, again and again). So is a check-in with
+    // a person after it: play itself sees when the goal is held (seen live: "Have you
+    // gathered the required logs?" ran when the GATHER found nothing it could reach, and the
+    // owner's command failed with the pause).
     if (
       gatherStep !== null &&
-      (NAMES_THE_VIEW.has(s.action.type) || s.action.type === 'EAT_FOOD')
+      (NAMES_THE_VIEW.has(s.action.type) ||
+        s.action.type === 'EAT_FOOD' ||
+        s.action.type === 'PAUSE_AND_ASK_USER')
     ) {
       keep = i;
       after = `the GATHER at step ${gatherStep}`;
