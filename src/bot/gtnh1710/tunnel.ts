@@ -1,5 +1,6 @@
 import type { BlockPosition } from '../../domain/common.ts';
 import type { ShelterStep } from '../../domain/night-shelter.ts';
+import type { TunnelDirection, TunnelSlope } from '../../domain/owner-commands.ts';
 import { BLOCK_CODE } from './block-hazards.ts';
 import { checkDig, type BlockPos } from './digging.ts';
 import { PlannedWorld, type PitOptions } from './night-pit.ts';
@@ -16,11 +17,12 @@ import type { Vec3, WalkWorld } from './walking.ts';
  * dig the rules refuse (a fluid, lava or a gap next to it, sand or gravel above, a player's
  * build, outside the play area) or at an open floor (a cave or a drop ahead). Every step is an
  * ordinary action the executor validates again when it runs.
+ *
+ * Going down (`slope` 'down'), it is a staircase: each cell one forward and one down, so the
+ * player never digs the block it stands on, sees each step's floor before it steps down (the
+ * classic way down a person digs), and three blocks go for each: above the head, then the
+ * head height, then the cell it steps down into.
  */
-
-/** The ways a tunnel goes: one block wide only along an axis. */
-export const TUNNEL_DIRECTIONS = ['north', 'south', 'east', 'west'] as const;
-export type TunnelDirection = (typeof TUNNEL_DIRECTIONS)[number];
 
 /** Cells planned at a time: the rest is planned again from what the world shows then. */
 export const TUNNEL_SEGMENT = 6;
@@ -49,8 +51,9 @@ export type TunnelPlan =
 
 /**
  * The next steps of the tunnel that starts at feet block `start` and goes `length` cells
- * `direction`, for the player with its feet at `feet`, which must stand in the tunnel's line
- * (the start's level, in its row).
+ * `direction` (and, with `slope` 'down', one block down for each), for the player with its
+ * feet at `feet`, which must stand in the tunnel's line (in its row, at the level the cells
+ * dug so far reach).
  */
 export function planTunnel(
   world: WalkWorld,
@@ -59,14 +62,16 @@ export function planTunnel(
   direction: TunnelDirection,
   length: number,
   opts: Pick<PitOptions, 'area' | 'canHarvest'>,
+  slope: TunnelSlope = 'level',
 ): TunnelPlan {
   const { dx, dz } = STEP[direction];
+  const drop = slope === 'down' ? 1 : 0;
   const fx = Math.floor(feet.x);
   const fy = Math.floor(feet.y + EPS);
   const fz = Math.floor(feet.z);
   const done = (fx - start.x) * dx + (fz - start.z) * dz;
   const aside = dx !== 0 ? fz - start.z : fx - start.x;
-  if (fy !== start.y || aside !== 0 || done < 0) {
+  if (fy !== start.y - drop * done || aside !== 0 || done < 0) {
     return {
       ok: false,
       reason: `the player at ${fmt({ x: fx, y: fy, z: fz })} is not in the tunnel's line from ${fmt(start)} ${direction}`,
@@ -79,16 +84,17 @@ export function planTunnel(
   let at: Vec3 = feet;
   let problem: string | null = null;
   for (let k = done + 1; k <= Math.min(done + TUNNEL_SEGMENT, length); k++) {
-    const cell = { x: start.x + k * dx, y: start.y, z: start.z + k * dz };
+    const cell = { x: start.x + k * dx, y: start.y - drop * k, z: start.z + k * dz };
     const floor = floorProblem(plan, { x: cell.x, y: cell.y - 1, z: cell.z });
     if (floor !== null) {
       problem = `the tunnel stops before ${fmt(cell)}: ${floor}`;
       break;
     }
-    // The head block first: what stands on it stays put while the feet block goes.
+    // The top block first: what stands on it stays put while the ones below go.
     const digs: ShelterStep[] = [];
     let refused: string | null = null;
-    for (const p of [{ ...cell, y: cell.y + 1 }, cell]) {
+    const heights = drop === 1 ? [2, 1, 0] : [1, 0];
+    for (const p of heights.map((h) => ({ ...cell, y: cell.y + h }))) {
       if (passProblem(plan, p.x, p.y, p.z) === null) continue;
       const check = checkDig(plan, opts.area, at, p);
       const tool = check.ok && opts.canHarvest !== undefined ? opts.canHarvest(check.block) : null;
@@ -98,7 +104,7 @@ export function planTunnel(
       }
       digs.push({
         spec: { type: 'DIG_BLOCK', args: { position: { ...p } } },
-        text: `dig the ${check.block} at ${fmt(p)} (the tunnel's ${p.y === cell.y ? 'feet' : 'head'} height)`,
+        text: `dig the ${check.block} at ${fmt(p)} (${['the feet', 'the head', 'above the head'][p.y - cell.y]} of ${fmt(cell)})`,
       });
       plan.dig(p);
     }

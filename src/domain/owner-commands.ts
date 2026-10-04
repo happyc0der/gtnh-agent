@@ -107,6 +107,8 @@ export const EXPLORE_COMMAND_MAX = 256;
 /** The ways a tunnel goes: one block wide only along an axis. */
 export const TUNNEL_DIRECTIONS = ['north', 'south', 'east', 'west'] as const;
 export type TunnelDirection = (typeof TUNNEL_DIRECTIONS)[number];
+/** A tunnel level, or a staircase down: one block down for each block forward. */
+export type TunnelSlope = 'level' | 'down';
 /** How long a tunnel is when the owner names no length (blocks). */
 export const TUNNEL_COMMAND_LENGTH = 16;
 /** The longest tunnel one command digs (blocks). */
@@ -151,6 +153,8 @@ export const OwnerCommandSchema = z.discriminatedUnion('verb', [
     verb: z.literal('tunnel'),
     direction: z.enum(TUNNEL_DIRECTIONS),
     length: z.int().min(1).max(TUNNEL_COMMAND_MAX),
+    /** Stored before stairs existed: level. */
+    slope: z.enum(['level', 'down']).default('level'),
   }),
   /** Have `count` of `item`, pursued like `cli play --needs`. */
   z.strictObject({ verb: z.literal('get'), count: Count, item: ItemNameSchema }),
@@ -253,7 +257,8 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   follow: 'usage: !follow [player]',
   goto: 'usage: !goto <x> <y> <z>, !goto <x> <z> or !goto <waypoint>',
   explore: 'usage: !explore [direction] [blocks], e.g. !explore north 100 (8-256 blocks)',
-  tunnel: 'usage: !tunnel <north|south|east|west> [blocks], e.g. !tunnel east 20 (1-64 blocks)',
+  tunnel:
+    'usage: !tunnel <north|south|east|west> [blocks] [down], e.g. !tunnel east 20, or !tunnel east 20 down for stairs (1-64 blocks)',
   get: 'usage: !get <count> <item>, e.g. !get 20 logs',
   mine: 'usage: !mine <count> <block>, e.g. !mine 10 sand or !mine 16 iron ore',
   quests: 'usage: !quests on or !quests off',
@@ -439,16 +444,18 @@ function exploreCommand(args: readonly string[]): CommandParse {
 }
 
 function tunnelCommand(args: readonly string[]): CommandParse {
-  // "tunnel east", "tunnel east 20", "tunnel 20 east".
+  // "tunnel east", "tunnel east 20", "tunnel 20 east", "tunnel east 20 down" (stairs down).
   let direction: string | null = null;
   let length = TUNNEL_COMMAND_LENGTH;
-  if (args.length === 0 || args.length > 2) return usage('tunnel');
+  let slope: TunnelSlope = 'level';
+  if (args.length === 0 || args.length > 3) return usage('tunnel');
   for (const a of args) {
     if (NUMBER.test(a)) length = Number(a);
+    else if (a.toLowerCase() === 'down') slope = 'down';
     else if (direction !== null) return usage('tunnel');
     else direction = directionOf(a);
   }
-  const parsed = OwnerCommandSchema.safeParse({ verb: 'tunnel', direction, length });
+  const parsed = OwnerCommandSchema.safeParse({ verb: 'tunnel', direction, length, slope });
   return parsed.success ? { ok: true, command: parsed.data } : usage('tunnel');
 }
 
@@ -537,7 +544,9 @@ export function describeCommand(c: OwnerCommand): string {
     case 'explore':
       return `explore ${c.distance} blocks ${c.direction === null ? 'the way I have seen least' : c.direction.replace('_', '-')}`;
     case 'tunnel':
-      return `dig a tunnel ${c.length} blocks ${c.direction}`;
+      return c.slope === 'down'
+        ? `dig stairs ${c.length} blocks down, going ${c.direction}`
+        : `dig a tunnel ${c.length} blocks ${c.direction}`;
     case 'home':
       return 'go home';
     case 'get':

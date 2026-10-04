@@ -111,7 +111,7 @@ export function liveTunnel(
     if (world === null || feet === null || !state.inventory.known) return null;
     const opts = digOptions(client, config, state.inventory.value.items);
     if (opts === null) return null;
-    return planTunnel(world, feet, req.start, req.direction, req.length, opts);
+    return planTunnel(world, feet, req.start, req.direction, req.length, opts, req.slope);
   };
 }
 

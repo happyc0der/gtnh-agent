@@ -429,7 +429,7 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
       return `going to ${fmt(c)}`;
     case 'tunnel': {
       const p = view.position;
-      return `digging a tunnel ${c.length} blocks ${c.direction}${p === null ? '' : ` from ${fmt(roundPoint(p))}`}`;
+      return `${describeCommand(c).replace(/^dig /, 'digging ')}${p === null ? '' : ` from ${fmt(roundPoint(p))}`}`;
     }
     case 'explore': {
       const to = exploreTarget(play, cmd, c);
@@ -708,6 +708,7 @@ async function tunnelRound(
     start: run.tunnelFrom,
     direction: command.direction,
     length: command.length,
+    slope: command.slope,
   });
   if (plan === null) {
     run.failures += 1;
@@ -719,7 +720,7 @@ async function tunnelRound(
   const dug = `${plan.done} of ${command.length} blocks dug`;
   if (plan.steps.length === 0) {
     if (plan.done >= command.length) {
-      finish(play, cmd, 'done', `Done: dug a tunnel ${command.length} blocks ${command.direction}`);
+      finish(play, cmd, 'done', `Done: ${describeCommand(command).replace(/^dig /, 'dug ')}`);
       return 'next-round';
     }
     return fail(`${plan.problem ?? 'there is nothing to dig'} (${dug})`);

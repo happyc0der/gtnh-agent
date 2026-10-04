@@ -270,10 +270,20 @@ describe('explore (Baritone #explore)', () => {
 
 describe('tunnel (Baritone #tunnel)', () => {
   it('takes a direction along an axis and a length, the length optional', () => {
-    expect(parsed('!tunnel east')).toEqual({ verb: 'tunnel', direction: 'east', length: 16 });
-    expect(parsed('!tunnel n 40')).toEqual({ verb: 'tunnel', direction: 'north', length: 40 });
-    expect(parsed('!tunnel 8 west')).toEqual({ verb: 'tunnel', direction: 'west', length: 8 });
+    const level = { verb: 'tunnel', slope: 'level' };
+    expect(parsed('!tunnel east')).toEqual({ ...level, direction: 'east', length: 16 });
+    expect(parsed('!tunnel n 40')).toEqual({ ...level, direction: 'north', length: 40 });
+    expect(parsed('!tunnel 8 west')).toEqual({ ...level, direction: 'west', length: 8 });
+    expect(parsed('!tunnel east 20 down')).toEqual({
+      verb: 'tunnel',
+      direction: 'east',
+      length: 20,
+      slope: 'down',
+    });
     expect(describeCommand(parsed('!tunnel south 20'))).toBe('dig a tunnel 20 blocks south');
+    expect(describeCommand(parsed('!tunnel down south 20'))).toBe(
+      'dig stairs 20 blocks down, going south',
+    );
   });
 
   it('gives its usage without a direction, for a diagonal, or a length past 64', () => {

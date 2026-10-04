@@ -10,13 +10,14 @@ import type { GameState, WorldTime } from '../../domain/game-state.ts';
 import type { ShelterStatus } from '../../goals/shelter.ts';
 import type { TunnelPlan } from '../../bot/gtnh1710/tunnel.ts';
 import type { BlockPosition } from '../../domain/common.ts';
-import type { TunnelDirection } from '../../domain/owner-commands.ts';
+import type { TunnelDirection, TunnelSlope } from '../../domain/owner-commands.ts';
 
-/** An owner's tunnel: where it starts (a feet block), which way, how many blocks. */
+/** An owner's tunnel: where it starts (a feet block), which way, how many blocks, how steep. */
 export interface TunnelRequest {
   start: BlockPosition;
   direction: TunnelDirection;
   length: number;
+  slope: TunnelSlope;
 }
 import type { Repositories } from '../../persistence/repositories.ts';
 import type { System1Stats } from '../../system1/model-cadence.ts';

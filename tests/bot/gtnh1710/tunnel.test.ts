@@ -69,7 +69,7 @@ describe('a tunnel one wide and two high, as Baritone digs one (tunnel.ts)', () 
       ]).flat(),
     );
     expect(plan.steps[0]?.text).toBe(
-      "dig the minecraft:dirt at (1, 62, 0) (the tunnel's head height)",
+      'dig the minecraft:dirt at (1, 62, 0) (the head of (1, 61, 0))',
     );
   });
 
@@ -120,6 +120,62 @@ describe('a tunnel one wide and two high, as Baritone digs one (tunnel.ts)', () 
     expect(stopsAt({ [k(1, 61, 0)]: ID.stone }, noPickaxe)).toEqual({
       moves: 0,
       why: 'the tunnel stops before (1, 61, 0): (1, 61, 0): it needs a pickaxe, and the player carries none',
+    });
+  });
+
+  it('going down, a staircase: one forward and one down each, three blocks dug, the top first', () => {
+    // From the surface: the player on the grass at (0, 64, 0), stairs east into the ground.
+    const surface = land({ [k(0, 61, 0)]: ID.dirt, [k(0, 62, 0)]: ID.dirt });
+    const top = { x: 0, y: 64, z: 0 };
+    const plan = planTunnel(
+      surface,
+      { x: 0.5, y: 64, z: 0.5 },
+      top,
+      'east',
+      3,
+      { area: AREA },
+      'down',
+    );
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.problem).toBeNull();
+    expect(plan.steps.map((s) => s.spec)).toEqual([
+      // (1, 63, 0): the grass it steps down into; above it is air already.
+      { type: 'DIG_BLOCK', args: { position: { x: 1, y: 63, z: 0 } } },
+      { type: 'MOVE_TO', args: { target: { x: 1.5, y: 63, z: 0.5 }, tolerance: 0.5 } },
+      { type: 'DIG_BLOCK', args: { position: { x: 2, y: 63, z: 0 } } },
+      { type: 'DIG_BLOCK', args: { position: { x: 2, y: 62, z: 0 } } },
+      { type: 'MOVE_TO', args: { target: { x: 2.5, y: 62, z: 0.5 }, tolerance: 0.5 } },
+      { type: 'DIG_BLOCK', args: { position: { x: 3, y: 63, z: 0 } } },
+      { type: 'DIG_BLOCK', args: { position: { x: 3, y: 62, z: 0 } } },
+      { type: 'DIG_BLOCK', args: { position: { x: 3, y: 61, z: 0 } } },
+      { type: 'MOVE_TO', args: { target: { x: 3.5, y: 61, z: 0.5 }, tolerance: 0.5 } },
+    ]);
+    // Halfway down, it goes on from its step: the level the cells dug so far reach.
+    const half = planTunnel(
+      land({ [k(1, 63, 0)]: ID.air, [k(2, 63, 0)]: ID.air, [k(2, 62, 0)]: ID.air }),
+      { x: 2.5, y: 62, z: 0.5 },
+      top,
+      'east',
+      3,
+      { area: AREA },
+      'down',
+    );
+    expect(half).toMatchObject({ ok: true, done: 2 });
+    // A cave under the next step: it stops before stepping down into it.
+    const cave = planTunnel(
+      land({ [k(1, 62, 0)]: ID.air }),
+      { x: 0.5, y: 64, z: 0.5 },
+      top,
+      'east',
+      3,
+      { area: AREA },
+      'down',
+    );
+    expect(cave).toMatchObject({
+      ok: true,
+      steps: [],
+      problem:
+        'the tunnel stops before (1, 63, 0): the floor at (1, 62, 0) is open (a cave or a drop ahead)',
     });
   });
 
