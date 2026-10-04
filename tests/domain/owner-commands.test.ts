@@ -161,6 +161,24 @@ describe('GregTech ores by name (the caller resolves them: src/goals/ore-names.t
       ok: true,
       command: { verb: 'get', count: 4, item: 'gregtech:gt.metaitem.03@5035' },
     });
+    // A bare material, to mine or find: GregTech's ores replace vanilla's ("find coal" found
+    // the coal item, which no block is). To get, it stays the item.
+    expect(parseOwnerCommand('!mine 8 coal', names)).toMatchObject({
+      ok: true,
+      command: { verb: 'mine', block: 'gregtech:gt.blockores' },
+    });
+    expect(parseOwnerCommand('!find some coal', names)).toMatchObject({
+      ok: true,
+      command: { verb: 'find', block: 'gregtech:gt.blockores' },
+    });
+    expect(parseOwnerCommand('!get 16 coal', names)).toMatchObject({
+      ok: true,
+      command: { verb: 'get', item: 'minecraft:coal' },
+    });
+    expect(parseOwnerCommand('!find water', names)).toMatchObject({
+      ok: true,
+      command: { verb: 'find', block: 'minecraft:water' },
+    });
   });
 
   it('without names, or for an ore that does not generate, it gives the usage', () => {

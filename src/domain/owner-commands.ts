@@ -399,9 +399,10 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
       return none ? ok({ verb: 'surface' }) : usage(verb);
     case 'find':
     case 'locate': {
-      // "iron ore": a GregTech ore of that material (the caller's names), as for !mine.
-      const text = args.join(' ');
-      const ore = /\sores?$/i.test(text) ? (names.ore?.(text) ?? null) : null;
+      // "iron ore": a GregTech ore of that material (the caller's names), as for !mine; a bare
+      // material too ("find coal": GregTech's ores replace vanilla's).
+      const text = args.filter((w) => !BLOCK_FILLER.has(w.toLowerCase())).join(' ');
+      const ore = names.ore?.(/\sores?$/i.test(text) ? text : `${text} ore`) ?? null;
       if (ore !== null) return ok({ verb: 'find', block: ore.block, item: ore.item });
       const block = none ? null : blockName(args);
       return block === null ? usage('find') : ok({ verb: 'find', block });
@@ -575,9 +576,14 @@ function goalCommand(
     words = words.slice(1);
   }
   if (words.length === 0) return usage(verb);
-  // "iron ore", "copper ores": a GregTech ore, mined for its raw ore (the caller's names).
+  // "iron ore", "copper ores": a GregTech ore, mined for its raw ore (the caller's names); for
+  // a mine, a bare material too ("mine 8 coal": GregTech's ores replace vanilla's).
   const text = words.join(' ');
-  const ore = /\sores?$/i.test(text) ? (names.ore?.(text) ?? null) : null;
+  const ore = /\sores?$/i.test(text)
+    ? (names.ore?.(text) ?? null)
+    : verb === 'mine'
+      ? (names.ore?.(`${text} ore`) ?? null)
+      : null;
   const name = ore === null ? resolveItemName(text) : ore.item;
   if (name === null) return usage(verb);
   const n =
