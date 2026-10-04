@@ -176,12 +176,14 @@ function loadProgress(play: PlayState, id: number): z.infer<typeof ProgressSchem
  * step that went, or a cycle with none.
  */
 export function stepFailureOf(r: CycleResult): string | null {
-  const outcome = r.outcome;
-  if (outcome === null) return null;
-  if (outcome.execution !== null && !outcome.execution.ok) return outcome.execution.message;
-  const v = outcome.validation;
-  if (v !== undefined && !v.ok)
+  // Loosely typed: a session's cycles come from many places (and tests), some without these.
+  const outcome = r.outcome as Partial<NonNullable<CycleResult['outcome']>> | null | undefined;
+  const execution = outcome?.execution;
+  if (execution !== null && execution !== undefined && !execution.ok) return execution.message;
+  const v = outcome?.validation;
+  if (v !== undefined && !v.ok) {
     return v.violations[0]?.message ?? v.preconditionFailures[0] ?? null;
+  }
   return null;
 }
 

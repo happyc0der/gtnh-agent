@@ -495,6 +495,47 @@ describe("owners' commands in play", () => {
     );
   });
 
+  it('get waits out a hostile that stops its walks: no sessions "without progress"', async () => {
+    const sim = newSim({ heard: [whisper('!get 6 logs')], gain: { 'minecraft:log': 1 } });
+    const base = deps(open(), sim);
+    const why = 'walk stopped after 3 of 40 steps: hostile entity minecraft:Zombie 9.8 blocks away';
+    let failed = 0;
+    await runPlay(
+      {
+        ...base,
+        session: (limits, hooks) => {
+          if (failed >= 5) return base.session(limits, hooks);
+          failed += 1;
+          hooks.onCycle(
+            {
+              summary: 'REQUEST_PLANNER -> MOVE_TO -> failed',
+              status: 'failed',
+              decision: null,
+              outcome: { execution: { ok: false, code: 'FAILED', message: why, data: {} } },
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'REQUEST_PLANNER -> MOVE_TO -> failed' }],
+            stopReason: 'stopped after: REQUEST_PLANNER -> MOVE_TO -> failed',
+            stopKind: 'cycle-failed',
+            taskId: 'command-1',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual([
+      'OK: getting minecraft:log until I have 6 (I have 0)',
+      'A Zombie 10 blocks off is in my way: I keep away (I do not fight) and try again',
+      'Halfway: 3/6 minecraft:log',
+      'Done: I have 6 minecraft:log',
+    ]);
+  });
+
   it('a name without a damage value counts every kind: birch logs are logs', async () => {
     // "get 16 logs" in a birch forest counted oak only, and would have felled it all.
     const sim = newSim({

@@ -11,6 +11,7 @@ import {
 import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import type { SessionResult } from '../loop/live-session.ts';
+import { stepFailureOf } from './command-base.ts';
 import { foodDue, type FoodStatus } from './food.ts';
 import { planOf } from './narration.ts';
 import { isDark, nightReason, nightSoon } from './night.ts';
@@ -365,6 +366,8 @@ export interface GoalSessionEnd {
   hungry: FoodStatus | null;
   /** An owner's new command ended it: commands come before the goal (commands.ts). */
   preempted: string | null;
+  /** The session's last step that did not go, in the client's or the rules' words, or null. */
+  stepFailure: string | null;
 }
 
 /**
@@ -384,6 +387,7 @@ export async function runGoalSession(
   let dark: WorldTime | null = null;
   let hungry: FoodStatus | null = null;
   let preempted: string | null = null;
+  let stepFailure: string | null = null;
   const session = play.sessions + 1;
   const seenBefore = deps.scouting?.chunksSeen() ?? null;
   const result = await deps.session(limits.session, {
@@ -406,6 +410,7 @@ export async function runGoalSession(
     },
     onCycle: (r, index) => {
       play.lastDecision = r.decision ?? null;
+      stepFailure = stepFailureOf(r) ?? stepFailure;
       emit({
         kind: 'cycle',
         session,
@@ -451,7 +456,7 @@ export async function runGoalSession(
     cycles: result.cycles.length,
     system1: result.system1,
   });
-  return { result, met, dark, hungry, preempted };
+  return { result, met, dark, hungry, preempted, stepFailure };
 }
 
 /**

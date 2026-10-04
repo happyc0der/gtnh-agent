@@ -10,6 +10,7 @@ import {
   commandTaskId,
   finish,
   MAX_COMMAND_FAILURES,
+  mobInTheWay,
   reflexEnded,
   runOf,
   sayOnce,
@@ -128,6 +129,18 @@ export async function goalCommandRound(
   run.worked =
     after !== null && Object.entries(after).some(([item, n]) => n > (inventory[item] ?? 0));
   run.interrupted = reflexEnded(play);
+  // A walk a hostile stopped: interrupted, not stuck (mobInTheWay; seen live 2026-10-04 on
+  // trips: zombies in the forest's shade failed a follow).
+  const mobbed =
+    ended.result.stopKind === 'cycle-failed' && ended.stepFailure !== null
+      ? await mobInTheWay(play, cmd, ended.stepFailure)
+      : null;
+  if (mobbed === 'give-up') {
+    finish(play, cmd, 'failed', `Failed: ${ended.stepFailure} (${run.mobStops - 1} tries)`);
+    return 'next-round';
+  }
+  if (mobbed === 'retry') run.interrupted = true;
+  else run.mobStops = 0;
   // Only a session that ran its course counts: one a new command, dusk, a food bar nearly
   // empty, a reflex or a mob cut short tried nothing (an independent review, 2026-10-04: a
   // !status abandoned a copper ore in view).
