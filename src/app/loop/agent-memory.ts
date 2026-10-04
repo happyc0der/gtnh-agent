@@ -179,7 +179,8 @@ export function rememberContainers(repos: Repositories, state: GameState | null)
 
 /**
  * World memory: stores what the client has seen since it was last asked (per chunk; only what
- * a player could see). A problem here is logged and never stops the cycle.
+ * a player could see), and the players' builds it saw (src/domain/player-builds.ts: blocks
+ * it never breaks). A problem here is logged and never stops the cycle.
  */
 export function rememberSeen(deps: AgentDeps, cycleId: string): void {
   try {
@@ -187,6 +188,31 @@ export function rememberSeen(deps: AgentDeps, cycleId: string): void {
     if (seen.length > 0) deps.repos.worldMemory.remember(seen);
   } catch (error) {
     deps.repos.events.append(cycleId, 'ERROR', { worldMemory: errorMessage(error) });
+  }
+  try {
+    const builds = deps.client.takePlayerBuilds?.();
+    if (builds !== undefined) deps.repos.playerBuilds.apply(builds);
+  } catch (error) {
+    deps.repos.events.append(cycleId, 'ERROR', { playerBuilds: errorMessage(error) });
+  }
+}
+
+/** Clients that have been given the players' builds agent memory keeps. */
+const seededClients = new WeakSet<object>();
+
+/**
+ * Gives a client the players' builds agent memory keeps, once (before its first observation):
+ * so after a restart, or on a new connection, the blocks a player built stay never broken.
+ * A problem here is logged; the client then knows only the builds it sees itself.
+ */
+export function seedPlayerBuilds(deps: AgentDeps, cycleId: string): void {
+  const client = deps.client;
+  if (client.knowPlayerBuilds === undefined || seededClients.has(client)) return;
+  try {
+    client.knowPlayerBuilds(deps.repos.playerBuilds.all());
+    seededClients.add(client);
+  } catch (error) {
+    deps.repos.events.append(cycleId, 'ERROR', { playerBuilds: errorMessage(error) });
   }
 }
 

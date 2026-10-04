@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { FactValueSchema } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
 import type { ValidatedAction } from '../domain/validated-action.ts';
+import type { PlayerBuild, PlayerBuildChanges } from '../domain/player-builds.ts';
 import type { SeenChunk } from '../domain/world-memory.ts';
 
 export const ClientResultCodeSchema = z.enum([
@@ -41,6 +42,13 @@ export interface MinecraftClient {
    * could see). Optional; the agent loop stores it.
    */
   takeSeenChunks?(): SeenChunk[];
+  /**
+   * Players' builds (src/domain/player-builds.ts): what the client saw since the last call
+   * (builds added, cells that became air), for agent memory. Optional.
+   */
+  takePlayerBuilds?(): PlayerBuildChanges;
+  /** The builds agent memory keeps, for a new connection (never broken). Optional. */
+  knowPlayerBuilds?(builds: readonly PlayerBuild[]): void;
 }
 
 export function ok(message: string, data: ClientActionResult['data'] = {}): ClientActionResult {

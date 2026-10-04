@@ -568,6 +568,27 @@ describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's suppo
     expect(codes(dig(2, 64, 1), blind)).toEqual(['UNKNOWN_TARGET']);
   });
 
+  it("refuses a player's build, whatever the block (and the mock never lists one as a resource)", () => {
+    const built = makeState((w) => void (w.playerBuiltBlocks = [{ x: 2, y: 64, z: 1 }]));
+    const r = evaluateAction(action(dig(2, 64, 1)), built, safetyCtx(), emptyFailureHistory);
+    expect(r.violations.map((v) => v.code)).toEqual(['NOT_DIGGABLE']);
+    expect(r.violations[0]?.message).toMatch(/built by a player/);
+    // Even when an observation lists it (a stale or hand-made one), the build wins.
+    const listed: GameState = {
+      ...built,
+      nearbyBlocks: built.nearbyBlocks.known
+        ? known({
+            ...built.nearbyBlocks.value,
+            resources: [
+              ...built.nearbyBlocks.value.resources,
+              { block: 'minecraft:dirt', position: { x: 2, y: 64, z: 1 } },
+            ],
+          })
+        : built.nearbyBlocks,
+    };
+    expect(codes(dig(2, 64, 1), listed)).toEqual(['NOT_DIGGABLE']);
+  });
+
   it("refuses sand over the head, a block with gravel on it, and the player's own cells", () => {
     const state = makeState((w) => {
       w.resourceBlocks.push(

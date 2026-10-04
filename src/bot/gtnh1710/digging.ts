@@ -220,6 +220,11 @@ export function checkDig(world: WalkWorld, area: DigArea, feet: Vec3, target: Bl
     return refuse(`${fmt(target)} holds block id ${id}, which the registry does not name`);
   if (!isDiggableBlock(name))
     return refuse(`${fmt(target)} is ${name}, which is not on the dig allowlist`);
+  if (world.builtByPlayer?.(x, y, z) === true) {
+    return refuse(
+      `${fmt(target)} was built by a player (seen placed while one stood near): the agent never breaks a player's build`,
+    );
+  }
   const facts = digFacts(name, world.metaAt?.(x, y, z));
   if ('problem' in facts) return refuse(`${fmt(target)}: ${facts.problem}`);
   const allowed = (blockId: number, reach: number): DigCheck => ({
@@ -615,6 +620,9 @@ export function checkDigDown(
     return refuse(
       `${fmt(target)} is ${name}: digging down takes only dirt, grass, sand, gravel or clay`,
     );
+  }
+  if (world.builtByPlayer?.(x, y, z) === true) {
+    return refuse(`${fmt(target)} was built by a player: the agent never breaks a player's build`);
   }
 
   // Exactly one block down, onto something that stays put.

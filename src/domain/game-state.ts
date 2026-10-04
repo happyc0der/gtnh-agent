@@ -177,6 +177,8 @@ export const MAX_REPORTED_REMOVED = 16;
 export const MAX_REPORTED_PLACEABLE = 32;
 /** Largest `nearbyBlocks.placed` list. */
 export const MAX_REPORTED_PLACED = 16;
+/** Largest `nearbyBlocks.playerBuilt` list. */
+export const MAX_REPORTED_PLAYER_BUILT = 64;
 
 /** A block DIG_BLOCK may break, where the observation saw it. */
 export const ResourceBlockSchema = z.strictObject({
@@ -266,6 +268,12 @@ export const NearbyBlocksSchema = z.strictObject({
    * verified against this.
    */
   placed: z.array(PlacedBlockSchema).max(MAX_REPORTED_PLACED).default([]),
+  /**
+   * Blocks near the player (within the scan's full radius) that a player built
+   * (src/domain/player-builds.ts): never dug, and never listed among `resources`; nearest
+   * first. Empty in snapshots stored before they were kept.
+   */
+  playerBuilt: z.array(BlockPositionSchema).max(MAX_REPORTED_PLAYER_BUILT).default([]),
   /**
    * The ground under the player (DIG_DOWN), or null when the player's body is not in one
    * column on a block top, or a block is not loaded or named. Absent when the adapter does

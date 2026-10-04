@@ -722,6 +722,8 @@ export class PathActions {
     const cell = this.#world.watchBlock(p.cell.x, p.cell.y, p.cell.z);
     const sentClicked = clicked.updates.length;
     const sentCell = cell.updates.length;
+    // The cell's change is the agent's own: never a player's build.
+    this.#world.expectOwnPlacement(p.cell, this.#opts.clock.now());
     this.#core.send(
       outbound.placeBlock(
         p.against.x,

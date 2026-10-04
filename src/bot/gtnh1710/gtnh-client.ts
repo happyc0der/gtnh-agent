@@ -2,6 +2,7 @@ import type { MinecraftConfig } from '../../config/env.ts';
 import type { Position } from '../../domain/common.ts';
 import type { GameState } from '../../domain/game-state.ts';
 import { assertValidatedAction, type ValidatedAction } from '../../domain/validated-action.ts';
+import type { PlayerBuild, PlayerBuildChanges } from '../../domain/player-builds.ts';
 import type { SeenChunk } from '../../domain/world-memory.ts';
 import type { Clock } from '../../util/clock.ts';
 import { errorMessage } from '../../util/json.ts';
@@ -157,6 +158,16 @@ export class Gtnh1710Client implements MinecraftClient {
   /** What the player has seen since the last call, per chunk (for world memory). */
   takeSeenChunks(): SeenChunk[] {
     return this.#core.observation.takeSeenChunks();
+  }
+
+  /** Players' builds seen (and cells that became air) since the last call, for agent memory. */
+  takePlayerBuilds(): PlayerBuildChanges {
+    return this.#core.world.takePlayerBuilds();
+  }
+
+  /** The players' builds agent memory keeps: never broken (walks, DIG_BLOCK, GATHER). */
+  knowPlayerBuilds(builds: readonly PlayerBuild[]): void {
+    this.#core.world.knowPlayerBuilds(builds);
   }
 
   /**
