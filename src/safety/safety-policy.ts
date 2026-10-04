@@ -526,13 +526,19 @@ export { HURT_DANGER_MS };
  * The nearest hostile that shoots (a skeleton, a witch, a blaze, Special Mobs ones too:
  * hostileTactic), anywhere in the entity scan: their reach is the scan's, not the threat
  * radius. Null when none, or the entities are not known. (Spiders fight in melee; a calm one
- * is skipped all the same, like everywhere a hostile counts.)
+ * is skipped all the same, like everywhere a hostile counts.) One that cannot see the player
+ * (NearbyEntitySchema.hidden: rock on every line between them) neither aims nor hits from out
+ * there: seen live 2026-10-04, a giant skeleton in a cave 7 blocks under the night pit, 10.4
+ * blocks off, kept the agent sealed in its shelter for a whole day. Within the threat radius
+ * every hostile counts, seen or not.
  */
 function rangedHostileInView(state: GameState): { type: string; distance: number } | null {
   if (!state.nearbyEntities.known) return null;
   let best: { type: string; distance: number } | null = null;
   for (const e of state.nearbyEntities.value.entities) {
-    if (e.category !== 'hostile' || e.calm || hostileTactic(e.type) !== 'ranged') continue;
+    if (e.category !== 'hostile' || e.calm || e.hidden || hostileTactic(e.type) !== 'ranged') {
+      continue;
+    }
     if (best === null || e.distance < best.distance) best = { type: e.type, distance: e.distance };
   }
   return best;

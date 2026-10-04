@@ -246,6 +246,8 @@ export interface MockMob {
    * bite makes it count again, as live.
    */
   calm?: boolean;
+  /** Rock on every line between it and the player (the live client's sight.ts): it cannot see it. */
+  hidden?: boolean;
   /**
    * What it drops when killed (item -> count), picked up at once, as the live client walks
    * to a farm animal's drops after the kill.
@@ -576,6 +578,7 @@ export class MockMinecraftClient implements MinecraftClient {
         baby: m.baby === undefined ? (m.category === 'passive' ? false : null) : m.baby,
         lastHurtAt: m.lastHurtAt ?? null,
         calmLight: m.calm === true,
+        hidden: m.hidden === true,
       })),
       ...w.hostiles.map((p, i) => ({
         id: MOCK_HOSTILE_ID_BASE + i,
@@ -588,6 +591,7 @@ export class MockMinecraftClient implements MinecraftClient {
         baby: null,
         lastHurtAt: null,
         calmLight: false,
+        hidden: false,
       })),
       ...w.unclassified.map((p, i) => ({
         id: MOCK_UNCLASSIFIED_ID_BASE + i,
@@ -600,6 +604,7 @@ export class MockMinecraftClient implements MinecraftClient {
         baby: null,
         lastHurtAt: null,
         calmLight: false,
+        hidden: false,
       })),
     ];
     return listed

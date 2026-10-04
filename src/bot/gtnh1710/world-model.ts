@@ -93,6 +93,7 @@ import {
 } from '../../domain/game-state.ts';
 import { buildInteractableTable, roleOf, scanInteractables } from './interact.ts';
 import { nameItemStack, type Registry } from './registry.ts';
+import { hiddenFrom } from './sight.ts';
 import type { Vec3, WalkWorld } from './walking.ts';
 import { ProtocolError } from './wire.ts';
 
@@ -2308,6 +2309,7 @@ export class WorldModel {
           lastHurtAt: e.lastHurtAt,
           // As #threats counted it.
           calm: n.calm,
+          hidden: e.hidden,
         });
       }
       if (entities.length >= MAX_REPORTED_ENTITIES) break;
@@ -2340,6 +2342,7 @@ export class WorldModel {
     const type = e.kind === 'player' ? 'player' : e.classification.name;
     const vitals = vitalsOf(type, e.metadata ?? null);
     const distance = Number(Math.hypot(e.x - pos.x, e.y - pos.feetY, e.z - pos.z).toFixed(2));
+    const world = this.walkWorld();
     return {
       id: entityId,
       type,
@@ -2352,6 +2355,9 @@ export class WorldModel {
       baby: vitals.baby,
       lastHurtAt: e.lastHurtAt == null ? null : e.lastHurtAt.toISOString(),
       calm: this.#isCalm(e, distance, now),
+      hidden:
+        world !== null &&
+        hiddenFrom(world, { x: e.x, y: e.y, z: e.z }, { x: pos.x, y: pos.feetY, z: pos.z }),
       hurtCount: e.hurtCount ?? 0,
       dead: e.diedAt != null,
     };

@@ -6,6 +6,7 @@ import {
 } from '../../domain/combat.ts';
 import type { Classification } from './entity-types.ts';
 import { PLAYER_EYE_HEIGHT } from './packets.ts';
+import { cellsAlong } from './sight.ts';
 import { standProblem } from './terrain.ts';
 import type { Fence, Vec3, WalkWorld } from './walking.ts';
 
@@ -141,27 +142,9 @@ export function lookAtPoint(eyes: Vec3, p: Vec3): { yaw: number; pitch: number }
  * the agent's reach to what the server accepts without sight.
  */
 export function lineOfSightClear(world: WalkWorld, from: Vec3, to: Vec3): boolean {
-  // Voxel traversal (Amanatides & Woo): visit every cell the segment touches, in order.
-  const d = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
-  const s = { x: Math.sign(d.x), y: Math.sign(d.y), z: Math.sign(d.z) };
-  const cell = { x: Math.floor(from.x), y: Math.floor(from.y), z: Math.floor(from.z) };
-  const end = { x: Math.floor(to.x), y: Math.floor(to.y), z: Math.floor(to.z) };
-  // Fraction of the segment at which it crosses the next boundary on each axis, and per cell.
-  const first = (p: number, dp: number, sp: number): number =>
-    sp > 0 ? (Math.floor(p) + 1 - p) / dp : sp < 0 ? (p - Math.floor(p)) / -dp : Infinity;
-  const per = (dp: number): number => (dp === 0 ? Infinity : 1 / Math.abs(dp));
-  const t = { x: first(from.x, d.x, s.x), y: first(from.y, d.y, s.y), z: first(from.z, d.z, s.z) };
-  const dt = { x: per(d.x), y: per(d.y), z: per(d.z) };
-  for (let i = 0; i < 256; i++) {
-    // Not loaded (undefined) or any block at all: the server might not see through it.
-    if (world.blockAt(cell.x, cell.y, cell.z) !== 0) return false;
-    if (cell.x === end.x && cell.y === end.y && cell.z === end.z) return true;
-    const axis = t.x < t.y && t.x < t.z ? 'x' : t.y < t.z ? 'y' : 'z';
-    if (t[axis] > 1) return true; // the segment ends inside this cell
-    cell[axis] += s[axis];
-    t[axis] += dt[axis];
-  }
-  return false;
+  // Not loaded (undefined) or any block at all: the server might not see through it.
+  const cells = cellsAlong(from, to);
+  return cells !== null && cells.every(([x, y, z]) => world.blockAt(x, y, z) === 0);
 }
 
 /**

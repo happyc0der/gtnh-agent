@@ -1207,6 +1207,18 @@ describe('dangers from creatures beyond the threat radius', () => {
     expect(assessDangers(zombie, safetyCtx())).toEqual([]);
   });
 
+  it('a shooter that cannot see the player is no danger beyond the radius; within it, it counts', () => {
+    // Seen live 2026-10-04: a giant skeleton in a cave under the night pit, 10.4 blocks off,
+    // kept the agent in its shelter all day.
+    const giant = (x: number) =>
+      makeState((w) => void (w.mobs = [{ ...mob('SpecialMobs.GiantSkeleton', x), hidden: true }]));
+    expect(giant(15).nearbyEntities).toMatchObject({ value: { entities: [{ hidden: true }] } });
+    expect(assessDangers(giant(15), safetyCtx())).toEqual([]);
+    expect(assessDangers(giant(8), safetyCtx())).toMatchObject([
+      { code: 'HOSTILES_NEARBY', message: '1 hostile(s), nearest at 7.0 blocks' },
+    ]);
+  });
+
   it('being hurt in the last 15 s with a hostile about is a danger; with none about, it is not', () => {
     const hurt = (msAgo: number) =>
       makeState((w) => {

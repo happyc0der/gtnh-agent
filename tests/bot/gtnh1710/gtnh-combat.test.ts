@@ -91,6 +91,25 @@ describe('Gtnh1710Client fighting', () => {
     expect(attackPackets(server)).toEqual([]);
   });
 
+  it('marks a creature that cannot see the player: one under the ground is hidden, one on it is not', async () => {
+    // The fake world's floor is one layer of grass at y 105, air under it: a skeleton in the
+    // air below has that floor on every line to the player.
+    const { client } = await start({
+      combat: {
+        mobs: [
+          { entityId: 311, mobType: 51, x: -4.5 + 8, y: FEET_Y - 4, z: -7.5, health: 20 },
+          { entityId: 312, mobType: 51, ...east(9), health: 20 },
+        ],
+      },
+    });
+    const state = await client.observe();
+    if (!state.nearbyEntities.known) throw new Error(state.nearbyEntities.reason);
+    expect(state.nearbyEntities.value.entities.map((e) => [e.id, e.hidden])).toEqual([
+      [311, true],
+      [312, false],
+    ]);
+  });
+
   it('observes creatures with health, owner and age, and what it would strike with', async () => {
     const { client } = await start({
       combat: {

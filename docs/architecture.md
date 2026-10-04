@@ -2195,7 +2195,12 @@ on are in [GTNH compatibility: combat](gtnh-compatibility.md#combat-2026-09-30).
 **Danger without a fight.** Whatever combat allows, a creature is a danger (`HOSTILES_NEARBY`,
 so System 1 retreats) within the threat radius (10 blocks), and a hostile that shoots
 (skeletons, witches, blazes and their Special Mobs variants: `hostileTactic`) anywhere in the
-entity scan. Being hurt in the last 15 s (`player.lastHurtAt`, from the server's health
+entity scan, unless it cannot see the player (`hidden`: every line from its head to the
+player's body, and to the player's eyes higher up its column, where it comes out of a pit,
+passes clearly through a known full block, `src/bot/gtnh1710/sight.ts`; a 1.7.10 mob targets a
+player only while it sees it, and an arrow does not pass a block). Seen live 2026-10-04: a giant skeleton in
+a cave 7 blocks under the night pit, 10.4 blocks off, kept the agent sealed in its shelter a
+whole day. Within the threat radius every hostile counts, seen or not. Being hurt in the last 15 s (`player.lastHurtAt`, from the server's health
 updates) with a hostile about counts too. A walk threats do not stop (an escape) also keeps
 going when the player is hit. Seen live: a giant skeleton shot the agent from beyond the
 threat radius; its retreat stopped at the first arrow, nothing then counted as danger, and it
@@ -2243,8 +2248,9 @@ not stopping the client's walks, digs or placements, and never attacked. The rul
 1. **Observation.** `nearbyEntities` lists every entity within the entity scan (16 blocks),
    nearest first, at most 32: id, type, category (hostile, passive, unclassified, player), kind
    (mob, player, object), distance, health (the server's DataWatcher), whether it is owned (a
-   name tag, a saddle) or a baby, when the server last showed it hurt, and whether it is a
-   calm spider. It also lists the deaths seen since joining. It is unknown in older snapshots
+   name tag, a saddle) or a baby, when the server last showed it hurt, whether it is a
+   calm spider, and whether it is `hidden` (cannot see the player: `sight.ts`, failing toward
+   seen where blocks are not loaded or not known full cubes). It also lists the deaths seen since joining. It is unknown in older snapshots
    and whenever the threats are, and the safety policy checks it against `nearbyThreats`
    (same radius, same counts: calm spiders are in neither count).
    `player.weapon` is the best allowlisted weapon in the hotbar, or a bare hand (unknown when

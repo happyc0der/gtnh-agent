@@ -118,6 +118,15 @@ export const NearbyEntitySchema = z.strictObject({
    * False in snapshots stored before it existed (they counted every spider).
    */
   calm: z.boolean().default(false),
+  /**
+   * Known full blocks lie on every line from its head to the player's body, and to the
+   * player's eyes higher up its column (where it comes out of a pit), so it cannot see the
+   * player there (src/bot/gtnh1710/sight.ts): a mob picks a player to attack only while it
+   * sees it, and an arrow does not pass a block. Fails toward seen (false): a block not loaded
+   * or not known to be a full cube lets a line through, and so does one a line only grazes.
+   * False in snapshots stored before it existed.
+   */
+  hidden: z.boolean().default(false),
 });
 export type NearbyEntity = z.infer<typeof NearbyEntitySchema>;
 
