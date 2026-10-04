@@ -107,11 +107,22 @@ export function nearestOfEachKind<T>(
 }
 
 /**
+ * Stations the agent places to use them (approved 2026-09-30): GTNH's crafting table (3x3
+ * recipes are crafted there) and the vanilla furnace. Vanilla blocks with a GUI: the
+ * table's right-click opens its window and nothing else (BlockWorkbench, no tile entity);
+ * the furnace's keeps its items in a tile entity. Each stands on a solid floor beside the
+ * player, never where it walks (src/bot/gtnh1710/placing.ts checkStation); once placed it is
+ * one the agent sees and uses like any other (`crafting_table:<x>.<y>.<z>`, a furnace in
+ * the interactables).
+ */
+export const STATION_ITEMS = ['minecraft:crafting_table', 'minecraft:furnace'] as const;
+
+/**
  * The ONLY items PLACE_BLOCK may place, by the name the inventory reports (`@damage` for the
- * wood types): plain full vanilla blocks a bare player gets early. Nothing modded, nothing
- * with a tile entity, a GUI or a redstone function. Each becomes the block of the same
- * registry name (placedBlockOf); the live client keeps the rules for where they may go in
- * src/bot/gtnh1710/placing.ts.
+ * wood types): plain full vanilla blocks a bare player gets early, and the two stations
+ * (STATION_ITEMS). Nothing modded, nothing with a redstone function, no other block with a
+ * tile entity or a GUI. Each becomes the block of the same registry name (placedBlockOf);
+ * the live client keeps the rules for where they may go in src/bot/gtnh1710/placing.ts.
  */
 export const PLACEABLE_ITEMS = [
   'minecraft:dirt',
@@ -131,6 +142,7 @@ export const PLACEABLE_ITEMS = [
   'minecraft:log@3',
   'minecraft:log2',
   'minecraft:log2@1',
+  ...STATION_ITEMS,
 ] as const;
 
 export const PlaceableItemSchema = z.enum(PLACEABLE_ITEMS);
@@ -146,6 +158,7 @@ export const PLACEABLE_BLOCKS = [
   'minecraft:planks',
   'minecraft:log',
   'minecraft:log2',
+  ...STATION_ITEMS,
 ] as const;
 
 export const PlaceableBlockSchema = z.enum(PLACEABLE_BLOCKS);
@@ -173,4 +186,9 @@ export function placedBlockOf(item: PlaceableItem): PlaceableBlock {
 /** Sand and gravel: they fall unless a full block holds them up. */
 export function fallsWhenPlaced(item: PlaceableItem): boolean {
   return FALLING_PLACEABLE_BLOCKS.has(placedBlockOf(item));
+}
+
+/** A crafting table or a furnace (STATION_ITEMS): placed to be used, on a solid floor. */
+export function isStationItem(item: string): boolean {
+  return (STATION_ITEMS as readonly string[]).includes(item);
 }

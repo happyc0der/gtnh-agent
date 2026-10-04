@@ -243,7 +243,7 @@ export class FakeChestSim {
    */
   onInventoryChange: (() => void) | null = null;
   readonly #chests = new Map<string, Array<FakeStack | null>>();
-  readonly #tables: ReadonlySet<string>;
+  readonly #tables: Set<string>;
   readonly #recipes: readonly FakeRecipe[];
   readonly #furnaces = new Map<string, FurnaceState>();
   readonly #mods = new Map<string, FakeModBlock>();
@@ -322,6 +322,21 @@ export class FakeChestSim {
 
   chestContents(x: number, y: number, z: number): Array<FakeStack | null> {
     return [...(this.#chests.get(`${x},${y},${z}`) ?? [])];
+  }
+
+  /** A crafting table placed in the world: from now on it opens like the others. */
+  addTable(x: number, y: number, z: number): void {
+    this.#tables.add(`${x},${y},${z}`);
+  }
+
+  /** A furnace placed in the world (TileEntityFurnace, empty): from now on it opens. */
+  addFurnace(x: number, y: number, z: number): void {
+    this.#furnaces.set(`${x},${y},${z}`, {
+      slots: [null, null, null],
+      cookTicks: 0,
+      burnTicks: 0,
+      itemBurnTicks: 0,
+    });
   }
 
   /** A furnace's slots (input, fuel, output) and timers, as the server holds them. */

@@ -63,6 +63,18 @@ export interface GridCell {
   readonly accepts: readonly ItemKey[];
   /** Agent-facing names of the accepted items (for messages). */
   readonly names: readonly string[];
+  /** The ore-dictionary entry they come from (`ore:plankWood`), when the recipe names one. */
+  readonly label?: string;
+}
+
+/** A cell's accepted items in a message: the entry's label, or a few of the names. */
+function cellText(names: readonly string[], label: string | undefined): string {
+  if (label !== undefined) {
+    return `${label} (${names.length} kind${names.length === 1 ? '' : 's'})`;
+  }
+  return names.length > 3
+    ? `${names.slice(0, 3).join(' / ')} / ... (${names.length} kinds)`
+    : names.join(' / ');
 }
 
 export interface PlacedRecipe {
@@ -96,7 +108,10 @@ const inPlayerSlots = (layout: CraftingLayout, from: number = layout.playerSlots
 
 /**
  * Puts a recipe's pattern into the grid's top-left corner, resolving item names to registry
- * ids (names the registry does not know are left out; they cannot be in the inventory).
+ * ids (names the registry does not know are left out; they cannot be in the inventory). The
+ * pattern is the recipe's exact layout, empty cells included (src/domain/recipes.ts): placed
+ * at the corner, a shaped recipe matches at the server's first offset, and a 2x2 pattern
+ * fits either grid. A 3x3 one needs the table's.
  */
 export function placeRecipe(
   recipe: CraftingRecipe,
@@ -115,6 +130,7 @@ export function placeRecipe(
       const key = row[c] ?? ' ';
       if (key === ' ') continue;
       const names = recipe.key[key] ?? [];
+      const label = recipe.labels?.[key];
       const resolved: ItemKey[] = [];
       const known: string[] = [];
       for (const name of names) {
@@ -125,11 +141,17 @@ export function placeRecipe(
         }
       }
       if (resolved.length === 0) {
-        return fail(`none of ${names.join(', ') || `key ${key}`} is in the item registry`);
+        const wanted = names.length === 0 ? `key ${key}` : cellText(names, label);
+        return fail(`none of ${wanted} is in the item registry`);
       }
       const slot = layout.gridSlots[r * layout.gridWidth + c];
       if (slot === undefined) return fail('internal: pattern outside the grid');
-      cells.push({ slot, accepts: resolved, names: known });
+      cells.push({
+        slot,
+        accepts: resolved,
+        names: known,
+        ...(label === undefined ? {} : { label }),
+      });
     }
   }
   const result = resolve(recipe.result.item);
@@ -177,9 +199,8 @@ export function planFill(
     }
     if (source === null) {
       const missing = remaining[0];
-      return fail(
-        `not enough ingredients for one more craft: nothing left for ${missing?.names.join(' / ') ?? 'a cell'}`,
-      );
+      const what = missing === undefined ? 'a cell' : cellText(missing.names, missing.label);
+      return fail(`not enough ingredients for one more craft: nothing left for ${what}`);
     }
     const pickUp = click({ slot: source, button: 0 });
     if (pickUp !== null) return fail(pickUp);

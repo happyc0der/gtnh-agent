@@ -32,9 +32,9 @@ the play area that moves with the player) and within the safety boundary.
 | Observe position, health, food, inventory, mobs, hazards, light, GregTech machines, quests | `MC_ENABLE_LIVE_CONNECTION`                     | yes                               |
 | Walk over terrain, retreat or flee from threats, explore and remember what it saw          | `MC_ENABLE_MOVEMENT`, `MC_MOVEMENT_MODE=follow` | yes                               |
 | Dig allowlisted natural blocks with the best verified tool; dig a pit for the night        | `MC_ENABLE_DIGGING`                             | yes                               |
-| Place allowlisted plain blocks (night shelters)                                            | `MC_ENABLE_PLACING`                             | yes                               |
+| Place allowlisted plain blocks (night shelters); a crafting table or furnace to use        | `MC_ENABLE_PLACING`                             | plain yes; stations fake server   |
 | Eat approved food; go and get food when it has none                                        | `MC_ENABLE_EATING`                              | yes                               |
-| Craft in the 2x2 grid; at a crafting table                                                 | `MC_ENABLE_CRAFTING`                            | 2x2 yes; table on the fake server |
+| Craft hand-verified and GTNH's own recipes in the 2x2 grid; at a crafting table            | `MC_ENABLE_CRAFTING`                            | 2x2 yes; table on the fake server |
 | Move exact amounts to and from configured vanilla chests                                   | `MC_ENABLE_CONTAINERS`                          | yes (test pen)                    |
 | Quest book: submit quests, tick checkboxes, claim rewards                                  | `MC_ENABLE_QUEST_BOOK`                          | yes                               |
 | Take its owners' commands in chat (`!come`, `!goto`, `!get 20 logs`...) and whisper back   | `MC_OWNERS`                                     | fake server only                  |
@@ -248,7 +248,8 @@ and [docs/action-contract.md](docs/action-contract.md).
   and clay, Biomes O' Plenty's leaves and HarvestCraft's land gardens (`DIG_DOWN`: dirt, grass,
   sand, gravel or clay under the feet); the
   one that places blocks, `PLACE_BLOCK`, only places vanilla dirt, cobblestone, sand, gravel,
-  sandstone, planks and logs; `EXPLORE` only walks, in hops, inside the boundary and only in
+  sandstone, planks and logs, and a crafting table or furnace on a solid floor out of the way the
+  player walks; `EXPLORE` only walks, in hops, inside the boundary and only in
   daylight. Blocks are opened only by `INTERACT_BLOCK`, `SMELT` and `TAKE_OUTPUT`, and only
   blocks with an interaction profile or on the observe-only list. The only combat is
   `ATTACK_ENTITY`, on one listed hostile or farm animal.
@@ -262,8 +263,8 @@ and [docs/action-contract.md](docs/action-contract.md).
 - Chests are off unless `MC_ENABLE_CONTAINERS=true`; only chests listed in the config are used,
   and only if the block is a plain `minecraft:chest` (see below).
 - Crafting is off unless `MC_ENABLE_CRAFTING=true`; only crafting tables listed in the config or
-  found inside the fence are used, and a result is taken only if the server shows exactly what the
-  recipe table expects.
+  found inside the fence (one it placed among them) are used, and a result is taken only if the
+  server shows exactly what the recipe expects.
 - Interacting with blocks is off unless `MC_ENABLE_INTERACT=true`. Only blocks with an interaction
   profile are used; others only if you list them, and then only looked at. Trapped chests, levers,
   doors, drawers, barrels and ender chests are never right-clicked. Furnaces get only approved
@@ -283,7 +284,8 @@ and [docs/action-contract.md](docs/action-contract.md).
 - Placing is off unless `MC_ENABLE_PLACING=true` **and** the fence is set. It only fills empty
   cells inside the fence, never one the player's body or an entity is in, only by clicking a
   plain full block (never a chest or machine, which would open), never next to water, a chest
-  or a machine, never sand or gravel where it could fall, and never during danger (see below).
+  or a machine, never sand or gravel where it could fall, a crafting table or furnace only on a
+  solid floor and never where the player walks, and never during danger (see below).
 - Combat is off unless `MC_ENABLE_COMBAT=true` **and** the fence is set. It strikes only
   identified zombies, spiders, skeletons and witches (and their Special Mobs variants), or a
   grown, unnamed cow, pig, sheep or chicken for a task. Never players, villagers, golems, pets,
@@ -419,29 +421,55 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#chests)):
 
 ### Crafting
 
-The third world-changing ability: `CRAFT_ITEM` crafts a recipe from the agent's small table of
-early (Age 0) recipes (`src/domain/recipes.ts`: planks, sticks, torches, crafting table, chest,
-wooden shovel, wooden axe), each as GTNH 2.8.4 has it (e.g. 2 planks give 2 sticks; the crafting
-table is two flint above two logs). It crafts in the player's own 2x2 grid, or for 3x3 recipes at
-a crafting table you configure (the agent cannot place one). It has only run against the fake
-server so far (see [docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#crafting-2026-09-30)).
+The third world-changing ability: `CRAFT_ITEM` crafts a recipe in the player's own 2x2 grid, or a
+3x3 one at a crafting table: one you configure, one it sees, or one it placed itself (see
+[Placing](#placing)). The recipes (`src/domain/recipes.ts`):
 
-- Settings: `MC_ENABLE_CRAFTING=true`, and for 3x3 recipes the table in `agent.config.json` under
-  `minecraft.crafting.tables` (`{ "table.pen": { "name": "...", "position": { "x": .., "y": .., "z": .. } } }`).
+- **The hand-verified table** of early (Age 0) recipes: planks, sticks, torches, crafting table,
+  chest, wooden shovel, wooden axe, flint, each as GTNH 2.8.4 has it (e.g. 2 planks give 2
+  sticks; the crafting table is two flint above two logs). These win where the knowledge base
+  has the same recipe.
+- **GTNH's own recipes** from the knowledge base (CraftTweaker's dump of the server's recipes, see
+  [Knowledge base](docs/architecture.md#knowledge-base)), by the ids the planner's route names
+  them, e.g. `minecraft:wooden_pickaxe#1`: 19,786 of the 52,400 distinct crafting recipes (14
+  more are the hand-verified ones), shaped and shapeless, with their ore-dictionary ingredients
+  (any of GTNH's 650 planks for `ore:plankWood`). Left out, with the reason the route then
+  shows: results with NBT data (GT tools: 16,066), recipes with a crafting tool that stays in
+  the grid, worn (GT's hammers, saws, files; HarvestCraft's cookware: 11,998), shapes the dump
+  may have scrambled and vanilla's jar does not confirm (1,120), ingredients that must carry NBT
+  data (1,029), recipes whose ingredients share an item (943), ingredients only in kinds that
+  give something back (buckets, cells, bottles: 306), and unknown items (1,138). A count the
+  dump lacks (most: only 1,844 of the 19,786 have one) is expected to be 1, as the route
+  assumes; a wrong guess fails before anything is taken.
+
+It has only run against the fake server so far (see
+[docs/gtnh-compatibility.md](docs/gtnh-compatibility.md#crafting-2026-09-30)).
+
+- Settings: `MC_ENABLE_CRAFTING=true`. A table to use is configured in `agent.config.json` under
+  `minecraft.crafting.tables` (`{ "table.pen": { "name": "...", "position": { "x": .., "y": .., "z": .. } } }`),
+  seen inside the fence (`crafting_table:<x>.<y>.<z>`), or placed (`MC_ENABLE_PLACING=true`).
 - Use it as a plan step, e.g.
-  `{ "type": "CRAFT_ITEM", "args": { "recipe": "planks_oak", "times": 4, "craftingTableId": null } }`.
+  `{ "type": "CRAFT_ITEM", "args": { "recipe": "planks_oak", "times": 4, "craftingTableId": null } }`
+  or `{ "type": "CRAFT_ITEM", "args": { "recipe": "minecraft:wooden_pickaxe#1", "times": 1, "craftingTableId": "crafting_table:3.64.-2" } }`.
+  The planner's route ends each craft step with the exact `CRAFT_ITEM` to use.
+- `cli play` counts a quest's 3x3 crafts as doable when a table is configured, or when it may
+  place one (placing on): it places the table it holds, or makes one first. "Tools" and
+  "Monster Hunter" (a wooden sword) are doable so.
 
 How it stays safe (see [docs/architecture.md](docs/architecture.md#crafting)):
 
-- GTNH changes many recipes (e.g. a log gives 2 planks, not 4), so the table only says what to put
-  where. A result is taken only if the server shows exactly the expected item and count.
-  Otherwise every ingredient goes back and the action fails with what the server showed.
+- GTNH changes many recipes (e.g. a log gives 2 planks, not 4), so a recipe only says what to put
+  where, in the exact layout the server checks. A result is taken only if the server shows
+  exactly the expected item and count. Otherwise every ingredient goes back and the action fails
+  with what the server showed.
 - The server drops whatever is left in a crafting grid or on the cursor when a window closes or
   the player leaves. So the grid only ever holds one craft's worth of items, every failure puts
-  them back first, and the agent never closes window 0.
+  them back first, and the agent never closes window 0. Recipes that would leave something in the
+  grid (a worn crafting tool, an empty bucket) are left out.
 - Only predictable clicks are used, each confirmed by the server, and results always go into an
   empty slot.
-- Protected items are never used as ingredients, and neither are stacks with NBT data.
+- Protected items are never used as ingredients (every kind an ore-dictionary ingredient
+  accepts counts), and neither are stacks with NBT data.
 
 ### Interacting with blocks
 
@@ -556,10 +584,11 @@ How it stays safe (see [docs/architecture.md](docs/architecture.md#digging)):
 ### Placing
 
 The newest world-changing ability (approved 2026-09-30, so the agent can seal itself into a pit
-for the night, and later place a crafting table, furnace and coke oven): putting ONE block the
+for the night, and place a crafting table, furnace and coke oven): putting ONE block the
 player carries into an empty cell. Only `minecraft:dirt`, `cobblestone`, `sand`, `gravel`,
-`sandstone`, `planks` and `log`/`log2` are placed. Live since 2026-10-01: play builds its
-night shelters with it.
+`sandstone`, `planks` and `log`/`log2` are placed, and the two stations `minecraft:crafting_table`
+and `minecraft:furnace` (the coke oven is next). Live since 2026-10-01: play builds its night
+shelters with it. Tables and furnaces have only been placed on the fake server so far.
 
 - Settings: `MC_ENABLE_PLACING=true` (it also needs the movement fence), and optionally
   `minecraft.placing.maxHeightAboveFence` (default 4) in `agent.config.json`.
@@ -568,11 +597,20 @@ night shelters with it.
 - `observe --live` lists the cells a block could be placed into, and the blocks it saw placed.
 - Use it as a plan step, e.g.
   `{ "type": "PLACE_BLOCK", "args": { "position": { "x": -7, "y": 200, "z": -11 }, "item": "minecraft:dirt" } }`.
+  When a route needs a crafting table or furnace the player holds, its station step ends with
+  the exact `PLACE_BLOCK` (and the table's id it then has).
+- A placed crafting table is one the agent sees (`crafting_table:<x>.<y>.<z>`, for `CRAFT_ITEM`),
+  a placed furnace one it may smelt in (`SMELT`). The agent never breaks either again.
 
 How it stays safe (see [docs/architecture.md](docs/architecture.md#placing)):
 
 - Only a cell the observation lists as placeable can be asked for, and only with an allowlisted
   item the player carries.
+- A crafting table or furnace goes only on a solid floor beside the player (a plain full block
+  under it, out of the player's own columns: never in the cell it stands in, nor over its head),
+  and never where it walks: the client compares the walker's own moves around the cell with and
+  without the block, and refuses when any spot it reaches now would be cut off (a 1-wide
+  passage, a doorway, a staircase's only step).
 - The client re-checks it on the server's own block data just before the click. It refuses:
   - anything outside the fence's columns, below its level or more than 4 blocks above it;
   - a cell that is not air, tall grass or a dead bush (water, lava, a flower, a block);

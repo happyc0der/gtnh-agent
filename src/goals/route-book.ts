@@ -9,6 +9,7 @@ import { diggableInfo } from '../domain/dig-time.ts';
 import { ANIMAL_DROPS, GARDEN_BIOMES, GARDEN_DROPS, GARDEN_FOODS } from '../domain/food.ts';
 import {
   ingredientRequirements,
+  knowledgeRecipeIds,
   needsCraftingTable,
   RECIPE_IDS,
   RECIPES,
@@ -317,27 +318,20 @@ export function buildRouteBook(data: KnowledgeData): RouteBook {
     return list;
   };
   const generated: RouteRecipe[] = [];
-  const seen = new Set<string>();
-  const ordinal = new Map<string, number>();
-  for (const [out, count, flags, , inputs, label] of data.crafting) {
+  // The same recipe is often registered twice (e.g. by GT and a script): one id, one recipe.
+  // CRAFT_ITEM takes the same ids (one function names them both).
+  const ids = knowledgeRecipeIds(data);
+  for (const [i, [out, count, flags, , inputs, label]] of data.crafting.entries()) {
     const item = data.items[out];
-    if (item === undefined) continue;
+    const id = ids[i];
+    if (item === undefined || id == null) continue;
     const pairs: Array<{ ref: IngredientRef; count: number }> = [];
     for (let k = 0; k + 1 < inputs.length; k += 2) {
       pairs.push({ ref: inputs[k] as IngredientRef, count: inputs[k + 1] as number });
     }
     const station = (flags & CraftFlag.FITS_2X2) !== 0 ? '2x2' : 'crafting_table';
-    // The same recipe is often registered twice (e.g. by GT and a script): keep one.
-    const sig = `${out}|${count}|${station}|${label}|${pairs
-      .map((p) => `${JSON.stringify(p.ref)}*${p.count}`)
-      .sort()
-      .join(',')}`;
-    if (seen.has(sig)) continue;
-    seen.add(sig);
-    const n = (ordinal.get(item) ?? 0) + 1;
-    ordinal.set(item, n);
     generated.push({
-      id: `${item}${label === '' ? '' : `[${label}]`}#${n}`,
+      id,
       output: { item, count: Math.max(1, count) },
       inputs: pairs.map((p) => ({
         anyOf: expand(p.ref),

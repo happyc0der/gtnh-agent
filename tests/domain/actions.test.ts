@@ -9,6 +9,7 @@ import {
 } from '../../src/domain/actions.ts';
 import {
   fallsWhenPlaced,
+  isStationItem,
   PLACEABLE_BLOCKS,
   PLACEABLE_ITEMS,
   placedBlockOf,
@@ -201,7 +202,7 @@ describe('action model', () => {
 });
 
 describe('the place allowlist', () => {
-  it('holds plain vanilla blocks only, each becoming a block of the same name', () => {
+  it('holds vanilla blocks only, each becoming a block of the same name', () => {
     for (const item of PLACEABLE_ITEMS) {
       expect(item.startsWith('minecraft:'), item).toBe(true);
       expect(placedBlockOf(item), item).toBe(item.replace(/@\d+$/, ''));
@@ -213,6 +214,24 @@ describe('the place allowlist', () => {
 
   it('knows which of them fall', () => {
     expect(PLACEABLE_ITEMS.filter(fallsWhenPlaced)).toEqual(['minecraft:sand', 'minecraft:gravel']);
+  });
+
+  it('and the two stations, placed to be used: a crafting table and a furnace', () => {
+    expect(PLACEABLE_ITEMS.filter(isStationItem)).toEqual([
+      'minecraft:crafting_table',
+      'minecraft:furnace',
+    ]);
+    expect(
+      expectedPostconditionFor({
+        type: 'PLACE_BLOCK',
+        args: { position: { x: 2, y: 65, z: 1 }, item: 'minecraft:crafting_table' },
+      }),
+    ).toEqual({
+      kind: 'BLOCK_PLACED',
+      position: { x: 2, y: 65, z: 1 },
+      block: 'minecraft:crafting_table',
+      item: 'minecraft:crafting_table',
+    });
   });
 
   it('every wood type, and nothing else, has a damage value', () => {

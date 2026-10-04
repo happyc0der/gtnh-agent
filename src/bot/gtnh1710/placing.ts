@@ -1,6 +1,7 @@
 import {
   SOLID_DIGGABLE_BLOCKS,
   fallsWhenPlaced,
+  isStationItem,
   placedBlockOf,
   type PlaceableBlock,
   type PlaceableItem,
@@ -17,7 +18,8 @@ import {
   type DigArea,
 } from './digging.ts';
 import { PASSABLE_BLOCKS, passProblem, variantName } from './passable.ts';
-import { WALKABLE_SURFACES, type Vec3, type WalkWorld } from './walking.ts';
+import { reachableFeet } from './terrain.ts';
+import { WALKABLE_SURFACES, type Fence, type Vec3, type WalkWorld } from './walking.ts';
 
 /**
  * Placing ONE block for the live GTNH client: which cells may take a block, which block is
@@ -43,6 +45,12 @@ import { WALKABLE_SURFACES, type Vec3, type WalkWorld } from './walking.ts';
  *  - The server answers every C08 with S23 for the clicked block and for the cell next to
  *    its face (the world's own change follows), and with S2F for the held slot whenever its
  *    stack differs from the one the client sent, or the placement failed.
+ *
+ * A crafting table or a furnace (STATION_ITEMS, approved 2026-09-30) is placed to be used,
+ * and stays where it is (the agent never breaks one): checkStation keeps it on a solid
+ * floor beside the player and out of the way the player walks. Placed like any block (the
+ * click on the floor below; BlockWorkbench and BlockFurnace place as plain ItemBlocks, the
+ * furnace turning its front to the player), it then opens like any table or furnace found.
  */
 
 /** The agent places only into cells this close to its eyes (the same reach as digging). */
@@ -331,8 +339,9 @@ export function checkPlaceCell(
 
 /**
  * Whether the player standing at `feet` may place `item` into the cell at `target`, and
- * against which neighbour: inside the area, every checkPlaceCell rule, and sand or gravel
- * only where they cannot fall. Checked before the click and again just before sending it.
+ * against which neighbour: inside the area, every checkPlaceCell rule, sand or gravel only
+ * where they cannot fall, and a crafting table or furnace only where checkStation allows it.
+ * Checked before the click and again just before sending it.
  */
 export function checkPlace(
   world: WalkWorld,
@@ -349,6 +358,10 @@ export function checkPlace(
   if (fallsWhenPlaced(item) && cell.fallingProblem !== null) {
     return { ok: false, reason: `${item} at ${fmt(target)}: ${cell.fallingProblem}` };
   }
+  if (isStationItem(item)) {
+    const station = checkStation(world, area.fence, feet, target);
+    if (station !== null) return { ok: false, reason: `${item} at ${fmt(target)}: ${station}` };
+  }
   return {
     ok: true,
     block: placedBlockOf(item),
@@ -356,6 +369,87 @@ export function checkPlace(
     support: cell.support,
     reach: cell.reach,
   };
+}
+
+/** Feet blocks around a station's cell whose walks checkStation compares (columns each way). */
+const STATION_AROUND = 2;
+/** Levels below and above the cell and the feet that the comparison walks over. */
+const STATION_BELOW = 3;
+const STATION_ABOVE = 2;
+/** Longest walk the comparison follows inside its small box. */
+const STATION_WALK = 48;
+
+/** `world` with a station's block in `cell`: no body passes it, and nobody stands on it. */
+function withStation(world: WalkWorld, cell: BlockPos): WalkWorld {
+  // An id above every real (16-bit) block id, named as a block the walker treats as solid.
+  const id = 1 << 20;
+  const at = (x: number, y: number, z: number): boolean =>
+    x === cell.x && y === cell.y && z === cell.z;
+  return {
+    blockAt: (x, y, z) => (at(x, y, z) ? id : world.blockAt(x, y, z)),
+    metaAt: (x, y, z) => (at(x, y, z) ? 0 : world.metaAt?.(x, y, z)),
+    blockName: (n) => (n === id ? 'minecraft:crafting_table' : world.blockName(n)),
+    hazardCode: (n) => (n === id ? BLOCK_CODE.safe : world.hazardCode(n)),
+  };
+}
+
+/**
+ * Why a crafting table or furnace may not go into the cell at `target`, or null. A player
+ * puts one down on the ground beside it, where it does not block the way:
+ *  - on a solid floor: a plain full block the walker stands on under it (it stays put, at
+ *    the height the player uses it from);
+ *  - never in a column the player's body is in: not in the cell it stands in (the server
+ *    would allow that), nor over its head;
+ *  - never where the player walks: in a small box around the cell and the player, the
+ *    walker's own moves (terrain.ts reachableFeet: level moves, steps up, drops) must still
+ *    reach every feet block they reach now, but the cell itself, with the block in place. A
+ *    1-wide passage, a doorway, a staircase's step or the only way out of a hole all fail:
+ *    the agent never breaks a station to get by.
+ * Fail closed: the player not standing on walkable ground (no walk to compare) refuses.
+ */
+export function checkStation(
+  world: WalkWorld,
+  fence: Fence,
+  feet: Vec3,
+  target: BlockPos,
+): string | null {
+  if (bodyColumns(feet).some((c) => c.x === target.x && c.z === target.z)) {
+    return 'it would be in a column the player stands in (never where the player stands)';
+  }
+  const belowId = world.blockAt(target.x, target.y - 1, target.z);
+  const below = belowId === undefined ? undefined : nameOf(world, belowId);
+  if (below === undefined || !FALLING_SUPPORTS.has(below)) {
+    return `it would not stand on a solid floor: ${below ?? 'an unknown block'} is under it`;
+  }
+  const feetY = Math.floor(feet.y + EPS);
+  const box: Fence = {
+    min: {
+      x: Math.max(fence.min.x, Math.min(target.x, Math.floor(feet.x)) - STATION_AROUND),
+      y: Math.max(fence.min.y, Math.min(target.y, feetY) - STATION_BELOW),
+      z: Math.max(fence.min.z, Math.min(target.z, Math.floor(feet.z)) - STATION_AROUND),
+    },
+    max: {
+      x: Math.min(fence.max.x, Math.max(target.x, Math.floor(feet.x)) + STATION_AROUND),
+      y: Math.min(fence.max.y, Math.max(target.y, feetY) + STATION_ABOVE),
+      z: Math.min(fence.max.z, Math.max(target.z, Math.floor(feet.z)) + STATION_AROUND),
+    },
+  };
+  const before = reachableFeet(world, box, feet, STATION_WALK);
+  if (before.size === 0) {
+    return 'the player does not stand on walkable ground here, so the way it walks is not known';
+  }
+  const after = reachableFeet(withStation(world, target), box, feet, STATION_WALK);
+  const cut = [...before.values()].filter(
+    (p) =>
+      !(p.x === target.x && p.y === target.y && p.z === target.z) &&
+      !after.has(`${p.x},${p.y},${p.z}`),
+  );
+  if (cut.length === 0) return null;
+  const first = cut[0] as { x: number; y: number; z: number };
+  return (
+    `it would be in the player's way: ${cut.length} spot(s) it walks to now ` +
+    `(e.g. ${fmt(first)}) would be cut off (a 1-wide passage or the only way on)`
+  );
 }
 
 /** A cell checkPlaceCell allows, as an observation lists it. */
