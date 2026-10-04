@@ -218,10 +218,22 @@ function checkAction(
 ): string | null {
   const commands = play.deps.commands as CommandDeps;
   switch (command.verb) {
-    case 'follow':
-      return command.player !== null && !commands.owners.includes(command.player)
-        ? `I follow only my owners (${commands.owners.join(', ')})`
+    case 'come':
+    case 'follow': {
+      if (
+        command.verb === 'follow' &&
+        command.player !== null &&
+        !commands.owners.includes(command.player)
+      ) {
+        return `I follow only my owners (${commands.owners.join(', ')})`;
+      }
+      // Not seen now (logged off, or out of view): said at once, before any "OK".
+      const who =
+        command.verb === 'follow' && command.player !== null ? command.player : cmd.sender;
+      return commands.view().playerAt(who) === null
+        ? `I cannot see ${who === cmd.sender ? 'you' : who} from here`
         : null;
+    }
     case 'goto':
       return outsideBoundary(commands.boundary, command);
     case 'goto-block': {
@@ -265,7 +277,6 @@ function checkAction(
       );
       return why === undefined || why === null ? null : `I cannot get ${command.item}: ${why}`;
     }
-    case 'come':
     case 'tunnel':
       return null;
   }

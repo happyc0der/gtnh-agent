@@ -297,6 +297,15 @@ describe("owners' commands in play", () => {
     expect(repos.commands.get(1)?.status).toBe('done');
   });
 
+  it('come and follow fail at once when the player is not seen, before any OK', async () => {
+    const sim = newSim({ owner: null, heard: [whisper('!come'), whisper('!follow')] });
+    await runPlay(deps(open(), sim), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'Failed: I cannot see you from here',
+      'Failed: I cannot see you from here',
+    ]);
+  });
+
   it('follow re-plans every cycle: a walk toward the owner, a wait near it, until it is lost', async () => {
     const repos = open();
     const sim = newSim({ owner: { x: 5.5, y: 64, z: 0.5 }, heard: [whisper('follow me')] });
