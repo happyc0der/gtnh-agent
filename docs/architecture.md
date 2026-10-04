@@ -442,8 +442,8 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   keeps only its last raw lines, for diagnostics. A stop in the command form stops the action in
   progress at once (below).
 - **The commands** (`src/domain/owner-commands.ts`): a fixed Zod schema (stop, pause, resume,
-  status, help, come, follow, goto a point or a waypoint, home, get, mine, sethome, quests on/off,
-  waypoint save/delete/list). `parseOwnerCommand` parses the command form deterministically
+  status, help, come, follow, goto a point or a waypoint, home, explore, tunnel, get, mine,
+  sethome, quests on/off, waypoint save/delete/list). `parseOwnerCommand` parses the command form deterministically
   (case-insensitive verbs, `minecraft:` optional, aliases); with a `!` or `#` prefix that is all,
   and a typo gets its usage back. Other text is natural language: `OllamaCommandProvider`
   (`src/llm/ollama-command-provider.ts`, `AGENT_COMMANDS=ollama`) asks the local model for a verb
@@ -478,9 +478,28 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   nothing within 3 blocks of another player, so never near the owner. Not seeing the player
   ends come and follow; anything else fails after 3 steps in a row that could not be planned or
   did not succeed.
+- **Explore** (Baritone's #explore) is travel to a point fixed when it begins: `distance`
+  blocks (default 64, at most 256) toward the compass direction asked, or, with none, the one
+  world memory has seen least (`wanderTarget`), no farther than the room left to the safety
+  boundary that way (refused with less than EXPLORE's minimum).
+- **Tunnel** (Baritone's #tunnel): a straight tunnel one wide and two high, `length` blocks
+  (default 16, at most 64) north, south, east or west from where the bot stood when it began,
+  or with `down` stairs going one block down for each block forward. Code plans it a few cells
+  at a time (`src/bot/gtnh1710/tunnel.ts` `planTunnel`, with the client's own dig rules: the
+  top block first, each dig checked with `checkDig` and a tool the player carries, the floor
+  checked before each step), and the steps run as known safe steps (`blueprintSession`), each
+  validated, executed and verified. It stops and says why, and how far it got, at a fluid,
+  lava, an open floor (a cave, a drop), sand or gravel that would fall, or a block it cannot
+  harvest; dusk, a nearly empty food bar and a new command interrupt it as they do a trip.
+  With tunnel and the ores it exposes (GregTech tells a client an ore's material only once a
+  face of it is open), `!mine` of a GregTech ore needs no x-ray: asked for one away from the
+  heights its veins lie at (the knowledge base's veins), the reply says where, and how to dig
+  there.
 - **Goals** (get, mine) are FreeGoals under the command's task, pursued exactly like
-  `cli play --needs` (`runGoalSession`: the planner plans from the route, GATHER digs), done when
-  the inventory holds them, failed after `maxStuckSessions` sessions without progress.
+  `cli play --needs` (`runGoalSession`: the planner plans from the route, GATHER digs; when
+  every step of the route is an exact action, code follows it without asking the model:
+  [Following the route](#following-the-route)), done when the inventory holds them, failed
+  after `maxStuckSessions` sessions without progress.
 - **Stop.** The client's `interrupt()` makes `haltReason` (which every walk, EXPLORE hop, dig,
   placement, fight and window checks before it starts and at every step or tick) report the stop,
   without `halt()`'s lasting latch: the action in progress stops at its next tick, and the one a
@@ -492,7 +511,10 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   in short slices; with `--listen` any end of play but the stop file, Ctrl+C, the limits, the
   night and a mob becomes such a wait, and play looks again after 2 minutes. Every slice the
   deterministic router looks at a fresh observation, and when it would retreat, fight, eat or
-  rest, a short standby session lets System 1 do it. `cli play --listen` also reconnects when the
+  rest, a short standby session lets System 1 do it. When it would pause only because a mob is
+  near while the bot is home (or has none) and not sealed in, play ends to wait offline, as
+  after a session ([A mob near home](#routes-nights-and-the-play-loop); seen live 2026-10-04: a
+  zombie followed the idle bot home, where the pause had it stand still until it was killed). `cli play --listen` also reconnects when the
   connection drops (5 s, 15 s, 60 s, then every 2 minutes).
 - **Chat out**: replies are whispers only (`outbound.whisper`: `/tell <owner> <text>`, the one
   chat packet, plain text, at most 100 characters a line), cut into at most 3 lines and sent at
@@ -639,6 +661,25 @@ Safety does not depend on the stored plan: every step is validated again, agains
 cycle that runs it, and the repeated-failure rule still applies across plans (a `REPLAN` that proposes
 the same failing action is refused with `REPEATED_FAILURE`). Dangers, vitals and upkeep are routed
 before the planner, so a plan simply waits while System 1 handles them.
+
+### Following the route
+
+The route (`src/goals/route.ts`, read to the planner by `planner-provider.ts`) ends each step it
+can name exactly with the action that does it: `=> PLACE_BLOCK {...}` for a station to put
+down, `=> CRAFT_ITEM {...}` for a craft (its recipe id, times, and table), `=> GATHER {...}` for
+a gather (the block in view that gives it, with `item` when the block may drop something else).
+When every step of the route is such an exact action, following the route is the plan, and
+code makes it (`src/planner/route-plan.ts` `planFromRoute`; stored with the planner `route`):
+the model is not asked. Seen live 2026-10-04: with planks and sticks held, the model planned
+planks from logs it did not have, plan after plan, and for "get 8 cobblestone" it planned single
+digs of blocks it named wrongly; followed by code, the Tools quest's crafts and the 8
+cobblestone went straight through. A route with a withdrawal, a smelt or a step no action names
+is still the model's to plan. A craft at a table out of reach walks back to it first
+(`tableApproach`: MOVE_TO the spot to use it from when it is in view, else EXPLORE toward it),
+for a placed table and a configured one alike. When the route says everything the goal needs
+is held but the goal is not met yet (a quest's crafting task: the server completes it on the
+craft and tells the client a moment later), the cycle WAITs 2 s instead, twice at most in a
+row, before the planner is asked.
 
 ### GATHER: gathering in one plan step
 
@@ -871,7 +912,14 @@ moment (the inventory, the other players, the boundary) into the pathfinder's op
   (`allowWater`, off) in calm one-deep water; falls of at most 3 blocks. Walks never dig down
   (that is the night pit's `DIG_DOWN`).
 - A walk that does no work (a retreat, the flee, the walk to a drop: threats do not stop them,
-  and a dig or a placement would) breaks and places nothing.
+  and a dig or a placement would) breaks and places nothing; only the walk to a dig's drop that
+  no free spot reaches breaks its way there, and still places nothing
+  ([Fetching the drop](#fetching-the-drop)).
+- **Mobs** (Baritone's mob avoidance, the idea): movements within 8 blocks of a hostile cost 1.5
+  times as much, so paths keep away from them where a detour is short; within 10 blocks of one
+  that explodes or might (a creeper, an unidentified hostile or entity: `mayExplode`) they cost
+  20 times as much, so any sane detour is cheaper. Seen live 2026-10-04: a retreat walked past
+  an EnderZoo concussion creeper, and the bot died.
 
 **The plan.** `planPath` (at most 60,000 nodes and 500 ms: it runs between packets), cut to the
 walk's `maxLength` (blocks) or `maxTicks`, a partial path only where the walk allows one
@@ -1499,9 +1547,15 @@ cell. A player watches where a drop goes and walks over to it; the client does t
   within a block), inside the fence, from which the item is within reach. The walk there is the
   ordinary checked walk (`walkTo`, as for `MOVE_TO`: it stops for threats, and breaks nothing),
   then the pickup is waited for (2 s).
-- **Refusals and bounds.** An item with no such cell (on leaves high in a tree, out of the
-  fence, in lava), one that ended up more than 6 blocks from where it appeared, one no walk
-  reaches, and any past 2 walks are left where they lie; a walk that stops on the way (a
+- **No free spot.** Over terrain, a dig's drop that no such cell puts in reach (in a gap one
+  block high under leaves), or that no walk without breaking reaches, is fetched by a walk on
+  the pathfinder that may break what is in its way but never places a block (`pickupGoal`: any
+  feet block from which the item is in reach, at its level or below, with no hazard around), so
+  it never climbs after a drop. Seen live 2026-10-04: two cobblestone drops left so under a
+  tree. A kill's drops are never fetched by breaking.
+- **Refusals and bounds.** An item next to lava or out of the fence, one that ended up more than
+  6 blocks from where it appeared, one no walk reaches, and any past 2 walks are left where they
+  lie; a walk that stops on the way (a
   threat, a correction, the stop file) ends the fetching. The dig or the kill stands either way.
 - **Sweeping up**, as a person sweeps up what fell around a tree. The client remembers which
   items its own digs and kills dropped (what it dug and killed for). With the walks left, a dig
