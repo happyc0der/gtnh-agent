@@ -71,6 +71,29 @@ function readPitSite(repos: Repositories): PitSite | null {
   }
 }
 
+/** How many hostiles a morning wait names (whoIsNear). */
+const NAMED_HOSTILES = 2;
+
+/**
+ * The nearest hostiles (or unidentified entities) by name, and where each is from the player
+ * (how far, how much above or below): ": minecraft:Zombie 4 blocks away, 3 below". Tells a
+ * mob in a cave beside the shelter from one at its door. Empty when none is listed.
+ */
+export function whoIsNear(state: GameState): string {
+  if (!state.nearbyEntities.known || !state.player.position.known) return '';
+  const feetY = state.player.position.value.y;
+  const near = state.nearbyEntities.value.entities
+    .filter((e) => (e.category === 'hostile' && e.calm !== true) || e.category === 'unclassified')
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, NAMED_HOSTILES)
+    .map((e) => {
+      const dy = Math.round(e.position.y - feetY);
+      const level = dy === 0 ? 'level' : dy > 0 ? `${dy} above` : `${-dy} below`;
+      return `${e.type} ${Math.round(e.distance)} blocks away, ${level}`;
+    });
+  return near.length === 0 ? '' : `: ${near.join('; ')}`;
+}
+
 /**
  * The fence and the dig rules a code-made plan uses now (the night pit, the way out of it, an
  * owner's tunnel): only digs a carried tool can harvest (the safety policy's own rule). Null
@@ -170,7 +193,8 @@ export function liveShelter(
         ...base,
         walled: true,
         sheltered: state.player.sealed === true,
-        hostiles: mobs.length === 0 ? null : mobs.map((v) => v.message).join('; '),
+        hostiles:
+          mobs.length === 0 ? null : `${mobs.map((v) => v.message).join('; ')}${whoIsNear(state)}`,
       };
       if (opts === null) return { ...stuck, problem: 'there is no fence to dig or walk in' };
       const exit = planShelterExit(world, feet, opts);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
-import { standbyReason } from '../../../src/app/play/live-play.ts';
+import { standbyReason, whoIsNear } from '../../../src/app/play/live-play.ts';
 import type { GameState } from '../../../src/domain/game-state.ts';
 import { makeState, memoryRepos, testConfig } from '../../fixtures/index.ts';
 
@@ -60,5 +60,22 @@ describe('an idle bot stands by for System 1', () => {
         repos,
       ),
     ).toBeNull();
+  });
+});
+
+describe('who is near the shelter (live-play.ts whoIsNear)', () => {
+  it('names the nearest hostiles, how far, and how much above or below the player', () => {
+    const state = makeState((w) => {
+      w.player.position = { x: 0.5, y: 61, z: 0.5 };
+      w.hostiles = [
+        { x: 3.5, y: 58, z: 0.5 },
+        { x: 0.5, y: 64, z: 6.5 },
+        { x: 9.5, y: 61, z: 0.5 },
+      ];
+    });
+    expect(whoIsNear(state)).toBe(
+      ': minecraft:Zombie 4 blocks away, 3 below; minecraft:Zombie 7 blocks away, 3 above',
+    );
+    expect(whoIsNear(makeState())).toBe('');
   });
 });
