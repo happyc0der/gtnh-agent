@@ -1,4 +1,5 @@
 import type { BlockPosition, Position } from '../../domain/common.ts';
+import type { StripState } from './strip-mine.ts';
 import type { DecisionResult } from '../../domain/decisions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import { AGE0_QUESTS } from '../../goals/age0-quests.ts';
@@ -112,6 +113,10 @@ export interface CommandRun {
   worked: boolean;
   /** A goal: its last session ended with one of System 1's reflexes (a retreat, a meal...). */
   interrupted: boolean;
+  /** Mine a GregTech ore none of which is in view: the strip mine (strip-mine.ts). */
+  strip: StripState | null;
+  /** Its ores in view a goal session got none from (`x,y,z`): the strip mine goes on past them. */
+  stripSkipped: Set<string>;
   /** Tunnel: its first cell (where the bot stood when it began), and the cells dug then. */
   tunnelFrom: BlockPosition | null;
   tunnelDone: number | null;

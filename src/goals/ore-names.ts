@@ -130,6 +130,29 @@ export function gtOreByItem(item: string): GtOre | null {
 }
 
 /**
+ * The Overworld's GregTech veins that hold `material` (any of a vein's four ores): their
+ * heights and weights, for a strip mine's level (src/app/play/strip-mine.ts); [] when none
+ * does or there is no knowledge base.
+ */
+export function gtOreVeins(
+  material: string,
+): Array<{ minY: number; maxY: number; weight: number }> {
+  try {
+    return loadKnowledge()
+      .veins.filter(
+        (v) =>
+          v.dims.includes('Overworld') &&
+          [v.primary, v.secondary, v.between, v.sporadic].some(
+            (o) => o !== null && o.material === material,
+          ),
+      )
+      .map((v) => ({ minY: v.minY, maxY: v.maxY, weight: v.weight }));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * The heights at which the Overworld's GregTech veins hold `material` (any of a vein's four
  * ores: primary, secondary, between, sporadic), as one range from the lowest vein's bottom to
  * the highest's top; null when no Overworld vein holds it or there is no knowledge base.

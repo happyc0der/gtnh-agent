@@ -334,6 +334,7 @@ export function liveCommands(
     step: (target) => planTravelStep({ ...travelInput(), target }),
     surface: () => surfaceTarget(travelInput()),
     findBlock: (names) => client.world.findBlocks(names),
+    gtOres: () => client.world.gtOresInView(),
     goalProblem: (item, count, anyKind) =>
       cannotGet(item, count, client.world.inventoryItems() ?? {}, anyKind),
     owners: config.minecraft.owners,

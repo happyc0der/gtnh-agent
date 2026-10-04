@@ -823,6 +823,64 @@ describe("owners' commands in play", () => {
     expect(sim.sessions).toEqual(['command-1']);
   });
 
+  it('strip-mines for a GregTech ore none of which is in view: stairs down to its veins, then a tunnel', async () => {
+    const repos = open();
+    const sim = newSim({
+      heard: [whisper('!mine 2 copper ore')],
+      gain: { 'gregtech:gt.metaitem.03@5035': 1 },
+    });
+    const requests: TunnelRequest[] = [];
+    const STEP = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] } as const;
+    const tunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
+      requests.push(req);
+      const [dx, dz] = STEP[req.direction];
+      const fx = Math.floor(sim.position.x);
+      const fz = Math.floor(sim.position.z);
+      const done = (fx - req.start.x) * dx + (fz - req.start.z) * dz;
+      if (done >= req.length) {
+        return Promise.resolve({ ok: true, done: req.length, steps: [], problem: null });
+      }
+      const down = req.slope === 'down' ? done + 1 : 0;
+      const target = {
+        x: req.start.x + dx * (done + 1) + 0.5,
+        y: req.start.y - down,
+        z: req.start.z + dz * (done + 1) + 0.5,
+      };
+      return Promise.resolve({
+        ok: true,
+        done,
+        steps: [
+          {
+            spec: { type: 'MOVE_TO', args: { target, tolerance: 0.5 } },
+            text: `step into the next cell`,
+          },
+        ],
+        problem: null,
+      });
+    };
+    // A copper ore shows in the wall once the tunnel is 3 cells past the stairs.
+    const base = deps(repos, sim, { tunnel });
+    const commands: CommandDeps = {
+      ...(base.commands as CommandDeps),
+      gtOres: () =>
+        sim.position.y <= 58 && Math.abs(sim.position.z) >= 9
+          ? [{ position: { x: 1, y: 58, z: Math.floor(sim.position.z) }, ore: 35 }]
+          : [],
+    };
+    await runPlay({ ...base, commands }, LIMITS, noStop);
+    expect(said(sim)[0]).toBe(
+      'OK: mining gregtech:gt.blockores until I have 2 gregtech:gt.metaitem.03@5035 (I have 0)',
+    );
+    // Copper's veins lie at y 5-60: 58 is the highest of them under the feet (64).
+    expect(said(sim)[1]).toBe(
+      'No copper ore in view: I dig stairs down to y 58, then tunnels north until some shows',
+    );
+    expect(requests[0]).toMatchObject({ direction: 'north', slope: 'down', length: 6 });
+    expect(requests.some((r) => r.slope === 'level' && r.start.y === 58)).toBe(true);
+    // The fake gains one a cycle: the second cycle's GATHER of the ore in view makes 3.
+    expect(said(sim).at(-1)).toMatch(/^Done: I have [23] gregtech:gt.metaitem.03@5035$/);
+  });
+
   it('digs a tunnel: code plans it a few cells at a time from where it began, to its length', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!tunnel east 3')] });

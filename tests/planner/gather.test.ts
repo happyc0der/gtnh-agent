@@ -212,6 +212,15 @@ describe('GATHER chooses each action in code, from the observation', () => {
       skip: [],
       skipEntities: [],
     });
+    // Not for a GregTech ore: they lie underground, and the owner's !mine strip-mines.
+    const ore: GatherStep = {
+      type: 'GATHER',
+      args: { block: 'gregtech:gt.blockores', item: 'gregtech:gt.metaitem.03@5032', count: 4 },
+    };
+    expect(chooseGatherAction(ore, progress, state, { ...opts(), wander })).toMatchObject({
+      kind: 'end',
+      end: 'no-target',
+    });
     // A remembered place it stands by already, with none in view, is gone: on all the same.
     const gone = { x: 5, y: 64, z: 5, distance: 5.7 };
     expect(

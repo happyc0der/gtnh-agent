@@ -505,10 +505,21 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   validated, executed and verified. It stops and says why, and how far it got, at a fluid,
   lava, an open floor (a cave, a drop), sand or gravel that would fall, or a block it cannot
   harvest; dusk, a nearly empty food bar and a new command interrupt it as they do a trip.
-  With tunnel and the ores it exposes (GregTech tells a client an ore's material only once a
-  face of it is open), `!mine` of a GregTech ore needs no x-ray: asked for one away from the
-  heights its veins lie at (the knowledge base's veins), the reply says where, and how to dig
-  there.
+- **Strip mining** (the idea of Baritone's legitMine): a `!mine` of a GregTech ore with none
+  of its material in view digs for it, as a person does, since GregTech tells a client an
+  ore's material only once a face of it is open (no x-ray). `src/app/play/strip-mine.ts`
+  picks the height (`stripLevel`: within the most Overworld veins of the material by their
+  weight, at least 6 under the feet, no lower than the safety boundary) and the way (the most
+  room to the boundary); the round digs stairs down to it, then level tunnels of 32 cells, each
+  planned like an owner's tunnel and run as known safe steps under its own task
+  (`command-N-strip`), turning clockwise where a tunnel may go no further. Between sessions
+  the goal round looks at the GregTech ores in view (`gtOresInView`, a face open to air): one
+  of the material, and the goal's GATHER digs it (and the vein behind it, as its faces open);
+  ores a session got none from are passed over. It fails after 256 cells of tunnel, or when 4
+  turns in a row dig nothing. A GATHER of a GregTech ore no longer wanders the surface for
+  one. Every GregTech ore needs a pickaxe of its level, which the bot cannot make yet (a
+  Tinkers' Construct pickaxe given to it works): without one the command fails at once,
+  saying so (`cannotGet`).
 - **Goals** (get, mine) are FreeGoals under the command's task, pursued exactly like
   `cli play --needs` (`runGoalSession`: the planner plans from the route, GATHER digs; when
   every step of the route is an exact action, code follows it without asking the model:

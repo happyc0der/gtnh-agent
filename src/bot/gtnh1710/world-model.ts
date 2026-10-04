@@ -2486,6 +2486,24 @@ export class WorldModel {
     return findExposedBlocks(this.#store, ids, { x: pos.x, y: pos.feetY, z: pos.z });
   }
 
+  /**
+   * GregTech ores the player could see within the resource scan's radius (a face open to
+   * air), nearest first, each with its material's metadata when the server sent it
+   * (oreMetaAt): what a strip mine looks for in its walls (src/app/play/strip-mine.ts).
+   */
+  gtOresInView(): Array<{ position: { x: number; y: number; z: number }; ore?: number }> {
+    const pos = this.#position;
+    const registry = this.#registry;
+    if (pos === null || registry === null) return [];
+    const ids = new Set<number>();
+    for (const [id, name] of registry.blocks) if (name === GT_ORE_BLOCK) ids.add(id);
+    const feet = { x: pos.x, y: pos.feetY, z: pos.z };
+    return findExposedBlocks(this.#store, ids, feet, RESOURCE_SCAN_RADIUS, 64).map((f) => {
+      const ore = this.oreMetaAt(f.position.x, f.position.y, f.position.z);
+      return ore === undefined ? { position: f.position } : { position: f.position, ore };
+    });
+  }
+
   /** The player's feet position: where the client walked it, or where the server placed it. */
   get ownPosition(): Vec3 | null {
     const p = this.#position;

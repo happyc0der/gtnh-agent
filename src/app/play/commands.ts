@@ -6,7 +6,23 @@ import {
   wanderTarget,
   type PlaceKind,
 } from '../../domain/world-memory.ts';
-import { gtOreByItem, gtOreByName, gtOreHeights } from '../../goals/ore-names.ts';
+import {
+  gtOreByItem,
+  gtOreByName,
+  gtOreHeights,
+  gtOreOfMeta,
+  gtOreVeins,
+} from '../../goals/ore-names.ts';
+import { GT_ORE_BLOCK } from '../../domain/blocks.ts';
+import type { ShelterStep } from '../../domain/night-shelter.ts';
+import {
+  firstLeg,
+  nextLeg,
+  STRIP_MAX,
+  STRIP_MAX_TURNS,
+  stripDirection,
+  stripLevel,
+} from './strip-mine.ts';
 import { heldOf, type BlockPosition, type Position } from '../../domain/common.ts';
 import {
   describeCommand,
@@ -23,6 +39,7 @@ import {
   type OwnerCommand,
   type TravelCommand,
   type TunnelCommand,
+  type TunnelDirection,
 } from '../../domain/owner-commands.ts';
 import type { Boundary, NamedLocation } from '../../domain/safety.ts';
 import type { CommandTranslation } from '../../llm/ollama-command-provider.ts';
@@ -97,6 +114,11 @@ export interface CommandDeps {
    * (world-model.ts findBlocks); absent: it cannot look.
    */
   findBlock?: (names: readonly string[]) => Array<{ position: BlockPosition; distance: number }>;
+  /**
+   * GregTech ores the bot sees (a face open to air), with their material's metadata when the
+   * server sent it (world-model.ts gtOresInView); absent: a !mine of one is not strip-mined.
+   */
+  gtOres?: () => Array<{ position: BlockPosition; ore?: number }>;
   /** Where `!surface` goes (owner-travel.ts surfaceTarget); absent: it cannot here. */
   surface?: () => { point: Position; here: boolean } | { problem: string };
   /** The owners (MC_OWNERS): `follow` follows only them. */
@@ -179,6 +201,8 @@ function runOf(play: PlayState, id: number): CommandRun {
       exploreTo: null,
       surfaceTo: null,
       blockTo: null,
+      strip: null,
+      stripSkipped: new Set(),
       tunnelFrom: null,
       tunnelDone: null,
       worked: false,
@@ -528,7 +552,10 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
         c.verb === 'get' || c.block === c.item
           ? `${c.verb === 'get' ? 'getting' : 'mining'} ${c.verb === 'get' ? c.item : c.block} until I have ${c.count}`
           : `mining ${c.block} until I have ${c.count} ${c.item}`;
-      return `${what} (I have ${have})${c.verb === 'mine' ? oreDepthHint(c.item, view.position) : ''}`;
+      // A GregTech ore it strip-mines for needs no hint of where its veins lie.
+      const hint =
+        c.verb === 'mine' && !stripMines(play, c) ? oreDepthHint(c.item, view.position) : '';
+      return `${what} (I have ${have})${hint}`;
     }
   }
 }
@@ -780,7 +807,7 @@ async function tunnelRound(
   cmd: OwnerCommandRecord,
   command: TunnelCommand,
 ): Promise<PlayResult | 'next-round'> {
-  const { deps, limits, hooks } = play;
+  const { deps, limits } = play;
   const run = runOf(play, cmd.id);
   const fail = (why: string): 'next-round' => {
     finish(play, cmd, 'failed', `Failed: ${why}`.slice(0, 400));
@@ -819,19 +846,38 @@ async function tunnelRound(
   if (run.stuck >= limits.maxStuckSessions) {
     return fail(`no progress in ${run.stuck} sessions (${play.lastStop}; ${dug})`);
   }
+  return digSession(play, cmd, command, plan.steps, dug, fail);
+}
+
+/**
+ * One session of a tunnel's next steps (tunnelRound, stripRound), run as known safe steps:
+ * dusk, a food bar nearly empty and an owner's new command end it, as they do a trip; a mob
+ * near has play wait for it; a step that fails fails the command.
+ */
+async function digSession(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  command: TunnelCommand | GoalCommand,
+  steps: readonly ShelterStep[],
+  dug: string,
+  fail: (why: string) => 'next-round',
+  taskId = commandTaskId(cmd.id),
+): Promise<PlayResult | 'next-round'> {
+  const { deps, hooks } = play;
+  const run = runOf(play, cmd.id);
   let dark: WorldTime | null = null;
   let hungry: FoodStatus | null = null;
   let preempted: string | null = null;
   const result = await blueprintSession(play, {
-    taskId: commandTaskId(cmd.id),
+    taskId: taskId,
     goal: `Owner command #${cmd.id} from ${cmd.sender}: ${describeCommand(command)} (code digs it)`,
     subgoal: dug,
-    steps: plan.steps.map((s, i) => `${i + 1}. ${s.text}`),
-    known: plan.steps,
+    steps: steps.map((s, i) => `${i + 1}. ${s.text}`),
+    known: [...steps],
     label: `owner command #${cmd.id}`,
     text: `${describeCommand(command)} (${dug})`,
     missing: {},
-    maxCycles: plan.steps.length * 2 + 2,
+    maxCycles: steps.length * 2 + 2,
     stopRequested: () =>
       dark !== null
         ? nightReason(dark)
@@ -861,7 +907,7 @@ async function tunnelRound(
     return 'next-round';
   }
   const mob = mobPause(result.stopKind, play.lastDecision);
-  if (mob !== null) return waitOutMob(play, commandTaskId(cmd.id), mob);
+  if (mob !== null) return waitOutMob(play, taskId, mob);
   if (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') {
     return fail(`${result.stopReason} (${dug})`);
   }
@@ -1333,6 +1379,17 @@ async function goalCommandRound(
   }
   const missing = missingFor(free.requirements, inventory, free.anyKind);
   const left = total(missing);
+  // A GregTech ore with none of it in view: dig for it (strip-mine.ts), as a person does.
+  // Before the count of sessions without progress: the tunnel's cells are its progress, and
+  // STRIP_MAX cells its end.
+  const strip = stripMines(play, command);
+  if (strip && !oreInView(play, command.item, run.stripSkipped)) {
+    run.missing = left;
+    run.stuck = 0;
+    run.worked = false;
+    run.interrupted = false;
+    return stripRound(play, cmd, command);
+  }
   // Progress: fewer missing, new ground seen, or work on the way there (more of anything: a
   // pickaxe from nothing takes logs, flint, a table... before the pickaxe itself; seen live
   // 2026-10-04, such sessions counted as none and the command failed). A session System 1
@@ -1373,6 +1430,13 @@ async function goalCommandRound(
   run.worked =
     after !== null && Object.entries(after).some(([item, n]) => n > (inventory[item] ?? 0));
   run.interrupted = play.lastDecision !== null && REFLEXES.has(play.lastDecision.decision);
+  if (strip && after !== null && (after[command.item] ?? 0) <= (inventory[command.item] ?? 0)) {
+    // The ores in view gave none (out of reach, refused): passed over, and the strip mine
+    // goes on past them.
+    for (const o of oresFor(play, command.item, run.stripSkipped)) {
+      run.stripSkipped.add(cellKey(o.position));
+    }
+  }
   if (ended.dark !== null) {
     sayOnce(
       play,
@@ -1389,6 +1453,124 @@ async function goalCommandRound(
     finish(play, cmd, 'failed', `Failed: ${ended.result.stopReason}`);
   }
   return 'next-round';
+}
+
+/** Whether a !mine is of a GregTech ore the live client can strip-mine for. */
+function stripMines(play: PlayState, command: GoalCommand): boolean {
+  return (
+    command.verb === 'mine' &&
+    command.block === GT_ORE_BLOCK &&
+    play.deps.tunnel !== undefined &&
+    (play.deps.commands as CommandDeps).gtOres !== undefined
+  );
+}
+
+const cellKey = (p: BlockPosition): string => `${p.x},${p.y},${p.z}`;
+
+/** GregTech ores in view that drop `item` (their material known and right), not passed over. */
+function oresFor(
+  play: PlayState,
+  item: string,
+  skipped: ReadonlySet<string>,
+): Array<{ position: BlockPosition }> {
+  const ores = (play.deps.commands as CommandDeps).gtOres?.() ?? [];
+  return ores.filter(
+    (o) =>
+      o.ore !== undefined &&
+      !skipped.has(cellKey(o.position)) &&
+      (gtOreOfMeta(o.ore)?.drops.includes(item) ?? false),
+  );
+}
+
+/** Whether a GregTech ore that may drop `item` is in view, and not passed over. */
+function oreInView(play: PlayState, item: string, skipped: ReadonlySet<string>): boolean {
+  return oresFor(play, item, skipped).length > 0;
+}
+
+/**
+ * One session of strip mining for a !mine of a GregTech ore with none of it in view: stairs
+ * down to the height where its veins lie most (strip-mine.ts stripLevel, no lower than the
+ * safety boundary), then straight tunnels, turning clockwise where one may go no further,
+ * each planned a few cells at a time like an owner's tunnel. Between sessions the goal round
+ * looks again: an ore of the material in the walls is dug by the goal's GATHER. It fails at
+ * STRIP_MAX cells of tunnel, or when every way is blocked.
+ */
+async function stripRound(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  command: GoalCommand,
+): Promise<PlayResult | 'next-round'> {
+  const { deps } = play;
+  const commands = deps.commands as CommandDeps;
+  const run = runOf(play, cmd.id);
+  const ore = gtOreByItem(command.item);
+  const name =
+    ore === null
+      ? command.item
+      : `${ore.material.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} ore`;
+  const fail = (why: string): 'next-round' => {
+    finish(play, cmd, 'failed', `Failed: ${why}`.slice(0, 400));
+    return 'next-round';
+  };
+  const view = commands.view();
+  const at = view.position;
+  if (at === null || deps.tunnel === undefined) return fail('I do not know where I am');
+  const feet = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-6), z: Math.floor(at.z) };
+  if (run.strip === null) {
+    const level = stripLevel(gtOreVeins(ore?.material ?? ''), feet.y, commands.boundary.min.y);
+    if (level === null) {
+      return fail(
+        `no vein of ${name} lies between my safety boundary (y ${commands.boundary.min.y}) and here (y ${feet.y})`,
+      );
+    }
+    const summary =
+      view.dimension === null
+        ? null
+        : summarizeExploration({
+            chunks: deps.repos.worldMemory.chunks(view.dimension),
+            from: at,
+            boundary: commands.boundary,
+            now: new Date(play.now()),
+          });
+    const room = (d: TunnelDirection): number | undefined => summary?.directions[d]?.room;
+    const direction = stripDirection(room);
+    run.strip = { level, leg: firstLeg(feet, level, direction), dug: 0, turns: 0 };
+    say(
+      play,
+      cmd,
+      `No ${name} in view: I dig ${feet.y > level ? `stairs down to y ${level}, then ` : ''}tunnels ${direction} until some shows`,
+    );
+  }
+  const strip = run.strip;
+  const plan = await deps.tunnel({
+    start: strip.leg.start,
+    direction: strip.leg.direction,
+    length: strip.leg.length,
+    slope: strip.leg.slope,
+  });
+  if (plan === null) {
+    run.failures += 1;
+    if (run.failures >= MAX_COMMAND_FAILURES) return fail('the blocks around me are not known');
+    await play.sleep(TUNNEL_RETRY_MS);
+    return 'next-round';
+  }
+  const total = strip.dug + (plan.ok ? plan.done : 0);
+  const dug = `${total} blocks of tunnel dug for ${name}`;
+  if (total >= STRIP_MAX)
+    return fail(`no ${name} showed in ${dug.replace(/ dug.*/, '')} at y ${strip.level}`);
+  const blocked = !plan.ok || (plan.steps.length === 0 && plan.done < strip.leg.length);
+  if (!plan.ok || plan.steps.length === 0) {
+    // The leg is dug to its end, or may go no further: the next one, from here.
+    run.strip = nextLeg(strip, feet, plan.ok ? plan.done : 0, blocked);
+    if (run.strip.turns >= STRIP_MAX_TURNS) {
+      return fail(
+        `every way is blocked (${plan.ok ? (plan.problem ?? 'nothing to dig') : plan.reason}; ${dug})`,
+      );
+    }
+    return 'next-round';
+  }
+  // Its own task: the goal's (the command's) is the GATHER's, and a blueprint completes its task.
+  return digSession(play, cmd, command, plan.steps, dug, fail, `${commandTaskId(cmd.id)}-strip`);
 }
 
 // ---------------------------------------------------------------------------

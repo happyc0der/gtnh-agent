@@ -662,8 +662,10 @@ export function chooseGatherAction(
       travelRefusal ??= `the one remembered at ${formatPosition(target)}: ${why}`;
     }
     // Nothing remembered either (or only places it stands by, gone): on into ground not seen yet.
+    // Not for GregTech ores: they lie underground, and a walk over new ground shows none (an
+    // owner's !mine strip-mines for them instead: src/app/play/strip-mine.ts).
     const w = opts.wander;
-    if (w != null && travelRefusal === null) {
+    if (w != null && travelRefusal === null && block !== GT_ORE_BLOCK) {
       const explore: ActionSpec = {
         type: 'EXPLORE',
         args: {
