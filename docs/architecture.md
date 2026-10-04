@@ -490,7 +490,15 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   about 3 blocks from its owner; the walk policy breaks nothing within 4 blocks and places
   nothing within 3 blocks of another player, so never near the owner. Not seeing the player
   ends come and follow; anything else fails after 3 steps in a row that could not be planned or
-  did not succeed.
+  did not succeed. A walk a hostile stopped is no such failure (`mobInTheWay` in
+  `command-base.ts`): with combat off a walk stops for a hostile within 10 blocks on its way,
+  so the owner is told once ("A Zombie 10 blocks off is in my way: I keep away (I do not fight)
+  and try again"), and the next round tries again after 2 s, System 1 seeing the mob first (it
+  may retreat or flee): 20 times in a row for a trip, a tunnel or a strip mine, for as long as
+  the player is in sight for a follow (seen live 2026-10-04: a zombie in the forest's shade
+  failed a follow in 15 s). Such walks are marked in their result (`data.threat`), and the
+  policy's repeated-failure count leaves them out, as it leaves out actions the client could
+  not even try: the same walk to a player standing still is no repeated failure of the way.
 - **Explore** (Baritone's #explore) is travel to a point fixed when it begins: `distance`
   blocks (default 64, at most 256) toward the compass direction asked, or, with none, the one
   world memory has seen least (`wanderTarget`), no farther than the room left to the safety
