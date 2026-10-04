@@ -1,12 +1,18 @@
-import { ActionSpecSchema, type ActionSpec } from '../domain/actions.ts';
-import type { Plan, PlannerRequest } from './plan-schema.ts';
+import {
+  PlanActionSchema,
+  type Plan,
+  type PlanAction,
+  type PlannerRequest,
+} from './plan-schema.ts';
 
 /**
  * Plans code makes from the route alone, without a model: when the route (calculated in code
  * from GTNH's recipes and what the player holds: planner-provider.ts) lists only steps that
  * are exact actions, following it IS the plan. Seen live 2026-10-04: with 7 planks and 2
  * sticks held, the route said "craft the wooden axe, craft sticks, craft the wooden hoe", and
- * the model planned planks from logs it did not have, plan after plan.
+ * the model planned planks from logs it did not have, plan after plan. Gather steps too, each a
+ * GATHER (code digs or hunts until the count is held): seen live the same day, "get 8
+ * cobblestone" had the model plan single digs of blocks it named wrongly.
  */
 
 /** The planner name plans made here are stored with. */
@@ -26,12 +32,12 @@ function objectAt(text: string, from: number): string | null {
 }
 
 /** The actions after " => " in one route line ("make it: CRAFT_ITEM {...}" first), or null. */
-function lineActions(line: string): ActionSpec[] | null {
+function lineActions(line: string): PlanAction[] | null {
   const at = line.indexOf(' => ');
   if (at === -1) return null;
   const hint = line.slice(at);
-  const out: ActionSpec[] = [];
-  for (const m of hint.matchAll(/(PLACE_BLOCK|CRAFT_ITEM) \{/g)) {
+  const out: PlanAction[] = [];
+  for (const m of hint.matchAll(/(PLACE_BLOCK|CRAFT_ITEM|GATHER) \{/g)) {
     const json = objectAt(hint, m.index + m[0].length - 1);
     if (json === null) return null;
     let args: unknown;
@@ -40,7 +46,7 @@ function lineActions(line: string): ActionSpec[] | null {
     } catch {
       return null;
     }
-    const spec = ActionSpecSchema.safeParse({ type: m[1], args });
+    const spec = PlanActionSchema.safeParse({ type: m[1], args });
     if (!spec.success) return null;
     out.push(spec.data);
   }
@@ -50,10 +56,11 @@ function lineActions(line: string): ActionSpec[] | null {
 /**
  * The actions a route's lines end with, in the route's order, as a planner that follows the
  * route writes them: "... => PLACE_BLOCK {...}" for a station to place (after "make it:
- * CRAFT_ITEM {...}" when it is not held), "... => CRAFT_ITEM {...}" for each craft
- * (planner-provider.ts withActionArgs). Lines without one are left out.
+ * CRAFT_ITEM {...}" when it is not held), "... => CRAFT_ITEM {...}" for each craft, "... =>
+ * GATHER {...}" for each gather (planner-provider.ts withActionArgs). Lines without one are
+ * left out.
  */
-export function routeActions(steps: readonly string[]): ActionSpec[] {
+export function routeActions(steps: readonly string[]): PlanAction[] {
   return steps.flatMap((line) => lineActions(line) ?? []);
 }
 
@@ -62,12 +69,12 @@ const isStep = (line: string): boolean => /^\d+\. /.test(line) || line.startsWit
 
 /**
  * The plan of following the route when every step it lists is an exact action (crafts, a
- * station to place), at most `maxSteps` of them; null when any step is not (a gather, an
- * explore, a smelt) or there is none: then the model plans.
+ * station to place, gathers), at most `maxSteps` of them; null when any step is not (a
+ * withdrawal, a smelt, a gather with no GATHER) or there is none: then the model plans.
  */
 export function planFromRoute(route: PlannerRequest['route'], maxSteps: number): Plan | null {
   if (route === null) return null;
-  const actions: ActionSpec[] = [];
+  const actions: PlanAction[] = [];
   for (const line of route.steps) {
     if (!isStep(line)) continue;
     const found = lineActions(line);
@@ -81,8 +88,9 @@ export function planFromRoute(route: PlannerRequest['route'], maxSteps: number):
     rationale: `the route's step ${i + 1}: code follows the route (every step is an exact action with what is held)`,
   }));
   const missing = route.stock.filter((s) => s.missing > 0).map((s) => `${s.missing} ${s.item}`);
+  const verb = actions.every((a) => a.type === 'GATHER') ? 'gather' : 'make';
   return {
-    goal: `make ${missing.join(', ') || 'what the route makes'}`.slice(0, 200),
+    goal: `${verb} ${missing.join(', ') || 'what the route makes'}`.slice(0, 200),
     steps,
     requiresUserApproval: false,
     explanation:

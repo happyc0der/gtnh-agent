@@ -127,9 +127,10 @@ export class InteractActions {
   }
 
   /**
-   * Opens the window of the block at `target` with an EMPTY hand (never sneaking), or keeps
-   * it open, and checks that the window is the one its profile describes. A failure, or the
-   * window's layout (null for an observe-only block) once it is open.
+   * Opens the window of the block at `target` (never sneaking; with an empty hand, else a vanilla
+   * tool or block: inventory-actions.ts clickHand), or keeps it open, and checks that the
+   * window is the one its profile describes. A failure, or the window's layout (null for an
+   * observe-only block) once it is open.
    */
   async openInteractable(
     target: BlockPosition,
@@ -156,8 +157,12 @@ export class InteractActions {
     }
     const feet = this.#world.ownPosition;
     if (feet === null) return done(failed('player position unknown', 'REFUSED'));
-    const hand = this.#core.inventory.emptyHotbarSlot();
-    if (hand === null) return done(failed('no empty hotbar slot to click with', 'REFUSED'));
+    const hand = this.#core.inventory.clickHand();
+    if (hand === null) {
+      return done(
+        failed('no hotbar slot to click with (empty, or a vanilla tool or block)', 'REFUSED'),
+      );
+    }
     if (hand !== this.#world.heldSlot) {
       this.#core.send(outbound.selectHotbarSlot(hand));
       this.#world.setHeldSlot(hand);

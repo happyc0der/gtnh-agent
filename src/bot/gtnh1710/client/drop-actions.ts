@@ -5,12 +5,14 @@ import {
   DROP_SETTLE_WAIT_MS,
   leftovers,
   MAX_DROP_WALKS,
+  pickupGoal,
   planDropFetch,
   SWEEP_RADIUS,
 } from '../drops.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import type { Vec3 } from '../walking.ts';
 import { ENTITY_SCAN_RADIUS, type ItemEntity, type WorldModel } from '../world-model.ts';
+import { failed, type ClientActionResult } from '../../minecraft-client.ts';
 import type { ClientCore } from './core.ts';
 import { describeGain, DROP_WAIT_MS } from './shared.ts';
 
@@ -26,6 +28,11 @@ export interface DropRequest {
   itemsBefore: Readonly<Record<string, number>>;
   /** Gains that are no drop: the tool or weapon used (its wear changes its name). */
   notDrop: (item: string) => boolean;
+  /**
+   * Never held for a break on the way to a drop (the validated action's protected items).
+   * Absent: no walk to a drop breaks anything.
+   */
+  protectedItems?: ReadonlySet<string>;
 }
 
 /** What became of an action's drops. */
@@ -191,8 +198,16 @@ export class DropActions {
         leave(area.problem ?? 'the block data is not known');
         break;
       }
-      const plan = planDropFetch(world, area.fence, feet, next);
+      const fence = area.fence;
+      const plan = planDropFetch(world, fence, feet, next);
       if (plan.kind === 'refused') {
+        leave(plan.reason);
+        continue;
+      }
+      // No free spot puts it in reach: over terrain, a walk that breaks its way there (a
+      // dig's drops: the dig's protected items are never held for those breaks).
+      const terrain = fence.min.y !== fence.max.y && req.protectedItems !== undefined;
+      if (plan.kind === 'dig-to' && !terrain) {
         leave(plan.reason);
         continue;
       }
@@ -213,10 +228,35 @@ export class DropActions {
         continue;
       }
       const where = cellText(next.position);
-      this.#core.log(
-        `walking onto ${cellText(plan.spot)} for ${what}${sweeping ? ', left there earlier' : ''}`,
-      );
-      const walked = await this.#core.movement.walkTo(plan.spot, { stopForThreats: true });
+      const breakingWalk = (): Promise<ClientActionResult> => {
+        const goal = plan.kind === 'dig-to' ? plan.goal : pickupGoal(world, fence, next.position);
+        if (goal === null) {
+          return Promise.resolve(failed('no cell inside the fence puts it in reach', 'REFUSED'));
+        }
+        return this.#core.paths.walk({
+          goal,
+          what: `the drop at ${where}`,
+          stopForThreats: true,
+          work: 'break',
+          partial: false,
+          protectedItems: req.protectedItems ?? new Set(),
+        });
+      };
+      let walked: ClientActionResult;
+      if (plan.kind === 'walk') {
+        this.#core.log(
+          `walking onto ${cellText(plan.spot)} for ${what}${sweeping ? ', left there earlier' : ''}`,
+        );
+        walked = await this.#core.movement.walkTo(plan.spot, { stopForThreats: true });
+        if (!walked.ok && walked.code !== 'FAILED' && terrain) {
+          // No walk there without breaking (refused before a step): one that breaks its way.
+          this.#core.log(`drops: ${walked.message}; again, breaking what is in the way`);
+          walked = await breakingWalk();
+        }
+      } else {
+        this.#core.log(`walking to ${what}, breaking what is in the way: ${plan.reason}`);
+        walked = await breakingWalk();
+      }
       if (!walked.ok && walked.code !== 'FAILED') {
         // Refused before a step (no way there, a blocker): nothing moved, the next may do.
         leave(walked.message);
@@ -232,7 +272,7 @@ export class DropActions {
       const got = gainSince(before);
       notes.push(
         got.length === 0
-          ? `walked to ${cellText(plan.spot)} for ${what}, but nothing reached the inventory`
+          ? `walked ${plan.kind === 'walk' ? `to ${cellText(plan.spot)}` : 'over'} for ${what}, but nothing reached the inventory`
           : sweeping
             ? `swept up ${describeGain(got)} left at ${where} earlier`
             : `walked to the drop${got.length > 1 ? 's' : ''} at ${where} and picked up ${describeGain(got)}`,

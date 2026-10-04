@@ -243,10 +243,13 @@ describe('fetching a drop', () => {
       kind: 'refused',
     });
     // On the leaves on top of the tree (seen live: logs dug high in a tree): nothing a player
-    // stands on puts it within reach.
-    expect(planDropFetch(world, fence, feet, item(3.5, 67.125, 3.5))).toMatchObject({
-      kind: 'refused',
-    });
+    // stands on puts it within reach. A walk may break its way to a cell below it (the trunk,
+    // under the leaves), never placing a block: it does not climb.
+    const treetop = planDropFetch(world, fence, feet, item(3.5, 67.125, 3.5));
+    expect(treetop).toMatchObject({ kind: 'dig-to', goal: { kind: 'any' } });
+    const cells =
+      treetop.kind === 'dig-to' && treetop.goal.kind === 'any' ? treetop.goal.goals : [];
+    expect(cells.every((g) => g.kind === 'block' && g.y >= 65 && g.y <= 67)).toBe(true);
     const far = item(0.5, 64.125, 9.5, { x: 0.5, y: 70, z: 0.5 });
     expect(planDropFetch(world, fence, feet, far)).toMatchObject({
       kind: 'refused',

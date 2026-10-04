@@ -1,6 +1,5 @@
 import type { BlockPosition } from '../../../domain/common.ts';
 import { TICK_MS } from '../../../domain/dig-time.ts';
-import { toolInfo } from '../../../domain/tools.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import { eyesOf, type DigArea } from '../digging.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
@@ -83,8 +82,11 @@ export interface PathWalk {
   readonly what: string;
   /** A hostile or unidentified entity near stops it (MOVE_TO, EXPLORE; not an escape). */
   readonly stopForThreats: boolean;
-  /** Break and place on the way, as the walk policy allows (MOVE_TO, EXPLORE). */
-  readonly work: boolean;
+  /**
+   * Break and place on the way, as the walk policy allows (MOVE_TO, EXPLORE); 'break': break
+   * only, never place (the walk to a drop no free spot reaches); false: neither.
+   */
+  readonly work: boolean | 'break';
   /** Walk the best partial path when the goal is out of reach inside the play area. */
   readonly partial: boolean;
   /** Blocks walked at most: the path is cut there. */
@@ -217,12 +219,13 @@ export class PathActions {
   /**
    * The walk policy for a walk now (path-policy.ts): what it may break and place, with the
    * tools and throwaway blocks the player carries, and the other players where they stand.
-   * `work` false (an escape, the walk to a drop) breaks and places nothing.
+   * `work` false (an escape, the walk to a drop) breaks and places nothing; 'break' breaks
+   * only (the walk to a drop no free spot reaches).
    */
   policy(
     world: WalkWorld,
     fence: Fence,
-    request: { work: boolean; protectedItems: ReadonlySet<string>; sprint: boolean },
+    request: { work: boolean | 'break'; protectedItems: ReadonlySet<string>; sprint: boolean },
   ): WalkPolicy {
     const cfg = this.#opts.config;
     const items = this.#world.inventoryItems();
@@ -232,8 +235,8 @@ export class PathActions {
       ...this.#context(),
       hostiles: this.#hostiles(),
       settings: cfg.movement.path,
-      breaking: request.work && terrain && cfg.digging.enabled && cfg.presenceTicks,
-      placing: request.work && terrain && cfg.placing.enabled && cfg.presenceTicks,
+      breaking: request.work !== false && terrain && cfg.digging.enabled && cfg.presenceTicks,
+      placing: request.work === true && terrain && cfg.placing.enabled && cfg.presenceTicks,
       digHeight: cfg.digging.maxHeightAboveFence,
       digTicks: (block, meta) => this.#core.dig.digTicksFor(block, meta, request.protectedItems),
       throwaway:
@@ -377,7 +380,7 @@ export class PathActions {
     if (world === null || from === null) {
       return failed('not walking: block data or position unknown', 'REFUSED');
     }
-    if (request.work) this.#lastProtected = request.protectedItems;
+    if (request.work === true) this.#lastProtected = request.protectedItems;
     const planned = this.plan(world, fence, from, request);
     if (!planned.ok) return failed(`not walking: ${planned.reason}`.slice(0, 500), 'REFUSED');
     return this.#execute(planned, fence, from, request);
@@ -718,7 +721,7 @@ export class PathActions {
       return m === undefined ? null : (m & 4) !== 0;
     };
     if (isOpen() === want) return null;
-    const hand = this.#doorHand();
+    const hand = this.#core.inventory.clickHand();
     if (hand === null) {
       return 'no hand to click it with (no empty hotbar slot, tool or plain block in the hotbar)';
     }
@@ -732,27 +735,6 @@ export class PathActions {
     return isOpen() === want
       ? null
       : `the ${click.block} did not ${want ? 'open' : 'close'} within ${DOOR_CLICK_MS} ms`;
-  }
-
-  /** The hotbar slot to click a door with (#clickDoor), or null. */
-  #doorHand(): number | null {
-    const empty = this.#core.inventory.emptyHotbarSlot();
-    if (empty !== null) return empty;
-    const registry = this.#world.registry;
-    if (registry === null) return null;
-    const blocks = new Set(registry.blocks.values());
-    const held = this.#world.heldSlot;
-    const order = [held, ...[0, 1, 2, 3, 4, 5, 6, 7, 8].filter((j) => j !== held)];
-    let block: number | null = null;
-    for (const j of order) {
-      const s = this.#core.inventory.hotbar(j);
-      if (s == null || s.hasNbt) continue;
-      const item = registry.items.get(s.id) ?? registry.blocks.get(s.id);
-      if (item === undefined) continue;
-      if (toolInfo(item) !== null) return j;
-      if (blocks.has(item)) block ??= j;
-    }
-    return block;
   }
 
   #flightProblem(

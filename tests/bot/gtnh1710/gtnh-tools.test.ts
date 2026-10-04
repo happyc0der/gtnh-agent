@@ -164,7 +164,8 @@ describe('the quest "Tools" on the fake server', { timeout: 60_000 }, () => {
     expect(station).toMatch(
       /^station: crafting_table: minecraft:crafting_table is held: place it => PLACE_BLOCK \{"position":\{"x":-?\d+,"y":106,"z":-?\d+\},"item":"minecraft:crafting_table"\}/,
     );
-    const actions = routeActions(steps);
+    // Crafts and the station only (no gather): each an action a client performs.
+    const actions = routeActions(steps).flatMap((a) => (a.type === 'GATHER' ? [] : [a]));
     const place = actions[0];
     if (place?.type !== 'PLACE_BLOCK') throw new Error(`first action: ${place?.type}`);
     const table = `crafting_table:${place.args.position.x}.${place.args.position.y}.${place.args.position.z}`;

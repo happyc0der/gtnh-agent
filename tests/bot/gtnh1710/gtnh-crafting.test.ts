@@ -386,6 +386,24 @@ describe('Gtnh1710Client crafting', () => {
     expectClean(server);
   });
 
+  it('opens the table holding a vanilla block when no hotbar slot is empty', async () => {
+    // Seen live 2026-10-04: a hotbar full of dirt, sand, saplings and planks refused the table.
+    const hotbar = Array.from({ length: 9 }, (_, j) => ({
+      slot: 36 + j,
+      id: BLOCK.dirt,
+      count: 4,
+      damage: 0,
+    }));
+    const { server, client } = await start({ server: { inventory: [...INVENTORY, ...hotbar] } });
+    const result = await perform(client, craft('chest', 1, 'table.test'));
+    expect(result).toMatchObject({ ok: true, data: { crafts: 1 } });
+    // Dirt in hand: the table answers the click, so nothing is placed.
+    expect(server.chestSim.activations).toEqual([{ ...TABLE, heldSlot: 0 }]);
+    expect(total(server.chestSim.playerSlots(), BLOCK.dirt)).toBe(36);
+    expect(total(server.chestSim.playerSlots(), ID.chest)).toBe(1);
+    expectClean(server);
+  });
+
   it('makes a wooden shovel: GTNH sticks (2 per craft) in the 2x2 grid, then the shovel at the table', async () => {
     const { server, client } = await start();
     const sticks = await perform(client, craft('sticks', 1));

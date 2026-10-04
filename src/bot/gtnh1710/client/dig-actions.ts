@@ -151,6 +151,7 @@ export class DigActions {
       itemsBefore,
       // The tool's wear changes its name (`@damage`): that is no drop.
       notDrop: (item) => tool !== null && (item === tool.item || item.startsWith(`${tool.item}@`)),
+      protectedItems,
     };
     // Picked up where it fell, the usual case: nothing of it is left to fetch, and nothing an
     // earlier dig left lies near to sweep up with it.

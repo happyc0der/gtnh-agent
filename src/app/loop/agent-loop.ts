@@ -59,6 +59,11 @@ export interface AgentDeps {
   planner: PlannerProvider | null;
   clock: Clock;
   newId: IdGenerator;
+  /**
+   * Whether code follows a route whose every step is an exact action instead of asking the
+   * planner (route-plan.ts); default true. Off only to test what the planner is asked.
+   */
+  followRoute?: boolean;
 }
 
 export type CycleStatus =

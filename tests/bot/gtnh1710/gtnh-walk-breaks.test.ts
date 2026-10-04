@@ -195,6 +195,29 @@ describe('Gtnh1710Client walks through leaves (MOVE_TO over terrain, digging ena
     });
   }, 15_000);
 
+  it('fetches a drop the leaves keep it from: no walk without breaking, so one that breaks its way', async () => {
+    // Dirt beyond the wall, in reach (no line of sight is needed to dig): its drop lands in
+    // its own cell, out of pickup reach, and no walk gets there without breaking a leaf.
+    const dirt = { x: -2, y: FEET_Y, z: -9 };
+    const blocks = new Map(WALL);
+    blocks.set(`${dirt.x},${dirt.y},${dirt.z}`, BLOCK.dirt);
+    const { server, client } = await start({ blockOverrides: blocks });
+    const result = await perform(client, {
+      type: 'DIG_BLOCK',
+      args: { position: dirt },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      data: { dropCollected: true, drops: '1 x minecraft:dirt', walkedToDrop: true },
+    });
+    expect(result.message).toMatch(/picked up 1 x minecraft:dirt/);
+    expect(server.digSim.pickedUp).toContainEqual({ item: 'minecraft:dirt', count: 1 });
+    // Its way through the wall: two leaves broken (upper first), never a block placed.
+    const digs = stepsAndDigs(server).filter((p) => 'dig' in p);
+    expect(digs.length).toBeGreaterThanOrEqual(2 * 3); // the dirt's and two leaves' start/finish
+    expect(server.received.filter((p) => p.state === 'play' && p.id === 0x08)).toHaveLength(0);
+  }, 20_000);
+
   it('goes through the executor: validated, walked (breaking) and verified (PLAYER_NEAR)', async () => {
     const { client, config } = await start();
     const repos = createRepositories(openDatabase(IN_MEMORY), systemClock);

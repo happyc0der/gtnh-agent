@@ -190,8 +190,10 @@ export class InventoryActions {
       );
     }
 
-    const hand = this.emptyHotbarSlot();
-    if (hand === null) return failed('no empty hotbar slot to click with', 'REFUSED');
+    const hand = this.clickHand();
+    if (hand === null) {
+      return failed('no hotbar slot to click with (empty, or a vanilla tool or block)', 'REFUSED');
+    }
     if (hand !== this.#world.heldSlot) {
       this.#core.send(outbound.selectHotbarSlot(hand));
       this.#world.setHeldSlot(hand);
@@ -237,6 +239,32 @@ export class InventoryActions {
   emptyHotbarSlot(): number | null {
     if (this.hotbar(this.#world.heldSlot) == null) return this.#world.heldSlot;
     for (let j = 0; j < 9; j++) if (this.hotbar(j) == null) return j;
+    return null;
+  }
+
+  /**
+   * A hotbar slot to right-click a block with when only the block may act (open its window,
+   * turn a door): an empty one; else, the held slot first, a stack with no NBT data of a
+   * vanilla tool or a vanilla block. Forge asks the held item's onItemUseFirst before the
+   * block's onBlockActivated, and only modded items hook it (a GregTech tool, a wand); a
+   * block that opens or turns then answers the click, so nothing is placed. Null when no slot
+   * is fit (seen live 2026-10-04: a full hotbar of dirt, sand, saplings and planks refused
+   * to open the crafting table).
+   */
+  clickHand(): number | null {
+    const empty = this.emptyHotbarSlot();
+    if (empty !== null) return empty;
+    const registry = this.#world.registry;
+    if (registry === null) return null;
+    const blocks = new Set(registry.blocks.values());
+    const held = this.#world.heldSlot;
+    for (const j of [held, ...[0, 1, 2, 3, 4, 5, 6, 7, 8].filter((k) => k !== held)]) {
+      const s = this.hotbar(j);
+      if (s == null || s.hasNbt) continue;
+      const item = registry.items.get(s.id) ?? registry.blocks.get(s.id);
+      if (item === undefined || !item.startsWith('minecraft:')) continue;
+      if (toolInfo(item) !== null || blocks.has(item)) return j;
+    }
     return null;
   }
 

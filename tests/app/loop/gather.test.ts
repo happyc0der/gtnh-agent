@@ -79,6 +79,8 @@ async function gatheringIn(mutate: (w: MockWorld) => void, ...responses: Planner
     planner,
     clock,
     newId: sequentialIds(),
+    // The scripted plans are what these tests check: never the route followed by code.
+    followRoute: false,
   };
   const taskId = world.task?.taskId ?? 'task-test';
   const cycle = (): Promise<CycleResult> => {

@@ -1,4 +1,6 @@
+import { BLOCK_CODE } from './block-hazards.ts';
 import { dropSpot, withinPickup } from './combat.ts';
+import { goalAny, goalBlock, type Goal } from './pathing/goals.ts';
 import type { Fence, Vec3, WalkWorld } from './walking.ts';
 import type { ItemEntity } from './world-model.ts';
 
@@ -80,7 +82,11 @@ export function leftovers(
 
 /** How to pick up one dropped item that lies still: it is in reach, a walk, or why not. */
 export type DropFetch =
-  { kind: 'in-reach' } | { kind: 'walk'; spot: Vec3 } | { kind: 'refused'; reason: string };
+  | { kind: 'in-reach' }
+  | { kind: 'walk'; spot: Vec3 }
+  /** No free spot puts it in reach: a walk that may break on its way (pickupGoal). */
+  | { kind: 'dig-to'; goal: Goal; reason: string }
+  | { kind: 'refused'; reason: string };
 
 /**
  * How the player, feet at `feet`, picks up `item` (lying still): within the pickup reach it
@@ -89,7 +95,9 @@ export type DropFetch =
  * level up or down at most) from which it is within reach, a cell inside the fence a player
  * may stand in (a full block underfoot, room for the body, no hazard within a block: never
  * into lava, fire or the like). Refused for an item that ended up more than MAX_FETCH_DISTANCE
- * from where it appeared, or when no such cell exists (on a log or leaves high in a tree).
+ * from where it appeared. When no such cell exists, a walk that may break blocks on its way
+ * but never places one (`dig-to`, pickupGoal): to a drop in a gap one block high under
+ * leaves (seen live 2026-10-04: two cobblestone drops left so under a tree), never up a tree.
  */
 export function planDropFetch(
   world: WalkWorld,
@@ -107,14 +115,58 @@ export function planDropFetch(
   }
   const spot = dropSpot(world, fence, item.position);
   if (spot === null) {
-    return {
-      kind: 'refused',
-      reason:
-        'no cell inside the play area that a player may stand in (a full block underfoot, room ' +
-        'for the body, no hazard near) puts it within pickup reach',
-    };
+    const reason =
+      'no cell inside the play area that a player may stand in (a full block underfoot, room ' +
+      'for the body, no hazard near) puts it within pickup reach';
+    const goal = pickupGoal(world, fence, item.position);
+    return goal === null ? { kind: 'refused', reason } : { kind: 'dig-to', goal, reason };
   }
   return { kind: 'walk', spot };
+}
+
+/**
+ * The pathfinder's goal for picking up an item lying at `at`: any feet block inside the fence
+ * from whose centre it is within pickup reach (withinPickup), at its level or below it, with
+ * no hazard (lava, fire...) or unloaded block in the 3 x 3 columns around it from under the
+ * feet to above the head, as terrain.ts standProblem asks; a walk that only breaks (never
+ * places) may get there. Null when there is none.
+ */
+export function pickupGoal(world: WalkWorld, fence: Fence, at: Vec3): Goal | null {
+  const cx = Math.floor(at.x);
+  const cz = Math.floor(at.z);
+  const goals: Goal[] = [];
+  for (let y = Math.floor(at.y + 1e-6); y >= Math.floor(at.y - 2.2); y--) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const x = cx + dx;
+        const z = cz + dz;
+        const inside =
+          x >= fence.min.x &&
+          x <= fence.max.x &&
+          z >= fence.min.z &&
+          z <= fence.max.z &&
+          y >= fence.min.y &&
+          y <= fence.max.y;
+        if (!inside || !withinPickup({ x: x + 0.5, y, z: z + 0.5 }, at)) continue;
+        if (!hazardFree(world, x, y, z)) continue;
+        goals.push(goalBlock(x, y, z));
+      }
+    }
+  }
+  return goals.length === 0 ? null : goalAny(...goals);
+}
+
+/** No hazard and nothing unloaded in the 3 x 3 columns around feet (x, y, z), y-1 to y+2. */
+function hazardFree(world: WalkWorld, x: number, y: number, z: number): boolean {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dy = -1; dy <= 2; dy++) {
+        const id = world.blockAt(x + dx, y + dy, z + dz);
+        if (id === undefined || world.hazardCode(id) !== BLOCK_CODE.safe) return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** "(-20, 116, 123)": the block cell a point is in. */

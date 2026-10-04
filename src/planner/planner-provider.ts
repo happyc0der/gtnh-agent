@@ -1,6 +1,12 @@
 import { ACTION_TYPES, isAllowlistedActionType, isCodeOnlyActionType } from '../domain/actions.ts';
 import { isQuestBookActionType } from '../domain/quest-book.ts';
-import { DIGGABLE_BLOCKS, nearestOfEachKind, PLACEABLE_ITEMS } from '../domain/blocks.ts';
+import {
+  DIGGABLE_BLOCKS,
+  DiggableBlockSchema,
+  nearestOfEachKind,
+  PLACEABLE_ITEMS,
+  type DiggableBlock,
+} from '../domain/blocks.ts';
 import { attackRefusal, calmRefusal } from '../domain/combat.ts';
 import type { GardenBlock } from '../domain/blocks.ts';
 import {
@@ -51,6 +57,13 @@ import {
   type PlannerResponse,
 } from './plan-schema.ts';
 import { estimateFurnace } from '../domain/interactions.ts';
+import {
+  GATHER,
+  GatherAnimalSchema,
+  gatherDrops,
+  GatherStepSchema,
+  MAX_GATHER_COUNT,
+} from './gather.ts';
 
 /**
  * High-level planner (a local LLM in the future; a fixture-driven mock today).
@@ -791,6 +804,39 @@ function stationCell(state: GameState): BlockPosition | null {
   return (pool.find((c) => c.position.y === feetY) ?? pool[0])?.position ?? null;
 }
 
+/**
+ * The GATHER that does a route's gather step, or null when none can: a farm animal's kill
+ * (GatherAnimalSchema), or the dig of one of its blocks (DIG_BLOCK's allowlist), the one listed
+ * nearest in view first; with `item` when the block may drop something else too (gravel:
+ * flint; a GT ore: its raw ore). GATHER digs every listed block that gives the same, walks to
+ * known places and explores when none is in view (gather.ts), so the route's own words on
+ * where to look are its business.
+ */
+function gatherHint(
+  leg: Extract<Route['legs'][number], { kind: 'gather' }>,
+  state: GameState,
+): string | null {
+  const count = Math.min(leg.quantity, MAX_GATHER_COUNT);
+  if (leg.via === 'kill') {
+    for (const b of leg.blocks) {
+      const animal = GatherAnimalSchema.safeParse(b);
+      if (animal.success) return `GATHER ${JSON.stringify({ animal: animal.data, count })}`;
+    }
+    return null;
+  }
+  const diggable = leg.blocks.filter((b) => DiggableBlockSchema.safeParse(b).success);
+  if (diggable.length === 0) return null;
+  const seen = state.nearbyBlocks.known ? state.nearbyBlocks.value.resources : [];
+  const block = seen.find((r) => diggable.includes(r.block))?.block ?? diggable[0];
+  const drops = gatherDrops(block as DiggableBlock);
+  const args =
+    drops.length === 1 && drops[0] === leg.item
+      ? { block, count }
+      : { block, count, item: leg.item };
+  const step = GatherStepSchema.safeParse({ type: GATHER, args });
+  return step.success ? `GATHER ${JSON.stringify(args)}` : null;
+}
+
 /** Longest route line the planner request takes (PlannerRequestSchema: route.steps). */
 const MAX_STEP_LINE = 500;
 
@@ -800,8 +846,8 @@ const MAX_STEP_LINE = 500;
  * stationCell picks) and the crafting table's id it then has; each craft step the CRAFT_ITEM
  * that makes it (its recipe id as the route names it, the times, and the table for a 3x3
  * recipe: the nearest one known, else the one placing makes), or why CRAFT_ITEM cannot make
- * it yet (src/domain/recipes.ts). A hint goes after its line, on a line of its own when both
- * would not fit one.
+ * it yet (src/domain/recipes.ts); each gather step the GATHER that gets it (gatherHint). A hint
+ * goes after its line, on a line of its own when both would not fit one.
  */
 function withActionArgs(lines: readonly string[], route: Route, state: GameState): string[] {
   const at = state.player.position.known ? state.player.position.value : null;
@@ -862,6 +908,14 @@ function withActionArgs(lines: readonly string[], route: Route, state: GameState
     }
   }
   route.legs.forEach((leg, i) => {
+    if (leg.kind === 'gather') {
+      const line = lines.find((l) =>
+        l.startsWith(`${i + 1}. gather ${leg.quantity} ${leg.item}: `),
+      );
+      const gather = gatherHint(leg, state);
+      if (line !== undefined && gather !== null) hints.set(line, gather);
+      return;
+    }
     if (leg.kind !== 'craft' || leg.station === 'furnace') return;
     const line = lines.find((l) => l.startsWith(`${i + 1}. craft ${leg.recipe} x${leg.times} `));
     if (line !== undefined) hints.set(line, craft(leg.recipe, leg.times));

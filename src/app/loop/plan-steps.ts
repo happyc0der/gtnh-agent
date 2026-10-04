@@ -234,18 +234,31 @@ const OBSERVED_TABLE = /^crafting_table:(-?\d+)\.(-?\d+)\.(-?\d+)$/;
  * The walk back to a crafting table a plan's CRAFT_ITEM uses, when it is out of reach: seen
  * live, "GATHER 5 logs" explored 56 blocks for trees, and the craft at the table placed
  * before was refused ("crafting table ... is not known": out of the scan). In view: MOVE_TO
- * the spot to use it from; out of view: EXPLORE toward it. Null when the craft can go ahead
- * (in reach, a configured table, a 2x2 craft) or there is no way to it (no stand spot).
+ * the spot to use it from; out of view: EXPLORE toward it. A configured table too (seen in a
+ * test 2026-10-04: the route's craft at table.main from 7 blocks away was refused, plan after
+ * plan). Null when the craft can go ahead (in reach, a 2x2 craft), the table's place is not
+ * known, or there is no way to it (no stand spot).
  */
 export function tableApproach(
   state: GameState,
   tableId: string | null,
   reach: number,
 ): { spec: ActionSpec; why: string } | null {
-  const m = tableId === null ? null : OBSERVED_TABLE.exec(tableId);
   const at = state.player.position.known ? state.player.position.value : null;
-  if (m === null || at === null) return null;
-  const table = { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) };
+  if (tableId === null || at === null) return null;
+  const m = OBSERVED_TABLE.exec(tableId);
+  const configured = state.craftingTables.find((t) => t.id === tableId);
+  const table =
+    m !== null
+      ? { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) }
+      : configured?.position.known === true
+        ? {
+            x: Math.floor(configured.position.value.x),
+            y: Math.floor(configured.position.value.y),
+            z: Math.floor(configured.position.value.z),
+          }
+        : null;
+  if (table === null) return null;
   if (eyeDistanceToBlock(at, table) <= reach) return null;
   const where = `(${table.x}, ${table.y}, ${table.z})`;
   const seen = state.interactables.known
@@ -616,6 +629,13 @@ function refusedFirstStep(
       repeated: false,
     };
   }
+  // A craft at a table out of reach walks back to it first (tableApproach): nothing to refuse.
+  if (
+    first.type === 'CRAFT_ITEM' &&
+    tableApproach(state, first.args.craftingTableId, ctx.config.interactionReach) !== null
+  ) {
+    return null;
+  }
   const action = createAction(
     { spec: first, reason: "dry run of a new plan's first step", origin: 'planner', taskId },
     { newId: () => 'dry-run', now: () => deps.clock.now() },
@@ -839,7 +859,8 @@ export async function consultPlanner(
   };
   // Every step of the route an exact action the player can do with what it holds: code
   // follows the route itself (route-plan.ts), and the model is not asked.
-  const followed = planFromRoute(request.route, config.planner.maxPlanSteps);
+  const followed =
+    deps.followRoute === false ? null : planFromRoute(request.route, config.planner.maxPlanSteps);
   let plannedBy = followed === null ? planner.name : ROUTE_PLANNER;
   let response: PlannerResponse =
     followed === null ? await ask(request) : { kind: 'plan', plan: followed };

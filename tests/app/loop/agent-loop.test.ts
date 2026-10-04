@@ -295,6 +295,7 @@ describe('world memory and exploring', () => {
       planner,
       clock,
       newId: sequentialIds(),
+      followRoute: false,
     });
     expect(requests).toHaveLength(2);
     expect(requests[0]?.route?.steps.join(' ')).toContain('no known place yet: explore');
@@ -387,6 +388,7 @@ describe('world memory and exploring', () => {
       planner,
       clock,
       newId: sequentialIds(),
+      followRoute: false,
     });
     expect(requests).toHaveLength(2);
     // The real planner sends only a request its schema accepts (seen live: a re-ask whose
@@ -451,6 +453,7 @@ describe('world memory and exploring', () => {
       planner,
       clock,
       newId: sequentialIds(),
+      followRoute: false,
     });
     expect(requests).toHaveLength(2);
     expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);
@@ -505,6 +508,7 @@ describe('world memory and exploring', () => {
       planner,
       clock,
       newId: sequentialIds(),
+      followRoute: false,
     });
     // The step explores on by itself toward the ground seen least: no second ask.
     expect(requests).toHaveLength(1);
@@ -553,6 +557,7 @@ describe('world memory and exploring', () => {
       planner,
       clock,
       newId: sequentialIds(),
+      followRoute: false,
     });
     expect(requests).toHaveLength(2);
     expect(PlannerRequestSchema.safeParse(requests[1]).success).toBe(true);

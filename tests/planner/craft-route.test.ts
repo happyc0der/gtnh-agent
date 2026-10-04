@@ -147,5 +147,33 @@ describe(
         /=> CRAFT_ITEM cannot make gregtech:gt\.metatool\.01@24\[Flint\]#1 yet: the result carries NBT data/,
       );
     });
+
+    it('names the GATHER for a gather step: the block in view', () => {
+      // Seen live 2026-10-04: "get 8 cobblestone" had the model plan digs of blocks it misnamed.
+      const cobble = steps(
+        needing({ 'minecraft:cobblestone': 8 }, { 'minecraft:wooden_pickaxe': 1 }, (w) => {
+          w.containers = []; // none stored: the route gathers
+          w.resourceBlocks = [
+            ...w.resourceBlocks,
+            { block: 'minecraft:stone', position: { x: 3, y: 63, z: 0 } },
+          ];
+        }),
+      );
+      const gather = cobble.find((l) => /^\d+\. gather 8 minecraft:cobblestone: /.test(l));
+      expect(gather).toMatch(/ => GATHER \{"block":"minecraft:stone","count":8\}$/);
+      expect(routeActions(cobble)).toEqual([
+        { type: 'GATHER', args: { block: 'minecraft:stone', count: 8 } },
+      ]);
+      // Flint: GTNH crafts it from gravel. Gather the gravel, then craft: all exact actions.
+      const flint = steps(
+        needing({ 'minecraft:flint': 2 }, {}, (w) => {
+          w.containers = [];
+        }),
+      );
+      expect(routeActions(flint)).toEqual([
+        { type: 'GATHER', args: { block: 'minecraft:gravel', count: 6 } },
+        { type: 'CRAFT_ITEM', args: { recipe: 'flint', times: 2, craftingTableId: null } },
+      ]);
+    });
   },
 );

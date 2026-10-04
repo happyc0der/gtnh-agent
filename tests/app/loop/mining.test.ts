@@ -10,6 +10,7 @@ import { parseToolName, usesLeft } from '../../../src/domain/tools.ts';
 import type { SeenChunk } from '../../../src/domain/world-memory.ts';
 import type { Plan, PlannerRequest, PlannerResponse } from '../../../src/planner/plan-schema.ts';
 import type { PlannerProvider } from '../../../src/planner/planner-provider.ts';
+import { ROUTE_PLANNER } from '../../../src/planner/route-plan.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import { makeWorld, memoryRepos, T0, testClock, testConfig } from '../../fixtures/index.ts';
@@ -50,6 +51,8 @@ async function mining(opts: {
   next: (request: PlannerRequest, world: MockWorld) => PlannerResponse;
   explore?: boolean;
   seen?: SeenChunk[];
+  /** Code follows a route of exact actions itself (the default); false: the planner is asked. */
+  followRoute?: boolean;
 }) {
   const clock = testClock();
   const { world, client } = makeWorld((w) => {
@@ -91,6 +94,7 @@ async function mining(opts: {
     planner,
     clock,
     newId: sequentialIds(),
+    ...(opts.followRoute === undefined ? {} : { followRoute: opts.followRoute }),
   };
   const taskId = 'task-mining';
   return {
@@ -140,6 +144,7 @@ describe('mining stone: 64 cobblestone from a few logs', () => {
 
   it('crafts a wooden pickaxe at the table, digs stone, and a second pickaxe when the first wears out', async () => {
     const g = await mining({
+      followRoute: false,
       requirements: { 'minecraft:cobblestone': 64 },
       mutate: (w) => {
         w.inventory.items = { 'minecraft:log': 6, 'minecraft:bread': 6 };
@@ -222,6 +227,46 @@ describe('mining stone: 64 cobblestone from a few logs', () => {
       'tool: pickaxe level >= 0 for dig minecraft:stone: get minecraft:wooden_pickaxe first',
     );
     expect(g.journal().at(-1)).toBe('plan #2 done: Get 64 cobblestone');
+  });
+});
+
+describe('mining stone with no model: code follows the route', () => {
+  const stone = (): MockResourceBlock[] =>
+    [5, 6].flatMap((z) =>
+      [64, 65].flatMap((y) =>
+        Array.from({ length: 18 }, (_, i) => ({
+          block: 'minecraft:stone' as const,
+          position: { x: i - 7, y, z },
+          standAt: { x: i - 6.5, y: 64, z: 4.5 },
+        })),
+      ),
+    );
+
+  it('the planks, sticks and pickaxe, the GATHER of stone, and a second pickaxe: all exact actions', async () => {
+    // Seen live 2026-10-04: "get 8 cobblestone" had the model plan single digs of blocks it
+    // misnamed. The route's every step is now an exact action: code follows it, unasked.
+    const g = await mining({
+      requirements: { 'minecraft:cobblestone': 64 },
+      mutate: (w) => {
+        w.inventory.items = { 'minecraft:log': 6, 'minecraft:bread': 6 };
+        w.resourceBlocks = stone();
+      },
+      next: (): PlannerResponse => ({
+        kind: 'escalation',
+        escalation: { reason: 'OTHER', message: 'not asked', questionForUser: 'Now what?' },
+      }),
+    });
+    await g.until(() => (g.world.inventory.items['minecraft:cobblestone'] ?? 0) >= 64);
+    expect(g.world.inventory.items['minecraft:cobblestone']).toBe(64);
+    expect(g.requests).toHaveLength(0);
+    expect(g.repos.plans.latestForTask('task-mining')?.planner).toBe(ROUTE_PLANNER);
+    const pickaxes = g
+      .performed()
+      .filter((a) => a.type === 'CRAFT_ITEM' && a.args.recipe === 'minecraft:wooden_pickaxe#1');
+    expect(pickaxes).toHaveLength(2);
+    const digs = g.logged().filter((a) => a.actionType === 'DIG_BLOCK');
+    expect(digs).toHaveLength(64);
+    expect(digs.every((a) => a.status === 'succeeded')).toBe(true);
   });
 });
 

@@ -52,8 +52,10 @@ where gtnh-agent goes further for GTNH, the last section says so.
 - Plays the quest book's Age 0 by itself: reads Better Questing's records, submits, ticks
   checkboxes, claims rewards (live).
 - Plans from a route that code calculates over GTNH's own recipes and drops (the server's
-  CraftTweaker dumps), and crafts 19,786 of its 52,400 crafting-table recipes (2x2 live;
-  3x3 at a placed table: fake server).
+  CraftTweaker dumps), and crafts 19,786 of its 52,400 crafting-table recipes (2x2 and at a
+  placed table: live). When every step of the route is an exact action (a craft, a station to
+  place, a GATHER), code follows it without asking the model, walking back to the table first
+  when it is out of reach.
 - Tools by GTNH's rules: Tinkers' Construct tools read from their data, IguanaTweaks' harvest
   levels, no dig that would drop nothing.
 - Food: eats approved food, fetches more from gardens and animals when hungry (live).
@@ -63,6 +65,8 @@ where gtnh-agent goes further for GTNH, the last section says so.
 - Inventory: a full hotbar swaps a stack in from the main inventory to place, dig with a tool or
   eat (live); a crafting table goes only where the client's own check says it is out of the
   way (live: the Tools quest's table).
-- Drops: walks to where a dig's or a kill's drop landed; fells trees from the base (live).
+- Drops: walks to where a dig's or a kill's drop landed; a dig's drop that no free spot
+  reaches (in a gap one block high under leaves) is fetched by a walk that breaks its way but
+  never places a block, so it never climbs after one; fells trees from the base (live).
 - Safety: every action through one executor and a safety policy; players' builds remembered
   and never broken; nothing broken or placed near another player.

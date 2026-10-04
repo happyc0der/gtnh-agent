@@ -32,6 +32,22 @@ describe('plans code makes from the route alone (route-plan.ts)', () => {
     expect(planFromRoute(CRAFTS, 2)?.steps).toHaveLength(2);
   });
 
+  it('follows a route of gathers too: each a GATHER, the plan "gather ..."', () => {
+    const route = {
+      stock: [{ item: 'minecraft:cobblestone', have: 0, stored: 0, need: 8, missing: 8 }],
+      steps: [
+        'stock: minecraft:cobblestone have 0 / need 8',
+        '1. gather 8 minecraft:cobblestone: dig minecraft:stone or minecraft:cobblestone (~8 digs, ~0.5 min); best: (3, 63, 0) 3 m away, ~12 seen => GATHER {"block":"minecraft:stone","count":8}',
+      ],
+    };
+    const plan = planFromRoute(route, 12);
+    expect(PlanSchema.safeParse(plan).success).toBe(true);
+    expect(plan?.steps.map((s) => s.action)).toEqual([
+      { type: 'GATHER', args: { block: 'minecraft:stone', count: 8 } },
+    ]);
+    expect(plan?.goal).toBe('gather 8 minecraft:cobblestone');
+  });
+
   it('leaves the plan to the model when a step is not an exact action, or there is no route', () => {
     const gather = {
       ...CRAFTS,

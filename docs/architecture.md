@@ -1170,7 +1170,9 @@ So, in layers:
    chest's contents to be known, which they are only while the agent has it open, so
    `OPEN_CONTAINER` comes first.
 2. The client opens only a configured chest whose block is `minecraft:chest` (never a trapped
-   chest), with an empty hand, and accepts only a chest window (27 or 54 slots).
+   chest), with an empty hand, else a vanilla tool or block with no NBT data (Forge asks only a
+   modded item's `onItemUseFirst` before the block answers the click: `clickHand`), and accepts
+   only a chest window (27 or 54 slots).
 3. `planTransfer` builds the whole move from predictable clicks: pick up a stack, put it into an
    EMPTY slot, or place one item at a time into a slot it filled itself. It never merges into
    other stacks, so item stack limits never matter, and it never touches stacks with NBT data.
@@ -1246,8 +1248,9 @@ Profiles today:
    for an output.
 4. **The client** re-checks the block itself: loaded, its name, its profile or the observe-only
    list, the never-opened lists, reach and the fence.
-   - It opens the block with an empty hand, and accepts only a window the profile knows (opener
-     and exact slot count).
+   - It opens the block with an empty hand, else a vanilla tool or block (`clickHand`, as for
+     chests and doors), and accepts only a window the profile knows (opener and exact slot
+     count).
    - Clicks are the chests' clicks: predictable, all planned before the first one, never onto
      stacks with NBT data, one at a time with the server's verdict. A rejection is followed by the
      re-sync, and the cursor goes back to the inventory.
