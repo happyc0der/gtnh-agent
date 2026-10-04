@@ -172,7 +172,10 @@ export async function playCommand(cli: Cli): Promise<number> {
           config,
           dbPath,
           {
-            limits: { ...limits, maxMinutes: Math.max(1, Math.min(480, Math.round(minutesLeft * 10) / 10)) },
+            limits: {
+              ...limits,
+              maxMinutes: Math.max(1, Math.min(480, Math.round(minutesLeft * 10) / 10)),
+            },
             ...providers,
             abilities: liveAbilities({
               configured: Object.keys(config.minecraft.crafting.tables).length > 0,
