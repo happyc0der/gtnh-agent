@@ -168,21 +168,21 @@ Its owners tell it what to do in chat while it plays, as with Baritone's chat co
 in front (`!come`) or its name (`gtnh_agent, come here`). It whispers back: "OK: coming to you",
 progress at milestones, "Done: ..." or "Failed: ..." with the reason.
 
-| Command                                                     | What it does                                                                                                                                                          |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `!stop`                                                     | Cancels the current command, stops the action in progress (a walk, a dig, a fight) at its next tick, and idles: its own play is paused                                |
-| `!pause` / `!resume`                                        | Its own (quest) play off / on; commands still work while paused                                                                                                       |
-| `!status`                                                   | Position, health, food, what it is doing, and the items it carries most of                                                                                            |
-| `!help`                                                     | The commands                                                                                                                                                          |
-| `!come`                                                     | Walks to you (it must see you: the server shows players within its view)                                                                                              |
-| `!follow [player]`                                          | Keeps within about 3 blocks of you (or another owner), re-planning about every second, until `!stop` or another command                                               |
-| `!goto <x> <y> <z>`, `!goto <x> <z>`                        | Travels there: EXPLORE in hops while it is beyond the play area, then a walk; refused outside the safety boundary                                                     |
-| `!goto <waypoint>`, `!home`                                 | Travels to a saved waypoint, or home                                                                                                                                  |
-| `!get <count> <item>`                                       | Gathers until it holds that many, as `cli play --needs` does (`minecraft:` optional; aliases: logs, wood, planks, sticks, cobble, dirt, sand, gravel, flint, clay...) |
-| `!mine <count> <block>`                                     | Mines the block until it holds that many of what it drops (grass gives dirt, stone cobblestone, a clay block clay balls)                                              |
-| `!sethome`                                                  | Home (the `home` safe location retreats go to) is where it stands                                                                                                     |
-| `!waypoint <name>`, `!waypoint delete <name>`, `!waypoints` | Saves where it stands, forgets one, lists them (`wp` for short; names: lowercase letters, digits, - and \_, at most 32, with a letter)                                |
-| `!quests on` / `!quests off`                                | Its own quest play on / off, kept across restarts (off: it only takes commands)                                                                                       |
+| Command                                                     | What it does                                                                                                                                                                       |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `!stop`                                                     | Cancels the current command, stops the action in progress (a walk, a dig, a fight) at its next tick, and idles: its own play is paused                                             |
+| `!pause` / `!resume`                                        | Its own (quest) play off / on; commands still work while paused                                                                                                                    |
+| `!status`                                                   | Position, health, food, what it is doing, and the items it carries most of                                                                                                         |
+| `!help`                                                     | The commands                                                                                                                                                                       |
+| `!come`                                                     | Walks to you (it must see you: the server shows players within its view)                                                                                                           |
+| `!follow [player]`                                          | Keeps within about 3 blocks of you (or another owner), re-planning about every second, until `!stop` or another command                                                            |
+| `!goto <x> <y> <z>`, `!goto <x> <z>`                        | Travels there: EXPLORE in hops while it is beyond the play area, then a walk; refused outside the safety boundary                                                                  |
+| `!goto <waypoint>`, `!home`                                 | Travels to a saved waypoint, or home                                                                                                                                               |
+| `!get <count> <item>`                                       | Gathers until it holds that many, as `cli play --needs` does (`minecraft:` optional; aliases: logs, wood, planks, sticks, cobble, dirt, sand, gravel, flint, clay...)              |
+| `!mine <count> <block>`                                     | Mines the block until it holds that many of what it drops (grass gives dirt, stone cobblestone, a clay block clay balls); `!mine 16 iron ore` mines a GregTech ore for its raw ore |
+| `!sethome`                                                  | Home (the `home` safe location retreats go to) is where it stands                                                                                                                  |
+| `!waypoint <name>`, `!waypoint delete <name>`, `!waypoints` | Saves where it stands, forgets one, lists them (`wp` for short; names: lowercase letters, digits, - and \_, at most 32, with a letter)                                             |
+| `!quests on` / `!quests off`                                | Its own quest play on / off, kept across restarts (off: it only takes commands)                                                                                                    |
 
 Anything else an owner writes is natural language. With `AGENT_COMMANDS=ollama` a local model
 (`OLLAMA_COMMAND_MODEL`, default qwen3:14b) turns it into one of these commands, which code then
@@ -196,7 +196,8 @@ first owner had whispered it (in bash, single-quote a `!`: `'!come'`), and a run
 lists the recent ones with their status and the bot's reply. `pnpm cli play --live --listen` keeps
 the bot online for commands when it has nothing else to do or is paused, and reconnects when the
 connection drops (a server restart, a kick: after 5 s, 15 s, 60 s, then every 2 minutes), until the
-stop file, Ctrl+C or `--minutes` (at most 480).
+stop file, Ctrl+C or `--minutes` (at most 480). On Windows, `scripts/play-listen.cmd` starts exactly
+that for 8 hours in its own window (start the server first).
 
 **How it fits into play.** Commands come before food trips and quests: a new one ends the session
 running at its next cycle, and the quest goes on after it (unless paused). The night shelter and a
