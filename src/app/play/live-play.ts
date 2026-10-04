@@ -12,18 +12,27 @@ import {
   type PitOptions,
   type PitSite,
 } from '../../bot/gtnh1710/night-pit.ts';
+import { HAZARD_SCAN_RADIUS } from '../../bot/gtnh1710/hazard-scan.ts';
+import { playArea } from '../../bot/gtnh1710/play-area.ts';
 import type { AgentConfig } from '../../config/env.ts';
+import type { Decision } from '../../domain/decisions.ts';
+import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
 import type { GameState } from '../../domain/game-state.ts';
 import type { Abilities } from '../../goals/quest-goals.ts';
+import type { CommandTranslator } from '../../llm/ollama-command-provider.ts';
 import { openDatabase } from '../../persistence/database.ts';
 import { NIGHT_PIT_KEY } from '../../persistence/memory-repository.ts';
 import { createRepositories, type Repositories } from '../../persistence/repositories.ts';
 import type { PlannerProvider } from '../../planner/planner-provider.ts';
+import { assessStateReliability } from '../../safety/safety-policy.ts';
 import type { DecisionProvider } from '../../system1/decision-provider.ts';
+import { routeDecision } from '../../system1/deterministic-router.ts';
 import { systemClock } from '../../util/clock.ts';
 import { randomIds } from '../../util/ids.ts';
 import { runQuestBookAction, type AgentDeps } from '../loop/agent-loop.ts';
-import { syncConfigToDatabase } from '../loop/agent-memory.ts';
+import { buildSafetyContext, syncConfigToDatabase } from '../loop/agent-memory.ts';
+import type { CommandDeps } from './commands.ts';
+import { planTravelStep } from './owner-travel.ts';
 import { foodStatusOf } from './food.ts';
 import { runSession } from '../loop/live-session.ts';
 import { withLiveClient } from '../commands/live-commands.ts';
@@ -39,6 +48,8 @@ import {
 
 /** How long to wait for Better Questing's quest book after login. */
 const QUEST_BOOK_WAIT_MS = 30_000;
+/** How often a running play looks for a stop queued from the command line. */
+const STOP_POLL_MS = 1_000;
 
 const PitSiteSchema = z.strictObject({ x: z.int(), z: z.int(), groundY: z.int().min(0).max(255) });
 
@@ -138,6 +149,92 @@ export function liveShelter(
   };
 }
 
+/** System 1 decisions an idle bot stands by for (commands.ts idleFor): its reflexes. */
+const STANDBY_DECISIONS: ReadonlySet<Decision> = new Set<Decision>([
+  'RETREAT_HOME',
+  'DEFEND',
+  'EAT',
+  'REST',
+]);
+
+/**
+ * What System 1 would do on its own about `state` while the bot is idle, when it is one of
+ * its reflexes (a retreat, a fight, a meal, a rest), or null: the rule router's decision on a
+ * reliable observation. The standby session then runs it through the executor like any cycle.
+ */
+export function standbyReason(
+  state: GameState,
+  config: AgentConfig,
+  repos: Repositories,
+): string | null {
+  const safety = buildSafetyContext(config, repos, systemClock.now());
+  if (assessStateReliability(state, safety).length > 0) return null;
+  const d = routeDecision(state, {
+    safety,
+    routing: config.routing,
+    combatEnabled: config.minecraft.combat.enabled,
+    eatingEnabled: config.minecraft.eating.enabled,
+    recentMeals: repos.actions.recentMeals(MEAL_HISTORY_LENGTH),
+  });
+  return STANDBY_DECISIONS.has(d.decision) ? `${d.decision} [${d.reasonCodes.join(', ')}]` : null;
+}
+
+/**
+ * The owners' commands on the live client (commands.ts CommandDeps): the commands it heard in
+ * chat, whispered replies, the stop's interrupt, what the bot knows (its world model), travel
+ * steps planned with its own walk rules on its own blocks (owner-travel.ts), and the standby
+ * check.
+ */
+export function liveCommands(
+  client: Gtnh1710Client,
+  config: AgentConfig,
+  repos: Repositories,
+  translator: CommandTranslator | null,
+  log?: (line: string) => void,
+): CommandDeps {
+  const movement = config.minecraft.movement;
+  return {
+    take: () => client.takeOwnerMessages(),
+    waiting: () => client.ownerMessagesWaiting(),
+    reply: (owner, text) => {
+      const why = client.whisper(owner, text);
+      if (why !== null) log?.(`reply to ${owner} not sent (${why}): ${text}`);
+    },
+    clearInterrupt: () => client.clearInterrupt(),
+    ...(translator === null ? {} : { translate: (text: string) => translator.translate(text) }),
+    view: () => ({
+      position: client.world.ownPosition,
+      dimension: client.world.dimension,
+      health: client.world.health,
+      food: client.world.food,
+      inventory: client.world.inventoryItems(),
+      playerAt: (name: string) => client.playerPosition(name),
+    }),
+    step: (target) =>
+      planTravelStep({
+        world: client.world.walkWorld(),
+        area: playArea(movement, config.safety.boundary, client.world.ownPosition),
+        feet: client.world.ownPosition,
+        target,
+        movement: {
+          enabled: movement.enabled,
+          canExplore: movement.enabled && movement.mode === 'follow',
+          maxPathLength: movement.maxPathLength,
+        },
+        // The safety policy refuses a MOVE_TO whose surroundings the hazard scan has not covered.
+        moveReach: Math.min(
+          config.safety.maxMoveDistance,
+          HAZARD_SCAN_RADIUS - config.safety.hazardAvoidanceRadius - 0.5,
+        ),
+      }),
+    owners: config.minecraft.owners,
+    homeName: config.routing.homeLocationName,
+    configLocations: new Map(Object.entries(config.locations)),
+    boundary: config.safety.boundary,
+    standby: async () => standbyReason(await client.observe(), config, repos),
+  };
+}
+
 /**
  * Observes, waiting first (at most `timeoutMs`) for the quest book: Better Questing sends it
  * a moment after login, once the client has answered its main_sync.
@@ -173,6 +270,13 @@ export async function runLivePlay(
     abilities?: Abilities;
     /** A goal outside the quest book (`play --needs`); play pursues it instead of the quests. */
     goal?: FreeGoal;
+    /**
+     * Stay online for the owners' commands (cli play --listen): play waits instead of ending
+     * when it has nothing to do, and ends when the connection is lost (the caller reconnects).
+     */
+    listen?: boolean;
+    /** Translates the owners' natural language into commands (commands.translator), or none. */
+    translator?: CommandTranslator | null;
     onEvent: (event: PlayEvent) => void;
   },
   log?: (line: string) => void,
@@ -191,12 +295,31 @@ export async function runLivePlay(
         };
         process.once('SIGINT', onInterrupt);
         const stopFile = resolve(config.minecraft.movement.stopFile);
+        const listen = input.listen === true;
         const stopRequested = (): string | null =>
           interrupted
             ? 'interrupted (Ctrl+C)'
             : existsSync(stopFile)
               ? `the stop file ${stopFile} exists`
-              : null;
+              : listen && client.info().closedReason !== null
+                ? `the connection is lost (${client.info().closedReason ?? ''})`
+                : null;
+        const commands =
+          config.minecraft.owners.length === 0
+            ? undefined
+            : liveCommands(client, config, repos, input.translator ?? null, log);
+        // A stop queued from the command line stops the action in progress too, as a stop in
+        // chat does (the client interrupts that one itself); the play loop then takes it.
+        let lastStop = 0;
+        const stopPoll =
+          commands === undefined
+            ? null
+            : setInterval(() => {
+                const stop = repos.commands.queuedVerb('stop', 'cli', lastStop);
+                if (stop === null) return;
+                lastStop = stop.id;
+                client.interrupt(`stopped by ${stop.sender} from the command line`);
+              }, STOP_POLL_MS);
         const agent: AgentDeps = {
           config,
           client,
@@ -251,12 +374,15 @@ export async function runLivePlay(
                   }
                 : {}),
               session: (limits, hooks) => runSession(agent, limits, hooks),
+              ...(commands === undefined ? {} : { commands }),
+              ...(listen ? { listen } : {}),
             },
             input.limits,
             { stopRequested, onEvent: input.onEvent },
           );
           return { ...result, info: client.info() };
         } finally {
+          if (stopPoll !== null) clearInterval(stopPoll);
           process.removeListener('SIGINT', onInterrupt);
         }
       },

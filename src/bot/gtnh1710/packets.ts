@@ -1,5 +1,7 @@
 import { gunzipSync } from 'node:zlib';
+import { SENDER_NAME } from '../../domain/owner-commands.ts';
 import { BQ_CHANNEL, encodeBqOutbound, type BqOutbound } from './better-questing.ts';
+import { CHAT_LINE_MAX, chatTextProblem } from './chat.ts';
 import type { ColumnHeader } from './chunk-data.ts';
 import {
   bool,
@@ -22,9 +24,9 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 
 // ---------------------------------------------------------------------------
 // Outbound: the ONLY packets this client can ever send. Anything that could change
-// the world (chat/commands, using items, attacking, dropping items) is intentionally
-// absent. The exceptions are walking ('player-move', only for steps walking.ts has
-// checked), vanilla chests, crafting and block windows ('activate-block', 'select-slot',
+// the world (public chat and commands, using items, attacking, dropping items) is
+// intentionally absent. The exceptions are walking ('player-move', only for steps walking.ts
+// has checked), vanilla chests, crafting and block windows ('activate-block', 'select-slot',
 // 'click-window', 'confirm-transaction', 'close-window', only as container.ts, crafting.ts
 // and interact.ts plan them), digging one block ('dig-block' with status start/cancel/finish
 // only, for targets digging.ts has checked), placing one block ('place-block': C08 with
@@ -35,6 +37,9 @@ export const PLAYER_EYE_HEIGHT = 1.6200000047683716;
 // 'quest-book' is Better Questing's own channel (BQ_NET_CHAN), and only its four typed
 // client messages (better-questing.ts BqOutbound): the answer to the server's main_sync,
 // quest_action claim/detect, task_checkbox and choice_reward.
+// 'whisper' is the one chat packet: C01 with exactly `/tell <owner> <plain text>`, a reply to
+// one of the bot's owners (client/chat-actions.ts checks MC_OWNERS and sends at most one line a
+// second). No public chat, and no other command, can be expressed.
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
@@ -58,7 +63,8 @@ export type OutboundKind =
   | 'swing-arm'
   | 'attack-entity'
   | 'client-status'
-  | 'quest-book';
+  | 'quest-book'
+  | 'whisper';
 
 /**
  * C02 Use Entity actions (C02PacketUseEntity.Action, read as values()[byte % 2]). Only ATTACK
@@ -449,6 +455,29 @@ export const outbound = {
   },
 
   /**
+   * C01 Chat Message, ONLY as a whisper: `/tell <player> <text>` (vanilla's CommandMessage,
+   * which any player may use; the server shows the player "<bot> whispers to you: <text>").
+   * The player must be a valid name and the text plain (chat.ts chatTextProblem: no § and no
+   * control character, for which the server kicks the client with "Illegal characters in
+   * chat", no line break, not starting with /), and the whole line at most CHAT_LINE_MAX
+   * characters (a longer one disconnects the client). That the player is one of the bot's
+   * owners is client/chat-actions.ts's check. Public chat and every other command cannot be
+   * expressed.
+   */
+  whisper(player: string, text: string): OutboundPacket {
+    if (!SENDER_NAME.test(player)) throw new ProtocolError('refusing to whisper to a bad name');
+    const problem = chatTextProblem(text);
+    if (problem !== null) throw new ProtocolError(`refusing to whisper: ${problem}`);
+    const line = `/tell ${player} ${text}`;
+    if (line.length > CHAT_LINE_MAX) {
+      throw new ProtocolError(
+        `refusing a chat line of ${line.length} characters (at most ${CHAT_LINE_MAX})`,
+      );
+    }
+    return { kind: 'whisper', frame: encodeFrame(0x01, encodeString(line)) };
+  },
+
+  /**
    * C06 Player Position And Look, used to acknowledge a position the server just set
    * (S08). The caller passes the server's packet, never a computed position.
    */
@@ -499,12 +528,15 @@ export interface ItemStackData {
 }
 
 /**
- * One DataWatcher entry: index 0-31 and its value. Item stacks and block coordinates (types
- * 5 and 6) are read past but kept as null: nothing the agent uses is stored in them.
+ * One DataWatcher entry: index 0-31 and its value. An item stack (type 5) has the value null
+ * and the stack in `stack`: a dropped item (EntityItem) says what it is only there (index 10).
+ * Block coordinates (type 6) are read past and kept as null: nothing the agent uses is in them.
  */
 export interface MetadataEntry {
   index: number;
   value: number | string | null;
+  /** Type 5 only: the item stack (null for an empty one). */
+  stack?: ItemStackData | null;
 }
 export type EntityMetadata = readonly MetadataEntry[];
 
@@ -776,9 +808,8 @@ export function readEntityMetadata(
         value = r.string(32767 * 4);
         break;
       case 5:
-        readItemStack(r, options);
-        value = null;
-        break;
+        entries.push({ index, value: null, stack: readItemStack(r, options) });
+        continue;
       case 6:
         r.i32();
         r.i32();

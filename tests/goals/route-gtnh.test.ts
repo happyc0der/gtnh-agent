@@ -107,10 +107,10 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
       'craft minecraft:wooden_pickaxe',
       'gather minecraft:cobblestone',
     ]);
-    // The pickaxe is the hand-verified recipe, which CRAFT_ITEM can make.
+    // The pickaxe is the knowledge base's GTNH recipe, which CRAFT_ITEM makes by this id.
     expect(
       route.legs.find((l) => l.kind === 'craft' && l.makes.item.endsWith('pickaxe')),
-    ).toMatchObject({ recipe: 'wooden_pickaxe', station: 'crafting_table' });
+    ).toMatchObject({ recipe: 'minecraft:wooden_pickaxe#1', station: 'crafting_table' });
     expect(route.legs.at(-1)).toMatchObject({
       kind: 'gather',
       quantity: 64,

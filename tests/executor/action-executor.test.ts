@@ -278,4 +278,29 @@ describe('preconditions', () => {
     });
     expect(far.failures[0]).toMatch(/crafting table table.main is .* blocks away/);
   });
+
+  it("checks a knowledge-base recipe's ingredients by the same data the client fills from", () => {
+    const pickaxe = (times: number, craftingTableId: string | null): ActionSpec => ({
+      type: 'CRAFT_ITEM',
+      args: { recipe: 'minecraft:wooden_pickaxe#1', times, craftingTableId },
+    });
+    // Any of plankWood's kinds, in any mix: oak and BOP planks; vanilla sticks.
+    const held = (w: MockWorld): void => {
+      Object.assign(w.inventory.items, {
+        'minecraft:planks': 2,
+        'BiomesOPlenty:planks@3': 1,
+        'minecraft:stick': 2,
+      });
+    };
+    expect(pre(pickaxe(1, 'table.main'), held).ok).toBe(true);
+    expect(pre(pickaxe(2, 'table.main'), held).failures).toEqual([
+      expect.stringMatching(
+        /^inventory holds 3 of ore:plankWood \(650 kinds: minecraft:planks, .*\), need 6 for 2 x minecraft:wooden_pickaxe#1$/,
+      ),
+      expect.stringMatching(/^inventory holds 2 of ore:stickWood .*, need 4 for 2 x /),
+    ]);
+    expect(pre(pickaxe(1, null), held).failures).toEqual([
+      'minecraft:wooden_pickaxe#1 needs a crafting table (its pattern does not fit 2x2)',
+    ]);
+  }, 30_000);
 });

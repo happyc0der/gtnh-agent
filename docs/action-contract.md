@@ -122,11 +122,15 @@ wears by one per block, which renames a vanilla one in the inventory
 
 **`PLACE_BLOCK`** places one of `minecraft:dirt`, `cobblestone`, `sand`, `gravel`, `sandstone`,
 `planks` (any of the six wood types, `@1`-`@5`) or `log`/`log2` (any wood type) that the player
-carries (`src/domain/blocks.ts`); nothing else, nothing modded. The cell must be listed in the
+carries, or a `minecraft:crafting_table` or `minecraft:furnace` to use (`src/domain/blocks.ts`);
+nothing else, nothing modded. The cell must be listed in the
 observation's `nearbyBlocks.placeable`: empty (air, tall grass or a dead bush), within reach,
 clear of the player's body and of every entity, next to a plain full block to place it against.
 Sand and gravel go only where `takesFalling` says they stay put: on a plain full block, never
-in a column the player stands in. It is refused during danger like every world action: placing
+in a column the player stands in; a crafting table or furnace only there too (a solid floor
+beside the player), and the client refuses one where the player walks (a 1-wide passage). A
+placed table is then a found one (`crafting_table:<x>.<y>.<z>`), a placed furnace a listed
+one. It is refused during danger like every world action: placing
 a block is not treated as an escape (a single block is no shelter, sealing one with a mob in
 reach can wall the agent in with it, and a creeper's blast opens it), so shelters are built
 while the state is safe.
@@ -193,12 +197,15 @@ spots (`standAt`) count such walks, so a log walled in by leaves gets one. Retre
 and the walk to a dig's drop never break.
 
 `CRAFT_ITEM` works when `MC_ENABLE_CRAFTING=true` (otherwise `NOT_IMPLEMENTED`): 2x2 recipes in
-the player's own grid, 3x3 recipes at a crafting table listed in `minecraft.crafting.tables`. The
-recipe table (`src/domain/recipes.ts`) only says what to put where; the server decides:
+the player's own grid, 3x3 recipes at a crafting table listed in `minecraft.crafting.tables` or
+found inside the fence. Its recipe is a hand-verified one (`planks_oak`) or a knowledge-base
+recipe by the id a route step names (`minecraft:wooden_pickaxe#1`; any other id fails the
+schema). A recipe (`src/domain/recipes.ts`) only says what to put where; the server decides:
 
-- It is refused (`REFUSED`, before any click) for an unconfigured table, a block that is not a
-  `minecraft:crafting_table`, no empty hotbar slot, or crafts that cannot all finish exactly (too
-  few NBT-free ingredients, or no empty slot for a result).
+- It is refused (`REFUSED`, before any click) for a recipe it does not make, a table neither
+  configured nor found, a block that is not a `minecraft:crafting_table`, no empty hotbar slot,
+  or crafts that cannot all finish exactly (too few NBT-free ingredients, or no empty slot for a
+  result).
 - If the server's result is not exactly the expected item and count, nothing is taken: every
   ingredient goes back and the action fails (`FAILED`) with what the server showed.
 - A rejected or unanswered click fails it (`FAILED`) after the grid and the cursor are emptied
@@ -295,7 +302,9 @@ The same dig breaks the leaves a `MOVE_TO` breaks on its way (above), with the s
     torch...), or has a hazard within one block;
   - has no plain full block beside it whose face looks at the player within the server's
     reach (nothing to click);
-  - would let sand or gravel fall, or is over the player's head for them.
+  - would let sand or gravel fall, or is over the player's head for them;
+  - for a crafting table or furnace: has no plain full block under it, is in a column the
+    player stands in, or would cut off a spot the player walks to now (a 1-wide passage).
     It is also refused with no stack of the item it can hold (none in the hotbar and no empty
     hotbar slot to move one into), or while a walk, chest operation or dig runs.
 - **Fails** (`FAILED`, after the click) when the server's answer for the cell is not the placed

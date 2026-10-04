@@ -6,7 +6,15 @@ import type { SessionLimits, SessionResult } from '../loop/live-session.ts';
 import { foodDue } from './food.ts';
 import { cycleEvent } from './narration.ts';
 import { isDark, nightReason } from './night.ts';
-import { CONTINUE_AFTER, done, mobPause, waitOutMob, type PlayState } from './play-state.ts';
+import {
+  autonomyOff,
+  commandWaiting,
+  CONTINUE_AFTER,
+  done,
+  mobPause,
+  waitOutMob,
+  type PlayState,
+} from './play-state.ts';
 import type { PlayResult } from './play.ts';
 
 /**
@@ -124,7 +132,8 @@ export async function runScoutSession(input: {
  */
 export async function scoutingRound(play: PlayState): Promise<PlayResult | null> {
   const { deps, limits, hooks, emit } = play;
-  if (deps.scouting !== undefined) {
+  // An owner paused play (or turned quests off): no scouting either.
+  if (deps.scouting !== undefined && autonomyOff(deps.repos) === null) {
     const due = scoutingDue(deps.repos, deps.scouting);
     if (due.kind === 'stop') return done(play, due.reason);
     // Hungry with nothing to eat, food comes first: a food trip explores for food itself, and
@@ -144,11 +153,12 @@ export async function scoutingRound(play: PlayState): Promise<PlayResult | null>
       const scout = adoptScoutTask(deps.repos);
       emit({ kind: 'scout', ...scout, chunksSeen: deps.scouting.chunksSeen() });
       const session = play.sessions + 1;
+      let preempted: string | null = null;
       const r = await runScoutSession({
         scouting: deps.scouting,
         limits: limits.session,
         session: deps.session,
-        stopRequested: hooks.stopRequested,
+        stopRequested: () => (preempted ??= commandWaiting(play)) ?? hooks.stopRequested(),
         onCycle: (c, index) => {
           play.lastDecision = c.decision ?? null;
           emit(cycleEvent(deps.repos, session, c, index));
@@ -165,6 +175,8 @@ export async function scoutingRound(play: PlayState): Promise<PlayResult | null>
         system1: r.session.system1,
       });
       if (r.dark !== null) return done(play, nightReason(r.dark), r.dark);
+      // An owner's command comes first: scouting waits for the next play.
+      if (preempted !== null && r.session.stopKind === 'stop-requested') return null;
       const mob = mobPause(r.session.stopKind, play.lastDecision);
       if (mob !== null) return waitOutMob(play, SCOUT_TASK_ID, mob);
       if (r.session.stopKind === 'stop-requested' && !r.scouted) {

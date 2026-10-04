@@ -380,8 +380,9 @@ Interruptions (mobs, hunger, lava, night) are still handled first by System 1's 
 a step that no longer fits the world is refused and replanned.
 
 `src/app/play/play.ts` (`runPlay`) is the play loop: each round is the first of the night, morning,
-food and goal rounds (`night.ts`, `food.ts`, `goal-round.ts`) that has something to do. The goal
-round reads the server's quest book and the inventory, records the quests the server now lists
+owner-command, food, idle and goal rounds (`night.ts`, `commands.ts`, `food.ts`, `goal-round.ts`)
+that has something to do (see [Owner commands](#owner-commands) for the command and idle rounds).
+The goal round reads the server's quest book and the inventory, records the quests the server now lists
 as completed (closing their tasks), and
 makes the quest-book clicks that are due, one per round. Each click is an ordinary action run by
 the executor (`runQuestBookAction`: schema, safety policy, preconditions, execution, and
@@ -404,6 +405,77 @@ verified like any other. Play stops, and says why, when:
 A failed action or a safe detour (retreating, eating) does not stop play by itself: that is part
 of playing, and the planner sees it in its recent history. Play is still started by a human and
 bounded in time (at most 8 hours).
+
+### Owner commands
+
+The bot's owners (`MC_OWNERS`) command it in chat, as Baritone's chat commands do: `!come`,
+`!follow`, `!goto x y z`, `!get 20 logs`, `!stop`... (the full list:
+[README](../README.md#commanding-the-bot)). A command never acts by itself: it becomes ordinary
+actions, each validated by the safety policy, executed and verified, or a goal for the planner.
+
+- **Chat in** (`src/bot/gtnh1710/chat.ts`, `client/chat-actions.ts`). Every S02 line is a 1.7.10
+  chat component. `parseChat` attributes a line to a sender only in vanilla's shapes, a whisper to
+  the bot (`commands.message.display.incoming`) or public chat (`chat.type.text`): exactly two
+  arguments, the sender a player name (a plain string, as RCON's `Rcon`, or a name component whose
+  `/msg` click event, when it has one, names the same player), the message plain text (its words
+  in `extra`, as CommandBase builds it). A mod's own `<Name> message` line counts only with no
+  translation anywhere in it. Everything else is `other`: announcements, emotes, joins, deaths,
+  ServerUtilities' lines, and the echo of the bot's own whispers (`...outgoing`, which names the
+  recipient). `commandTextOf` (`src/domain/owner-commands.ts`) then keeps only an owner's line
+  (exact, case-sensitive, never the bot itself) that is a whisper, or public chat starting with
+  `!`, `#` or the bot's name. The client queues those (`takeOwnerMessages`); the world model still
+  keeps only its last raw lines, for diagnostics. A stop in the command form stops the action in
+  progress at once (below).
+- **The commands** (`src/domain/owner-commands.ts`): a fixed Zod schema (stop, pause, resume,
+  status, help, come, follow, goto a point or a waypoint, home, get, mine, sethome, quests on/off,
+  waypoint save/delete/list). `parseOwnerCommand` parses the command form deterministically
+  (case-insensitive verbs, `minecraft:` optional, aliases); with a `!` or `#` prefix that is all,
+  and a typo gets its usage back. Other text is natural language: `OllamaCommandProvider`
+  (`src/llm/ollama-command-provider.ts`, `AGENT_COMMANDS=ollama`) asks the local model for a verb
+  and its words under a JSON schema, with only the owner's text as data, and parses the answer
+  with the same `parseOwnerCommand`; a failure or no command is "I did not understand; say !help".
+- **Stored** (migration 008, `OwnerCommandRepository`): source (`chat` or `cli`), sender, raw
+  text, the parsed command, status (queued, running, done, failed, cancelled), the latest reply,
+  timestamps. `cli command` queues one as the first owner; a running play takes it between
+  cycles.
+- **The command round** (`src/app/play/commands.ts`), after the night and morning rounds: it hears
+  the commands that came (chat and the database), answers the instant ones (stop, pause, status,
+  waypoints...) and starts the newest action command, cancelling any other: one runs at a time.
+  Owners' commands come before food trips, scouting and quests: every such session checks
+  `commandWaiting` before each cycle (in its `stopRequested`), so a new command ends it at its
+  next cycle and play goes on with it afterwards. The night shelter and a food trip on a nearly
+  empty food bar (`starving`: below `minHunger` with nothing to eat, when the policy itself lets
+  only food actions run) are not ended: travel and goals wait for them and say so, while instant
+  commands are answered meanwhile (also from the shelter, `whileSheltered`).
+- **Travel** (come, follow, goto, home, waypoints) runs as code-made steps, like the night
+  shelter's: `planTravelStep` (`owner-travel.ts`) picks a MOVE_TO to a stand spot a walk reaches
+  (`reachableFeet`, the walker's own rules, within the hazard scan a MOVE_TO needs), or an
+  EXPLORE toward a point beyond that (play area mode `follow`), and the command's task holds it as
+  its one known step. System 1 still decides first (a mob, low health, a meal), the executor
+  validates, executes and verifies the step, and after every cycle the next one is planned from
+  what the client now knows (`onCycle`), so a moving owner is followed: a walk toward the player,
+  or a 1 s WAIT near it. Not seeing the player ends come and follow; anything else fails after 3
+  steps in a row that could not be planned or did not succeed.
+- **Goals** (get, mine) are FreeGoals under the command's task, pursued exactly like
+  `cli play --needs` (`runGoalSession`: the planner plans from the route, GATHER digs), done when
+  the inventory holds them, failed after `maxStuckSessions` sessions without progress.
+- **Stop.** The client's `interrupt()` makes `haltReason` (which every walk, EXPLORE hop, dig,
+  placement, fight and window checks before it starts and at every step or tick) report the stop,
+  without `halt()`'s lasting latch: the action in progress stops at its next tick, and the one a
+  cycle in flight was about to start is refused; the play loop clears it at the start of the next
+  round, once the stopped session is over. A stop queued with `cli command` is looked for every
+  second and interrupts the same way. The stop then cancels the command and pauses play's own
+  goals (`owner_paused`; `cli play` clears it when it starts; `quests off` is kept).
+- **Idle** (`idleRound`): paused, or with `--listen` nothing left to do, play waits for commands
+  in short slices; with `--listen` any end of play but the stop file, Ctrl+C, the limits, the
+  night and a mob becomes such a wait, and play looks again after 2 minutes. Every slice the
+  deterministic router looks at a fresh observation, and when it would retreat, fight, eat or
+  rest, a short standby session lets System 1 do it. `cli play --listen` also reconnects when the
+  connection drops (5 s, 15 s, 60 s, then every 2 minutes).
+- **Chat out**: replies are whispers only (`outbound.whisper`: `/tell <owner> <text>`, the one
+  chat packet, plain text, at most 100 characters a line), cut into at most 3 lines and sent at
+  most one a second (1.7.10 kicks a client for spam, a § or a control character, and a line over
+  100 characters).
 
 ## Knowledge base
 
@@ -592,6 +664,9 @@ anew: no code was taken from Baritone (LGPL-3.0).
     skipped;
   - one within reach (4.5 from the eyes) is dug (`DIG_BLOCK`), nearest first; otherwise the
     agent walks to the nearest stand spot (`MOVE_TO`, tolerance 0.5);
+  - logs are felled trunk by trunk from the base, standing beside the trunk, so every drop
+    falls to the player ([Felling trees](#felling-trees)); a drop that still stops out of
+    reach is fetched by the dig itself ([Fetching the drop](#fetching-the-drop));
   - only an action the executor would accept now: code dry-runs the real validation (schema,
     safety policy, preconditions, the repeated-failure rule; for a walk, also the dig from the
     stand spot). A block the policy would refuse (sand over the head or on top, a hazard near,
@@ -767,7 +842,7 @@ digging enabled, a `MOVE_TO` over terrain may break `minecraft:leaves` and `leav
   (15 ticks) and reports them, so they arrive during the walk and do not pass for the next
   dig's drop. `MOVE_TO`'s verification is unchanged: the player near the target.
 - Only `MOVE_TO` breaks (and `cli move --dry-run` plans it so). `EXPLORE`'s hops, retreats (a
-  threat stops every dig, and a retreat runs from one) and the walk to a dig's drop do not.
+  threat stops every dig, and a retreat runs from one) and the walk to a drop do not.
 
 The `move` command runs one such action for a human (origin `user`). The repeated-failure rule does
 not apply to it (it is the human's decision each time), and its failures do not count against the
@@ -1048,9 +1123,8 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
    (one more damage) and up to 2 s for the inventory to grow. The result reports the tool
    (`tool`, null for an empty hand), its uses left (`toolUsesLeft`), why other tools for the
    block were passed over (`toolNote`), `dropCollected` and which items arrived. The tool's
-   new name (`minecraft:wooden_shovel@1`) is not counted as a drop. A drop out of pickup range
-   is fetched by walking onto it when the fence is terrain and the spot is standable;
-   otherwise it is reported.
+   new name (`minecraft:wooden_shovel@1`) is not counted as a drop. What did not reach the
+   inventory by itself is fetched: see [Fetching the drop](#fetching-the-drop).
 7. **Verification:** `BLOCK_REMOVED` passes only if the new observation lists the position in
    `nearbyBlocks.removed` (seen turning into air, still air) and not among the resources.
 
@@ -1072,6 +1146,84 @@ are digs inside the walk, with this same routine: see
   ore a block is shows only when it is dug. The observation does not carry block metadata
   either, so the safety policy and `GATHER` treat every GT ore alike, and the client refuses one
   above the carried tools' level (a failed action that the step passes over).
+
+### Fetching the drop
+
+Seen live 2026-10-01: gathering logs for a crafting table, the agent dug three logs and got
+one. The drops of the logs it dug high in the trees stopped on the logs and leaves under them,
+out of its pickup reach, and the client looked for a missed drop only on the floor of the dug
+cell. A player watches where a drop goes and walks over to it; the client does the same
+(`client/drop-actions.ts`, with its rules in `drops.ts`):
+
+- **Dropped items are tracked** (`world-model.ts`, its entity section). The server spawns a drop
+  as an item entity (Spawn Object type 2), then sends its DataWatcher, whose ItemStack (index
+  10; `packets.ts` keeps the item stacks of entity metadata) says what it is. The client
+  follows its moves and teleports, and knows where and when it appeared.
+  `itemEntitiesNear(point, radius, now)` lists them with the item's name, count, position and
+  whether each lies still; unknown while an entity update was lost.
+- **Lying still.** The server sends an item's position only every 20 ticks (EntityTracker: an
+  EntityItem's update frequency), and only once it moved 1/8 block (EntityTrackerEntry), so a
+  few quiet ticks prove nothing. An item counts as settled after 25 ticks without a move while
+  it lies on a block top (the bottom of its 0.25 box within 1/32 of a block top, over a block
+  that is not air), or after 70 ticks wherever it is (past the tracker's forced update every 60
+  ticks: a slab, a snow layer). These server facts are vanilla 1.7.10's, not yet checked live
+  ([GTNH compatibility](gtnh-compatibility.md#digging-2026-09-30) says what the mods change).
+- **Which items.** The action's own drops: the items that appeared since it began, within 1
+  block of the dug block's centre (a drop appears 0.15-0.85 into the cell) or 2 of where a
+  killed animal was last seen. Older drops and other players' items are left alone.
+- **When.** After a `DIG_BLOCK` whose drop did not all reach the inventory within its 2 s
+  (one that arrived, with nothing of it left lying, needs nothing more), and after killing a
+  farm animal ([Combat](#combat)). Never after `DIG_DOWN` (the player falls into the hole with
+  its drop) or after killing a hostile (walking to its drops is no escape).
+- **How.** It waits until each of them lies still or is picked up (at most 5 s; one still
+  moving then is left). Then, nearest first: one within the pickup reach (the player's box
+  grown by 1 sideways and 0.5 up and down) is waited for; for another, `dropSpot` (`combat.ts`)
+  chooses where to stand: the item's own cell, else the nearest cell beside it (one level up or
+  down at most) that a player may stand in (a full block underfoot, room for the body, no hazard
+  within a block), inside the fence, from which the item is within reach. The walk there is the
+  ordinary checked walk (`walkTo`, as for `MOVE_TO`: it stops for threats, and breaks nothing),
+  then the pickup is waited for (2 s).
+- **Refusals and bounds.** An item with no such cell (on leaves high in a tree, out of the
+  fence, in lava), one that ended up more than 6 blocks from where it appeared, one no walk
+  reaches, and any past 2 walks are left where they lie; a walk that stops on the way (a
+  threat, a correction, the stop file) ends the fetching. The dig or the kill stands either way.
+- **Sweeping up**, as a person sweeps up what fell around a tree. The client remembers which
+  items its own digs and kills dropped (what it dug and killed for). With the walks left, a dig
+  or a kill also picks up, the same way, such an item an earlier one left lying (a walk to it
+  stopped, the walks ran out, it lay out of reach then) within 4 blocks, lying still; never
+  another player's items. A new drop that lands within half a block of an older one of the same
+  item merges into it and is gone, so the older one, swept up, holds both. A dig whose drop
+  arrived at once looks only when such an item lies near.
+- **The result** says what was picked up where, and what was left there and why ("walked to the
+  drop at (-5, 105, -9) and picked up 1 x minecraft:sand"; "1 x minecraft:dirt at (1, 106, -8)
+  is left there: no cell inside the play area ... puts it within pickup reach"), with
+  `dropCollected`, `drops`, `walkedToDrop` (for a kill `dropsCollected`, `drops`,
+  `walkedToDrops`) and `dropsLeft`.
+
+On the fake server (`tests/bot/gtnh1710/fixtures/fake-items.ts`) drops are item entities too: the
+spawn, the DataWatcher, a fall onto the block under them, the tracker's position updates every
+20 ticks, and the pickup within reach at the player's ticks.
+
+### Felling trees
+
+A person chops a trunk from its base, standing beside it, reaching up to about 5 blocks high
+from the ground; every drop falls down the emptied column to the base and is picked up there.
+A `GATHER` of logs (`log`, `log2`) chooses its digs that way (`chooseGatherAction` in
+`src/planner/gather.ts`, from the listed resources):
+
+- A log with a listed log or leaves under it (its drop would stop there) comes after every log
+  with neither: the base of each trunk first, then the next one up as it becomes the lowest. It
+  is still dug when nothing else is left.
+- A log is dug only from beside its trunk (feet in the 3 x 3 columns around it): in reach from
+  farther away, the walk to its stand spot comes first (unless that walk was just made), so its
+  drop lands next to the player.
+- Among the logs in reach, the one in the column of the log dug last comes first: the trunk
+  goes on up while its logs are in reach from the same spot (up to `maxHeightAboveFence`, 4
+  above the feet; a higher one has no stand spot).
+
+Other blocks keep [GATHER](#gather-gathering-in-one-plan-step)'s order: the nearest in reach,
+then the nearest stand spot. On the fake server, a four-log tree three columns off is walked to,
+felled from y 106 to 109, and each drop falls to the base and is picked up without a walk.
 
 ## Digging down: the night pit
 
@@ -1124,10 +1276,15 @@ same time.
 
 `PLACE_BLOCK` places ONE block the player carries, from a fixed allowlist of plain vanilla
 blocks: `dirt`, `cobblestone`, `sand`, `gravel`, `sandstone`, `planks` (every wood type) and
-`log`/`log2` (`src/domain/blocks.ts`). It needs `MC_ENABLE_PLACING=true` **and** the movement
-fence. `src/bot/gtnh1710/placing.ts` holds the checks; `Gtnh1710Client` sends. The server-side
-rules it relies on are in [GTNH compatibility: placing](gtnh-compatibility.md#placing-2026-09-30).
-In layers:
+`log`/`log2`, and two stations the agent places to use them (approved 2026-09-30):
+`crafting_table` and `furnace` (`src/domain/blocks.ts` `STATION_ITEMS`). It needs
+`MC_ENABLE_PLACING=true` **and** the movement fence. `src/bot/gtnh1710/placing.ts` holds the
+checks; `Gtnh1710Client` sends. The server-side rules it relies on are in
+[GTNH compatibility: placing](gtnh-compatibility.md#placing-2026-09-30). A table or furnace is
+placed like any block: an `ItemBlock` placed by a click on the floor's top face (the furnace turns
+its front to the player; its later metadata updates keep its block id, which is what the verdict
+compares). Once placed it stays: the agent never breaks either, so it goes only where it is out
+of the way. In layers:
 
 1. **Observation.** `nearbyBlocks.placeable` lists the cells a block could go into, nearest to
    the eyes first (at most 32; the planner gets 16): air, tall grass or a dead bush within 4.5
@@ -1144,6 +1301,10 @@ In layers:
      invented.
    - Never a cell the player's body is in; never sand or gravel in a column the player stands
      in, or where `takesFalling` is false (`UNSAFE_PLACE`, pause).
+   - A crafting table or furnace only on a solid floor beside the player: a cell whose
+     `takesFalling` is true (a plain full block under it, out of the player's own columns;
+     `UNSAFE_PLACE`, pause). Whether it would be in the way the player walks the observation
+     cannot tell; the client checks that.
    - It must clear known hazards by `hazardAvoidanceRadius`.
    - Preconditions: within `interactionReach` of the eyes, and the item in the inventory.
    - Like any world action it is refused during danger. Placing is deliberately not an escape:
@@ -1164,7 +1325,15 @@ In layers:
      5.5 of the feet and of the point 2 above them. Never a chest, crafting table, machine or
      modded block: the server activates the clicked block first, and those would open;
    - no hostile (but a calm spider) or unidentified entity within `threatRadius`, no health
-     drop or server correction since it started, and neither `halt()` nor the stop file.
+     drop or server correction since it started, and neither `halt()` nor the stop file;
+   - a crafting table or furnace (`checkStation`): a plain full block the walker stands on under
+     the cell, never in a column the player's body is in, and never where the player walks.
+     In a small box around the cell and the player (2 columns beyond both, 3 levels below and
+     2 above), the walker's own moves (`reachableFeet` in `terrain.ts`: level moves, steps up,
+     drops) must still reach every feet block they reach now, but the cell itself, on a what-if
+     copy of the world with the block in it. A 1-wide passage, a doorway, a staircase's only
+     step or the way out of a hole fail; a 2-wide corridor, a dead end or open ground pass.
+     The player not standing on walkable ground (nothing to compare) refuses.
 4. **The hand.** The selected hotbar slot if it holds the item, else the first hotbar slot
    that does, else a stack from the main inventory goes into the first empty hotbar slot with
    two confirmed window-0 clicks (a failed click puts the stack back). With neither, or only
@@ -1181,9 +1350,19 @@ In layers:
 7. **Verification:** `BLOCK_PLACED` passes only if the new observation lists the cell in
    `nearbyBlocks.placed` with the expected block, and the inventory holds exactly one of the
    item fewer.
+8. **A station in use.** A placed crafting table is then a table the scan finds (the
+   interactables, `crafting_table:<x>.<y>.<z>` in `craftingTables`), which `CRAFT_ITEM` uses
+   like any found one; a placed furnace is a furnace in the interactables, for `SMELT` and
+   `TAKE_OUTPUT`. The mock world and the fake server do the same.
 
 Walking, chests, crafting, digging and placing never run at the same time. `halt()` and the
 stop file stop them all.
+
+**The planner** gets the cell to use: when a route needs a crafting table or furnace the player
+holds, its station line ends with the exact `PLACE_BLOCK` (`src/planner/planner-provider.ts`
+`withActionArgs`): a listed cell whose `takesFalling` is true, at the feet level first, and the
+table's id it will have. Should the client find that cell in the way, the step fails and the
+next plan picks another.
 
 **Not covered yet:**
 
@@ -1191,14 +1370,71 @@ stop file stop them all.
   plank's wood type and a log's axis are not checked.
 - Paintings are not tracked, so one hanging where the block goes pops off. Item frames are
   tracked entities and refuse the cell.
-- Blocks with a GUI or that need support (torches, crafting tables, furnaces, the coke oven)
-  are not on the allowlist; each will need its own checks.
+- Blocks that need support (torches) and the coke oven (a multiblock of bricks) are not on the
+  allowlist; each will need its own checks. A placed table or furnace is never broken again.
+- The observation does not say which listed cells are in the way; the planner learns it from a
+  refused placement.
 
 ## Crafting
 
-`CRAFT_ITEM` crafts with a recipe from the agent's table (`src/domain/recipes.ts`): 2x2 recipes in
-the player's own grid (window 0), 3x3 at a configured crafting table. `src/bot/gtnh1710/crafting.ts`
-plans; `Gtnh1710Client` sends. On top of the chest facts, 1.7.10 has three more
+`CRAFT_ITEM` crafts with a recipe it makes (`src/domain/recipes.ts`): 2x2 recipes in the
+player's own grid (window 0), 3x3 at a crafting table that is configured, seen inside the fence
+(`crafting_table:<x>.<y>.<z>`), or placed by the agent itself (see [Placing](#placing)).
+`src/bot/gtnh1710/crafting.ts` plans; `Gtnh1710Client` sends.
+
+**The recipes.** The hand-verified table (planks, sticks, torches, crafting table, chest, wooden
+shovel and axe, flint; `RECIPES`, ids like `planks_oak`), and GTNH's own crafting recipes from
+the [knowledge base](#knowledge-base), by the ids the route book gives them, so a route's craft
+step names a recipe `CRAFT_ITEM` takes (`minecraft:wooden_pickaxe#1`; one function,
+`knowledgeRecipeIds`, names them for both). `CraftRecipeIdSchema` accepts exactly these ids, so a
+plan with any other fails its schema. Built once, on first use (about 0.2 s):
+
+- **Hand-verified recipes win.** A dumped recipe a hand-verified one matches (its item, the
+  hand-verified kinds among the dump's with the same counts: the route book's own rule) is not
+  taken; the route shows the hand-verified id instead.
+- **The exact pattern the server checks.** A shaped recipe keeps its dumped layout, empty cells
+  included (trailing empty rows and columns trimmed, so a padded 2x2 recipe fits the 2x2 grid);
+  the client places it at the grid's corner, where the server always matches it (shaped recipes
+  also match at other offsets, and vanilla's and Forge's ore recipes mirrored, but the corner
+  needs neither). A shapeless recipe's cells go in reading order, two columns while they fit
+  2x2. CraftTweaker reads an ore recipe's width as the square root of its cell count, so a
+  dumped 1x2, 1x3 or 2x3 shape may really be 2x1, 3x1 or 3x2 (`SHAPE_UNCERTAIN`): such a shape is
+  taken only when vanilla's own recipe for the item (the jar's layer) has that layout or its
+  mirror, with the same ingredients: Forge's ore dictionary keeps a vanilla recipe's width and
+  height when it swaps planks and sticks for `plankWood` and `stickWood` (the wooden hoe and
+  sword).
+- **Ingredients as the dump gives them:** an item, a list, or an ore-dictionary entry with
+  every kind it lists (650 for `ore:plankWood`); the recipe keeps the entry's name as a label for
+  messages. Kinds that may give something back (a bucket, a cell, a bottle, a phial, a potion, a
+  GT or GT++ tool, HarvestCraft's cookware: by name, since the dump does not say) are never
+  used; an ingredient with no other kind leaves the recipe out.
+- **Counts.** A count the dump lacks (most: only 1,844 of the recipes taken have one, from the
+  coremod's scripts, GT's code, the hand-verified table or vanilla's) is expected to be 1, as the
+  route assumes; the server's result must still match exactly, so a wrong guess fails with
+  nothing taken. Play's abilities count only recipes with a known count.
+- **Left out** (`LEFT_OUT_REASONS`; `whyNotCraftable` says why, and the route says it after the
+  step): of the 52,400 distinct recipes (53,821 dumped rows), 14 are the hand-verified ones and
+  19,786 are taken. The other 32,600 are left out: results with NBT data (a GT tool's
+  material: 16,066), a crafting tool in the grid (`ore:craftingTool*`, `ore:tool*`: the worn
+  tool stays in the grid, which the client would have to predict: 11,998), unknown items
+  (1,138), a shape the dump may have scrambled (1,120), ingredients with specific NBT data
+  (1,029), two ingredients (or one and the result) sharing an item, which the verifier could not
+  tell apart (943), and ingredients only in kinds that give something back (306).
+- **Without the data** (a build that did not copy it), only the hand-verified recipes.
+
+**Play and the planner.** Play counts a quest's 3x3 crafts as doable (`liveAbilities` in
+`src/app/play/play.ts`) when a table is configured, or when it may place one (placing on): the
+table it holds, or one it makes from GTNH's 2x2 recipe. Its craft set is what the recipes make,
+step by step, from what digging gathers (`craftableFrom`), not every recipe's output: no torches
+while coal is not gathered, no furnace while cobblestone is not. "Tools" and "Monster Hunter"
+are doable so; seen live (2026-10-03), with a table only configurable, play stopped after
+"Crafting Time" with no quest left. The planner's route counts the stations the agent can use
+(a configured or seen table, a seen furnace) and ends each craft step with the exact
+`CRAFT_ITEM` (the recipe id, the times, and the table: the nearest known one, else the one the
+route places), or with why `CRAFT_ITEM` cannot make it yet. A table it sees nearby is used by the
+route, but is no ability: play picks its quest before a session looks around.
+
+On top of the chest facts, 1.7.10 has three more
 ([evidence](gtnh-compatibility.md#crafting-2026-09-30)):
 
 - The server never sends the crafting result slot as a slot update. Only a full window sync shows
@@ -1207,16 +1443,19 @@ plans; `Gtnh1710Client` sends. On top of the chest facts, 1.7.10 has three more
 - Closing a window, closing the inventory itself, or leaving the server DROPS whatever is in the
   grid, like the cursor.
 
-GTNH changes many vanilla recipes, so the table is never trusted blindly. In layers:
+GTNH changes many vanilla recipes, so no recipe is ever trusted blindly. In layers:
 
-1. The executor validates as usual. Every ingredient kind the recipe may use must be unprotected,
-   the inventory must hold enough, and a 3x3 recipe needs a known table within `interactionReach`.
-   The postcondition is derived from the table: the result +count × times, each ingredient group
+1. The executor validates as usual. Every ingredient kind the recipe may use (an ore entry's
+   every kind) must be unprotected, the inventory must hold enough of each ingredient in any mix
+   of its kinds, by the same recipe data the client fills the grid from, and a 3x3 recipe needs
+   a known table within `interactionReach`. The postcondition is derived from the recipe: the
+   result +count × times, each ingredient group (all its kinds, up to `MAX_INGREDIENT_KINDS`)
    −cells × times, and nothing else changed.
 2. The client plans the whole action on its view of the inventory and refuses before anything is
    opened or clicked when it cannot finish exactly. Window 0 is clicked only with no other window
-   open. A table opens only if it is configured and its block is a `minecraft:crafting_table`, with
-   an empty hand.
+   open. A table opens only if it is configured or found inside the fence and its block is a
+   `minecraft:crafting_table`, with an empty hand. Recipe names resolve to registry ids through an
+   index built once per world's registry (an ore entry may list hundreds of names).
 3. Each craft:
    - **Fill:** one item into every pattern cell, with predictable clicks (pick up a stack, place one
      item per empty cell, put the rest back).
@@ -1503,12 +1742,13 @@ not stopping the client's walks, digs or placements, and never attacked. The rul
    after the action started), its health fell, or (health unknown) the server showed it hurt.
    A target that vanished without a death status fails.
 7. **The drops of a farm animal** (hunting for food: [GATHER](#gather-gathering-in-one-plan-step)).
-   A killed animal drops its meat where it last stood. When that is beyond a player's pickup
-   reach (the body's box grown by 1 sideways: `withinPickup`), the client walks to its cell, or
-   the nearest cell beside it a player may stand in from which the drops are in reach
-   (`dropSpot`), with the walker's checks and stopping for threats, then waits for the inventory
-   to grow. The result says what arrived (`dropsCollected`, `drops`, `walkedToDrops`). Never
-   after killing a hostile: walking to its drops is no escape.
+   A killed animal drops its meat where it last stood, often beyond a player's pickup reach
+   (the body's box grown by 1 sideways: `withinPickup`). The client picks them up as a dig's
+   drop ([Fetching the drop](#fetching-the-drop)): it follows the items the kill dropped until
+   they lie still, then walks to the cell `dropSpot` gives (with the walker's checks, stopping
+   for threats) and waits for the pickup. The result says what arrived and what was left
+   (`dropsCollected`, `drops`, `walkedToDrops`, `dropsLeft`). Never after killing a hostile:
+   walking to its drops is no escape.
 
 `cli attack --live --entity <id>` runs one burst for a person (origin `user`); `observe` and
 `watch` print the entity ids. Walking, chests, crafting, digging and fighting exclude each
@@ -1534,17 +1774,17 @@ creeper: System 1 retreats home instead).
 
 ## Enforced boundaries
 
-| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; placing: C08 with the held block item, faces 0-5 only (never "use the item in the air"), an NBT-free stack, clicking only a block `placing.ts` checked; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured or found crafting tables); digging (`DIG_BLOCK`, and the leaves a `MOVE_TO` over terrain breaks on its way) needs `MC_ENABLE_DIGGING=true` and the fence; placing needs `MC_ENABLE_PLACING=true` and the fence; block windows (`INTERACT_BLOCK`, `SMELT`, `TAKE_OUTPUT`) need `MC_ENABLE_INTERACT=true` and a block with an interaction profile, or one on the observe-only list, which is only looked at; every other world-changing action returns `NOT_IMPLEMENTED`. EXPLORE walks in hops with the same walking steps. |
-| Quest-book messages                | On Better Questing's channel the client can send only four typed messages: the empty main_sync answer (reading the quest book) and, with `MC_ENABLE_QUEST_BOOK=true`, quest_action (submit or claim), task_checkbox and choice_reward, for the Age 0 quests only. The forced claim (random choice) and every editing message cannot be expressed; plans never contain these clicks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Boundary                           | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No shell / process spawning        | ESLint `no-restricted-imports` bans `child_process` everywhere.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Only adapters touch the network    | ESLint bans socket/HTTP imports (`node:net` connect/servers, `tls`, `dgram`, `http(s)`) and the global `fetch`/`WebSocket`/`EventSource` outside `src/bot/` (Minecraft) and `src/llm/` (the local-model client).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Live client                        | `Gtnh1710Client` can only emit the packet builders in `src/bot/gtnh1710/packets.ts` (handshake, login, keep-alive, FML handshake, idle ticks, echoes of server positions, walking steps, the chest and crafting packets: empty-hand block activation, hotbar selection, window clicks, confirmations, closing; digging: C07 start, cancel and finish only, never the item-dropping statuses; placing: C08 with the held block item, faces 0-5 only (never "use the item in the air"), an NBT-free stack, clicking only a block `placing.ts` checked; a whisper to an owner: C01 with exactly `/tell <owner> <plain text>`, never public chat or another command; and two cosmetic ones: head look and arm swing). Walking needs `MC_ENABLE_MOVEMENT=true` and a fence; chests need `MC_ENABLE_CONTAINERS=true` and a configured chest; crafting needs `MC_ENABLE_CRAFTING=true` (3x3 only at configured or found crafting tables); digging (`DIG_BLOCK`, and the leaves a `MOVE_TO` over terrain breaks on its way) needs `MC_ENABLE_DIGGING=true` and the fence; placing needs `MC_ENABLE_PLACING=true` and the fence; block windows (`INTERACT_BLOCK`, `SMELT`, `TAKE_OUTPUT`) need `MC_ENABLE_INTERACT=true` and a block with an interaction profile, or one on the observe-only list, which is only looked at; every other world-changing action returns `NOT_IMPLEMENTED`. EXPLORE walks in hops with the same walking steps. |
+| Quest-book messages                | On Better Questing's channel the client can send only four typed messages: the empty main_sync answer (reading the quest book) and, with `MC_ENABLE_QUEST_BOOK=true`, quest_action (submit or claim), task_checkbox and choice_reward, for the Age 0 quests only. The forced claim (random choice) and every editing message cannot be expressed; plans never contain these clicks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Operator tools stay outside        | `scripts/test-server-admin.ts` (RCON, operator rights on the test server) is the only script allowed sockets, and nothing in `src/` may import from `scripts/` (lint).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Mineflayer isolated to the adapter | ESLint bans importing `mineflayer` outside `src/bot/mineflayer-client.ts`; the adapter imports it lazily.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Only the executor performs actions | `mintValidatedAction` is lint-restricted to `src/executor/action-executor.ts`; clients call `assertValidatedAction()`, which rejects any object not minted (a `WeakSet` check), and tokens are deep-frozen copies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Private servers only               | Config rejects public IPs and non-allowlisted hostnames; the adapter re-checks DNS resolution before connecting and refuses unless `enableLiveConnection` is true. The model client applies the same guard to `llm.baseUrl` before every request and refuses redirects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| One action per cycle               | `runSingleCycle` has no loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 Fighting adds one packet to the live client's list: C02 Use Entity with the "attack" action
 (never "interact"), only with `MC_ENABLE_COMBAT=true` and the fence. Digging down (`DIG_DOWN`,
@@ -1555,18 +1795,18 @@ walking steps (C06), with digging and walking enabled and a fence with a height 
 
 ```
 src/config       env + JSON config loading (Zod), private-network guard
-src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Known<T>, interaction profiles
+src/domain       schemas/types: GameState, actions, tasks, safety, decisions, Known<T>, interaction profiles, owner commands
 src/safety       safety policy (evaluateAction) and its per-action checks (dig, place, interact, explore, combat, quest book), boundaries, protected items, forbidden-action classifier
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider and the model's cadence: decision points), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
-src/llm          Ollama client, model decision provider, model planner (opt-in)
-src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: inventory and chests, crafting, block windows, digging, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, placing, crafting, combat, world surveys, the world model, packets)
+src/llm          Ollama client, model decision provider, model planner, owner-command translator (opt-in)
+src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: chat (owners' commands in, whispers out), inventory and chests, crafting, block windows, digging, picking up drops, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, drops, placing, crafting, combat, world surveys, the world model, packets)
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)
 src/app          cli.ts (the CLI) and providers.ts (the decision-provider and planner factory), plus:
   loop/          one agent cycle (agent-loop.ts), agent memory overlaid on the state (agent-memory.ts), the open plan's steps and the planner (plan-steps.ts), a session of cycles; GATHER steps, dead ends, the trail, known steps
-  play/          the play loop (play.ts) over rounds sharing one play state (play-state.ts): night and morning (night.ts), food trips (food.ts), quest goals and quest-book clicks (goal-round.ts), scouting; narration.ts prints its events
+  play/          the play loop (play.ts) over rounds sharing one play state (play-state.ts): night and morning (night.ts), owners' commands and idling (commands.ts, travel steps in owner-travel.ts), food trips (food.ts), quest goals and quest-book clicks (goal-round.ts), scouting; narration.ts prints its events
   commands/      what the CLI runs: cli-context.ts (options), cli-live.ts, cli-runs.ts, cli-records.ts (the commands), live commands and their views, plans, tasks, world memory
   mock/          the mock agent and its scenarios
 ```

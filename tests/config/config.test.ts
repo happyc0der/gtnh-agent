@@ -165,9 +165,13 @@ describe('local model configuration', () => {
       allowedHostnames: [],
       plannerModel: 'qwen3:14b',
       decisionModel: 'qwen2.5:0.5b',
+      commandModel: 'qwen3:14b',
       timeoutMs: 120_000,
       keepAlive: '30s',
     });
+    // Owners' natural language is not translated unless asked for (AGENT_COMMANDS=ollama).
+    expect(c.commands).toEqual({ translator: 'none' });
+    expect(c.minecraft.owners).toEqual([]);
   });
 
   it('environment variables select the providers and models', () => {
@@ -191,6 +195,34 @@ describe('local model configuration', () => {
       decisionModel: 'qwen3:14b',
       timeoutMs: 30_000,
     });
+  });
+
+  it('owners (MC_OWNERS) and the command translator (AGENT_COMMANDS, OLLAMA_COMMAND_MODEL)', () => {
+    const { config } = loadConfig({
+      cwd: emptyDir(),
+      env: {
+        MC_OWNERS: 'DankAxon, Rcon',
+        AGENT_COMMANDS: 'ollama',
+        OLLAMA_COMMAND_MODEL: 'qwen3:8b',
+      },
+    });
+    expect(config.minecraft.owners).toEqual(['DankAxon', 'Rcon']);
+    expect(config.commands.translator).toBe('ollama');
+    expect(config.llm.commandModel).toBe('qwen3:8b');
+    // Names are player names; the bot itself is never one of its owners.
+    for (const env of [
+      { MC_OWNERS: 'Dank Axon' },
+      { MC_OWNERS: 'gtnh_agent' },
+      { MC_OWNERS: 'x' },
+      { AGENT_COMMANDS: 'openai' },
+    ]) {
+      expect(() => loadConfig({ cwd: emptyDir(), env }), JSON.stringify(env)).toThrow(
+        /Invalid agent configuration/,
+      );
+    }
+    expect(() =>
+      loadConfig({ cwd: emptyDir(), env: { MC_USERNAME: 'Helper', MC_OWNERS: 'helper' } }),
+    ).toThrow(/the bot's own name cannot be one of its owners/);
   });
 
   it('AGENT_DECISION_CADENCE chooses when the model decides', () => {

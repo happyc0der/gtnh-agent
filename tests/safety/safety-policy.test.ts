@@ -343,6 +343,34 @@ describe('rule 4: protected items', () => {
     expect(craft('planks_oak')).toEqual([]);
   });
 
+  it("checks a knowledge-base recipe's every kind too (an ore entry's, hundreds of them)", () => {
+    const pickaxe: ActionSpec = {
+      type: 'CRAFT_ITEM',
+      args: { recipe: 'minecraft:wooden_pickaxe#1', times: 1, craftingTableId: 'table.main' },
+    };
+    expect(codes(pickaxe)).toEqual([]);
+    // A BOP plank is one of plankWood's 650 kinds: protecting it protects the recipe.
+    const ctx = safetyCtx(
+      defaultConfig({ ...MOCK_CONFIG, safety: { protectedItems: ['BiomesOPlenty:planks'] } }),
+    );
+    expect(
+      evaluateAction(action(pickaxe), makeState(), ctx, emptyFailureHistory).violations.map(
+        (v) => v.code,
+      ),
+    ).toContain('PROTECTED_ITEM');
+    // An id CRAFT_ITEM does not make (the dump's saw recipe for sticks) never passes the schema.
+    const valid = action({
+      type: 'CRAFT_ITEM',
+      args: { recipe: 'planks_oak', times: 1, craftingTableId: null },
+    });
+    const forged = { ...valid, args: { ...valid.args, recipe: 'minecraft:stick#1' } };
+    expect(
+      evaluateAction(forged, makeState(), safetyCtx(), emptyFailureHistory).violations.map(
+        (v) => v.code,
+      ),
+    ).toEqual(['UNSUPPORTED_ACTION']);
+  }, 30_000);
+
   it('refuses crafting at a crafting table the state does not know', () => {
     expect(
       codes({
@@ -857,6 +885,25 @@ describe('PLACE_BLOCK: only observed placeable cells, never the body, nothing th
       w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 256, y: 64, z: 1 } });
     });
     expect(codes(place(256, 65, 1), edge)).toEqual(['OUT_OF_BOUNDS']);
+  });
+
+  it('places a crafting table or furnace only on a solid floor beside the player', () => {
+    // On top of the dirt next to the player: a plain full block under it.
+    expect(codes(place(2, 65, 1, 'minecraft:crafting_table'))).toEqual([]);
+    expect(codes(place(2, 65, 1, 'minecraft:furnace'))).toEqual([]);
+    // Beside the dirt, nothing under it; over the head: never.
+    expect(codes(place(2, 64, 2, 'minecraft:crafting_table'))).toEqual(['UNSAFE_PLACE']);
+    const overhead = makeState((w) => {
+      w.resourceBlocks.push({ block: 'minecraft:dirt', position: { x: 2, y: 66, z: 1 } });
+    });
+    const r = evaluateAction(
+      action(place(1, 66, 1, 'minecraft:furnace')),
+      overhead,
+      safetyCtx(),
+      emptyFailureHistory,
+    );
+    expect(r.violations.map((v) => v.code)).toEqual(['UNSAFE_PLACE']);
+    expect(r.violations[0]?.message).toMatch(/would not stand on a solid floor beside the player/);
   });
 
   it('never places a protected item, and is not allowed during danger', () => {

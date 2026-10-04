@@ -19,6 +19,7 @@ import type { Clock } from '../util/clock.ts';
 import type { Db } from './database.ts';
 import { PlanRepository } from './plan-repository.ts';
 import { MemoryRepository } from './memory-repository.ts';
+import { OwnerCommandRepository } from './owner-command-repository.ts';
 import { WorldMemoryRepository } from './world-memory-repository.ts';
 import { WindowLayoutRepository } from './window-layout-repository.ts';
 
@@ -569,6 +570,11 @@ export class LocationRepository {
       });
   }
 
+  /** Forgets a named location (an owner's `waypoint delete`); false when there was none. */
+  delete(name: string): boolean {
+    return this.#db.prepare('DELETE FROM named_locations WHERE name = ?').run(name).changes > 0;
+  }
+
   all(): Map<string, NamedLocation> {
     const rows = this.#db.prepare('SELECT * FROM named_locations ORDER BY name').all() as Array<{
       name: string;
@@ -668,6 +674,8 @@ export interface Repositories {
   worldMemory: WorldMemoryRepository;
   /** Window layouts of blocks the agent opened (src/domain/interactions.ts). */
   windowLayouts: WindowLayoutRepository;
+  /** The owners' commands, from chat and `cli command` (src/domain/owner-commands.ts). */
+  commands: OwnerCommandRepository;
   /** Runs `fn` in a single SQLite transaction (nested calls become savepoints). */
   transaction<T>(fn: () => T): T;
 }
@@ -686,6 +694,7 @@ export function createRepositories(db: Db, clock: Clock): Repositories {
     memory: new MemoryRepository(db, clock),
     worldMemory: new WorldMemoryRepository(db),
     windowLayouts: new WindowLayoutRepository(db),
+    commands: new OwnerCommandRepository(db, clock),
     transaction: <T>(fn: () => T): T => db.transaction(fn)(),
   };
 }

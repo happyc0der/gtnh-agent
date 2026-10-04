@@ -7,6 +7,7 @@ import {
   foodStatusOf,
   foodTripDone,
   foodTripOngoing,
+  starving,
 } from '../../../src/app/play/food.ts';
 import { FOOD_TASK_ID, FOOD_TRIP_POINTS } from '../../../src/domain/food.ts';
 import { CURRENT_TASK_KEY } from '../../../src/persistence/memory-repository.ts';
@@ -39,7 +40,12 @@ describe('the food situation', () => {
       w.player.hunger = 9;
       w.inventory.items = { 'minecraft:apple': 3, 'minecraft:carrot': 2 };
     });
-    expect(foodStatusOf(state, config, repos)).toEqual({ hunger: 9, carried: 5, eatBelow: 14 });
+    expect(foodStatusOf(state, config, repos)).toEqual({
+      hunger: 9,
+      carried: 5,
+      eatBelow: 14,
+      starveBelow: 6,
+    });
     // Five apples eaten lately: the apples carried restore nothing now.
     ate(repos, Array<string>(5).fill('minecraft:apple'));
     expect(foodStatusOf(state, config, repos)?.carried).toBe(2);
@@ -55,18 +61,28 @@ describe('the food situation', () => {
   });
 
   it('says when a trip is due (hungry, nothing to eat) and when it has enough', () => {
-    expect(foodDue({ hunger: 9, carried: 0, eatBelow: 14 })).toBe(true);
-    expect(foodDue({ hunger: 9, carried: 1, eatBelow: 14 })).toBe(false); // eat that first
-    expect(foodDue({ hunger: 14, carried: 0, eatBelow: 14 })).toBe(false); // not hungry yet
-    expect(foodTripDone({ hunger: 9, carried: FOOD_TRIP_POINTS, eatBelow: 14 })).toBe(true);
-    expect(foodTripDone({ hunger: 9, carried: FOOD_TRIP_POINTS - 1, eatBelow: 14 })).toBe(false);
+    expect(foodDue({ hunger: 9, carried: 0, eatBelow: 14, starveBelow: 6 })).toBe(true);
+    expect(foodDue({ hunger: 9, carried: 1, eatBelow: 14, starveBelow: 6 })).toBe(false); // eat that first
+    expect(foodDue({ hunger: 14, carried: 0, eatBelow: 14, starveBelow: 6 })).toBe(false); // not hungry yet
+    expect(
+      foodTripDone({ hunger: 9, carried: FOOD_TRIP_POINTS, eatBelow: 14, starveBelow: 6 }),
+    ).toBe(true);
+    expect(
+      foodTripDone({ hunger: 9, carried: FOOD_TRIP_POINTS - 1, eatBelow: 14, starveBelow: 6 }),
+    ).toBe(false);
+  });
+
+  it('a food bar nearly empty with nothing to eat comes before an owner command too', () => {
+    expect(starving({ hunger: 5, carried: 0, eatBelow: 14, starveBelow: 6 })).toBe(true);
+    expect(starving({ hunger: 6, carried: 0, eatBelow: 14, starveBelow: 6 })).toBe(false);
+    expect(starving({ hunger: 2, carried: 1, eatBelow: 14, starveBelow: 6 })).toBe(false);
   });
 });
 
 describe('the food task', () => {
   it('becomes the current, active task, with no requirements: its route is the food route', () => {
     const repos = memoryRepos();
-    const status = { hunger: 2, carried: 0, eatBelow: 14 };
+    const status = { hunger: 2, carried: 0, eatBelow: 14, starveBelow: 6 };
     expect(foodTripOngoing(repos)).toBe(false);
     expect(adoptFoodTask(repos, status)).toEqual({ taskId: FOOD_TASK_ID, created: true });
     expect(foodTripOngoing(repos)).toBe(true);

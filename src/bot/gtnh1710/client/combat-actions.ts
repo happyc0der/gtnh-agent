@@ -19,20 +19,19 @@ import { TICK_MS } from '../../../domain/dig-time.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import {
   chooseWeapon,
-  dropSpot,
   eyeHeightOf,
   insideFence,
   lineOfSightClear,
   lookAtPoint,
   playerEyes,
-  withinPickup,
 } from '../combat.ts';
+import { KILL_DROP_SPAWN_RADIUS } from '../drops.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { outbound } from '../packets.ts';
 import type { Fence, Vec3 } from '../walking.ts';
 import { ENTITY_SCAN_RADIUS, type WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
-import { craftFailed, delay, describeGain, DROP_WAIT_MS, ON_GROUND } from './shared.ts';
+import { craftFailed, delay, describeGain, ON_GROUND } from './shared.ts';
 
 /**
  * An ATTACK_ENTITY burst's outcome: the action's result, and the kill when the target died
@@ -154,6 +153,8 @@ export class CombatActions {
     if (unsafe !== null) return failed(`not attacking: ${unsafe}`, 'REFUSED');
 
     const itemsBefore = this.#world.inventoryItems();
+    // Items that appear after this, where the target dies, are its drops.
+    const since = this.#opts.clock.now();
     let burst: Burst;
     this.#core.fighting = true;
     try {
@@ -197,7 +198,7 @@ export class CombatActions {
     if (!result.ok || kill === null || !FARM_ANIMALS.has(kill.type) || itemsBefore === null) {
       return result;
     }
-    return this.#collectKillDrops(result, kill.at, itemsBefore, kill.weapon);
+    return this.#collectKillDrops(result, kill.at, itemsBefore, kill.weapon, since);
   }
 
   /**
@@ -346,59 +347,34 @@ export class CombatActions {
 
   /**
    * After killing a farm animal: its drops (raw meat, leather, wool...) spawn where it died,
-   * and the player struck from up to 2.2 blocks away with a bare hand (4.5 with an axe), out
-   * of the pickup reach (the body's box grown by 1 sideways and 0.5 up and down: the vanilla
-   * player's onLivingUpdate). As a dig fetches a drop it cannot reach (dig-actions.ts dig), it
-   * walks onto the spot the animal died on, or the nearest standable spot beside it, with an
-   * ordinary checked walk that stops for threats, then waits for the drops to arrive. The kill
-   * stands whatever the walk does; the result says what was picked up.
+   * and the player struck from up to 2.2 blocks away with a bare hand (4.5 with an axe), often
+   * out of the pickup reach (the body's box grown by 1 sideways and 0.5 up and down: the vanilla
+   * player's onLivingUpdate). They are picked up as a dig's drop is (drop-actions.ts collect):
+   * the client follows the items the kill dropped until they lie still, then walks to where
+   * they are within the pickup reach, with an ordinary checked walk that stops for threats. The
+   * kill stands whatever the walk does; the result says what was picked up, and what was left.
    */
   async #collectKillDrops(
     result: ClientActionResult,
     at: Vec3,
     itemsBefore: Readonly<Record<string, number>>,
     weapon: string | null,
+    since: Date,
   ): Promise<ClientActionResult> {
-    // A struck weapon wears (its name's @damage changes): that is no drop.
-    const isWeapon = (item: string): boolean =>
-      weapon !== null && (item === weapon || item.startsWith(`${weapon}@`));
-    const gains = (): Array<[string, number]> =>
-      this.#core.dig.gainSince(itemsBefore, null).filter(([item]) => !isWeapon(item));
-    const where = `(${at.x.toFixed(1)}, ${at.y.toFixed(1)}, ${at.z.toFixed(1)})`;
-    const world = this.#world.walkWorld();
-    const feet = this.#world.ownPosition;
-    const fence = this.#core.fence().fence;
-    let walked: ClientActionResult | null = null;
-    if (world !== null && feet !== null && fence !== null && !withinPickup(feet, at)) {
-      const spot = dropSpot(world, fence, at);
-      walked =
-        spot === null
-          ? failed(`no spot a player could stand on at or beside ${where}`, 'REFUSED')
-          : await this.#core.movement.walkTo(spot, { stopForThreats: true });
-    }
-    if (walked === null || walked.ok) {
-      await this.#core.waitFor(() => gains().length > 0, DROP_WAIT_MS);
-      // Several stacks (meat and leather) arrive a tick or two apart.
-      if (gains().length > 0) await delay(5 * TICK_MS);
-    }
-    const gained = gains();
-    const drops = describeGain(gained);
-    const how =
-      walked === null
-        ? gained.length > 0
-          ? `picked up ${drops}`
-          : 'no drop reached the inventory'
-        : !walked.ok
-          ? `its drops lie at ${where}, but walking there failed: ${walked.message}`
-          : gained.length > 0
-            ? `walked to the drops at ${where} and picked up ${drops}`
-            : `walked to ${where}, but no drop reached the inventory`;
-    this.#core.log(`after the kill: ${how}`);
-    return ok(`${result.message}; ${how}`.slice(0, 500), {
+    const fetched = await this.#core.drops.collect({
+      origin: at,
+      spawnRadius: KILL_DROP_SPAWN_RADIUS,
+      since,
+      itemsBefore,
+      // A struck weapon wears (its name's @damage changes): that is no drop.
+      notDrop: (item) => weapon !== null && (item === weapon || item.startsWith(`${weapon}@`)),
+    });
+    return ok(`${result.message}; ${fetched.note}`.slice(0, 500), {
       ...result.data,
-      dropsCollected: gained.length > 0,
-      drops,
-      walkedToDrops: walked?.ok ?? false,
+      dropsCollected: fetched.gained.length > 0,
+      drops: describeGain(fetched.gained),
+      walkedToDrops: fetched.walks > 0,
+      dropsLeft: fetched.left,
     });
   }
 }

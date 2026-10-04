@@ -93,5 +93,9 @@ export function describePlayEvent(e: PlayEvent): string {
       return `food: ${e.message}`;
     case 'quest-book':
       return `QUEST BOOK ${e.action} "${e.quest}": ${e.ok ? 'done' : 'FAILED'} (${e.detail})`;
+    case 'command':
+      return `COMMAND #${e.id} (${e.sender}): ${e.message}`;
+    case 'idle':
+      return `idle: ${e.message}`;
   }
 }

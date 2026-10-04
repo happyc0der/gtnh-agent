@@ -36,6 +36,7 @@ describe('migrations', () => {
       { version: 5 },
       { version: 6 },
       { version: 7 },
+      { version: 8 },
     ]);
   });
 
@@ -55,6 +56,7 @@ describe('migrations', () => {
         'safety_violations',
         'named_locations',
         'protected_items',
+        'owner_commands',
       ]),
     );
   });

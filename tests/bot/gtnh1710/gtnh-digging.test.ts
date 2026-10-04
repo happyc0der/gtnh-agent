@@ -6,6 +6,7 @@ import { runUserAction } from '../../../src/app/loop/agent-loop.ts';
 import { syncConfigToDatabase } from '../../../src/app/loop/agent-memory.ts';
 import { digWaitTicks } from '../../../src/domain/dig-time.ts';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
+import { PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
 import { defaultConfig, type DiggingConfig } from '../../../src/config/env.ts';
 import { createAction, type ActionSpec } from '../../../src/domain/actions.ts';
 import type { GameState } from '../../../src/domain/game-state.ts';
@@ -406,14 +407,92 @@ describe('Gtnh1710Client digging', () => {
     });
   }, 10_000);
 
-  it('reports a drop that fell out of pickup range instead of claiming it', async () => {
+  it('follows a drop that came to rest out of pickup range, and walks over to it (the pen too)', async () => {
+    // The dirt is in reach, 3.5 blocks east: its drop lands in its cell, out of pickup reach.
     const { server, client } = await start();
     const result = await perform(client, dig(AT.farDirt));
-    expect(result).toMatchObject({ ok: true, data: { dropCollected: false, drops: '' } });
-    expect(result.message).toMatch(/no drop reached the inventory/);
-    expect(server.digSim.pickedUp).toEqual([]);
+    expect(result).toMatchObject({
+      ok: true,
+      data: { dropCollected: true, drops: '1 x minecraft:dirt', walkedToDrop: true, dropsLeft: 0 },
+    });
+    expect(result.message).toMatch(
+      /; walked to the drop at \(-1, 106, -8\) and picked up 1 x minecraft:dirt$/,
+    );
+    // It waited for the item to come to rest: the server showed that 20 ticks after it
+    // appeared, and the walk started after it.
+    const item = server.itemSim.spawned[0];
+    expect(item).toMatchObject({ item: 'minecraft:dirt', rest: { x: -0.5, y: 106.125, z: -7.5 } });
+    expect(server.walkSteps().at(-1)).toMatchObject({ x: -0.5, feetY: 106, z: -7.5 });
+    expect(server.digSim.pickedUp).toEqual([{ item: 'minecraft:dirt', count: 1 }]);
+    expect(server.itemSim.lying()).toEqual([]);
     expect(blocksOf(await client.observe()).removed).toEqual([AT.farDirt]);
-  }, 10_000);
+  }, 15_000);
+
+  it('leaves a drop no spot inside the fence puts within reach, and says why', async () => {
+    // The drop bounces out of the pen, two blocks past its east side.
+    const { server, client } = await start({
+      dig: {
+        dropRest: (x, y, z) =>
+          x === AT.farDirt.x && z === AT.farDirt.z ? { x: 1.5, y: y + 0.125, z: -7.5 } : undefined,
+      },
+    });
+    const result = await perform(client, dig(AT.farDirt));
+    expect(result).toMatchObject({
+      ok: true,
+      data: { dropCollected: false, drops: '', walkedToDrop: false, dropsLeft: 1 },
+    });
+    expect(result.message).toMatch(
+      /; 1 x minecraft:dirt at \(1, 106, -8\) is left there: no cell inside the play area/,
+    );
+    // It never walked toward it: the only moves are the join's echo.
+    expect(server.walkSteps()).toEqual([]);
+    expect(server.digSim.pickedUp).toEqual([]);
+    expect(server.itemSim.lying()).toHaveLength(1);
+  }, 15_000);
+
+  it('sweeps up a drop an earlier dig left lying near, when it digs again', async () => {
+    // The first dig's drop bounces three blocks off, and the walk to it is stopped by a server
+    // correction (a lag-back): it is left. The next dig, beside the player, gets its own drop at
+    // once and sweeps the first one up on the way.
+    const second = { x: -5, y: 106, z: -9 };
+    const { server, client } = await start({
+      blockOverrides: new Map([...WORLD, [key(second), BLOCK.dirt]]),
+      dig: {
+        dropRest: (x, y, z) =>
+          x === AT.dirt.x && z === AT.dirt.z ? { x: -1.5, y: y + 0.125, z: -10.5 } : undefined,
+      },
+    });
+    const first = perform(client, dig(AT.dirt));
+    // The walk to the drop starts once it lies still; a few steps in, the server puts the
+    // player back where it stood.
+    await vi.waitFor(() => expect(server.walkSteps().length).toBeGreaterThan(2), {
+      timeout: 8_000,
+    });
+    server.placePlayer(-4.5, 106 + PLAYER_EYE_HEIGHT, -7.5);
+    const a = await first;
+    expect(a).toMatchObject({
+      ok: true,
+      data: { dropCollected: false, walkedToDrop: true, dropsLeft: 1 },
+    });
+    expect(a.message).toMatch(
+      /the drop lies at \(-2, 106, -11\), but walking there stopped: .*server corrected/,
+    );
+    expect(server.itemSim.lying()).toHaveLength(1);
+
+    const b = await perform(client, dig(second));
+    expect(b).toMatchObject({
+      ok: true,
+      data: { dropCollected: true, drops: '2 x minecraft:dirt', walkedToDrop: true, dropsLeft: 0 },
+    });
+    expect(b.message).toMatch(
+      /the drop reached the inventory: 1 x minecraft:dirt; swept up 1 x minecraft:dirt left at \(-2, 106, -11\) earlier$/,
+    );
+    expect(server.itemSim.lying()).toEqual([]);
+    expect(server.digSim.pickedUp).toEqual([
+      { item: 'minecraft:dirt', count: 1 },
+      { item: 'minecraft:dirt', count: 1 },
+    ]);
+  }, 30_000);
 
   it('refuses before sending anything', async () => {
     const { server, client } = await start();

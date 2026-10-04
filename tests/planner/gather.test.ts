@@ -477,6 +477,98 @@ describe('GATHER of a farm animal: hunting it', () => {
   });
 });
 
+describe('GATHER of logs fells each trunk from its base', () => {
+  // Seen live 2026-10-01: three logs dug, one picked up; the logs dug high in the trees, off
+  // the player's column, dropped onto the logs and leaves under them, out of its reach. The
+  // mock player stands at (1, 64, 1), eyes at (1, 65.62, 1); a trunk stands at (2, 2).
+  const fell = (count = 4): GatherStep => gather('minecraft:log', count);
+  const log = (x: number, y: number, z: number, standAt?: Position): MockResourceBlock => ({
+    block: 'minecraft:log',
+    position: { x, y, z },
+    standAt: standAt ?? { x: x - 0.5, y: 64, z: z + 0.5 },
+  });
+  const trunk = (x: number, z: number, from: number, to: number): MockResourceBlock[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => log(x, from + i, z));
+  function felling(blocks: MockResourceBlock[], last: GatherProgress['last'] = null) {
+    const state = makeState((w) => {
+      w.resourceBlocks = blocks;
+    });
+    return { state, progress: { ...startGather(1, 0, fell(), state, NOW), last } };
+  }
+  const dug = (x: number, y: number, z: number): NonNullable<GatherProgress['last']> => ({
+    position: { x, y, z },
+    walk: false,
+    entity: null,
+    walks: 0,
+  });
+
+  it('digs the lowest log of a trunk first, though the one above it is nearer the eyes', () => {
+    const { state, progress } = felling(trunk(2, 2, 64, 66));
+    expect(chooseGatherAction(fell(), progress, state, opts())).toMatchObject({
+      kind: 'act',
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 2, y: 64, z: 2 } } },
+    });
+    // Sand stacked the same way is dug nearest first, as before.
+    const sandy = setup(trunk(2, 2, 64, 66).map((b) => ({ ...b, block: 'minecraft:sand' })));
+    expect(chooseGatherAction(gather(), sandy.progress, sandy.state, opts())).toMatchObject({
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 2, y: 65, z: 2 } } },
+    });
+  });
+
+  it('then goes on up that trunk while it is in reach, before another trunk nearer the eyes', () => {
+    // The base is dug; another trunk's base (0, 64, 0) is 1.3 from the eyes, the next log 2.1.
+    const { state, progress } = felling(
+      [...trunk(2, 2, 65, 66), ...trunk(0, 0, 64, 65)],
+      dug(2, 64, 2),
+    );
+    expect(chooseGatherAction(fell(), progress, state, opts())).toMatchObject({
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 2, y: 65, z: 2 } } },
+    });
+    // Once that trunk is down, the other one, from its base.
+    const next = felling(trunk(0, 0, 64, 65), dug(2, 66, 2));
+    expect(chooseGatherAction(fell(), next.progress, next.state, opts())).toMatchObject({
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 0, y: 64, z: 0 } } },
+    });
+  });
+
+  it('walks to beside a trunk first, though its log is in reach from here', () => {
+    // (4, 64, 1) is 3.7 from the eyes, three columns away: its drop would land out of reach.
+    const { state, progress } = felling([log(4, 64, 1, { x: 3.5, y: 64, z: 1.5 })]);
+    expect(chooseGatherAction(fell(), progress, state, opts())).toMatchObject({
+      spec: { type: 'MOVE_TO', args: { target: { x: 3.5, y: 64, z: 1.5 }, tolerance: 0.5 } },
+      target: { x: 4, y: 64, z: 1 },
+      walk: true,
+    });
+    // That walk made, it digs from where it ended.
+    const walked: GatherProgress['last'] = { ...dug(4, 64, 1), walk: true, walks: 1 };
+    expect(chooseGatherAction(fell(), { ...progress, last: walked }, state, opts())).toMatchObject({
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 4, y: 64, z: 1 } } },
+    });
+    // Sand there is dug from here, as before.
+    const sandy = setup([sand(4, 64, 1, { x: 3.5, y: 64, z: 1.5 })]);
+    expect(chooseGatherAction(gather(), sandy.progress, sandy.state, opts())).toMatchObject({
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 4, y: 64, z: 1 } } },
+    });
+  });
+
+  it('a log on leaves (a branch) comes after a trunk, but is dug when none is left', () => {
+    const leaves: MockResourceBlock = {
+      block: 'minecraft:leaves',
+      position: { x: 1, y: 66, z: 2 },
+    };
+    const branch = log(1, 67, 2);
+    const { state, progress } = felling([leaves, branch, log(6, 64, 6)]);
+    expect(chooseGatherAction(fell(), progress, state, opts())).toMatchObject({
+      spec: { type: 'MOVE_TO', args: { target: { x: 5.5, y: 64, z: 6.5 } } },
+      target: { x: 6, y: 64, z: 6 },
+    });
+    const alone = felling([leaves, branch]);
+    expect(chooseGatherAction(fell(), alone.progress, alone.state, opts())).toMatchObject({
+      spec: { type: 'DIG_BLOCK', args: { position: { x: 1, y: 67, z: 2 } } },
+    });
+  });
+});
+
 describe('GATHER in a plan', () => {
   const plan = (action: unknown): unknown => ({
     goal: 'Gather sand',

@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { describeCommand, isStructured, parseOwnerCommand } from '../../domain/owner-commands.ts';
 import { TaskStatusSchema } from '../../domain/tasks.ts';
+import { NOT_UNDERSTOOD } from '../play/commands.ts';
 import { openDatabase } from '../../persistence/database.ts';
 import { createRepositories } from '../../persistence/repositories.ts';
 import { systemClock } from '../../util/clock.ts';
@@ -72,6 +74,86 @@ export function historyCommand(cli: Cli): number {
   );
   db.close();
   return 0;
+}
+
+/**
+ * `command "<text>"`: queues an owner command as if the first owner (MC_OWNERS) had whispered
+ * it; a running `play --live` picks it up between cycles (and a stop at once), else the next
+ * play does. The structured form is checked here, so a typo is refused at once; natural
+ * language is left for the model (AGENT_COMMANDS=ollama) to translate when play takes it.
+ */
+export function commandCommand(cli: Cli): number {
+  const { args, config, dbPath, print } = cli;
+  const text = args.join(' ').trim();
+  if (text === '') {
+    process.stderr.write('command needs the text, e.g. pnpm cli command "!goto 120 64 -40"\n');
+    return 1;
+  }
+  const owner = config.minecraft.owners[0];
+  if (owner === undefined) {
+    process.stderr.write('no owner is configured (MC_OWNERS): owner commands are off\n');
+    return 1;
+  }
+  const parsed = parseOwnerCommand(text);
+  if (!parsed.ok && (parsed.kind === 'usage' || isStructured(text))) {
+    process.stderr.write(`${parsed.kind === 'usage' ? parsed.usage : NOT_UNDERSTOOD}\n`);
+    return 1;
+  }
+  if (!parsed.ok && config.commands.translator === 'none') {
+    process.stderr.write(
+      `${NOT_UNDERSTOOD} (natural language needs a translator: AGENT_COMMANDS=ollama)\n`,
+    );
+    return 1;
+  }
+  const db = openDatabase(dbPath);
+  try {
+    const record = createRepositories(db, systemClock).commands.add({
+      source: 'cli',
+      sender: owner,
+      rawText: text,
+      command: parsed.ok ? parsed.command : null,
+    });
+    print({
+      id: record.id,
+      sender: owner,
+      text,
+      command: parsed.ok
+        ? describeCommand(parsed.command)
+        : 'natural language: the model translates it when play takes it',
+      status: record.status,
+      note: 'a running `cli play --live` takes it between cycles; otherwise the next play does',
+    });
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+/** `commands [--limit N]`: the most recent owner commands, with their status and reply. */
+export function commandsCommand(cli: Cli): number {
+  const { values, dbPath, print } = cli;
+  const db = openDatabase(dbPath);
+  try {
+    const limit = Math.max(1, Math.min(200, Number(values.limit) || 10));
+    print(
+      createRepositories(db, systemClock)
+        .commands.recent(limit)
+        .map((c) => ({
+          id: c.id,
+          at: c.createdAt,
+          source: c.source,
+          sender: c.sender,
+          text: c.rawText,
+          command: c.command === null ? null : describeCommand(c.command),
+          status: c.status,
+          reply: c.reply,
+          finishedAt: c.finishedAt,
+        })),
+    );
+    return 0;
+  } finally {
+    db.close();
+  }
 }
 
 /** `task-resume --task <id>`: marks a paused or blocked task active again. */

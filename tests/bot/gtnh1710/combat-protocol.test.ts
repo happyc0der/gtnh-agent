@@ -73,7 +73,8 @@ describe('entity metadata (DataWatcher)', () => {
       { index: 12, value: -24000 },
       { index: 6, value: 7.5 },
       { index: 10, value: 'Bessie' },
-      { index: 13, value: null },
+      // An item stack is kept apart from the values (a dropped item's says what it is).
+      { index: 13, value: null, stack: { id: 296, count: 3, damage: 0, hasNbt: false } },
       { index: 14, value: null },
     ]);
   });

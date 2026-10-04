@@ -176,6 +176,58 @@ export interface TrackedEntity {
    * this connection, and why (#watchSpiders): it never counts as calm again.
    */
   mayTarget?: string | null;
+  /** A dropped item (Spawn Object type 2, an EntityItem): what it is, and how it moved. */
+  item?: DroppedItem;
+}
+
+/**
+ * What the client knows of a dropped item besides where it is: its stack, from the server's
+ * DataWatcher (index 10; null until that arrives, or after an update for it was lost), where
+ * and when it appeared, and when its position last changed.
+ */
+interface DroppedItem {
+  stack: ItemStackData | null;
+  spawn: Vec3;
+  spawnedAt: Date;
+  movedAt: Date;
+}
+
+/** Spawn Object type of a dropped item (EntityTrackerEntry: S0EPacketSpawnObject(entity, 2, 1)). */
+export const DROPPED_ITEM_OBJECT_TYPE = 2;
+/** The DataWatcher index of a dropped item's stack (EntityItem.entityInit: type 5 at 10). */
+const DROPPED_ITEM_STACK_INDEX = 10;
+/**
+ * A dropped item lies still once its position has not changed for this long (25 ticks) and it
+ * lies on a block. The server sends an item's position only every 20 ticks (EntityTracker:
+ * EntityItem's update frequency is 20), and then only when it moved 1/8 block since the last
+ * one it sent (EntityTrackerEntry.sendLocationToAllClients): a few quiet ticks prove nothing,
+ * one update period and a margin do.
+ */
+export const ITEM_SETTLE_MS = 1_250;
+/**
+ * ...or this long (70 ticks) whatever it seems to lie on (a slab, a snow layer; or its first
+ * update is late): past the forced update the tracker sends every 60 ticks.
+ */
+export const ITEM_STILL_MS = 3_500;
+/** A dropped item's box is 0.25 high; its position is the box's centre (yOffset = height/2). */
+const ITEM_HALF_SIZE = 0.125;
+
+/** A dropped item near a point, as WorldModel.itemEntitiesNear reports it. */
+export interface ItemEntity {
+  entityId: number;
+  /** The item as the inventory names it (`name` or `name@damage`); null while not known. */
+  item: string | null;
+  /** How many it holds (it grows when items merge); null while not known. */
+  count: number | null;
+  /** Where it is: the centre of its 0.25-block box, as the server last sent it. */
+  position: Vec3;
+  /** Where and when it appeared (its spawn packet). */
+  spawn: Vec3;
+  spawnedAt: Date;
+  /** It lies still (WorldModel#itemSettled). */
+  settled: boolean;
+  /** From the point asked about to where it is. */
+  distance: number;
 }
 
 /** A recent death the server announced (S19 status 3). */
@@ -1025,8 +1077,12 @@ export class WorldModel {
         return;
       case 0x1c:
         // An entity's metadata update was lost, and which entity is not known: every
-        // entity's health, name tag and age become unknown until they are sent again.
-        for (const e of this.#entities.values()) e.metadata = new Map();
+        // entity's health, name tag and age (and what each dropped item is) become unknown
+        // until they are sent again.
+        for (const e of this.#entities.values()) {
+          e.metadata = new Map();
+          if (e.item !== undefined) e.item.stack = null;
+        }
         return;
       case 0x2b:
         // A weather update was lost: the sky's darkness is not known for this connection
@@ -1152,6 +1208,86 @@ export class WorldModel {
       }
     }
     return out.sort((a, b) => a.distance - b.distance);
+  }
+
+  // -------------------------------------------------------------------------
+  // Dropped items (EntityItems: what a dig or a kill drops)
+
+  /**
+   * The dropped items within `radius` of `point`, nearest first: what each is, where it is,
+   * where and when it appeared, and whether it lies still as of `now` (#itemSettled). Unknown
+   * while an entity update was lost: an item may be missing or misplaced.
+   */
+  itemEntitiesNear(point: Vec3, radius: number, now: Date): Known<ItemEntity[]> {
+    if (this.#entityProblem !== null) return unknown(this.#entityProblem);
+    const out: ItemEntity[] = [];
+    for (const [entityId, e] of this.#entities) {
+      const item = this.#itemEntity(entityId, e, point, now);
+      if (item !== null && item.distance <= radius) out.push(item);
+    }
+    return known(out.sort((a, b) => a.distance - b.distance || a.entityId - b.entityId));
+  }
+
+  /**
+   * One dropped item as itemEntitiesNear reports it (its distance from `point`), or null once
+   * it is gone: picked up, merged into another, burnt or despawned (the server destroys it).
+   */
+  itemEntity(entityId: number, point: Vec3, now: Date): ItemEntity | null {
+    const e = this.#entities.get(entityId);
+    return e === undefined ? null : this.#itemEntity(entityId, e, point, now);
+  }
+
+  #itemEntity(entityId: number, e: TrackedEntity, point: Vec3, now: Date): ItemEntity | null {
+    const track = e.item;
+    if (track === undefined) return null;
+    const stack = track.stack;
+    const naming = stack === null ? null : nameItemStack(this.#registry, stack.id, stack.damage);
+    return {
+      entityId,
+      item: naming !== null && naming.ok ? naming.name : null,
+      count: stack === null ? null : stack.count,
+      position: { x: e.x, y: e.y, z: e.z },
+      spawn: { ...track.spawn },
+      spawnedAt: track.spawnedAt,
+      settled: this.#itemSettled(e, track, now),
+      distance: Math.hypot(e.x - point.x, e.y - point.y, e.z - point.z),
+    };
+  }
+
+  /**
+   * Whether a dropped item lies still: its position has not changed for ITEM_SETTLE_MS (since
+   * it appeared, or last moved) and it lies on a block (#itemOnBlock), or for ITEM_STILL_MS
+   * whatever it seems to lie on. A block's drop flies up and comes down within a dozen ticks
+   * (EntityItem: 0.2 up, up to 0.1 sideways a tick, falling 0.04 faster a tick); the server
+   * shows where it came to rest at its next update, 20 ticks after it appeared.
+   */
+  #itemSettled(e: TrackedEntity, track: DroppedItem, now: Date): boolean {
+    const still = now.getTime() - track.movedAt.getTime();
+    if (still >= ITEM_STILL_MS) return true;
+    return still >= ITEM_SETTLE_MS && this.#itemOnBlock(e.x, e.y, e.z);
+  }
+
+  /**
+   * Whether an item at (x, y, z) lies on a block: the bottom of its box is on a block top
+   * (within the protocol's 1/32), over a block that is not air under its 0.25-wide footprint.
+   * Falling, or in mid-air where it appeared, it does not. Fail closed: block data that is not
+   * known, or not trusted, holds nothing up.
+   */
+  #itemOnBlock(x: number, y: number, z: number): boolean {
+    if (this.#hazardProblem !== null) return false;
+    const bottom = y - ITEM_HALF_SIZE;
+    const top = Math.round(bottom);
+    if (Math.abs(bottom - top) > 1 / 32 + 1e-9) return false;
+    const under = (v: number): number[] => [
+      ...new Set([Math.floor(v - ITEM_HALF_SIZE), Math.floor(v + ITEM_HALF_SIZE)]),
+    ];
+    for (const bx of under(x)) {
+      for (const bz of under(z)) {
+        const id = this.#store.blockAt(bx, top - 1, bz);
+        if (id !== undefined && id !== 0) return true;
+      }
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------
@@ -1558,24 +1694,40 @@ export class WorldModel {
         const e = this.#entities.get(packet.entityId);
         if (e === undefined) return;
         // A lost update: which values changed is not known, so none of the old ones count.
-        if (packet.metadata === null) e.metadata = new Map();
-        else {
+        if (packet.metadata === null) {
+          e.metadata = new Map();
+          if (e.item !== undefined) e.item.stack = null;
+        } else {
           const merged = new Map(e.metadata ?? []);
-          for (const entry of packet.metadata) merged.set(entry.index, entry.value);
+          for (const entry of packet.metadata) {
+            merged.set(entry.index, entry.value);
+            // A dropped item's stack follows its spawn (EntityTrackerEntry sends the whole
+            // DataWatcher at once), and again when items merge into it.
+            if (
+              e.item !== undefined &&
+              entry.index === DROPPED_ITEM_STACK_INDEX &&
+              entry.stack !== undefined
+            ) {
+              e.item.stack = entry.stack;
+            }
+          }
           e.metadata = merged;
         }
         return;
       }
-      case 'spawn-object':
+      case 'spawn-object': {
+        const position = { x: packet.x, y: packet.y, z: packet.z };
         this.#track(packet.entityId, {
           kind: 'object',
           modType: null,
           classification: classifyVanillaObject(packet.objectType),
-          x: packet.x,
-          y: packet.y,
-          z: packet.z,
+          ...position,
+          ...(packet.objectType === DROPPED_ITEM_OBJECT_TYPE
+            ? { item: { stack: null, spawn: { ...position }, spawnedAt: at, movedAt: at } }
+            : {}),
         });
         return;
+      }
       case 'destroy-entities':
         for (const id of packet.entityIds) {
           this.#entities.delete(id);
@@ -1588,12 +1740,22 @@ export class WorldModel {
           e.x += packet.dx;
           e.y += packet.dy;
           e.z += packet.dz;
+          // The tracker also sends a dropped item's position every 60 ticks when it has not
+          // moved (a move of nothing): only a real move counts.
+          if (e.item !== undefined && (packet.dx !== 0 || packet.dy !== 0 || packet.dz !== 0)) {
+            e.item.movedAt = at;
+          }
         }
         return;
       }
       case 'entity-teleport': {
         const e = this.#entities.get(packet.entityId);
-        if (e !== undefined) Object.assign(e, { x: packet.x, y: packet.y, z: packet.z });
+        if (e !== undefined) {
+          if (e.item !== undefined && (e.x !== packet.x || e.y !== packet.y || e.z !== packet.z)) {
+            e.item.movedAt = at;
+          }
+          Object.assign(e, { x: packet.x, y: packet.y, z: packet.z });
+        }
         return;
       }
       case 'server-position':

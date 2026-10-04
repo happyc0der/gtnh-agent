@@ -2,13 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { ItemNameSchema } from '../../src/domain/common.ts';
 import { expectedPostconditionFor } from '../../src/domain/actions.ts';
 import {
+  buildKnowledgeRecipes,
+  craftableFrom,
+  CraftRecipeIdSchema,
+  craftingRecipe,
+  describeIngredient,
   ingredientRequirements,
+  knowledgeRecipeIds,
+  knowledgeRecipes,
   needsCraftingTable,
   patternSize,
   RECIPE_IDS,
   RECIPES,
+  whyNotCraftable,
 } from '../../src/domain/recipes.ts';
 import { mintValidatedAction } from '../../src/domain/validated-action.ts';
+import { CraftFlag, type KnowledgeData } from '../../src/goals/knowledge.ts';
+import { BASE_ABILITIES } from '../../src/goals/quest-goals.ts';
+import { ROUTE_BOOK } from '../../src/goals/route-book.ts';
 import { action, makeWorld } from '../fixtures/index.ts';
 
 describe('the recipe table', () => {
@@ -40,7 +51,6 @@ describe('the recipe table', () => {
     expect(RECIPE_IDS.filter((id) => needsCraftingTable(RECIPES[id]))).toEqual([
       'chest',
       'wooden_shovel',
-      'wooden_pickaxe',
       'wooden_axe',
     ]);
   });
@@ -73,15 +83,6 @@ describe('the recipe table', () => {
     expect(RECIPES.wooden_axe.pattern).toEqual(['PP', 'PS', ' S']);
     expect(RECIPES.wooden_shovel.key['P']).toEqual(RECIPES.sticks.key['P']);
     expect(RECIPES.wooden_axe.evidence).toMatch(/verified.*RecipesTools/);
-    // The wooden pickaxe: the only craftable pickaxe that digs (stone, level-0 ores).
-    expect(RECIPES.wooden_pickaxe).toMatchObject({
-      pattern: ['PPP', ' S ', ' S '],
-      result: { item: 'minecraft:wooden_pickaxe', count: 1 },
-    });
-    expect(ingredientRequirements(RECIPES.wooden_pickaxe).map((r) => [r.key, r.perCraft])).toEqual([
-      ['P', 3],
-      ['S', 2],
-    ]);
   });
 
   it('derives what a craft uses and makes', () => {
@@ -105,6 +106,269 @@ describe('the recipe table', () => {
         { anyOf: ['minecraft:stick'], quantity: 3 },
       ],
     });
+  });
+});
+
+// Loading and indexing the knowledge base takes a moment on a busy machine.
+describe("the knowledge base's crafting recipes", { timeout: 30_000 }, () => {
+  it("makes GTNH's wooden pickaxe, hoe and sword with their exact layouts and ore entries", () => {
+    const pickaxe = craftingRecipe('minecraft:wooden_pickaxe#1');
+    expect(pickaxe).toMatchObject({
+      pattern: ['aaa', ' b ', ' b '],
+      labels: { a: 'ore:plankWood', b: 'ore:stickWood' },
+      result: { item: 'minecraft:wooden_pickaxe', count: 1 },
+    });
+    if (pickaxe === null) throw new Error('no pickaxe');
+    expect(needsCraftingTable(pickaxe)).toBe(true);
+    // Any of GTNH's 650 planks and 16 sticks, the vanilla ones among them.
+    expect(pickaxe.key['a']).toContain('minecraft:planks@3');
+    expect(pickaxe.key['a']?.length).toBe(650);
+    expect(pickaxe.key['b']).toContain('minecraft:stick');
+    expect(pickaxe.evidence).toMatch(/count 1 \(vanilla\)/);
+    // CraftTweaker may misread a 2x3 or 1x3 ore recipe's width; vanilla's jar confirms these.
+    expect(craftingRecipe('minecraft:wooden_hoe#1')?.pattern).toEqual(['aa', ' b', ' b']);
+    expect(craftingRecipe('minecraft:wooden_sword#1')?.pattern).toEqual(['a', 'a', 'b']);
+    // GTNH's furnace: cobblestone around three flint, its count from the coremod's scripts.
+    expect(craftingRecipe('minecraft:furnace#1')).toMatchObject({
+      pattern: ['aaa', 'bbb', 'aaa'],
+      key: { b: ['minecraft:flint'] },
+      result: { item: 'minecraft:furnace', count: 1 },
+    });
+    expect(describeIngredient(pickaxe.key['b'] ?? [], 'ore:stickWood')).toMatch(
+      /^ore:stickWood \(16 kinds: minecraft:stick, /,
+    );
+  });
+
+  it('postconditions list every kind an ore ingredient may be (the verifier counts any mix)', () => {
+    const post = expectedPostconditionFor({
+      type: 'CRAFT_ITEM',
+      args: { recipe: 'minecraft:wooden_pickaxe#1', times: 2, craftingTableId: 'table.main' },
+    });
+    expect(post).toMatchObject({
+      kind: 'ITEMS_CRAFTED',
+      recipe: 'minecraft:wooden_pickaxe#1',
+      result: 'minecraft:wooden_pickaxe',
+      quantity: 2,
+    });
+    if (post.kind !== 'ITEMS_CRAFTED') throw new Error(post.kind);
+    expect(post.ingredients.map((g) => [g.anyOf.length, g.quantity])).toEqual([
+      [650, 6],
+      [16, 4],
+    ]);
+  });
+
+  it('takes ids as the route writes them; hand-verified recipes win where both exist', () => {
+    expect(CraftRecipeIdSchema.safeParse('planks_oak').success).toBe(true);
+    expect(CraftRecipeIdSchema.safeParse('minecraft:wooden_pickaxe#1').success).toBe(true);
+    // The dump's copy of the hand-verified axe is that recipe: the route shows wooden_axe.
+    expect(whyNotCraftable('minecraft:wooden_axe#1')).toBe(
+      'the hand-verified recipe wooden_axe is the same recipe',
+    );
+    expect(craftingRecipe('wooden_axe')).toBe(RECIPES.wooden_axe);
+    expect(knowledgeRecipes().replaced.size).toBe(RECIPE_IDS.length);
+    for (const id of ['minecraft:wooden_axe#1', 'minecraft:wooden_pickaxe#99', 'oak', '']) {
+      expect(CraftRecipeIdSchema.safeParse(id).success, id).toBe(false);
+    }
+  });
+
+  it('leaves out what the client cannot do safely yet, and says why', () => {
+    // GregTech's saw recipe for sticks: the worn saw would stay in the grid.
+    expect(whyNotCraftable('minecraft:stick#1')).toMatch(/crafting tool .* stays in the grid/);
+    // A GregTech tool: its material is NBT data on the result.
+    expect(whyNotCraftable('gregtech:gt.metatool.01@24[Flint]#1')).toMatch(/NBT data/);
+    const reasons = new Set(knowledgeRecipes().leftOut.values());
+    for (const r of ['nbtInput', 'nbtOutput', 'craftingTool', 'container', 'shape', 'overlap']) {
+      expect(reasons.has(r as never), r).toBe(true);
+    }
+    // Still thousands of recipes, with sound data.
+    const made = [...knowledgeRecipes().byId.values()];
+    expect(made.length).toBeGreaterThan(15_000);
+    for (const r of made.slice(0, 2000)) {
+      const groups = ingredientRequirements(r);
+      expect(groups.length).toBeGreaterThan(0);
+      for (const g of groups) expect(g.anyOf.includes(r.result.item)).toBe(false);
+      expect(patternSize(r).width).toBeLessThanOrEqual(3);
+      expect(patternSize(r).height).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it("names every crafting recipe as the route book does, and makes the route's recipes", () => {
+    const kb = knowledgeRecipes();
+    const route = ROUTE_BOOK.recipes.filter((r) => r.station !== 'furnace' && r.id.includes('#'));
+    // The same ids: each one the route book has is made or left out, and no other.
+    const known = new Set([...kb.byId.keys(), ...kb.leftOut.keys()]);
+    expect(route.length).toBe(known.size);
+    expect(route.every((r) => known.has(r.id))).toBe(true);
+    // A recipe CRAFT_ITEM makes is the route's: its output, and what one craft uses.
+    for (const r of route.filter((x) => kb.byId.has(x.id)).slice(0, 3000)) {
+      const made = kb.byId.get(r.id);
+      if (made === undefined) throw new Error(r.id);
+      expect(made.result.item).toBe(r.output.item);
+      expect(needsCraftingTable(made)).toBe(r.station === 'crafting_table');
+      expect(ingredientRequirements(made).map((g) => g.perCraft)).toEqual(
+        r.inputs.map((i) => i.count),
+      );
+    }
+  });
+
+  it('what the agent can craft from what it gathers: wooden tools need a table', () => {
+    const grid = craftableFrom(BASE_ABILITIES.gather, { table: false });
+    expect([...grid].sort()).toEqual([
+      'minecraft:crafting_table',
+      'minecraft:flint',
+      'minecraft:planks',
+      'minecraft:stick',
+    ]);
+    const table = craftableFrom(BASE_ABILITIES.gather, { table: true });
+    for (const tool of ['pickaxe', 'shovel', 'axe', 'hoe', 'sword']) {
+      expect(table.has(`minecraft:wooden_${tool}`), tool).toBe(true);
+    }
+    // Coal is not gathered: no torches; nor is cobblestone (stone needs a pickaxe): no furnace.
+    expect(table.has('minecraft:torch')).toBe(false);
+    expect(table.has('minecraft:furnace')).toBe(false);
+  });
+});
+
+describe('knowledge-base recipes from small data', () => {
+  const ITEMS = [
+    'minecraft:planks',
+    'minecraft:planks@1',
+    'minecraft:stick',
+    'x:tool',
+    'minecraft:water_bucket',
+    'x:dough',
+    'x:block',
+    'x:bar',
+    'x:thing',
+    'minecraft:flint',
+  ];
+  const at = (name: string): number => ITEMS.indexOf(name);
+  /** A crafting row: output, count, flags, pattern, inputs as [ingredient, count] pairs. */
+  const row = (
+    out: string,
+    count: number,
+    flags: number,
+    pattern: string,
+    inputs: Array<[number | string | number[], number]>,
+    label = '',
+  ): KnowledgeData['crafting'][number] => [
+    at(out),
+    count,
+    flags,
+    pattern,
+    inputs.flat(),
+    label,
+    '',
+  ];
+  const data = (
+    crafting: KnowledgeData['crafting'],
+    vanilla: KnowledgeData['vanilla']['crafting'] = [],
+  ): KnowledgeData =>
+    ({
+      items: ITEMS,
+      ores: {
+        plankWood: [at('minecraft:planks'), at('minecraft:planks@1')],
+        listAllwater: [at('minecraft:water_bucket'), at('x:dough')],
+        craftingToolSaw: [at('x:tool')],
+      },
+      crafting,
+      vanilla: { crafting: vanilla },
+    }) as unknown as KnowledgeData;
+  const S = CraftFlag;
+
+  it('ids: the n-th distinct recipe of an item, its label, repeats left out', () => {
+    const rows = [
+      row('x:bar', 0, S.FITS_2X2, 'a', [['plankWood', 1]]),
+      row('x:bar', 0, S.FITS_2X2, 'a', [['plankWood', 1]]), // registered twice
+      row('x:bar', 2, S.FITS_2X2, 'a/a', [['plankWood', 2]]),
+      row('x:thing', 1, S.NBT_OUTPUT, 'aaa', [['plankWood', 3]], 'Iron'),
+    ];
+    expect(knowledgeRecipeIds(data(rows))).toEqual(['x:bar#1', null, 'x:bar#2', 'x:thing[Iron]#1']);
+  });
+
+  it('lays shapeless recipes out in reading order, and trims a padded shaped one', () => {
+    const kb = buildKnowledgeRecipes(
+      data([
+        row('x:block', 4, S.SHAPELESS | S.FITS_2X2, '', [
+          ['plankWood', 2],
+          [at('minecraft:flint'), 1],
+        ]),
+        row('x:thing', 1, S.SHAPELESS, '', [['plankWood', 5]]),
+        row('x:bar', 0, S.FITS_2X2, 'aa./b../...', [
+          ['plankWood', 2],
+          [at('minecraft:flint'), 1],
+        ]),
+      ]),
+    );
+    expect(kb.byId.get('x:block#1')).toMatchObject({
+      pattern: ['aa', 'b '],
+      key: { a: ['minecraft:planks', 'minecraft:planks@1'], b: ['minecraft:flint'] },
+      labels: { a: 'ore:plankWood' },
+      result: { item: 'x:block', count: 4 },
+    });
+    expect(kb.byId.get('x:thing#1')?.pattern).toEqual(['aaa', 'aa ']);
+    // Padded to 3x3 in the dump, it fits the 2x2 grid; its count is not known: 1 expected.
+    expect(kb.byId.get('x:bar#1')).toMatchObject({
+      pattern: ['aa', 'b '],
+      result: { count: 1 },
+      countKnown: false,
+    });
+  });
+
+  it('a shape the dump may have scrambled only when vanilla has the same layout (or its mirror)', () => {
+    const tall = row('x:bar', 1, S.SHAPE_UNCERTAIN, 'aa/.b/.b', [
+      ['plankWood', 2],
+      [at('minecraft:stick'), 2],
+    ]);
+    expect(buildKnowledgeRecipes(data([tall])).leftOut.get('x:bar#1')).toBe('shape');
+    const vanilla = (rows: string[]): KnowledgeData['vanilla']['crafting'][number] => ({
+      output: 'x:bar',
+      count: 1,
+      shaped: true,
+      rows,
+      inputs: [
+        { item: 'minecraft:planks', damage: null, count: 2 },
+        { item: 'minecraft:stick', damage: 0, count: 2 },
+      ],
+      from: 'test',
+    });
+    expect(
+      buildKnowledgeRecipes(data([tall], [vanilla(['XX', ' #', ' #'])])).byId.get('x:bar#1')
+        ?.pattern,
+    ).toEqual(['aa', ' b', ' b']);
+    expect(
+      buildKnowledgeRecipes(data([tall], [vanilla(['XX', '# ', '# '])])).byId.has('x:bar#1'),
+    ).toBe(true);
+    // Another layout (the 3x2 it may really be) confirms nothing.
+    expect(
+      buildKnowledgeRecipes(data([tall], [vanilla(['XX#', '  #'])])).leftOut.get('x:bar#1'),
+    ).toBe('shape');
+  });
+
+  it('leaves out crafting tools, container items, NBT and shared items', () => {
+    const kb = buildKnowledgeRecipes(
+      data([
+        row('x:bar', 1, S.FITS_2X2, 'a/b', [
+          ['craftingToolSaw', 1],
+          ['plankWood', 1],
+        ]),
+        row('x:block', 1, S.SHAPELESS | S.FITS_2X2, '', [[at('minecraft:water_bucket'), 1]]),
+        // A bucket among other kinds: only the others are used.
+        row('x:thing', 1, S.SHAPELESS | S.FITS_2X2, '', [['listAllwater', 1]]),
+        row('x:dough', 1, S.NBT_INPUT | S.FITS_2X2, 'a', [['plankWood', 1]]),
+        row('x:bar', 1, S.FITS_2X2, 'ab', [
+          ['plankWood', 1],
+          [at('minecraft:planks'), 1],
+        ]),
+      ]),
+    );
+    expect(Object.fromEntries(kb.leftOut)).toEqual({
+      'x:bar#1': 'craftingTool',
+      'x:block#1': 'container',
+      'x:dough#1': 'nbtInput',
+      'x:bar#2': 'overlap',
+    });
+    expect(kb.byId.get('x:thing#1')?.key['a']).toEqual(['x:dough']);
   });
 });
 

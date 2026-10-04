@@ -2,10 +2,10 @@ import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { INTERACTION_PROFILES } from '../../../domain/interactions.ts';
 import {
+  craftingRecipe,
   needsCraftingTable,
-  RECIPES,
+  whyNotCraftable,
   type CraftingRecipe,
-  type RecipeId,
 } from '../../../domain/recipes.ts';
 import { errorMessage } from '../../../util/json.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
@@ -25,11 +25,12 @@ import {
   TABLE_GRID,
   windowDifferences,
   type CraftingLayout,
+  type ItemKey,
   type PlacedRecipe,
 } from '../crafting.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { interactAreaProblem } from '../interact.ts';
-import { resolveItemName } from '../registry.ts';
+import type { Registry } from '../registry.ts';
 import { parseObservedTableId, WORKBENCH_WINDOW_TYPE, type WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
 import { craftFailed } from './shared.ts';
@@ -37,6 +38,34 @@ import { craftFailed } from './shared.ts';
 const VANILLA_CRAFTING_TABLE = 'minecraft:crafting_table';
 /** How often a crafting grid is emptied again (with fresh server state) before giving up. */
 const CLEAR_GRID_ATTEMPTS = 3;
+
+/** Registry name -> id, per world's registry (built once: see itemResolver). */
+const nameIndexes = new WeakMap<Registry, ReadonlyMap<string, number>>();
+
+/**
+ * Item names to registry ids and damage, as registry.ts resolveItemName does it (items before
+ * blocks of the same name, the first id of a name), from an index built once per registry: a
+ * knowledge-base recipe's ore-dictionary ingredient may list hundreds of kinds (650 planks),
+ * each looked up when the pattern is placed.
+ */
+function itemResolver(registry: Registry | null): (name: string) => ItemKey | null {
+  if (registry === null) return () => null;
+  let index = nameIndexes.get(registry);
+  if (index === undefined) {
+    const built = new Map<string, number>();
+    for (const map of [registry.items, registry.blocks]) {
+      for (const [id, n] of map) if (!built.has(n)) built.set(n, id);
+    }
+    index = built;
+    nameIndexes.set(registry, index);
+  }
+  const names = index;
+  return (name) => {
+    const m = /^(.*)@(\d{1,5})$/.exec(name);
+    const id = names.get(m === null ? name : (m[1] ?? ''));
+    return id === undefined ? null : { id, damage: m === null ? 0 : Number(m[2]) };
+  };
+}
 
 /**
  * Crafting (see crafting.ts): CRAFT_ITEM in the player's own 2x2 grid or at a crafting table,
@@ -74,11 +103,13 @@ export class CraftActions {
 
   /**
    * CRAFT_ITEM: in the player's own 2x2 grid (window 0; any open window is closed first,
-   * since the server takes window-0 clicks only when none is open), or at a configured
-   * crafting table (3x3), which is closed again afterwards.
+   * since the server takes window-0 clicks only when none is open), or at a configured or
+   * observed crafting table (3x3), which is closed again afterwards. Any recipe CRAFT_ITEM
+   * makes (src/domain/recipes.ts): the hand-verified table's, or the knowledge base's, laid
+   * out exactly as the server checks it.
    */
   async craft(args: {
-    recipe: RecipeId;
+    recipe: string;
     times: number;
     craftingTableId: string | null;
   }): Promise<ClientActionResult> {
@@ -90,7 +121,11 @@ export class CraftActions {
     if (this.#core.usingContainer) {
       return failed('a chest or crafting operation is already running', 'REFUSED');
     }
-    const recipe = RECIPES[args.recipe];
+    const recipe = craftingRecipe(args.recipe);
+    if (recipe === null) {
+      const why = whyNotCraftable(args.recipe) ?? 'unknown';
+      return failed(`not crafting: CRAFT_ITEM does not make ${args.recipe}: ${why}`, 'REFUSED');
+    }
     const tableId = args.craftingTableId;
     if (tableId === null && needsCraftingTable(recipe)) {
       return failed(`not crafting: ${recipe.id} needs a crafting table (3x3)`, 'REFUSED');
@@ -100,8 +135,7 @@ export class CraftActions {
       if (typeof where === 'string') return failed(`not crafting: ${where}`, 'REFUSED');
     }
     const layout = tableId === null ? INVENTORY_GRID : TABLE_GRID;
-    const registry = this.#world.registry;
-    const placed = placeRecipe(recipe, layout, (name) => resolveItemName(registry, name));
+    const placed = placeRecipe(recipe, layout, itemResolver(this.#world.registry));
     if (!placed.ok) return failed(`not crafting: ${placed.reason}`, 'REFUSED');
     // Refuse before anything is opened or clicked when the crafts cannot all finish exactly.
     const planned = this.#plannedCraftingWindow(layout);

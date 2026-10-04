@@ -49,12 +49,14 @@ try {
   await new Promise((r) => setTimeout(r, Math.max(0, Number(values.seconds) || 0) * 1000));
   const observed = await observeWithQuestBook(client);
   if (values.quest && observed.inventory.known && observed.questBook.known) {
-    const tables = Object.keys(config.minecraft.crafting.tables).length > 0;
     const update = updateQuests(
       repos,
       observed.questBook.value,
       { items: observed.inventory.value.items, freeSlots: freeSlotsOf(observed) },
-      liveAbilities(tables),
+      liveAbilities({
+        configured: Object.keys(config.minecraft.crafting.tables).length > 0,
+        placing: config.minecraft.placing.enabled,
+      }),
     );
     if (update.next !== null) adoptGoal(repos, update.next);
     out({

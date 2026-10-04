@@ -22,6 +22,7 @@ import {
 } from './fake-chests.ts';
 import { FakeCombatSim, type FakeCombatOptions } from './fake-combat.ts';
 import { FakeDigSim, type FakeDigOptions } from './fake-digging.ts';
+import { FakeItemSim } from './fake-items.ts';
 import { FakePlaceSim, type FakeBody, type FakePlaceOptions } from './fake-placing.ts';
 import {
   blockChangeFrame,
@@ -322,6 +323,8 @@ export class FakeGtnhServer {
   readonly placements: Array<{ x: number; eyeY: number; z: number }> = [];
   /** Chests and the player's inventory: one world, kept across connections like a real server. */
   readonly chestSim: FakeChestSim;
+  /** Dropped items (a dig's or a kill's drops): where they lie, what was picked up. */
+  readonly itemSim: FakeItemSim;
   /** Digging (C07): what the client sent, what broke, what was picked up. */
   readonly digSim: FakeDigSim;
   /** Placing (C08 with a held block): what the client clicked, what was placed. */
@@ -442,25 +445,34 @@ export class FakeGtnhServer {
     this.#metas = new Map(this.#opts.blockMeta);
     const world = this.#worldNow();
     const blockNames = new Map(this.#opts.blocks);
+    const playerFeet = (): { x: number; y: number; z: number } | null => {
+      const p = this.confirmedPositions.at(-1);
+      return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
+    };
+    this.itemSim = new FakeItemSim(
+      {
+        blockAt: world,
+        // 1.7.10 block items share their block's id.
+        itemId: (name) =>
+          this.#opts.items.find(([, n]) => n === name)?.[0] ??
+          this.#opts.blocks.find(([, n]) => n === name)?.[0],
+        playerFeet,
+      },
+      this.chestSim,
+      this.#opts.mods.some((m) => m.modid === 'modularui'),
+    );
     this.digSim = new FakeDigSim(
       {
         blockAt: world,
         blockMeta: (x, y, z) => this.#metas.get(`${x},${y},${z}`) ?? 0,
         setBlock: (x, y, z, id) => this.#put(x, y, z, id, 0),
         blockName: (id) => (id === 0 ? 'minecraft:air' : blockNames.get(id)),
-        // 1.7.10 block items share their block's id.
-        itemId: (name) =>
-          this.#opts.items.find(([, n]) => n === name)?.[0] ??
-          this.#opts.blocks.find(([, n]) => n === name)?.[0],
         itemName: (id) =>
           this.#opts.items.find(([i]) => i === id)?.[1] ??
           this.#opts.blocks.find(([i]) => i === id)?.[1],
-        playerFeet: () => {
-          const p = this.confirmedPositions.at(-1);
-          return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
-        },
       },
       this.chestSim,
+      this.itemSim,
       this.#opts.dig,
     );
     this.placeSim = new FakePlaceSim(
@@ -477,16 +489,10 @@ export class FakeGtnhServer {
       this.chestSim,
       this.#opts.place,
     );
-    this.combatSim = new FakeCombatSim(this.#opts.combat, this.chestSim, {
-      feet: () => {
-        const p = this.confirmedPositions.at(-1);
-        return p === undefined ? null : { x: p.x, y: p.feetY, z: p.z };
-      },
+    this.combatSim = new FakeCombatSim(this.#opts.combat, this.chestSim, this.itemSim, {
+      feet: playerFeet,
       health: this.#opts.health.health,
       food: this.#opts.health.food,
-      itemId: (name) =>
-        this.#opts.items.find(([, n]) => n === name)?.[0] ??
-        this.#opts.blocks.find(([, n]) => n === name)?.[0],
     });
     this.questBookSim =
       options.questBook === undefined
@@ -521,6 +527,37 @@ export class FakeGtnhServer {
     this.#server = createServer((socket) => this.#onConnection(socket));
   }
 
+  /** Every chat line (C01) the client sent, in order, as the server read it. */
+  readonly chat: string[] = [];
+
+  /** S02: one chat line (its JSON, as 1.7.10 serializes a chat component) to every client. */
+  sendChat(json: string): void {
+    this.broadcast(encodeFrame(0x02, encodeString(json)));
+  }
+
+  /**
+   * A chat line from the client. Vanilla answers a `/tell <player> <text>` with the sender's
+   * own copy (commands.message.display.outgoing, which names the RECIPIENT, in gray italics):
+   * the client must never take that echo for a command.
+   */
+  #onChatLine(line: string, send: (frame: Buffer) => void): void {
+    this.chat.push(line);
+    const m = /^\/tell ([A-Za-z0-9_]+) (.+)$/.exec(line);
+    if (m === null) return;
+    const [, to = '', text = ''] = m;
+    const words = text.split(' ').flatMap((w, i) => (i === 0 ? [w] : [' ', w]));
+    const echo = {
+      italic: true,
+      color: 'gray',
+      translate: 'commands.message.display.outgoing',
+      with: [
+        { clickEvent: { action: 'suggest_command', value: `/msg ${to} ` }, text: to },
+        { extra: words, text: '' },
+      ],
+    };
+    send(encodeFrame(0x02, encodeString(JSON.stringify(echo))));
+  }
+
   /** Eats the server started (a C08 in the air with an edible stack in hand). */
   eatsStarted = 0;
   /** Client Status actions received (C16; 0 = Perform Respawn). */
@@ -539,6 +576,7 @@ export class FakeGtnhServer {
 
   close(): Promise<void> {
     for (const t of this.#timers) clearInterval(t);
+    this.itemSim.stop();
     this.digSim.stop();
     this.placeSim.stop();
     this.combatSim.stop();
@@ -811,6 +849,7 @@ export class FakeGtnhServer {
           sim = this.chestSim;
           sim.setSender(send);
           sim.onJoin();
+          this.itemSim.setBroadcast((f) => this.broadcast(f));
           this.digSim.setSenders(send, (f) => this.broadcast(f));
           this.placeSim.setSenders(send, (f) => this.broadcast(f));
           this.combatSim.setSenders(
@@ -836,10 +875,12 @@ export class FakeGtnhServer {
           case 0x00:
             this.keepAliveEchoes.push(r.i32());
             break;
+          case 0x01:
+            this.#onChatLine(r.string(), send);
+            break;
           case 0x03:
             this.idleTicks += 1;
-            this.digSim.onPlayerTick();
-            this.combatSim.onPlayerTick();
+            this.itemSim.onPlayerTick();
             this.questBookSim?.onPlayerTick();
             if (!healthSent && this.confirmedPositions.length > 0) {
               healthSent = true;
@@ -867,8 +908,7 @@ export class FakeGtnhServer {
               onGround: r.bool(),
             };
             this.confirmedPositions.push(p);
-            this.digSim.onPlayerTick();
-            this.combatSim.onPlayerTick();
+            this.itemSim.onPlayerTick();
             this.questBookSim?.onPlayerTick();
             const centre = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`;
             if (this.#opts.streamChunks && this.#views.get(socket)?.centre !== centre) {
@@ -1025,6 +1065,7 @@ export class FakeGtnhServer {
       this.#sendView(socket, send, Math.floor(o.spawn.x / 16), Math.floor(o.spawn.z / 16));
     }
     for (const entity of o.entities) send(spawnFrame(entity));
+    this.itemSim.onJoin(send);
     this.combatSim.onJoin();
     // FML fires PlayerLoggedInEvent last: Better Questing's main_sync comes after the join.
     this.questBookSim?.onJoin(send);

@@ -50,6 +50,7 @@ export function parseCommandLine(argv: string[]) {
       tolerance: { type: 'string', default: '0.5' },
       'dry-run': { type: 'boolean', default: false },
       live: { type: 'boolean', default: false },
+      listen: { type: 'boolean', default: false },
       radius: { type: 'string', default: '16' },
       verbose: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
@@ -64,6 +65,8 @@ export type CliValues = ReturnType<typeof parseCommandLine>['values'];
 export interface Cli {
   /** The command as typed: the first positional argument. */
   command: string;
+  /** The positional arguments after the command (e.g. `cli command <text>`'s text). */
+  args: string[];
   values: CliValues;
   config: AgentConfig;
   configFile: LoadedConfig['configFile'];

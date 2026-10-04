@@ -166,10 +166,20 @@ describe('Gtnh1710Client fighting', () => {
     const result = await attack(client, 401);
     expect(result).toMatchObject({
       ok: true,
-      data: { target: 'minecraft:Cow', kills: 1, dropsCollected: true, walkedToDrops: true },
+      data: {
+        target: 'minecraft:Cow',
+        kills: 1,
+        dropsCollected: true,
+        walkedToDrops: true,
+        dropsLeft: 0,
+      },
     });
-    // The drops lay 2 blocks away, beyond a player's pickup reach (1.3): it walked there.
-    expect(result.message).toMatch(/walked to the drops at \(-2\.5, 106\.0, -7\.5\) and picked up/);
+    // The drops came to rest 2 blocks away, beyond a player's pickup reach (1.4): it followed
+    // the items there, and walked onto the block they lay in.
+    expect(result.message).toMatch(
+      /walked to the drops at \(-3, 106, -8\) and picked up 2 x minecraft:beef, 1 x minecraft:leather/,
+    );
+    expect(server.walkSteps().at(-1)).toMatchObject({ x: -2.5, feetY: 106, z: -7.5 });
     expect(server.combatSim.pickedUp).toEqual(
       expect.arrayContaining([
         { item: 'minecraft:beef', count: 2 },
@@ -180,7 +190,7 @@ describe('Gtnh1710Client fighting', () => {
       known: true,
       value: { items: { 'minecraft:beef': 2, 'minecraft:leather': 1 } },
     });
-  }, 10_000);
+  }, 15_000);
 
   it('never walks to the drops of a hostile it killed (that is no escape)', async () => {
     const { server, client } = await start({

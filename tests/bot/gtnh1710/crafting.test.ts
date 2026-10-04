@@ -21,7 +21,7 @@ import {
   type ItemKey,
   type PlacedRecipe,
 } from '../../../src/bot/gtnh1710/crafting.ts';
-import { RECIPES } from '../../../src/domain/recipes.ts';
+import { craftingRecipe, RECIPES, type CraftingRecipe } from '../../../src/domain/recipes.ts';
 
 // A tiny registry: vanilla 1.7.10 ids.
 const IDS: Record<string, number> = {
@@ -33,6 +33,7 @@ const IDS: Record<string, number> = {
   'minecraft:chest': 54,
   'minecraft:flint': 318,
   'minecraft:crafting_table': 58,
+  'minecraft:wooden_pickaxe': 270,
 };
 function resolve(name: string): ItemKey | null {
   const m = /^(.*?)(?:@(\d+))?$/.exec(name);
@@ -103,6 +104,59 @@ describe('placing a recipe in the grid', () => {
     expect(placeRecipe(RECIPES.planks_acacia, INVENTORY_GRID, resolve)).toMatchObject({
       ok: false,
       reason: 'none of minecraft:log2 is in the item registry',
+    });
+  });
+});
+
+describe("placing the knowledge base's recipes", { timeout: 30_000 }, () => {
+  /** GTNH's wooden pickaxe (any plankWood, any stickWood), as CRAFT_ITEM knows it. */
+  const pickaxe = (): CraftingRecipe => {
+    const r = craftingRecipe('minecraft:wooden_pickaxe#1');
+    if (r === null) throw new Error('no pickaxe recipe');
+    return r;
+  };
+
+  it('lays a 3x3 pattern out cell by cell at the table, with every kind its ore entry has', () => {
+    const p = placeRecipe(pickaxe(), TABLE_GRID, resolve);
+    if (!p.ok) throw new Error(p.reason);
+    // aaa / .b. / .b.: slots 1-3, then 5 and 8.
+    expect(p.value.cells.map((c) => c.slot)).toEqual([1, 2, 3, 5, 8]);
+    expect(p.value.cells[0]?.label).toBe('ore:plankWood');
+    // Only the kinds this registry names: of GTNH's 650 planks, vanilla's (the dump lists
+    // minecraft:planks at every damage value it saw, 0-63).
+    const planks = p.value.cells[0]?.accepts ?? [];
+    expect(planks.slice(0, 6)).toEqual([0, 1, 2, 3, 4, 5].map((damage) => ({ id: 5, damage })));
+    expect(planks.every((k) => k.id === 5)).toBe(true);
+    expect(p.value.cells[3]?.accepts).toEqual([{ id: 280, damage: 0 }]);
+    expect(p.value.expected).toEqual({ id: 270, damage: 0, count: 1, hasNbt: false });
+    expect(placeRecipe(pickaxe(), INVENTORY_GRID, resolve)).toMatchObject({
+      ok: false,
+      reason: 'minecraft:wooden_pickaxe#1 is 3x3; the 2x2 inventory grid is smaller',
+    });
+  });
+
+  it('fills it from any mix of accepted kinds, and names the ore entry when one runs out', () => {
+    const p = placeRecipe(pickaxe(), TABLE_GRID, resolve);
+    if (!p.ok) throw new Error(p.reason);
+    const w = win(TABLE_GRID, {
+      10: stack('minecraft:planks@4', 2),
+      11: stack('minecraft:planks', 1),
+      12: stack('minecraft:stick', 2),
+    });
+    const fill = planFill(w, TABLE_GRID, p.value);
+    if (!fill.ok) throw new Error(fill.reason);
+    expect([1, 2, 3, 5, 8].map((s) => fill.value.after.slots[s])).toEqual([
+      stack('minecraft:planks@4', 1),
+      stack('minecraft:planks@4', 1),
+      stack('minecraft:planks', 1),
+      stack('minecraft:stick', 1),
+      stack('minecraft:stick', 1),
+    ]);
+    expect(replay(w, fill.value.clicks)).toEqual(fill.value.after);
+    const noSticks = win(TABLE_GRID, { 10: stack('minecraft:planks', 3) });
+    expect(planFill(noSticks, TABLE_GRID, p.value)).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/nothing left for ore:stickWood \(1 kind\)/) as string,
     });
   });
 });

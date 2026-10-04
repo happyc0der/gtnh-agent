@@ -12,6 +12,8 @@ import { isProtected, mergeProtectedItems } from '../../safety/protected-items.t
 import { cycleEvent } from './narration.ts';
 import { isDark, nightReason, nightSoon } from './night.ts';
 import {
+  autonomyOff,
+  commandWaiting,
   CONTINUE_AFTER,
   done,
   mobPause,
@@ -49,6 +51,12 @@ export interface FoodStatus {
   carried: number;
   /** Below this food level System 1 eats (safety.hungerEatThreshold). */
   eatBelow: number;
+  /**
+   * Below this food level the food bar is nearly empty (safety.minHunger): the safety policy
+   * then lets only a food trip's actions run, so getting food keeps priority over an owner's
+   * command (commands.ts).
+   */
+  starveBelow: number;
 }
 
 /**
@@ -76,12 +84,18 @@ export function foodStatusOf(
       FOOD_TRIP_POINTS,
     ),
     eatBelow: config.safety.hungerEatThreshold,
+    starveBelow: config.safety.minHunger,
   };
 }
 
 /** Hungry, and nothing carried would restore anything: time to get food. */
 export function foodDue(s: FoodStatus): boolean {
   return s.hunger < s.eatBelow && s.carried <= 0;
+}
+
+/** The food bar nearly empty with nothing to eat: food comes before an owner's command too. */
+export function starving(s: FoodStatus): boolean {
+  return s.hunger < s.starveBelow && s.carried <= 0;
 }
 
 /** A food trip has what it went for: about a day of food carried. */
@@ -159,8 +173,16 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
     finishFoodTask(deps.repos, `${fed.carried} hunger points of food carried`);
     emit({ kind: 'food', message: `trip over: ${fed.carried} hunger points of food carried` });
     play.foodStuck = 0;
-  } else if (fed !== null && (foodTripOngoing(deps.repos) || foodDue(fed))) {
+  } else if (
+    fed !== null &&
+    (foodTripOngoing(deps.repos) || foodDue(fed)) &&
+    // An owner paused play: no food trip, unless the food bar is nearly empty.
+    (starving(fed) || autonomyOff(deps.repos) === null)
+  ) {
     const food = deps.food as NonNullable<PlayDeps['food']>;
+    // A food trip on a nearly empty food bar keeps priority; any other gives way to a command.
+    const urgent = starving(fed);
+    let preempted: string | null = null;
     if (play.foodStuck >= limits.maxStuckSessions) {
       return done(
         play,
@@ -196,7 +218,7 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
           ? 'enough food is carried'
           : foodDark !== null
             ? nightReason(foodDark)
-            : hooks.stopRequested(),
+            : ((urgent ? null : (preempted ??= commandWaiting(play))) ?? hooks.stopRequested()),
       onCycle: (r, index) => {
         play.lastDecision = r.decision ?? null;
         emit(cycleEvent(deps.repos, session, r, index));
@@ -233,6 +255,8 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
       if (deps.shelter === undefined) return done(play, nightReason(foodDark), foodDark);
       return 'next-round'; // the next round builds the shelter
     }
+    // An owner's command comes first; the trip goes on after it.
+    if (preempted !== null && result.stopKind === 'stop-requested') return 'next-round';
     if (result.stopKind === 'stop-requested' && !enough) return done(play, result.stopReason);
     const mob = mobPause(result.stopKind, play.lastDecision);
     if (mob !== null) return waitOutMob(play, FOOD_TASK_ID, mob);

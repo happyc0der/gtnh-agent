@@ -5,6 +5,7 @@ import {
   CLICKABLE_SUPPORTS,
   checkPlace,
   checkPlaceCell,
+  checkStation,
   FALLING_SUPPORTS,
   PLACE_NEIGHBOURS,
   PLACE_TARGETS,
@@ -336,6 +337,94 @@ describe('checkPlace', () => {
         /in a column the player stands in: it could fall on its head/,
       ) as unknown,
     });
+  });
+});
+
+describe('placing a crafting table or a furnace (checkStation)', () => {
+  /** Stone at the feet and head levels along z = -1 and z = `south` (x -6..6): a corridor. */
+  const corridor = (south: number, extra: Record<string, number> = {}): WalkWorld => {
+    const blocks: Record<string, number> = { ...extra };
+    for (let x = -6; x <= 6; x++) {
+      for (const z of [-1, south]) for (const y of [200, 201]) blocks[k(x, y, z)] = ID.stone;
+    }
+    return world(blocks);
+  };
+
+  it('goes on the ground beside the player, in the open', () => {
+    expect(checkStation(world(), TERRAIN.fence, FEET, { x: 2, y: 200, z: 0 })).toBeNull();
+    expect(
+      checkPlace(world(), TERRAIN, FEET, { x: 2, y: 200, z: 0 }, 'minecraft:crafting_table', []),
+    ).toMatchObject({
+      ok: true,
+      block: 'minecraft:crafting_table',
+      support: { clicked: { x: 2, y: 199, z: 0 }, face: 1 },
+    });
+    // In the pen (one walking level) too, and a furnace alike.
+    expect(
+      checkPlace(world(), AREA, FEET, { x: 1, y: 200, z: 0 }, 'minecraft:furnace', []),
+    ).toMatchObject({ ok: true, block: 'minecraft:furnace' });
+  });
+
+  it('never in a 1-wide passage: the walks it cuts off refuse it (a plain block is not judged so)', () => {
+    const narrow = corridor(1);
+    const cell = { x: 2, y: 200, z: 0 };
+    expect(checkStation(narrow, TERRAIN.fence, FEET, cell)).toMatch(
+      /^it would be in the player's way: \d+ spot\(s\) it walks to now \(e\.g\. \(3, 200, 0\)\) would be cut off/,
+    );
+    expect(checkPlace(narrow, TERRAIN, FEET, cell, 'minecraft:furnace', [])).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(
+        /^minecraft:furnace at \(2, 200, 0\): it would be in the/,
+      ) as unknown,
+    });
+    expect(checkPlace(narrow, TERRAIN, FEET, cell, 'minecraft:cobblestone', []).ok).toBe(true);
+    // Two blocks wide, the other lane stays open; at a dead end nothing is cut off.
+    expect(checkStation(corridor(2), TERRAIN.fence, FEET, cell)).toBeNull();
+    const deadEnd = corridor(1, { [k(3, 200, 0)]: ID.stone, [k(3, 201, 0)]: ID.stone });
+    expect(checkStation(deadEnd, TERRAIN.fence, FEET, cell)).toBeNull();
+  });
+
+  it("never on a staircase's only step", () => {
+    // North of z = -1 a plateau two blocks high (feet at 202 on it), reached by one step at
+    // x = 2: the stone at (2, 200, -2) has nothing on it, and the walker steps up straight
+    // only, from (2, 200, -1).
+    const blocks: Record<string, number> = {};
+    for (let x = -6; x <= 6; x++) {
+      for (let z = -6; z <= -2; z++) {
+        blocks[k(x, 200, z)] = ID.stone;
+        if (!(x === 2 && z === -2)) blocks[k(x, 201, z)] = ID.stone;
+      }
+    }
+    const stairs = world(blocks);
+    expect(checkStation(stairs, TERRAIN.fence, FEET, { x: 2, y: 200, z: -1 })).toMatch(
+      /in the player's way: .*\(2, 201, -2\)/,
+    );
+    expect(checkStation(stairs, TERRAIN.fence, FEET, { x: 0, y: 200, z: -1 })).toBeNull();
+  });
+
+  it("only on a solid floor, never in the player's own columns, and only from walkable ground", () => {
+    // At head height beside a stone: placeable for a log, but no floor under it.
+    const side = world({ [k(2, 201, 0)]: ID.stone });
+    expect(checkPlace(side, AREA, FEET, { x: 1, y: 201, z: 0 }, 'minecraft:log', []).ok).toBe(true);
+    expect(checkStation(side, AREA.fence, FEET, { x: 1, y: 201, z: 0 })).toBe(
+      'it would not stand on a solid floor: minecraft:air is under it',
+    );
+    expect(
+      checkStation(world({ [k(1, 199, 0)]: ID.leaves }), TERRAIN.fence, FEET, {
+        x: 1,
+        y: 200,
+        z: 0,
+      }),
+    ).toMatch(/minecraft:leaves is under it/);
+    // Over the head (against a block beside it): never.
+    const overHead = world({ [k(1, 202, 0)]: ID.stone });
+    expect(checkStation(overHead, TERRAIN.fence, FEET, { x: 0, y: 202, z: 0 })).toMatch(
+      /in a column the player stands in/,
+    );
+    // Feet in the air (mid-jump): no walk to compare, so no.
+    expect(
+      checkStation(world(), TERRAIN.fence, { x: 0.5, y: 200.4, z: 0.5 }, { x: 2, y: 200, z: 0 }),
+    ).toMatch(/does not stand on walkable ground/);
   });
 });
 

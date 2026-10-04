@@ -12,7 +12,13 @@ import {
 } from './common.ts';
 import { PlaceableBlockSchema, PlaceableItemSchema, placedBlockOf } from './blocks.ts';
 import { QuestIdSchema } from './quest-book.ts';
-import { ingredientRequirements, MAX_CRAFT_TIMES, RECIPES, RecipeIdSchema } from './recipes.ts';
+import {
+  CraftRecipeIdSchema,
+  ingredientRequirements,
+  MAX_CRAFT_TIMES,
+  MAX_INGREDIENT_KINDS,
+  recipeById,
+} from './recipes.ts';
 
 /**
  * The complete allowlist of in-game actions. Anything not listed here is rejected
@@ -174,21 +180,23 @@ export const DigBlockSpec = z.strictObject({
 });
 /**
  * Place ONE block the player carries (an allowlisted plain block: dirt, cobblestone, sand,
- * gravel, sandstone, planks, logs) into the empty cell at `position`, which the observation
- * lists as placeable. See docs/action-contract.md.
+ * gravel, sandstone, planks, logs; or a crafting table or furnace, on a solid floor) into
+ * the empty cell at `position`, which the observation lists as placeable. See
+ * docs/action-contract.md.
  */
 export const PlaceBlockSpec = z.strictObject({
   type: z.literal('PLACE_BLOCK'),
   args: z.strictObject({ position: BlockPositionSchema, item: PlaceableItemSchema }),
 });
 /**
- * Craft `times` times with a recipe from the agent's table (src/domain/recipes.ts), in the
- * player's own 2x2 grid (craftingTableId null) or at a configured crafting table (3x3).
+ * Craft `times` times with a recipe CRAFT_ITEM makes (src/domain/recipes.ts: the
+ * hand-verified table's, or the knowledge base's by a route step's id), in the player's own
+ * 2x2 grid (craftingTableId null) or at a configured or observed crafting table (3x3).
  */
 export const CraftItemSpec = z.strictObject({
   type: z.literal('CRAFT_ITEM'),
   args: z.strictObject({
-    recipe: RecipeIdSchema,
+    recipe: CraftRecipeIdSchema,
     times: z.int().min(1).max(MAX_CRAFT_TIMES),
     craftingTableId: EntityIdSchema.nullable(),
   }),
@@ -354,7 +362,7 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
   }),
   z.strictObject({
     kind: z.literal('ITEMS_CRAFTED'),
-    recipe: RecipeIdSchema,
+    recipe: CraftRecipeIdSchema,
     /** The result item and how many of it the inventory gains in total. */
     result: ItemNameSchema,
     quantity: z
@@ -365,7 +373,7 @@ export const PostconditionSchema = z.discriminatedUnion('kind', [
     ingredients: z
       .array(
         z.strictObject({
-          anyOf: z.array(ItemNameSchema).min(1).max(16),
+          anyOf: z.array(ItemNameSchema).min(1).max(MAX_INGREDIENT_KINDS),
           quantity: z
             .int()
             .min(1)
@@ -476,7 +484,7 @@ export function expectedPostconditionFor(spec: ActionSpec): Postcondition {
         item: spec.args.item,
       };
     case 'CRAFT_ITEM': {
-      const recipe = RECIPES[spec.args.recipe];
+      const recipe = recipeById(spec.args.recipe);
       const times = spec.args.times;
       return {
         kind: 'ITEMS_CRAFTED',

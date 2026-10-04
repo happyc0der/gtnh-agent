@@ -171,7 +171,11 @@ describe('mining stone: 64 cobblestone from a few logs', () => {
             { type: 'CRAFT_ITEM', args: { recipe: 'sticks', times: 1, craftingTableId: null } },
             {
               type: 'CRAFT_ITEM',
-              args: { recipe: 'wooden_pickaxe', times: 1, craftingTableId: 'table.main' },
+              args: {
+                recipe: 'minecraft:wooden_pickaxe#1',
+                times: 1,
+                craftingTableId: 'table.main',
+              },
             },
           );
         }
@@ -192,7 +196,7 @@ describe('mining stone: 64 cobblestone from a few logs', () => {
     expect(g.world.inventory.items['minecraft:cobblestone']).toBe(64);
     const performed = g.performed();
     const pickaxes = performed.filter(
-      (a) => a.type === 'CRAFT_ITEM' && a.args.recipe === 'wooden_pickaxe',
+      (a) => a.type === 'CRAFT_ITEM' && a.args.recipe === 'minecraft:wooden_pickaxe#1',
     );
     expect(pickaxes).toHaveLength(2);
     // Every dig had a pickaxe that harvests stone: none was refused, none failed.

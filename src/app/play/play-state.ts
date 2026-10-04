@@ -7,6 +7,8 @@ import {
   type Quest,
   type QuestProgress,
 } from '../../goals/quest-goals.ts';
+import { OWNER_PAUSED_KEY, QUESTS_OFF_KEY } from '../../persistence/memory-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
 import type { SessionStopKind } from '../loop/live-session.ts';
 import type { PlayDeps, PlayEvent, PlayHooks, PlayLimits, PlayResult } from './play.ts';
 
@@ -49,6 +51,38 @@ export interface PlayState {
   foodStuck: number;
   /** System 1's decision in the latest cycle (for mobPause). */
   lastDecision: DecisionResult | null;
+  /** Owners' commands (commands.ts): how each running one is going, by command id. */
+  readonly commandRuns: Map<number, CommandRun>;
+  /** The newest command id the command round has handled (newer ones preempt sessions). */
+  commandsSeen: number;
+  /**
+   * Why play has nothing to do now (no quest left, a task that needs a person...), and since
+   * when: with --listen play waits for commands instead of ending, and looks again later.
+   */
+  idle: { reason: string; since: number } | null;
+  /** The idle reason last told (each is told once). */
+  idleNote: string | null;
+  /**
+   * Run every few seconds while play waits in the shelter for the morning: owners' commands
+   * are heard and answered meanwhile (commands.ts; set by runPlay).
+   */
+  whileSheltered: () => Promise<void>;
+}
+
+/** How an owner's running command is going (commands.ts). */
+export interface CommandRun {
+  /** Steps (travel) or sessions (a goal) in a row that failed, and the last failure. */
+  failures: number;
+  lastFailure: string | null;
+  /** Replies said once for it ("night", "food", "half"...). */
+  said: Set<string>;
+  /** Travel: blocks to go when progress was last told. */
+  reportedDistance: number | null;
+  /** A goal: items missing before the last session, and sessions in a row with no fewer. */
+  missing: number | null;
+  stuck: number;
+  /** A goal: how many of its item the inventory held when the command began. */
+  startHave: number | null;
 }
 
 /**
@@ -83,7 +117,35 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     loopWaits: 0,
     foodStuck: 0,
     lastDecision: null,
+    commandRuns: new Map(),
+    commandsSeen: 0,
+    idle: null,
+    idleNote: null,
+    whileSheltered: () => Promise.resolve(),
   };
+}
+
+/**
+ * Why the session running now should end for an owner's command, or null: one heard in chat
+ * and not taken yet, or one `cli command` queued since the command round last looked.
+ * Commands come before quests, food trips and scouting; the night shelter and a food trip on
+ * a nearly empty food bar do not ask.
+ */
+export function commandWaiting(play: PlayState): string | null {
+  const commands = play.deps.commands;
+  if (commands === undefined) return null;
+  if (commands.waiting()) return 'an owner gave a new command';
+  return play.deps.repos.commands.hasQueuedAfter(play.commandsSeen)
+    ? 'an owner queued a new command'
+    : null;
+}
+
+/** Why autonomous play is off (an owner's pause or stop, or quests off), or null when it is on. */
+export function autonomyOff(repos: Repositories): string | null {
+  const paused = repos.memory.getValue(OWNER_PAUSED_KEY);
+  if (paused !== null) return `paused: ${paused}`;
+  const off = repos.memory.getValue(QUESTS_OFF_KEY);
+  return off === null ? null : `quests are off: ${off}`;
 }
 
 /** Ends play: why (and the clock, when it stops for the night), with what play has done. */
