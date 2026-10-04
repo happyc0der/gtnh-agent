@@ -23,6 +23,7 @@ import {
   liveAbilities,
   type PlayLimits,
   MAX_MOB_WAITS,
+  MOB_LONG_WAIT_MS,
   MOB_WAIT_MS,
 } from '../play/play.ts';
 import { createCommandTranslator, createProviders } from '../providers.ts';
@@ -244,12 +245,16 @@ export async function playCommand(cli: Cli): Promise<number> {
       // Until the next sunrise: also from a day that night will end soon (seen live: with
       // no shelter possible two minutes before dusk, it slept 15 s and came back, again
       // and again, until the evening).
+      // A mob that stays: listening, the bot waits longer each time rather than leaving the
+      // owner a bot that quit (MOB_LONG_WAIT_MS); otherwise play stops and says so.
       const sleepMs =
         out.night !== null
           ? (untilSunrise(out.night) + 0.25) * 60_000
           : out.mobNearby !== null && mobWaits <= MAX_MOB_WAITS
             ? MOB_WAIT_MS
-            : 0;
+            : out.mobNearby !== null && listen
+              ? MOB_LONG_WAIT_MS
+              : 0;
       if (sleepMs === 0 || Date.now() + sleepMs >= deadline) {
         print(
           out.mobNearby !== null && mobWaits > MAX_MOB_WAITS
@@ -264,7 +269,7 @@ export async function playCommand(cli: Cli): Promise<number> {
       process.stderr.write(
         out.night !== null
           ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on (${out.stopReason.slice(0, 600)})\n`
-          : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits}/${MAX_MOB_WAITS}), then playing on\n`,
+          : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits <= MAX_MOB_WAITS ? `${mobWaits}/${MAX_MOB_WAITS}` : `wait ${mobWaits}: it stays near`}), then playing on\n`,
       );
       if ((await waitUnlessStopped(sleepMs)) !== null) {
         print({

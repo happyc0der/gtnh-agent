@@ -12,7 +12,7 @@ describe('an idle bot stands by for System 1', () => {
   const repos = memoryRepos();
   syncConfigToDatabase(config, repos);
 
-  it('acts only on a reflex: a retreat, a meal, a rest', () => {
+  it('acts on a reflex: a retreat, a meal, a rest', () => {
     expect(standbyReason(now(makeState()), config, repos)).toBeNull();
     const away = now(
       makeState((w) => {
@@ -20,17 +20,38 @@ describe('an idle bot stands by for System 1', () => {
         w.hostiles = [{ x: 43, y: 64, z: 40 }];
       }),
     );
-    expect(standbyReason(away, config, repos)).toBe('RETREAT_HOME [HOSTILES_NEARBY]');
+    expect(standbyReason(away, config, repos)).toEqual({
+      kind: 'reflex',
+      text: 'RETREAT_HOME [HOSTILES_NEARBY]',
+    });
     const hungry = now(makeState((w) => void (w.player.hunger = 8)));
-    expect(standbyReason(hungry, config, repos)).toBe('EAT [HUNGRY]');
+    expect(standbyReason(hungry, config, repos)).toEqual({ kind: 'reflex', text: 'EAT [HUNGRY]' });
     const hurt = now(makeState((w) => void (w.player.health = 6)));
-    expect(standbyReason(hurt, config, repos)).toBe('REST [LOW_HEALTH]');
+    expect(standbyReason(hurt, config, repos)).toEqual({
+      kind: 'reflex',
+      text: 'REST [LOW_HEALTH]',
+    });
   });
 
-  it('not on a pause or an unreliable observation: those are for a person', () => {
-    // A hostile at home: System 1 pauses (nowhere to retreat to), which standing by cannot fix.
+  it('waits offline for a mob near home, unless sealed in: nowhere is left to retreat to', () => {
+    // Seen live 2026-10-04: a zombie followed the bot home, and the idle bot, paused there,
+    // stood still until it was killed.
     const atHome = now(makeState((w) => void (w.hostiles = [{ x: 3, y: 64, z: 1 }])));
-    expect(standbyReason(atHome, config, repos)).toBeNull();
+    expect(standbyReason(atHome, config, repos)).toEqual({
+      kind: 'mob',
+      reasons: 'HOSTILES_NEARBY, ALREADY_AT_SAFE_LOCATION',
+    });
+    // Sealed in its shelter, no mob can reach it: it stays, online for commands.
+    const sealed = now(
+      makeState((w) => {
+        w.hostiles = [{ x: 3, y: 64, z: 1 }];
+        w.player.sealed = true;
+      }),
+    );
+    expect(standbyReason(sealed, config, repos)).toBeNull();
+  });
+
+  it('nothing on an unreliable observation', () => {
     // An old observation is unreliable: nothing is done on it.
     expect(
       standbyReason(

@@ -8,6 +8,16 @@ import {
 import { craftableFrom } from '../../domain/recipes.ts';
 import type { GameState, WorldTime } from '../../domain/game-state.ts';
 import type { ShelterStatus } from '../../goals/shelter.ts';
+import type { TunnelPlan } from '../../bot/gtnh1710/tunnel.ts';
+import type { BlockPosition } from '../../domain/common.ts';
+import type { TunnelDirection } from '../../domain/owner-commands.ts';
+
+/** An owner's tunnel: where it starts (a feet block), which way, how many blocks. */
+export interface TunnelRequest {
+  start: BlockPosition;
+  direction: TunnelDirection;
+  length: number;
+}
 import type { Repositories } from '../../persistence/repositories.ts';
 import type { System1Stats } from '../../system1/model-cadence.ts';
 import type { CycleResult } from '../loop/agent-loop.ts';
@@ -99,6 +109,12 @@ export interface PlayDeps {
    * morning inside; without it, play stops before dark.
    */
   shelter?: (purpose?: 'night' | 'morning') => Promise<ShelterStatus | null>;
+  /**
+   * The next steps of an owner's tunnel (src/bot/gtnh1710/tunnel.ts planTunnel, with the live
+   * client's dig rules), or null when the blocks or the position are not known. Without it,
+   * a tunnel command fails.
+   */
+  tunnel?: (req: TunnelRequest) => Promise<TunnelPlan | null>;
   /** Waits (injectable for tests). */
   sleep?: (ms: number) => Promise<void>;
   /**
@@ -248,8 +264,10 @@ export interface PlayHooks {
 
 /** How long the caller waits offline for a mob near home to leave, before playing on. */
 export const MOB_WAIT_MS = 30_000;
-/** Mob waits in a row after which play stops and says so. */
+/** Mob waits in a row after which play stops and says so (with --listen: waits longer). */
 export const MAX_MOB_WAITS = 6;
+/** With --listen, each wait after MAX_MOB_WAITS of them: the bot stays for its owners. */
+export const MOB_LONG_WAIT_MS = 5 * 60_000;
 
 /**
  * What the live agent can obtain: everything digging gathers, and what the recipes CRAFT_ITEM
@@ -302,6 +320,15 @@ export async function runPlay(
   for (;;) {
     // An owner's stop has stopped the session it interrupted: actions may run again.
     deps.commands?.clearInterrupt();
+    // A mob came near the idle bot at home: wait offline for it to leave.
+    if (play.mobAlarm !== null) {
+      const reasons = play.mobAlarm;
+      play.mobAlarm = null;
+      return leave(play, {
+        ...done(play, `a mob is near the player (${reasons}): waiting offline for it to leave`),
+        mobNearby: reasons,
+      });
+    }
     const round =
       stopOrLimit(play) ??
       (await nightRound(play)) ??

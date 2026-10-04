@@ -121,7 +121,8 @@ const LADDER_BLOCKS: ReadonlySet<string> = new Set([
   'BiomesOPlenty:moss',
 ]);
 
-function isLiquidName(name: string): boolean {
+/** Water, lava or a modded fluid (by its registry name). */
+export function isLiquidName(name: string): boolean {
   if (WATER_BLOCKS.has(name) || LAVA_BLOCKS.has(name)) return true;
   const hazard = hazardKindOfBlock(name);
   // Modded fluids are registered as "...fluid..." blocks (IC2:fluidUuMatter, ...); the hazard

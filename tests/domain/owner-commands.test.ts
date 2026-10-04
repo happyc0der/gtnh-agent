@@ -267,3 +267,25 @@ describe('explore (Baritone #explore)', () => {
     }
   });
 });
+
+describe('tunnel (Baritone #tunnel)', () => {
+  it('takes a direction along an axis and a length, the length optional', () => {
+    expect(parsed('!tunnel east')).toEqual({ verb: 'tunnel', direction: 'east', length: 16 });
+    expect(parsed('!tunnel n 40')).toEqual({ verb: 'tunnel', direction: 'north', length: 40 });
+    expect(parsed('!tunnel 8 west')).toEqual({ verb: 'tunnel', direction: 'west', length: 8 });
+    expect(describeCommand(parsed('!tunnel south 20'))).toBe('dig a tunnel 20 blocks south');
+  });
+
+  it('gives its usage without a direction, for a diagonal, or a length past 64', () => {
+    for (const text of [
+      '!tunnel',
+      '!tunnel ne',
+      '!tunnel east 100',
+      '!tunnel east west',
+      '!tunnel 20',
+    ]) {
+      const p = parseOwnerCommand(text);
+      expect(p, text).toMatchObject({ ok: false, kind: 'usage' });
+    }
+  });
+});

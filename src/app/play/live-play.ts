@@ -14,6 +14,7 @@ import {
   type PitSite,
 } from '../../bot/gtnh1710/night-pit.ts';
 import { HAZARD_SCAN_RADIUS } from '../../bot/gtnh1710/hazard-scan.ts';
+import { planTunnel, type TunnelPlan } from '../../bot/gtnh1710/tunnel.ts';
 import { playArea } from '../../bot/gtnh1710/play-area.ts';
 import type { AgentConfig } from '../../config/env.ts';
 import type { Decision } from '../../domain/decisions.ts';
@@ -34,7 +35,8 @@ import { systemClock } from '../../util/clock.ts';
 import { randomIds } from '../../util/ids.ts';
 import { runQuestBookAction, type AgentDeps } from '../loop/agent-loop.ts';
 import { buildSafetyContext, syncConfigToDatabase } from '../loop/agent-memory.ts';
-import type { CommandDeps } from './commands.ts';
+import type { CommandDeps, StandbyCall } from './commands.ts';
+import { mobPause } from './play-state.ts';
 import { planTravelStep } from './owner-travel.ts';
 import { foodStatusOf } from './food.ts';
 import { runSession } from '../loop/live-session.ts';
@@ -47,6 +49,7 @@ import {
   type PlayEvent,
   type PlayLimits,
   type PlayResult,
+  type TunnelRequest,
 } from './play.ts';
 
 /** How long to wait for Better Questing's quest book after login. */
@@ -66,6 +69,50 @@ function readPitSite(repos: Repositories): PitSite | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The fence and the dig rules a code-made plan uses now (the night pit, the way out of it, an
+ * owner's tunnel): only digs a carried tool can harvest (the safety policy's own rule). Null
+ * without a fence.
+ */
+function digOptions(
+  client: Gtnh1710Client,
+  config: AgentConfig,
+  inventory: Readonly<Record<string, number>>,
+): PitOptions | null {
+  const fence = client.currentFence();
+  if (fence === null) return null;
+  return {
+    area: { fence, maxHeightAboveFence: config.minecraft.digging.maxHeightAboveFence },
+    maxPathLength: config.minecraft.movement.maxPathLength,
+    canHarvest: (block) => {
+      const rule = diggableInfo(block).harvest;
+      if (rule === null) return null;
+      const tool = carriedHarvester(inventory, rule);
+      return tool.ok ? null : tool.reason;
+    },
+  };
+}
+
+/**
+ * An owner's tunnel's next steps (tunnel.ts planTunnel), from the live world with the
+ * client's own dig rules; null when the blocks, the position, the inventory or the fence are
+ * not known.
+ */
+export function liveTunnel(
+  client: Gtnh1710Client,
+  config: AgentConfig,
+): (req: TunnelRequest) => Promise<TunnelPlan | null> {
+  return async (req) => {
+    const state = await client.observe();
+    const world = client.world.walkWorld();
+    const feet = client.world.ownPosition;
+    if (world === null || feet === null || !state.inventory.known) return null;
+    const opts = digOptions(client, config, state.inventory.value.items);
+    if (opts === null) return null;
+    return planTunnel(world, feet, req.start, req.direction, req.length, opts);
+  };
 }
 
 /**
@@ -111,20 +158,7 @@ export function liveShelter(
       exit: [],
     };
     const fence = client.currentFence();
-    const opts: PitOptions | null =
-      fence === null
-        ? null
-        : {
-            area: { fence, maxHeightAboveFence: config.minecraft.digging.maxHeightAboveFence },
-            maxPathLength: config.minecraft.movement.maxPathLength,
-            // Only digs a carried tool can harvest (the safety policy's own rule).
-            canHarvest: (block) => {
-              const rule = diggableInfo(block).harvest;
-              if (rule === null) return null;
-              const tool = carriedHarvester(inventory, rule);
-              return tool.ok ? null : tool.reason;
-            },
-          };
+    const opts = digOptions(client, config, inventory);
     if (purpose === 'morning') {
       if (site !== null && !inPit) repos.memory.setValue(NIGHT_PIT_KEY, null);
       if (!walled && !inPit) return base;
@@ -188,15 +222,19 @@ const STANDBY_DECISIONS: ReadonlySet<Decision> = new Set<Decision>([
 ]);
 
 /**
- * What System 1 would do on its own about `state` while the bot is idle, when it is one of
- * its reflexes (a retreat, a fight, a meal, a rest), or null: the rule router's decision on a
- * reliable observation. The standby session then runs it through the executor like any cycle.
+ * What System 1 would do on its own about `state` while the bot is idle: one of its reflexes
+ * (a retreat, a fight, a meal, a rest), which the standby session then runs through the
+ * executor like any cycle; or a pause only because a mob is near while the bot is home (or has
+ * no home) and not sealed in: play then waits offline for it to leave, as after a session
+ * (seen live 2026-10-04: a zombie followed the bot home, where the pause had the idle bot
+ * stand still, and it was killed); or null. The rule router's decision on a reliable
+ * observation.
  */
 export function standbyReason(
   state: GameState,
   config: AgentConfig,
   repos: Repositories,
-): string | null {
+): StandbyCall | null {
   const safety = buildSafetyContext(config, repos, systemClock.now());
   if (assessStateReliability(state, safety).length > 0) return null;
   const d = routeDecision(state, {
@@ -206,7 +244,11 @@ export function standbyReason(
     eatingEnabled: config.minecraft.eating.enabled,
     recentMeals: repos.actions.recentMeals(MEAL_HISTORY_LENGTH),
   });
-  return STANDBY_DECISIONS.has(d.decision) ? `${d.decision} [${d.reasonCodes.join(', ')}]` : null;
+  if (STANDBY_DECISIONS.has(d.decision)) {
+    return { kind: 'reflex', text: `${d.decision} [${d.reasonCodes.join(', ')}]` };
+  }
+  const mob = mobPause('needs-attention', d);
+  return mob === null ? null : { kind: 'mob', reasons: mob };
 }
 
 /**
@@ -397,6 +439,7 @@ export async function runLivePlay(
                 return state.time.known ? state.time.value : null;
               },
               shelter: liveShelter(client, config, repos),
+              tunnel: liveTunnel(client, config),
               // Food trips only when the agent may eat (food it never eats is no use) and can
               // get some: dig a garden or hunt.
               ...(config.minecraft.eating.enabled &&

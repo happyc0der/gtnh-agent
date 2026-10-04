@@ -16,6 +16,7 @@ import {
   type InstantCommand,
   type OwnerCommand,
   type TravelCommand,
+  type TunnelCommand,
 } from '../../domain/owner-commands.ts';
 import type { Boundary, NamedLocation } from '../../domain/safety.ts';
 import type { CommandTranslation } from '../../llm/ollama-command-provider.ts';
@@ -88,9 +89,19 @@ export interface CommandDeps {
   configLocations: ReadonlyMap<string, NamedLocation>;
   /** The safety boundary: no command goes beyond it. */
   boundary: Boundary;
-  /** While idle: why System 1 should act now (a mob, low health, a meal), or null. */
-  standby?: () => Promise<string | null>;
+  /**
+   * While idle: what System 1 would do now, when it must act (a reflex: a retreat, a meal, a
+   * rest) or a mob near home has the bot wait offline; else null.
+   */
+  standby?: () => Promise<StandbyCall | null>;
 }
+
+/** What an idle bot must do now (live-play.ts standbyReason). */
+export type StandbyCall =
+  /** One of System 1's reflexes, run in a standby session: its decision and reasons. */
+  | { kind: 'reflex'; text: string }
+  /** A mob near the bot at home (or with no home): play waits offline (PlayState.mobAlarm). */
+  | { kind: 'mob'; reasons: string };
 
 /** What the bot knows now, for commands. */
 export interface CommandView {
@@ -144,6 +155,8 @@ function runOf(play: PlayState, id: number): CommandRun {
       stuck: 0,
       startHave: null,
       exploreTo: null,
+      tunnelFrom: null,
+      tunnelDone: null,
     };
     play.commandRuns.set(id, run);
   }
@@ -397,6 +410,7 @@ function checkAction(
     case 'come':
     case 'get':
     case 'mine':
+    case 'tunnel':
       return null;
   }
 }
@@ -413,6 +427,10 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
         : `following ${c.player}`;
     case 'goto':
       return `going to ${fmt(c)}`;
+    case 'tunnel': {
+      const p = view.position;
+      return `digging a tunnel ${c.length} blocks ${c.direction}${p === null ? '' : ` from ${fmt(roundPoint(p))}`}`;
+    }
     case 'explore': {
       const to = exploreTarget(play, cmd, c);
       return 'problem' in to
@@ -655,7 +673,110 @@ export async function commandRound(play: PlayState): Promise<RoundEnd> {
   }
   return isTravelCommand(command)
     ? travelRound(play, running, command)
-    : goalCommandRound(play, running, command);
+    : command.verb === 'tunnel'
+      ? tunnelRound(play, running, command)
+      : goalCommandRound(play, running, command);
+}
+
+/**
+ * One session of an owner's tunnel: the next few cells, planned by code from where the bot
+ * stands (PlayDeps.tunnel: tunnel.ts), run as known safe steps, each validated, executed and
+ * verified by the executor. It starts where the bot stood when the command began. Done at its
+ * length; failed, saying why and how far it got, when the next cell may not be dug (a fluid,
+ * a cave floor, a block it cannot harvest...), when a step fails, or after sessions with no
+ * cell gained. Dusk, a food bar nearly empty and an owner's new command interrupt it, as they
+ * do a trip.
+ */
+async function tunnelRound(
+  play: PlayState,
+  cmd: OwnerCommandRecord,
+  command: TunnelCommand,
+): Promise<PlayResult | 'next-round'> {
+  const { deps, limits, hooks } = play;
+  const run = runOf(play, cmd.id);
+  const fail = (why: string): 'next-round' => {
+    finish(play, cmd, 'failed', `Failed: ${why}`.slice(0, 400));
+    return 'next-round';
+  };
+  if (deps.tunnel === undefined) return fail('I cannot dig a tunnel here');
+  if (run.tunnelFrom === null) {
+    const at = (deps.commands as CommandDeps).view().position;
+    if (at === null) return fail('I do not know where I am');
+    run.tunnelFrom = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-6), z: Math.floor(at.z) };
+  }
+  const plan = await deps.tunnel({
+    start: run.tunnelFrom,
+    direction: command.direction,
+    length: command.length,
+  });
+  if (plan === null) {
+    run.failures += 1;
+    return run.failures >= MAX_COMMAND_FAILURES
+      ? fail('the blocks around me are not known')
+      : 'next-round';
+  }
+  if (!plan.ok) return fail(plan.reason);
+  const dug = `${plan.done} of ${command.length} blocks dug`;
+  if (plan.steps.length === 0) {
+    if (plan.done >= command.length) {
+      finish(play, cmd, 'done', `Done: dug a tunnel ${command.length} blocks ${command.direction}`);
+      return 'next-round';
+    }
+    return fail(`${plan.problem ?? 'there is nothing to dig'} (${dug})`);
+  }
+  run.stuck = run.tunnelDone !== null && plan.done <= run.tunnelDone ? run.stuck + 1 : 0;
+  run.tunnelDone = plan.done;
+  if (run.stuck >= limits.maxStuckSessions) {
+    return fail(`no progress in ${run.stuck} sessions (${play.lastStop}; ${dug})`);
+  }
+  let dark: WorldTime | null = null;
+  let hungry: FoodStatus | null = null;
+  let preempted: string | null = null;
+  const result = await blueprintSession(play, {
+    taskId: commandTaskId(cmd.id),
+    goal: `Owner command #${cmd.id} from ${cmd.sender}: ${describeCommand(command)} (code digs it)`,
+    subgoal: dug,
+    steps: plan.steps.map((s, i) => `${i + 1}. ${s.text}`),
+    known: plan.steps,
+    label: `owner command #${cmd.id}`,
+    text: `${describeCommand(command)} (${dug})`,
+    missing: {},
+    maxCycles: plan.steps.length * 2 + 2,
+    stopRequested: () =>
+      dark !== null
+        ? nightReason(dark)
+        : hungry !== null
+          ? 'the food bar is nearly empty'
+          : ((preempted ??= commandWaiting(play)) ?? hooks.stopRequested()),
+    onCycle: (r) => {
+      const after = r.outcome?.stateAfter;
+      if (
+        after?.time.known === true &&
+        (deps.shelter === undefined ? isDark(after.time.value) : nightSoon(after.time.value))
+      ) {
+        dark = after.time.value;
+      }
+      const fed = after === undefined || after === null ? null : (deps.food?.of(after) ?? null);
+      if (fed !== null && starving(fed)) hungry = fed;
+    },
+  });
+  play.lastStop = result.stopReason;
+  if (dark !== null) {
+    sayOnce(
+      play,
+      cmd,
+      'dusk',
+      `It is getting dark: I shelter for the night, then I ${describeCommand(command)}`,
+    );
+    return 'next-round';
+  }
+  const mob = mobPause(result.stopKind, play.lastDecision);
+  if (mob !== null) return waitOutMob(play, commandTaskId(cmd.id), mob);
+  if (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') {
+    return fail(`${result.stopReason} (${dug})`);
+  }
+  run.failures = 0;
+  return 'next-round';
 }
 
 /** Where a travel command goes now (a player may have moved), or why it cannot go. */
@@ -1054,8 +1175,14 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
     if (play.hooks.stopRequested() !== null || commandWaiting(play) !== null) return;
     await play.sleep(IDLE_POLL_MS);
   }
-  const reflex = (await play.deps.commands?.standby?.()) ?? null;
-  if (reflex === null) return;
+  const call = (await play.deps.commands?.standby?.()) ?? null;
+  if (call === null) return;
+  if (call.kind === 'mob') {
+    play.emit({ kind: 'idle', message: `a mob is near (${call.reasons}): waiting offline` });
+    play.mobAlarm = call.reasons;
+    return;
+  }
+  const reflex = call.text;
   play.emit({ kind: 'idle', message: `standing by: ${reflex}` });
   await blueprintSession(play, {
     taskId: STANDBY_TASK_ID,

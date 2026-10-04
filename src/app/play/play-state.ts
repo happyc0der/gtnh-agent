@@ -1,3 +1,4 @@
+import type { BlockPosition } from '../../domain/common.ts';
 import type { DecisionResult } from '../../domain/decisions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import { AGE0_QUESTS } from '../../goals/age0-quests.ts';
@@ -68,6 +69,11 @@ export interface PlayState {
    */
   whileSheltered: () => Promise<void>;
   /**
+   * A mob near the idle bot at home (standby: commands.ts idleFor): its reasons, until play
+   * ends to wait offline for it to leave (play.ts); else null.
+   */
+  mobAlarm: string | null;
+  /**
    * In the shelter, waiting: for the morning (until when, on play.now's clock), or in the
    * morning for the hostiles near it to go (what they are); else null.
    */
@@ -90,6 +96,9 @@ export interface CommandRun {
   startHave: number | null;
   /** Explore: the point it heads for, fixed when it began (x, z). */
   exploreTo: { x: number; z: number; direction: string } | null;
+  /** Tunnel: its first cell (where the bot stood when it began), and the cells dug then. */
+  tunnelFrom: BlockPosition | null;
+  tunnelDone: number | null;
 }
 
 /**
@@ -129,6 +138,7 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     idle: null,
     idleNote: null,
     whileSheltered: () => Promise.resolve(),
+    mobAlarm: null,
     sheltered: null,
   };
 }

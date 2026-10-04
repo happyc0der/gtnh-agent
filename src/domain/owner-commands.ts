@@ -104,6 +104,13 @@ const Coordinate = z.number().min(-COORDINATE_LIMIT).max(COORDINATE_LIMIT);
 export const EXPLORE_COMMAND_DISTANCE = 64;
 /** The farthest an explore command goes (blocks): more is a goto. */
 export const EXPLORE_COMMAND_MAX = 256;
+/** The ways a tunnel goes: one block wide only along an axis. */
+export const TUNNEL_DIRECTIONS = ['north', 'south', 'east', 'west'] as const;
+export type TunnelDirection = (typeof TUNNEL_DIRECTIONS)[number];
+/** How long a tunnel is when the owner names no length (blocks). */
+export const TUNNEL_COMMAND_LENGTH = 16;
+/** The longest tunnel one command digs (blocks). */
+export const TUNNEL_COMMAND_MAX = 64;
 const Count = z.int().min(1).max(MAX_GOAL_COUNT);
 
 export const OwnerCommandSchema = z.discriminatedUnion('verb', [
@@ -136,6 +143,15 @@ export const OwnerCommandSchema = z.discriminatedUnion('verb', [
     direction: ExploreDirectionSchema.nullable(),
     distance: z.int().min(8).max(EXPLORE_COMMAND_MAX),
   }),
+  /**
+   * Dig a straight tunnel, one block wide and two high, `length` blocks toward a compass
+   * direction from where the bot stands, as Baritone's #tunnel (code plans it: tunnel.ts).
+   */
+  z.strictObject({
+    verb: z.literal('tunnel'),
+    direction: z.enum(TUNNEL_DIRECTIONS),
+    length: z.int().min(1).max(TUNNEL_COMMAND_MAX),
+  }),
   /** Have `count` of `item`, pursued like `cli play --needs`. */
   z.strictObject({ verb: z.literal('get'), count: Count, item: ItemNameSchema }),
   /** Have `count` of what `block` drops (`item`), by mining it, likewise. */
@@ -165,8 +181,10 @@ export type TravelCommand = Extract<
 >;
 /** Commands that pursue items to have: get, mine. */
 export type GoalCommand = Extract<OwnerCommand, { verb: 'get' | 'mine' }>;
+/** A tunnel to dig: code plans its steps. */
+export type TunnelCommand = Extract<OwnerCommand, { verb: 'tunnel' }>;
 /** Commands that make the bot do something over time: one runs at a time. */
-export type ActionCommand = TravelCommand | GoalCommand;
+export type ActionCommand = TravelCommand | GoalCommand | TunnelCommand;
 /** Commands done at once: stop, pause, status, waypoints... */
 export type InstantCommand = Exclude<OwnerCommand, ActionCommand>;
 
@@ -184,7 +202,7 @@ export function isTravelCommand(c: OwnerCommand): c is TravelCommand {
 }
 
 export function isActionCommand(c: OwnerCommand): c is ActionCommand {
-  return isTravelCommand(c) || c.verb === 'get' || c.verb === 'mine';
+  return isTravelCommand(c) || c.verb === 'get' || c.verb === 'mine' || c.verb === 'tunnel';
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +253,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   follow: 'usage: !follow [player]',
   goto: 'usage: !goto <x> <y> <z>, !goto <x> <z> or !goto <waypoint>',
   explore: 'usage: !explore [direction] [blocks], e.g. !explore north 100 (8-256 blocks)',
+  tunnel: 'usage: !tunnel <north|south|east|west> [blocks], e.g. !tunnel east 20 (1-64 blocks)',
   get: 'usage: !get <count> <item>, e.g. !get 20 logs',
   mine: 'usage: !mine <count> <block>, e.g. !mine 10 sand or !mine 16 iron ore',
   quests: 'usage: !quests on or !quests off',
@@ -243,7 +262,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
 
 export const HELP_TEXT =
   'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z> | <waypoint> ' +
-  '!explore [direction] [blocks] ' +
+  '!explore [dir] [n] !tunnel <dir> [n] ' +
   '!get <n> <item> !mine <n> <block> !sethome !home !waypoint <name> | delete <name> ' +
   '!waypoints !quests on|off';
 
@@ -332,6 +351,8 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
       return gotoCommand(args);
     case 'explore':
       return exploreCommand(args);
+    case 'tunnel':
+      return tunnelCommand(args);
     case 'home':
       return none ? ok({ verb: 'home' }) : usage(verb);
     case 'sethome':
@@ -415,6 +436,20 @@ function exploreCommand(args: readonly string[]): CommandParse {
   if (args.length > 2) return usage('explore');
   const parsed = OwnerCommandSchema.safeParse({ verb: 'explore', direction, distance });
   return parsed.success ? { ok: true, command: parsed.data } : usage('explore');
+}
+
+function tunnelCommand(args: readonly string[]): CommandParse {
+  // "tunnel east", "tunnel east 20", "tunnel 20 east".
+  let direction: string | null = null;
+  let length = TUNNEL_COMMAND_LENGTH;
+  if (args.length === 0 || args.length > 2) return usage('tunnel');
+  for (const a of args) {
+    if (NUMBER.test(a)) length = Number(a);
+    else if (direction !== null) return usage('tunnel');
+    else direction = directionOf(a);
+  }
+  const parsed = OwnerCommandSchema.safeParse({ verb: 'tunnel', direction, length });
+  return parsed.success ? { ok: true, command: parsed.data } : usage('tunnel');
 }
 
 function goalCommand(
@@ -501,6 +536,8 @@ export function describeCommand(c: OwnerCommand): string {
       return `go to waypoint ${c.name}`;
     case 'explore':
       return `explore ${c.distance} blocks ${c.direction === null ? 'the way I have seen least' : c.direction.replace('_', '-')}`;
+    case 'tunnel':
+      return `dig a tunnel ${c.length} blocks ${c.direction}`;
     case 'home':
       return 'go home';
     case 'get':

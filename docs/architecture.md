@@ -325,8 +325,11 @@ sunrise, the retreat home failed from inside it session after session, and the e
 `UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand
 the pause to a person: it sets the task active again, notes it in the journal, and `cli play`
 waits offline for 30 s (an offline player cannot be hurt) and plays on, at most 6 times in a
-row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play/play.ts`). Every new session re-checks the
-state from scratch, so a mob that is still there pauses it again.
+row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play/play.ts`); with `--listen` it then waits
+5 minutes at a time (`MOB_LONG_WAIT_MS`) instead of quitting. Every new session re-checks the
+state from scratch, so a mob that is still there pauses it again. An idle bot standing by does
+the same (`standbyReason` answers `mob`): seen live 2026-10-04, a zombie followed the bot home,
+where the pause had it stand still until it was killed. Sealed in its shelter it stays online.
 
 **Food** (`src/app/play/food.ts`, `src/domain/food.ts`; approved 2026-10-01). Seen live: food 9/20
 with nothing to eat, its only apple eaten. Below food 6 with no food System 1 retreats or

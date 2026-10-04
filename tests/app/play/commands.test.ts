@@ -13,7 +13,9 @@ import {
   type PlayDeps,
   type PlayEvent,
   type PlayLimits,
+  type TunnelRequest,
 } from '../../../src/app/play/play.ts';
+import type { TunnelPlan } from '../../../src/bot/gtnh1710/tunnel.ts';
 import type { Position } from '../../../src/domain/common.ts';
 import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
 import { worldTime, type WorldTime } from '../../../src/domain/game-state.ts';
@@ -603,6 +605,89 @@ describe("owners' commands in play", () => {
       'Done: here, 1 block from you',
     ]);
     expect(sim.sessions).toEqual(['command-1']);
+  });
+
+  it('digs a tunnel: code plans it a few cells at a time from where it began, to its length', async () => {
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!tunnel east 3')] });
+    const requests: TunnelRequest[] = [];
+    // The cells ahead already open: each plan is one step into the next cell.
+    const tunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
+      requests.push(req);
+      const done = Math.floor(sim.position.x) - req.start.x;
+      if (done >= req.length) {
+        return Promise.resolve({ ok: true, done: req.length, steps: [], problem: null });
+      }
+      const x = req.start.x + done + 1;
+      return Promise.resolve({
+        ok: true,
+        done,
+        steps: [
+          {
+            spec: {
+              type: 'MOVE_TO',
+              args: {
+                target: { x: x + 0.5, y: req.start.y, z: req.start.z + 0.5 },
+                tolerance: 0.5,
+              },
+            },
+            text: `step into (${x}, ${req.start.y}, ${req.start.z})`,
+          },
+        ],
+        problem: null,
+      });
+    };
+    await runPlay(deps(repos, sim, { tunnel }), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: digging a tunnel 3 blocks east from 0 64 0',
+      'Done: dug a tunnel 3 blocks east',
+    ]);
+    expect(requests.every((r) => r.start.x === 0 && r.start.z === 0)).toBe(true);
+    expect(sim.steps).toEqual(['MOVE_TO 1.5 0.5', 'MOVE_TO 2.5 0.5', 'MOVE_TO 3.5 0.5']);
+    expect(repos.tasks.get('command-1')?.status).toBe('completed');
+
+    // One it may not dig: it says why, and how far it got.
+    const blocked = newSim({ heard: [whisper('!tunnel west')] });
+    await runPlay(
+      deps(open(), blocked, {
+        tunnel: () =>
+          Promise.resolve({
+            ok: true,
+            done: 0,
+            steps: [],
+            problem:
+              'the tunnel stops before (-1, 64, 0): the floor at (-1, 63, 0) is open (a cave or a drop ahead)',
+          }),
+      }),
+      LIMITS,
+      noStop,
+    );
+    expect(said(blocked)).toEqual([
+      'OK: digging a tunnel 16 blocks west from 0 64 0',
+      'Failed: the tunnel stops before (-1, 64, 0): the floor at (-1, 63, 0) is open (a cave or a drop ahead) (0 of 16 blocks dug)',
+    ]);
+  });
+
+  it('idle with a mob near home: play waits offline for it to leave (it stood there once and died)', async () => {
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!pause')] });
+    const base = deps(repos, sim, { listen: true });
+    const result = await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          standby: () =>
+            Promise.resolve({ kind: 'mob', reasons: 'HOSTILES_NEARBY, ALREADY_AT_SAFE_LOCATION' }),
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY, ALREADY_AT_SAFE_LOCATION');
+    expect(result.stopReason).toMatch(
+      /^a mob is near the player .*: waiting offline for it to leave$/,
+    );
   });
 
   it('a food bar nearly empty keeps priority: the food trip first, then the command', async () => {

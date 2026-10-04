@@ -7,6 +7,7 @@ import {
 } from '../../domain/night-shelter.ts';
 import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
 import { setKnownSteps } from '../loop/known-steps.ts';
+import type { CycleResult } from '../loop/agent-loop.ts';
 import type { SessionResult } from '../loop/live-session.ts';
 import { planOf } from './narration.ts';
 import { done, type PlayState, type RoundEnd } from './play-state.ts';
@@ -92,6 +93,10 @@ export async function blueprintSession(
     text: string;
     missing: Record<string, number>;
     maxCycles: number;
+    /** Why the session must stop now (default: the stop file, Ctrl+C: hooks.stopRequested). */
+    stopRequested?: () => string | null;
+    /** After each cycle, with its result (an owner's tunnel watches the dusk and the food). */
+    onCycle?: (r: CycleResult) => void;
   },
 ): Promise<SessionResult> {
   const { deps, limits, hooks, emit } = play;
@@ -115,9 +120,10 @@ export async function blueprintSession(
   const result = await deps.session(
     { ...limits.session, maxCycles: Math.min(limits.session.maxCycles, b.maxCycles) },
     {
-      stopRequested: hooks.stopRequested,
+      stopRequested: b.stopRequested ?? hooks.stopRequested,
       onCycle: (r, index) => {
         play.lastDecision = r.decision ?? null;
+        b.onCycle?.(r);
         emit({
           kind: 'cycle',
           session,
