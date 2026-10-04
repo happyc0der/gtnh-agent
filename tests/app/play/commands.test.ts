@@ -1082,6 +1082,58 @@ describe("owners' commands in play", () => {
     );
   });
 
+  it('idle, a retreat from a mob that cannot run is waited out offline, not retried', async () => {
+    // Seen live: 37 refused retreats in a row from a pit the morning had opened.
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!pause')] });
+    const base = deps(repos, sim, { listen: true });
+    let sessions = 0;
+    const result = await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          standby: () =>
+            Promise.resolve({ kind: 'reflex', text: 'RETREAT_HOME [HOSTILES_NEARBY]' }),
+        },
+        session: (_limits, hooks) => {
+          sessions += 1;
+          hooks.onCycle(
+            {
+              summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> rejected [REPEATED_FAILURE]',
+              status: 'rejected',
+              decision: {
+                decision: 'RETREAT_HOME',
+                confidence: 0.95,
+                reasonCodes: ['HOSTILES_NEARBY'],
+                factsUsed: {},
+                requiresHumanConfirmation: false,
+                provider: 'test',
+              },
+              outcome: null,
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [
+              { cycleId: 'c1', summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> rejected' },
+            ],
+            stopReason:
+              'stopped after: RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> rejected [REPEATED_FAILURE]',
+            stopKind: 'cycle-failed',
+            taskId: 'owner-standby',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(sessions).toBe(1);
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY');
+  });
+
   it('a food bar nearly empty keeps priority: the food trip first, then the command', async () => {
     const repos = open();
     const sim = newSim({

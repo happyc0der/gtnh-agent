@@ -615,7 +615,7 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
   }
   const reflex = call.text;
   play.emit({ kind: 'idle', message: `standing by: ${reflex}` });
-  await blueprintSession(play, {
+  const result = await blueprintSession(play, {
     taskId: STANDBY_TASK_ID,
     goal: 'Stand by for owner commands: System 1 acts first (a retreat, a fight, a meal, a rest)',
     subgoal: reflex.slice(0, 300),
@@ -626,4 +626,23 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
     missing: {},
     maxCycles: 3,
   });
+  // A retreat from a mob that could not run (no way home, or refused after failing there
+  // before): the mob is waited out offline, as a pause for one is, not tried again every few
+  // seconds (seen live 2026-10-04: 37 refused retreats in a row, from a pit the morning had
+  // opened).
+  const last = play.lastDecision;
+  if (
+    result.stopKind === 'cycle-failed' &&
+    last !== null &&
+    last.decision === 'RETREAT_HOME' &&
+    (last.reasonCodes.includes('HOSTILES_NEARBY') ||
+      last.reasonCodes.includes('UNCLASSIFIED_ENTITY_NEARBY'))
+  ) {
+    const reasons = last.reasonCodes.join(', ');
+    play.emit({
+      kind: 'idle',
+      message: `a mob is near and no retreat works (${reasons}): waiting offline`,
+    });
+    play.mobAlarm = reasons;
+  }
 }
