@@ -260,7 +260,7 @@ export async function playCommand(cli: Cli): Promise<number> {
       }
       process.stderr.write(
         out.night !== null
-          ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on (${out.stopReason.slice(0, 200)})\n`
+          ? `night: offline for ${(sleepMs / 60_000).toFixed(1)} min until sunrise, then playing on (${out.stopReason.slice(0, 600)})\n`
           : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits}/${MAX_MOB_WAITS}), then playing on\n`,
       );
       if ((await waitUnlessStopped(sleepMs)) !== null) {
