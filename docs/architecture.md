@@ -977,8 +977,8 @@ Over terrain, `MOVE_TO`, `EXPLORE`'s hops, retreats, the flee, the walk to a dro
 travel steps all walk the same way (`PathActions.walk` in `client/path-actions.ts`): toward a
 goal (`pathing/goals.ts`), doing work (breaking and placing) or not, stopping for threats or
 not, with a partial path allowed or not. It replaced the terrain walker (`terrain.ts`), which
-walked, stepped up one block, dropped at most two and broke only leaves; it has run on the
-fake server only so far.
+walked, stepped up one block, dropped at most two and broke only leaves; it runs live on the
+test server.
 
 Seen live with the terrain walker: in a Hot Forest the logs the agent needed stood 7 blocks
 away, walled in by leaf bushes, and it gave up on the forest until walks could break leaves. A
