@@ -28,6 +28,15 @@ function parsed(text: string): OwnerCommand {
   return p.command;
 }
 
+describe('surface', () => {
+  it('parses !surface and !top, and takes no arguments', () => {
+    expect(parseOwnerCommand('!surface')).toEqual({ ok: true, command: { verb: 'surface' } });
+    expect(parseOwnerCommand('#top')).toEqual({ ok: true, command: { verb: 'surface' } });
+    expect(parseOwnerCommand('!surface now')).toMatchObject({ ok: false, kind: 'usage' });
+    expect(describeCommand({ verb: 'surface' })).toBe('go up to the surface');
+  });
+});
+
 describe('which chat is a command', () => {
   it('an owner whispering the bot: always (the text as written)', () => {
     expect(commandTextOf(whisper('DankAxon', 'come here please'), OWNERS, SELF)).toEqual({

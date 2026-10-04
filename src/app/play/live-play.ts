@@ -38,7 +38,7 @@ import { runQuestBookAction, type AgentDeps } from '../loop/agent-loop.ts';
 import { buildSafetyContext, syncConfigToDatabase } from '../loop/agent-memory.ts';
 import type { CommandDeps, StandbyCall } from './commands.ts';
 import { mobPause } from './play-state.ts';
-import { planTravelStep } from './owner-travel.ts';
+import { planTravelStep, surfaceTarget, type TravelInput } from './owner-travel.ts';
 import { foodStatusOf } from './food.ts';
 import { runSession } from '../loop/live-session.ts';
 import { withLiveClient } from '../commands/live-commands.ts';
@@ -281,8 +281,8 @@ export function standbyReason(
 /**
  * The owners' commands on the live client (commands.ts CommandDeps): the commands it heard in
  * chat, whispered replies, the stop's interrupt, what the bot knows (its world model), travel
- * steps planned with its own walk rules on its own blocks (owner-travel.ts), and the standby
- * check.
+ * steps and the surface planned with its own walk rules on its own blocks (owner-travel.ts),
+ * and the standby check.
  */
 export function liveCommands(
   client: Gtnh1710Client,
@@ -292,6 +292,27 @@ export function liveCommands(
   log?: (line: string) => void,
 ): CommandDeps {
   const movement = config.minecraft.movement;
+  /** What travel plans with: the client's blocks, its play area and its own walk policy. */
+  const travelInput = (): Omit<TravelInput, 'target'> => ({
+    world: client.world.walkWorld(),
+    area: playArea(movement, config.safety.boundary, client.world.ownPosition),
+    feet: client.world.ownPosition,
+    movement: {
+      enabled: movement.enabled,
+      canExplore: movement.enabled && movement.mode === 'follow',
+      maxPathLength: movement.maxPathLength,
+    },
+    // The safety policy refuses a MOVE_TO whose surroundings the hazard scan has not covered.
+    moveReach: Math.min(
+      config.safety.maxMoveDistance,
+      HAZARD_SCAN_RADIUS - config.safety.hazardAvoidanceRadius - 0.5,
+    ),
+    // The client's own walk policy, so a step plans as its MOVE_TO will walk.
+    ...(() => {
+      const path = client.walkOptions();
+      return path === null ? {} : { path };
+    })(),
+  });
   return {
     take: () => client.takeOwnerMessages(),
     waiting: () => client.ownerMessagesWaiting(),
@@ -309,28 +330,8 @@ export function liveCommands(
       inventory: client.world.inventoryItems(),
       playerAt: (name: string) => client.playerPosition(name),
     }),
-    step: (target) =>
-      planTravelStep({
-        world: client.world.walkWorld(),
-        area: playArea(movement, config.safety.boundary, client.world.ownPosition),
-        feet: client.world.ownPosition,
-        target,
-        movement: {
-          enabled: movement.enabled,
-          canExplore: movement.enabled && movement.mode === 'follow',
-          maxPathLength: movement.maxPathLength,
-        },
-        // The safety policy refuses a MOVE_TO whose surroundings the hazard scan has not covered.
-        moveReach: Math.min(
-          config.safety.maxMoveDistance,
-          HAZARD_SCAN_RADIUS - config.safety.hazardAvoidanceRadius - 0.5,
-        ),
-        // The client's own walk policy, so a step plans as its MOVE_TO will walk.
-        ...(() => {
-          const path = client.walkOptions();
-          return path === null ? {} : { path };
-        })(),
-      }),
+    step: (target) => planTravelStep({ ...travelInput(), target }),
+    surface: () => surfaceTarget(travelInput()),
     owners: config.minecraft.owners,
     homeName: config.routing.homeLocationName,
     configLocations: new Map(Object.entries(config.locations)),

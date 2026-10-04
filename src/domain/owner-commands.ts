@@ -136,6 +136,8 @@ export const OwnerCommandSchema = z.discriminatedUnion('verb', [
   }),
   /** Travel to a named location (a waypoint, home included). */
   z.strictObject({ verb: z.literal('goto-waypoint'), name: WaypointNameSchema }),
+  /** Go up to open sky, as Baritone's #surface: out of a tunnel, a cave or a pit. */
+  z.strictObject({ verb: z.literal('surface') }),
   /**
    * Explore `distance` blocks toward a compass direction (null: the one seen least), as
    * Baritone's #explore: a travel to the point that far that way from where it starts.
@@ -181,7 +183,7 @@ export type OwnerVerb = OwnerCommand['verb'];
 /** Commands that walk somewhere: come, follow, goto (a point or a waypoint), home. */
 export type TravelCommand = Extract<
   OwnerCommand,
-  { verb: 'come' | 'follow' | 'goto' | 'goto-waypoint' | 'home' | 'explore' }
+  { verb: 'come' | 'follow' | 'goto' | 'goto-waypoint' | 'home' | 'explore' | 'surface' }
 >;
 /** Commands that pursue items to have: get, mine. */
 export type GoalCommand = Extract<OwnerCommand, { verb: 'get' | 'mine' }>;
@@ -199,6 +201,7 @@ const TRAVEL_VERBS: ReadonlySet<OwnerVerb> = new Set<OwnerVerb>([
   'goto-waypoint',
   'home',
   'explore',
+  'surface',
 ]);
 
 export function isTravelCommand(c: OwnerCommand): c is TravelCommand {
@@ -267,7 +270,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
 
 export const HELP_TEXT =
   'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z> | <waypoint> ' +
-  '!explore [dir] [n] !tunnel <dir> [n] ' +
+  '!explore [dir] [n] !tunnel <dir> [n] !surface ' +
   '!get <n> <item> !mine <n> <block> !sethome !home !waypoint <name> | delete <name> ' +
   '!waypoints !quests on|off';
 
@@ -360,6 +363,9 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
       return tunnelCommand(args);
     case 'home':
       return none ? ok({ verb: 'home' }) : usage(verb);
+    case 'surface':
+    case 'top':
+      return none ? ok({ verb: 'surface' }) : usage(verb);
     case 'sethome':
       return none ? ok({ verb: 'sethome' }) : usage(verb);
     case 'get':
@@ -544,6 +550,8 @@ export function describeCommand(c: OwnerCommand): string {
       return `go to ${coord(c.x)} ${c.y === null ? '' : `${coord(c.y)} `}${coord(c.z)}`;
     case 'goto-waypoint':
       return `go to waypoint ${c.name}`;
+    case 'surface':
+      return 'go up to the surface';
     case 'explore':
       return `explore ${c.distance} blocks ${c.direction === null ? 'the way I have seen least' : c.direction.replace('_', '-')}`;
     case 'tunnel':

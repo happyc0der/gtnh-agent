@@ -644,6 +644,32 @@ describe("owners' commands in play", () => {
     expect(edge.steps).toEqual([]);
   });
 
+  it('goes up to the surface: a cell found as it begins, then a walk there (Baritone #surface)', async () => {
+    const sim = newSim({ heard: [whisper('!surface')], position: { x: 0.5, y: 50, z: 0.5 } });
+    let looked = 0;
+    const base = deps(open(), sim);
+    await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          surface: () => {
+            looked += 1;
+            return { point: { x: 3.5, y: 64, z: 0.5 }, here: false };
+          },
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual(['OK: going up to open sky at 3 64 0', 'Done: under open sky']);
+    expect(sim.steps).toEqual(['MOVE_TO 3.5 0.5']);
+    expect(looked).toBe(1); // fixed when it began
+    const none = newSim({ heard: [whisper('!top')] });
+    await runPlay(deps(open(), none), LIMITS, noStop);
+    expect(said(none)).toEqual(['Failed: I cannot look for the surface here']);
+  });
+
   it('at night the shelter keeps priority: commands are answered, travel waits for the morning', async () => {
     const repos = open();
     const night = worldTime(18_000, true);

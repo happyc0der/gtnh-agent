@@ -485,6 +485,11 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   blocks (default 64, at most 256) toward the compass direction asked, or, with none, the one
   world memory has seen least (`wanderTarget`), no farther than the room left to the safety
   boundary that way (refused with less than EXPLORE's minimum).
+- **Surface** (Baritone's #surface, `!surface` or `!top`) is travel to a cell fixed when it
+  begins (`surfaceTarget`): natural ground with nothing but air or plants above it, within 16
+  blocks across. Of the 48 nearest, the search's goal is any of them, so the one the cheapest
+  path reaches wins: back up the stairs a tunnel came down by rather than through the rock
+  above, when that is cheaper; it digs up only where the walk policy may break and pillar.
 - **Tunnel** (Baritone's #tunnel): a straight tunnel one wide and two high, `length` blocks
   (default 16, at most 64) north, south, east or west from where the bot stood when it began,
   or with `down` stairs going one block down for each block forward. Code plans it a few cells

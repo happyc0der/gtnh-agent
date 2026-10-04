@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { planTravelStep, type TravelInput } from '../../../src/app/play/owner-travel.ts';
+import {
+  planTravelStep,
+  surfaceTarget,
+  type TravelInput,
+} from '../../../src/app/play/owner-travel.ts';
 import { BLOCK_CODE } from '../../../src/bot/gtnh1710/block-hazards.ts';
 import type { PlayArea } from '../../../src/bot/gtnh1710/play-area.ts';
 import { walkPolicy, type WalkSettings } from '../../../src/bot/gtnh1710/path-policy.ts';
@@ -7,13 +11,15 @@ import { goalNear } from '../../../src/bot/gtnh1710/pathing/goals.ts';
 import { planPath } from '../../../src/bot/gtnh1710/pathing/search.ts';
 import type { WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 
-const ID = { air: 0, stone: 1, grass: 2, dirt: 3, water: 9 } as const;
+const ID = { air: 0, stone: 1, grass: 2, dirt: 3, water: 9, leaves: 18, tallgrass: 31 } as const;
 const NAMES = new Map<number, string>([
   [ID.air, 'minecraft:air'],
   [ID.stone, 'minecraft:stone'],
   [ID.grass, 'minecraft:grass'],
   [ID.dirt, 'minecraft:dirt'],
   [ID.water, 'minecraft:water'],
+  [ID.leaves, 'minecraft:leaves'],
+  [ID.tallgrass, 'minecraft:tallgrass'],
 ]);
 
 /** Grass at y=63 (the feet at 64), stone under it; `blocks` overrides single blocks. */
@@ -150,6 +156,49 @@ describe('planning an owner travel step', () => {
       planTravelStep(input({ target, area: { fence: null, problem: 'no fence here' } })),
     ).toEqual({ kind: 'refused', reason: 'no fence here' });
     expect(planTravelStep(input({ target, world: null }))).toMatchObject({ kind: 'refused' });
+  });
+});
+
+describe('the surface (Baritone #surface)', () => {
+  const base: Omit<TravelInput, 'target'> = {
+    world: flat(),
+    area: AREA,
+    feet: { x: 0.5, y: 64, z: 0.5 },
+    movement: { enabled: true, canExplore: true, maxPathLength: 32 },
+    moveReach: 25.5,
+  };
+
+  it('is here already under open sky (plants above do not count)', () => {
+    const world = flat({ '0,64,0': ID.tallgrass });
+    expect(surfaceTarget({ ...base, world })).toEqual({
+      point: { x: 0.5, y: 64, z: 0.5 },
+      here: true,
+    });
+  });
+
+  it('goes back up the stairs it came down rather than through the rock', () => {
+    // Stairs east from the grass at x = 0: at each x the feet at 64 - x, three blocks dug.
+    const stairs: Record<string, number> = {};
+    for (let x = 1; x <= 8; x++) {
+      for (let dy = 0; dy <= 2; dy++) stairs[`${x},${64 - x + dy},0`] = ID.air;
+    }
+    const found = surfaceTarget({
+      ...base,
+      world: flat(stairs),
+      feet: { x: 8.5, y: 56, z: 0.5 },
+    });
+    // The first stair open to the sky (x 1-3 lie in the cut through the ground).
+    expect(found).toEqual({ point: { x: 3.5, y: 61, z: 0.5 }, here: false });
+  });
+
+  it('says so when no natural ground under open sky is near', () => {
+    const canopy: Record<string, number> = {};
+    for (let x = -20; x <= 20; x++) {
+      for (let z = -20; z <= 20; z++) canopy[`${x},70,${z}`] = ID.leaves;
+    }
+    expect(surfaceTarget({ ...base, world: flat(canopy) })).toEqual({
+      problem: 'I see no open sky on natural ground within 16 blocks',
+    });
   });
 });
 

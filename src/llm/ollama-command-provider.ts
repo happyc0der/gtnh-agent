@@ -22,6 +22,7 @@ export const MODEL_COMMAND_VERBS = [
   'goto',
   'explore',
   'tunnel',
+  'surface',
   'get',
   'mine',
   'sethome',
@@ -57,6 +58,7 @@ follow: follow the owner; args [player] to follow that player
 goto: args [x, y, z], [x, z] or [waypoint]: travel there
 explore: args [], [direction], [blocks] or [direction, blocks] (direction north, north_east, east... ; blocks 8-256): explore new ground that way
 tunnel: args [direction], [direction, blocks] or [direction, blocks, "down"] (direction north, south, east or west; blocks 1-64; "down": stairs going one block down for each block forward): dig a straight tunnel that way
+surface: go up to open sky (out of a tunnel, a cave or a hole)
 get: args [count, item]: gather until it has that many (item like log, sand, cobblestone, minecraft:dirt)
 mine: args [count, block]: mine that block until it has that many of what it drops (a GregTech ore by its name and "ore": ["16", "iron", "ore"])
 sethome: home is where it stands; home: go home

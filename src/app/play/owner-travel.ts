@@ -1,4 +1,11 @@
-import { goalBlock, goalNear, goalXZ, type Goal } from '../../bot/gtnh1710/pathing/goals.ts';
+import { passProblem } from '../../bot/gtnh1710/passable.ts';
+import {
+  goalAny,
+  goalBlock,
+  goalNear,
+  goalXZ,
+  type Goal,
+} from '../../bot/gtnh1710/pathing/goals.ts';
 import type { Movement } from '../../bot/gtnh1710/pathing/movements.ts';
 import { planPath, type PathOptions } from '../../bot/gtnh1710/pathing/search.ts';
 import type { PlayArea } from '../../bot/gtnh1710/play-area.ts';
@@ -95,6 +102,92 @@ const fmt = (p: { x: number; y: number | null; z: number }): string =>
     .filter((v): v is number => v !== null)
     .map((v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)))
     .join(', ');
+
+/** `!surface` looks this far across for open sky. */
+export const SURFACE_RADIUS = 16;
+/** At most this many open-sky cells go to the search, the nearest first. */
+const SURFACE_CANDIDATES = 48;
+/** The surface search runs once, as the command begins: a little longer than a step's. */
+const SURFACE_MAX_NODES = 80_000;
+const SURFACE_MAX_MS = 600;
+/** Natural ground `!surface` stands on: not a roof, a tree top or water. */
+const SURFACE_GROUND: ReadonlySet<string> = new Set([
+  'minecraft:grass',
+  'minecraft:dirt',
+  'minecraft:stone',
+  'minecraft:sand',
+  'minecraft:gravel',
+  'minecraft:sandstone',
+  'minecraft:clay',
+  'minecraft:hardened_clay',
+  'minecraft:stained_hardened_clay',
+  'minecraft:snow',
+  'minecraft:mycelium',
+  'minecraft:cobblestone',
+  'minecraft:mossy_cobblestone',
+]);
+
+/**
+ * Where `!surface` goes (Baritone's #surface): a cell on natural ground with nothing but air
+ * or plants above it, within SURFACE_RADIUS across. Of the nearest SURFACE_CANDIDATES, the one
+ * the cheapest path reaches (the search's goal is any of them: back up a staircase when that
+ * is cheaper than digging straight up), else the nearest; `here` when the feet are under open
+ * sky already. Fixed when the command begins, like an explore's point.
+ */
+export function surfaceTarget(
+  input: Omit<TravelInput, 'target'>,
+): { point: Position; here: boolean } | { problem: string } {
+  const { world, feet } = input;
+  if (feet === null) return { problem: 'my position is not known' };
+  if (world === null) return { problem: 'the blocks around me are not known yet' };
+  const fence = input.area.fence;
+  if (fence === null) return { problem: input.area.problem };
+  const fx = Math.floor(feet.x);
+  const fy = Math.floor(feet.y + 1e-6);
+  const fz = Math.floor(feet.z);
+  /** The column's highest block that is not air or a plant; undefined when not known. */
+  const topOf = (x: number, z: number): number | undefined => {
+    for (let y = 255; y >= 0; y--) {
+      if (world.blockAt(x, y, z) === undefined) return undefined;
+      if (passProblem(world, x, y, z) !== null) return y;
+    }
+    return undefined;
+  };
+  const own = topOf(fx, fz);
+  if (own !== undefined && own < fy) return { point: { ...feet }, here: true };
+  const cells: Array<{ x: number; y: number; z: number; d: number }> = [];
+  const r = SURFACE_RADIUS;
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dz = -r; dz <= r; dz++) {
+      if (dx * dx + dz * dz > r * r) continue;
+      const x = fx + dx;
+      const z = fz + dz;
+      if (x < fence.min.x || x > fence.max.x || z < fence.min.z || z > fence.max.z) continue;
+      const top = topOf(x, z);
+      if (top === undefined) continue;
+      const id = world.blockAt(x, top, z);
+      const name = id === undefined ? undefined : world.blockName(id);
+      if (name === undefined || !SURFACE_GROUND.has(name)) continue;
+      const y = top + 1;
+      if (y < fence.min.y || y > fence.max.y) continue;
+      cells.push({ x, y, z, d: Math.hypot(dx, y - fy, dz) });
+    }
+  }
+  if (cells.length === 0) {
+    return { problem: `I see no open sky on natural ground within ${r} blocks` };
+  }
+  cells.sort((a, b) => a.d - b.d);
+  const offered = cells.slice(0, SURFACE_CANDIDATES);
+  const found = planPath(
+    world,
+    fence,
+    feet,
+    goalAny(...offered.map((c) => goalBlock(c.x, c.y, c.z))),
+    { ...input.path, maxNodes: SURFACE_MAX_NODES, maxTimeMs: SURFACE_MAX_MS },
+  );
+  const best = (found.status === 'reached' ? found.end : null) ?? (offered[0] as Vec3);
+  return { point: { x: best.x + 0.5, y: best.y, z: best.z + 0.5 }, here: false };
+}
 
 /** The next step toward `target`, or that it is there, or why there is no step. */
 export function planTravelStep(input: TravelInput): TravelStep {

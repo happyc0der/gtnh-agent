@@ -1,4 +1,4 @@
-import type { BlockPosition } from '../../domain/common.ts';
+import type { BlockPosition, Position } from '../../domain/common.ts';
 import type { DecisionResult } from '../../domain/decisions.ts';
 import type { WorldTime } from '../../domain/game-state.ts';
 import { AGE0_QUESTS } from '../../goals/age0-quests.ts';
@@ -96,6 +96,8 @@ export interface CommandRun {
   startHave: number | null;
   /** Explore: the point it heads for, fixed when it began (x, z). */
   exploreTo: { x: number; z: number; direction: string } | null;
+  /** Surface: the open-sky cell it heads for, fixed when it began. */
+  surfaceTo: Position | null;
   /** A goal: its last session left more of something in the inventory (work on the way). */
   worked: boolean;
   /** A goal: its last session ended with one of System 1's reflexes (a retreat, a meal...). */

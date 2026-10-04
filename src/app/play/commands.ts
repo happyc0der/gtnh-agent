@@ -81,6 +81,8 @@ export interface CommandDeps {
   view: () => CommandView;
   /** The next step toward a target, with the client's walk rules (owner-travel.ts). */
   step: (target: TravelTarget) => TravelStep;
+  /** Where `!surface` goes (owner-travel.ts surfaceTarget); absent: it cannot here. */
+  surface?: () => { point: Position; here: boolean } | { problem: string };
   /** The owners (MC_OWNERS): `follow` follows only them. */
   owners: readonly string[];
   /** The named location `home` and `sethome` mean (routing.homeLocationName). */
@@ -159,6 +161,7 @@ function runOf(play: PlayState, id: number): CommandRun {
       stuck: 0,
       startHave: null,
       exploreTo: null,
+      surfaceTo: null,
       tunnelFrom: null,
       tunnelDone: null,
       worked: false,
@@ -413,6 +416,11 @@ function checkAction(
       const to = exploreTarget(play, cmd, command);
       return 'problem' in to ? to.problem : null;
     }
+    case 'surface': {
+      // Likewise its open-sky cell (surfaceTarget).
+      const to = surfaceTarget(play, cmd);
+      return 'problem' in to ? to.problem : null;
+    }
     case 'come':
     case 'get':
     case 'mine':
@@ -467,6 +475,12 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
       const at = locations(play).get(name);
       const where = at === undefined ? '' : ` (${fmt(at.position)})`;
       return c.verb === 'home' ? `going home${where}` : `going to ${name}${where}`;
+    }
+    case 'surface': {
+      const to = surfaceTarget(play, cmd);
+      return 'problem' in to
+        ? `not going up: ${to.problem}`
+        : `going up to open sky at ${fmt(roundPoint(to))}`;
     }
     case 'get':
     case 'mine': {
@@ -846,6 +860,10 @@ function travelTarget(
         ? to
         : { target: { kind: 'point', point: { x: to.x, y: null, z: to.z } } };
     }
+    case 'surface': {
+      const to = surfaceTarget(play, cmd);
+      return 'problem' in to ? to : { target: { kind: 'point', point: to } };
+    }
     case 'goto-waypoint':
     case 'home': {
       const name = c.verb === 'home' ? commands.homeName : c.name;
@@ -898,6 +916,18 @@ function exploreTarget(
   return run.exploreTo;
 }
 
+/** Where a surface command heads: the open-sky cell found when it began (surfaceTarget). */
+function surfaceTarget(play: PlayState, cmd: OwnerCommandRecord): Position | { problem: string } {
+  const run = runOf(play, cmd.id);
+  if (run.surfaceTo !== null) return run.surfaceTo;
+  const find = (play.deps.commands as CommandDeps).surface;
+  if (find === undefined) return { problem: 'I cannot look for the surface here' };
+  const to = find();
+  if ('problem' in to) return to;
+  run.surfaceTo = to.point;
+  return run.surfaceTo;
+}
+
 const blocks = (n: number): string => `${n} block${n === 1 ? '' : 's'}`;
 
 function arrivedText(play: PlayState, c: TravelCommand, distance: number): string {
@@ -909,6 +939,8 @@ function arrivedText(play: PlayState, c: TravelCommand, distance: number): strin
       return `Done: at ${fmt(c)}`;
     case 'explore':
       return `Done: explored ${c.distance} blocks${c.direction === null ? '' : ` ${c.direction.replace('_', '-')}`}`;
+    case 'surface':
+      return 'Done: under open sky';
     case 'goto-waypoint':
       return `Done: at ${c.name}`;
     case 'home':
