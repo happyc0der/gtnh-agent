@@ -201,6 +201,25 @@ describe('walk policies on the fake server', { timeout: 30_000 }, () => {
     expect(server.walkSteps().at(-1)).toMatchObject({ feetY: FEET_Y, onGround: true });
   });
 
+  it('a pillar block the server places too late: the jump comes down, then up onto the block', async () => {
+    // A lagging server places the block 0.7 s after the click, after the jump has landed back
+    // where it began, into the player's own cell (the server leaves the placer out of its
+    // check). The agent jumps up onto it, as a player gets out of a block it stands in.
+    const { server, client } = await start(CLIFF, { server: { place: { lagMs: 700 } } });
+    const r = await perform(client, moveTo(-1.5, CLIFF_FEET));
+    expect(r).toMatchObject({ ok: false, code: 'FAILED', data: { placed: 1 } });
+    expect(r.message).toMatch(
+      /the block placed at \(-3, 106, -8\) was not there in time \(pending\); it came late, after the jump came back down: jumped up onto it/,
+    );
+    expect(server.placeSim.placed).toEqual([
+      { x: -3, y: 106, z: -8, name: 'minecraft:cobblestone' },
+    ]);
+    expect(await positionOf(client)).toEqual({ x: -2.5, y: FEET_Y + 1, z: -7.5 });
+    expect(server.moveSim.corrections).toEqual([]);
+    expect(server.moveSim.falls).toEqual([]);
+    expect(server.combatSim.playerHealth).toBe(20);
+  });
+
   it('keeps the dirt reserve for the night shelter, and never places a protected item', async () => {
     // Five dirt, four kept: one to place, and the cliff needs two.
     const short = await start(CLIFF, { inventory: [dirt(5)] });

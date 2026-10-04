@@ -528,7 +528,23 @@ export class PathActions {
               const why = `the block placed at ${fmt(p.cell)} was not there in time (${verdict})`;
               if (seg.fallback !== null && seg.fallback.fromStep === i) {
                 const hard = await sendRun(seg.fallback.steps);
-                return stopped(hard ?? `${why}: came back down where the jump began`);
+                if (hard !== null) return stopped(hard);
+                // A lagging server may place it still, into the cell the feet came back down
+                // into (it leaves the placer out of its check). A player stands in such a
+                // block freely (no box clips the one it is in) and gets out by jumping onto it:
+                // the pillar's own jump, from where it began.
+                if (verdict === 'pending' && click !== undefined) {
+                  const late = await this.#awaitVerdict(click, guard);
+                  if (late === 'placed') {
+                    const up = await sendRun(seg.steps.slice(0, p.neededBy + 1));
+                    if (up !== null) return stopped(up);
+                    placed.push({ ...p.cell });
+                    return stopped(
+                      `${why}; it came late, after the jump came back down: jumped up onto it`,
+                    );
+                  }
+                }
+                return stopped(`${why}: came back down where the jump began`);
               }
               return stopped(why);
             }
