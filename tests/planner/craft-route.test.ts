@@ -118,11 +118,15 @@ describe(
           },
         ),
       );
-      const station = lines.find((l) => l.startsWith('station: crafting_table:')) ?? '';
-      expect(station).toMatch(
-        /^station: crafting_table: none known; make one: crafting_table: 2 minecraft:flint, 2 minecraft:log \(2x2\), then place it => make it: CRAFT_ITEM \{"recipe":"crafting_table","times":1,"craftingTableId":null\}; then PLACE_BLOCK \{/,
+      // The route makes it in a step of its own, placed right after: the note says which.
+      expect(lines).toContain(
+        'note: no crafting_table is known: step 1 makes one (minecraft:crafting_table), placed right after',
       );
-      expect(routeActions([station]).map((a) => a.type)).toEqual(['CRAFT_ITEM', 'PLACE_BLOCK']);
+      const table = lines.find((l) => l.startsWith('1. craft crafting_table x1 ')) ?? '';
+      expect(table).toMatch(
+        / => CRAFT_ITEM \{"recipe":"crafting_table","times":1,"craftingTableId":null\}; then PLACE_BLOCK \{/,
+      );
+      expect(routeActions([table]).map((a) => a.type)).toEqual(['CRAFT_ITEM', 'PLACE_BLOCK']);
     });
 
     it('says so when no listed cell takes a station, or CRAFT_ITEM cannot make a step yet', () => {

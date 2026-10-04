@@ -96,6 +96,8 @@ export interface CommandRun {
   startHave: number | null;
   /** Explore: the point it heads for, fixed when it began (x, z). */
   exploreTo: { x: number; z: number; direction: string } | null;
+  /** A goal: its last session left more of something in the inventory (work on the way). */
+  worked: boolean;
   /** Tunnel: its first cell (where the bot stood when it began), and the cells dug then. */
   tunnelFrom: BlockPosition | null;
   tunnelDone: number | null;

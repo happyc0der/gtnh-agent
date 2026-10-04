@@ -914,6 +914,10 @@ function withActionArgs(lines: readonly string[], route: Route, state: GameState
       hints.set(line, `make it: ${craft(id, 1)}; then ${place(s.item)}`);
     }
   }
+  // A station the route makes: placed as soon as its craft is done (the 3x3 crafts use it).
+  const madeStations = new Set(
+    route.stationNeeds.flatMap((s) => (s.status === 'made' && s.item !== null ? [s.item] : [])),
+  );
   route.legs.forEach((leg, i) => {
     if (leg.kind === 'gather') {
       const line = lines.find((l) =>
@@ -925,7 +929,14 @@ function withActionArgs(lines: readonly string[], route: Route, state: GameState
     }
     if (leg.kind !== 'craft' || leg.station === 'furnace') return;
     const line = lines.find((l) => l.startsWith(`${i + 1}. craft ${leg.recipe} x${leg.times} `));
-    if (line !== undefined) hints.set(line, craft(leg.recipe, leg.times));
+    if (line === undefined) return;
+    const item = leg.makes.item;
+    hints.set(
+      line,
+      madeStations.has(item)
+        ? `${craft(leg.recipe, leg.times)}; then ${place(item)}`
+        : craft(leg.recipe, leg.times),
+    );
   });
   return lines.flatMap((l) => {
     const hint = hints.get(l);

@@ -200,9 +200,11 @@ export interface RouteStationNeed {
   station: string;
   /**
    * available: the caller says one is usable; held: its item is in the inventory (to place);
-   * missing: none known; unknown: the caller did not say which stations exist.
+   * made: none known, and the route makes its item (in a leg, before the crafts at it), to
+   * place then; missing: none known, and the book makes none; unknown: the caller did not say
+   * which stations exist.
    */
-  status: 'available' | 'held' | 'missing' | 'unknown';
+  status: 'available' | 'held' | 'made' | 'missing' | 'unknown';
   /** The item that provides it, e.g. minecraft:furnace. */
   item: string | null;
   /** How the book makes that item (when not available), e.g. "minecraft:furnace#1: 6 ...". */
@@ -628,6 +630,47 @@ export function planRoute(
   places: PlaceLookup = () => [],
   storage: readonly StoredContainer[] = [],
   stations?: readonly string[],
+): Route {
+  const first = planRouteOnce(goal, inventory, book, places, storage, stations);
+  // A station the crafts need with none usable or held, that the book makes: the route makes
+  // its item first, as a person does (seen live 2026-10-04: "make a crafting table: 2 flint,
+  // 2 logs, then place it" with no flint held, and nothing in the route to get any; the
+  // first step was refused, and the model then crafted the pickaxe without a table).
+  const make = first.stationNeeds.filter(
+    (s): s is RouteStationNeed & { item: string } =>
+      s.status === 'missing' && s.item !== null && s.make !== null,
+  );
+  if (make.length === 0) return first;
+  const withStations: Record<string, number> = {};
+  for (const s of make) withStations[s.item] = 1;
+  for (const [item, n] of Object.entries(goal)) withStations[item] = (withStations[item] ?? 0) + n;
+  const second = planRouteOnce(withStations, inventory, book, places, storage, stations);
+  // Only when the station's own tree can be had: else listed as missing, as before.
+  if (Object.keys(second.unresolved).some((item) => !(item in first.unresolved))) return first;
+  const made = new Set(make.map((s) => s.item));
+  const madeHere = (item: string): boolean =>
+    second.legs.some((l) => l.kind === 'craft' && l.makes.item === item);
+  return {
+    ...second,
+    goal: { ...goal },
+    // The station's item is a means, not the goal: off the stock (unless the goal is it).
+    stock: second.stock.filter((x) => !made.has(x.item) || (goal[x.item] ?? 0) > 0),
+    stationNeeds: second.stationNeeds.map((s) =>
+      s.item !== null && made.has(s.item) && s.status === 'missing' && madeHere(s.item)
+        ? { ...s, status: 'made' as const }
+        : s,
+    ),
+  };
+}
+
+/** One pass of planRoute: the route for `goal` as it is (stations listed, not made). */
+function planRouteOnce(
+  goal: Readonly<Record<string, number>>,
+  inventory: Readonly<Record<string, number>>,
+  book: RouteBook,
+  places: PlaceLookup,
+  storage: readonly StoredContainer[],
+  stations: readonly string[] | undefined,
 ): Route {
   const ix = indexBook(book);
   const pool = new Map(Object.entries(inventory).filter(([, n]) => n > 0));
@@ -1300,6 +1343,13 @@ export function describeRoute(route: Route): string[] {
   }
   for (const s of route.stationNeeds) {
     if (s.status === 'available') continue;
+    if (s.status === 'made') {
+      const at = route.legs.findIndex((l) => l.kind === 'craft' && l.makes.item === s.item);
+      lines.push(
+        `note: no ${s.station} is known: step ${at + 1} makes one (${s.item}), placed right after`,
+      );
+      continue;
+    }
     const make = s.make === null ? '' : `make one: ${s.make}, then place it`;
     const what =
       s.status === 'held'

@@ -159,6 +159,7 @@ function runOf(play: PlayState, id: number): CommandRun {
       exploreTo: null,
       tunnelFrom: null,
       tunnelDone: null,
+      worked: false,
     };
     play.commandRuns.set(id, run);
   }
@@ -1123,7 +1124,14 @@ async function goalCommandRound(
   }
   const missing = missingFor(free.requirements, inventory);
   const left = total(missing);
-  run.stuck = run.missing !== null && left >= run.missing && !play.explored ? run.stuck + 1 : 0;
+  // Progress: fewer missing, new ground seen, or work on the way there (more of anything: a
+  // pickaxe from nothing takes logs, flint, a table... before the pickaxe itself; seen live
+  // 2026-10-04, such sessions counted as none and the command failed).
+  run.stuck =
+    run.missing !== null && left >= run.missing && !play.explored && !run.worked
+      ? run.stuck + 1
+      : 0;
+  run.worked = false;
   run.missing = left;
   if (run.stuck >= limits.maxStuckSessions) {
     finish(play, cmd, 'failed', `Failed: no progress in ${run.stuck} sessions (${play.lastStop})`);
@@ -1145,6 +1153,10 @@ async function goalCommandRound(
   });
   // Only a food bar nearly empty ends an owner's goal for food: hunger alone waits for it.
   const ended = await runGoalSession(play, current, starving);
+  // Work on the way: more of anything than before the session (logs, flint, planks...).
+  const after = await deps.inventory();
+  run.worked =
+    after !== null && Object.entries(after).some(([item, n]) => n > (inventory[item] ?? 0));
   if (ended.dark !== null) {
     sayOnce(
       play,

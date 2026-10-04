@@ -97,16 +97,22 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     ]);
   });
 
-  it('64 cobblestone from nothing: logs, planks, sticks, a wooden pickaxe, then stone', () => {
+  it('64 cobblestone from nothing: a crafting table, logs, planks, sticks, a wooden pickaxe, then stone', () => {
     const route = planRoute({ 'minecraft:cobblestone': 64 }, {}, ROUTE_BOOK, () => [], [], []);
     expect(route.unresolved).toEqual({});
+    // No table known: the route makes one first (GTNH: flint and logs), as a person does.
     expect(steps(route)).toEqual([
+      'gather minecraft:gravel',
+      'craft minecraft:flint',
       'gather minecraft:log',
+      'craft minecraft:crafting_table',
       'craft minecraft:planks',
       'craft minecraft:stick',
       'craft minecraft:wooden_pickaxe',
       'gather minecraft:cobblestone',
     ]);
+    expect(route.stationNeeds).toMatchObject([{ station: 'crafting_table', status: 'made' }]);
+    expect(route.stock.map((s) => s.item)).toEqual(['minecraft:cobblestone']);
     // The pickaxe is the knowledge base's GTNH recipe, which CRAFT_ITEM makes by this id.
     expect(
       route.legs.find((l) => l.kind === 'craft' && l.makes.item.endsWith('pickaxe')),
@@ -122,14 +128,19 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
   it('a GregTech mortar: flint, smooth stone from a furnace, a pickaxe to dig the stone', () => {
     const route = planRoute({ 'gregtech:gt.metatool.01@24': 1 }, {}, ROUTE_BOOK, () => [], [], []);
     expect(route.unresolved).toEqual({});
+    // The crafting table and the furnace it needs are made on the way.
     expect(steps(route)).toEqual([
       'gather minecraft:gravel',
       'craft minecraft:flint',
       'gather minecraft:log',
+      'craft minecraft:crafting_table',
       'craft minecraft:planks',
       'craft minecraft:stick',
       'craft minecraft:wooden_pickaxe',
       'gather minecraft:cobblestone',
+      'craft minecraft:flint',
+      'craft minecraft:furnace',
+      'craft minecraft:flint',
       'smelt minecraft:stone',
       'craft gregtech:gt.metatool.01@24',
     ]);
@@ -143,15 +154,18 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
       },
     ]);
     expect(route.stationNeeds.map((s) => [s.station, s.status])).toEqual([
-      ['crafting_table', 'missing'],
-      ['furnace', 'missing'],
+      ['crafting_table', 'made'],
+      ['furnace', 'made'],
     ]);
     const lines = describeRoute(route);
     // The hand-verified GTNH table recipe (2 flint above 2 logs) replaced the generated copy.
-    expect(lines).toContain(
-      'station: crafting_table: none known; make one: crafting_table: 2 minecraft:flint, ' +
-        '2 minecraft:log (2x2), then place it',
-    );
+    expect(
+      lines.some((l) =>
+        / craft crafting_table x1 -> 1 minecraft:crafting_table \(2x2; uses 2 minecraft:flint, 2 minecraft:log\)/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
     expect(
       lines.some((l) => l.includes('smelt 5 minecraft:cobblestone -> >=5 minecraft:stone')),
     ).toBe(true);
@@ -295,7 +309,7 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     expect(route.tools).toContainEqual(
       expect.objectContaining({ have: 'TConstruct:pickaxe', unverified: true }),
     );
-    expect(route.stationNeeds.find((s) => s.station === 'furnace')?.status).toBe('missing');
+    expect(route.stationNeeds.find((s) => s.station === 'furnace')?.status).toBe('made');
     expect(steps(route).filter((s) => s.startsWith('smelt')).length).toBeGreaterThan(0);
   });
 
@@ -356,11 +370,18 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
       [],
       ['crafting_table'],
     );
+    // A furnace to make first (cobblestone and flint, at the table the caller has).
     expect(steps(route)).toEqual([
+      'gather minecraft:cobblestone',
+      'gather minecraft:gravel',
+      'craft minecraft:flint',
+      'craft minecraft:furnace',
       'gather gregtech:gt.metaitem.03@5500',
       'smelt minecraft:diamond',
     ]);
-    expect(route.legs[0]).toMatchObject({
+    expect(
+      route.legs.find((l) => l.kind === 'gather' && l.item === 'gregtech:gt.metaitem.03@5500'),
+    ).toMatchObject({
       blocks: ['gregtech:gt.blockores'],
       tool: { kind: 'pickaxe', level: 4 },
       where:
@@ -369,15 +390,24 @@ describe('routes over the GTNH knowledge base', { timeout: 30_000 }, () => {
     });
     expect(route.stationNeeds).toEqual([
       {
+        station: 'crafting_table',
+        status: 'available',
+        item: 'minecraft:crafting_table',
+        make: null,
+      },
+      {
         station: 'furnace',
-        status: 'missing',
+        status: 'made',
         item: 'minecraft:furnace',
         make: 'minecraft:furnace#1: 6 minecraft:cobblestone, 3 minecraft:flint (crafting_table)',
       },
     ]);
     const lines = describeRoute(route);
+    expect(lines).toContain(
+      'note: no furnace is known: step 4 makes one (minecraft:furnace), placed right after',
+    );
     expect(lines[lines.length - 1]).toBe(
-      '2. smelt 100 gregtech:gt.metaitem.03@5500 -> >=100 minecraft:diamond (furnace; fuel for 100 items)',
+      '6. smelt 100 gregtech:gt.metaitem.03@5500 -> >=100 minecraft:diamond (furnace; fuel for 100 items)',
     );
   });
 
@@ -501,7 +531,7 @@ describe('routes: tools and stations, in general', () => {
     expect(route.why['x:gear']).toBe('made only in machines the agent cannot use');
   });
 
-  it('lists a station the caller lacks, with how to make it', () => {
+  it('makes a station the caller lacks when its tree can be had, before the crafts at it', () => {
     const withTable: RouteBook = {
       ...book,
       recipes: [
@@ -525,11 +555,14 @@ describe('routes: tools and stations, in general', () => {
     expect(route.stationNeeds).toEqual([
       {
         station: 'crafting_table',
-        status: 'missing',
+        status: 'made',
         item: 'x:table',
         make: 'table: 4 x:ore (2x2)',
       },
     ]);
+    const made = steps(route);
+    expect(made.indexOf('craft x:table')).toBeGreaterThanOrEqual(0);
+    expect(made.indexOf('craft x:table')).toBeLessThan(made.indexOf('craft x:plate'));
     // Holding the station's item: place it.
     const held = planRoute(
       { 'x:plate': 1 },

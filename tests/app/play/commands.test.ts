@@ -407,6 +407,18 @@ describe("owners' commands in play", () => {
     ]);
   });
 
+  it('work on the way counts as progress: a session that gets logs for a pickaxe is no stall', async () => {
+    // Seen live 2026-10-04: logs, flint and planks got, sessions counted as none, the
+    // pickaxe command failed.
+    const sim = newSim({
+      heard: [whisper('!get 1 minecraft:wooden_pickaxe')],
+      gain: { 'minecraft:log': 1 },
+    });
+    await runPlay(deps(open(), sim), LIMITS, noStop);
+    expect(sim.sessions.length).toBeGreaterThan(3);
+    expect(said(sim).some((l) => l.includes('no progress'))).toBe(false);
+  });
+
   it('a goal that makes no progress fails after maxStuckSessions sessions', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!mine 4 sand')] });
