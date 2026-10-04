@@ -119,6 +119,31 @@ describe('Gtnh1710Client gravity', () => {
     });
   });
 
+  it('comes down into a hole it stands just past the edge of (the server would hold it up)', async () => {
+    // Seen live 2026-10-04: a walk stopped 0.03 past an edge, stepping down into a hole; the
+    // server's wider box reached the block behind, so nothing fell, and walks refused to start.
+    const hole = new Map([
+      ['-5,105,-8', BLOCK.air],
+      ['-5,104,-8', BLOCK.grass],
+    ]);
+    const z = -7.33; // the box (0.3 each way) over z -8 only; the server's reaches z -7
+    const { server, client } = await start(
+      {
+        blockOverrides: hole,
+        spawn: { x: -4.5, eyeY: FEET_Y + PLAYER_EYE_HEIGHT, z, yaw: 0, pitch: 0 },
+      },
+      { fence: { ...FENCE, min: { ...FENCE.min, y: FEET_Y - 1 } } },
+    );
+    await vi.waitFor(() => expect(server.confirmedPositions.at(-1)?.feetY).toBe(FEET_Y - 1), {
+      timeout: 3_000,
+    });
+    expect(server.confirmedPositions.at(-1)).toMatchObject({ x: -4.5, z, onGround: true });
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -4.5, y: FEET_Y - 1, z },
+    });
+  });
+
   it('comes to rest on the ground when the server put it a little above (saved mid-jump)', async () => {
     // Seen live: the player joined 0.42 above the sand; the server held it up, the night pit
     // did not ("the player is not standing on a block").
@@ -429,5 +454,37 @@ describe('Gtnh1710Client walking over terrain', () => {
     });
     // A real jump (the pathfinder's physics): the server's own move check takes every step.
     expect(server.moveSim.corrections).toEqual([]);
+  });
+
+  it('a hostile coming near as it steps off an edge stops the walk on the ground below, not over it', async () => {
+    // Seen live 2026-10-04: a Mirage Enderman stopped a walk the tick its body passed an edge
+    // (a step still on the ground: 1.7.10 moves along y first), and the bot hung over the hole.
+    const low = new Map<string, number>();
+    for (let x = -9; x <= -1; x++) {
+      for (let z = -12; z <= -9; z++) {
+        low.set(`${x},105,${z}`, BLOCK.air);
+        low.set(`${x},104,${z}`, BLOCK.grass);
+      }
+    }
+    const { server, client } = await start(
+      { blockOverrides: low },
+      { fence: { min: { x: -9, y: FEET_Y - 1, z: -12 }, max: { x: -1, y: FEET_Y, z: -4 } } },
+    );
+    const walk = perform(client, moveTo(-4.5, -11.5, FEET_Y - 1));
+    // The step whose box (0.3 each way) has left the block at z -8, still at its level.
+    const overEdge = (): boolean =>
+      server.walkSteps().some((s) => s.z + 0.3 < -8 && s.feetY === FEET_Y);
+    const deadline = Date.now() + 5_000;
+    while (!overEdge() && Date.now() < deadline) await delay(2);
+    expect(overEdge()).toBe(true);
+    server.broadcast(
+      spawnFrame({ kind: 'mob', entityId: 701, mobType: 54, x: -4.5, y: FEET_Y - 1, z: -11.5 }),
+    );
+    const result = await walk;
+    expect(result).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(result.message).toMatch(/hostile entity minecraft:Zombie/);
+    // Down on the lower ground, where it was going: not over the edge.
+    expect(result.data['y']).toBe(FEET_Y - 1);
+    expect(server.confirmedPositions.at(-1)).toMatchObject({ feetY: FEET_Y - 1, onGround: true });
   });
 });

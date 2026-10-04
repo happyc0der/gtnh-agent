@@ -647,7 +647,6 @@ function horizontal(a: Vec3, b: Vec3, y: number, onGround: boolean): TerrainStep
   return out;
 }
 
-/** Per-tick positions (and on-ground flags) for a planned terrain walk. */
 /** The longest fall that does no damage (vanilla: damage = fall distance - 3). */
 export const MAX_SAFE_FALL = 3;
 /** The server's floating check: the player's box (0.3 each way) grown by 0.0625... */
@@ -730,6 +729,33 @@ export function restingY(world: WalkWorld, feet: Vec3): number | null {
   return ground ? y : null;
 }
 
+/**
+ * Where feet on a block level (a whole y) over no block come down to, as a game client's
+ * player falls: nothing the body may not enter under the box's footprint (0.3 each way),
+ * though the server's floating check, whose box is wider (checkSupport), may still hold it up
+ * there. Seen live 2026-10-04: a walk stopped 0.03 past an edge, and the bot hung over the
+ * hole it was stepping down into, where its walks then refused to start. The landing: the
+ * highest level below with such a block under the footprint, MAX_SAFE_FALL + 1 levels down at
+ * most. Null when something holds the feet up, when they are between levels (restingY), when
+ * no floor is that near, or when a chunk is not loaded.
+ */
+export function edgeLanding(world: WalkWorld, feet: Vec3): number | null {
+  const y = Math.round(feet.y);
+  if (Math.abs(feet.y - y) > 1e-6) return null;
+  const xs = cellsAcross(feet.x - 0.3, feet.x + 0.3);
+  const zs = cellsAcross(feet.z - 0.3, feet.z + 0.3);
+  for (let below = y - 1; below >= Math.max(0, y - 2 - MAX_SAFE_FALL); below--) {
+    for (const x of xs) {
+      for (const z of zs) {
+        const problem = passProblem(world, x, below, z);
+        if (problem === 'chunk not loaded') return null;
+        if (problem !== null) return below === y - 1 ? null : below + 1;
+      }
+    }
+  }
+  return null;
+}
+
 /** A hazard (lava, fire, harmful fluid, cactus...) next to where the feet would land, or null. */
 export function landingHazard(world: WalkWorld, x: number, y: number, z: number): string | null {
   for (let dx = -1; dx <= 1; dx++) {
@@ -744,6 +770,7 @@ export function landingHazard(world: WalkWorld, x: number, y: number, z: number)
   return null;
 }
 
+/** Per-tick positions (and on-ground flags) for a planned terrain walk. */
 export function terrainSteps(from: Vec3, moves: readonly TerrainMove[]): TerrainStep[] {
   const out: TerrainStep[] = [];
   let at = from;

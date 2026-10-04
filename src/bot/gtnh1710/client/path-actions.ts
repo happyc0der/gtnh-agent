@@ -15,6 +15,7 @@ import {
   type PolicyContext,
   type WalkPolicy,
 } from '../path-policy.ts';
+import { isLiquidName } from '../pathing/cells.ts';
 import { WALK_ONE_BLOCK } from '../pathing/costs.ts';
 import {
   planExecution,
@@ -25,6 +26,7 @@ import {
 } from '../pathing/execute.ts';
 import { describeGoal, type Goal } from '../pathing/goals.ts';
 import type { Movement } from '../pathing/movements.ts';
+import { overlappedCells } from '../pathing/physics.ts';
 import {
   floodPath,
   planPath,
@@ -559,6 +561,11 @@ export class PathActions {
           holding = slot;
         }
         let airborne = false;
+        // A step counted as on the ground with the body past an edge, over no block: the next
+        // tick falls (1.7.10 moves along y before x and z, so the step off an edge still lands
+        // on it). Seen live 2026-10-04: a hostile stopped a walk there, and the bot hung in the
+        // air over the hole it was stepping down into. The walk's own stops wait for the landing.
+        let overEdge = false;
         for (let i = 0; i < seg.steps.length; i++) {
           const step = seg.steps[i] as PathStep;
           // A block placed in this segment must be there before the step that stands on it.
@@ -600,7 +607,9 @@ export class PathActions {
           const hard = hardStop();
           if (hard !== null) return stopped(hard);
           if (!airborne) {
-            const soft = this.#core.movement.walkInterruption(guard, { from: at, to: step.pos });
+            const soft = overEdge
+              ? null
+              : this.#core.movement.walkInterruption(guard, { from: at, to: step.pos });
             if (soft !== null) return stopped(soft);
             // This step, and when it leaves the ground every step to the landing: no pause in
             // the air.
@@ -608,7 +617,7 @@ export class PathActions {
             if (why !== null) return stopped(`the way ahead is not clear: ${why}`);
             // Sprinting only while the food bar stays above 10 (HungerOverhaul: it costs food).
             const food = this.#world.food;
-            if (step.sprint && (food === null || food <= SPRINT_MIN_FOOD)) {
+            if (!overEdge && step.sprint && (food === null || food <= SPRINT_MIN_FOOD)) {
               return stopped(
                 `the food bar is at ${food ?? 'an unknown level'}: no sprinting with food at ${SPRINT_MIN_FOOD} or less`,
               );
@@ -625,6 +634,7 @@ export class PathActions {
                 };
           send(step, point);
           airborne = !step.onGround;
+          overEdge = step.onGround && !this.#overBlock(step.pos);
           if (placing.length > 0) setSprint(false);
           for (const p of placing) {
             const why = this.#placeProblem(p, placeArea, guard, ownPlaced);
@@ -712,10 +722,6 @@ export class PathActions {
   }
 
   /**
-   * Why step `i` (from `at`), and when it leaves the ground every step until the landing,
-   * would take the body where it must not be, on the blocks as they are now, or null.
-   */
-  /**
    * Opens (or closes) a door or gate on the walk's way with a right-click, standing still, as a
    * player uses one: a hand that places nothing harmful if the click were not taken by the door
    * (an empty slot, else a vanilla tool, else a plain block item; never a stack with NBT data:
@@ -754,6 +760,10 @@ export class PathActions {
       : `the ${click.block} did not ${want ? 'open' : 'close'} within ${DOOR_CLICK_MS} ms`;
   }
 
+  /**
+   * Why step `i` (from `at`), and when it leaves the ground every step until the landing,
+   * would take the body where it must not be, on the blocks as they are now, or null.
+   */
   #flightProblem(
     fence: Fence,
     at: Vec3,
@@ -772,6 +782,29 @@ export class PathActions {
       prev = step.pos;
     }
     return null;
+  }
+
+  /**
+   * Whether a block under the body with its feet at `pos` holds it up: of the cells under the
+   * box's footprint, one that is neither passable nor a fluid. Not loaded counts as holding (no
+   * stop is held back for what is not known).
+   */
+  #overBlock(pos: Vec3): boolean {
+    const world = this.#world.walkWorld();
+    if (world === null) return true;
+    const [x0, x1, , , z0, z1] = overlappedCells(pos.x, pos.y, pos.z);
+    const y = Math.floor(pos.y - 1e-3);
+    for (let x = x0; x <= x1; x++) {
+      for (let z = z0; z <= z1; z++) {
+        const id = world.blockAt(x, y, z);
+        if (id === undefined) return true;
+        const name = id === 0 ? 'minecraft:air' : world.blockName(id);
+        if (passProblem(world, x, y, z) !== null && !(name !== undefined && isLiquidName(name))) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**

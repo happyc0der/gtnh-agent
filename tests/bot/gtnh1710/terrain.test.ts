@@ -4,6 +4,7 @@ import { MAX_WALK_BREAKS, walkBreakCost, walkBreaks } from '../../../src/bot/gtn
 import {
   bodyProblem,
   checkSupport,
+  edgeLanding,
   restingY,
   standingCell,
   fallDistances,
@@ -507,6 +508,22 @@ describe('gravity: what holds the player up', () => {
     // Something at the feet's level (a plant it stands in, a block beside it): no settling.
     const grassy = terrain(() => 63, { '0,64,0': ID.tallgrass });
     expect(restingY(grassy, at(0.5, 64.42, 0.5))).toBeNull();
+  });
+
+  it('feet just past an edge, over nothing under the box, come down (the server holds them up)', () => {
+    // Seen live 2026-10-04: a walk stopped at z 27.67 stepping down into a hole at z 27; the
+    // server's wider box reached the block at z 28, so it never fell and its walks refused.
+    const hole = terrain((x) => (x >= 1 ? 63 : 62));
+    const past = at(0.97, 64, 0.5); // box 0.67..1.27: over x 0 (62) and x 1 (63)
+    expect(edgeLanding(hole, past)).toBeNull(); // still over the block at x 1
+    const over = at(0.67, 64, 0.5); // box 0.37..0.97: over x 0 only; the server's reaches 1.03
+    expect(checkSupport(hole, over)).toEqual({ kind: 'supported' });
+    expect(edgeLanding(hole, over)).toBe(63);
+    expect(edgeLanding(hole, at(0.67, 64.42, 0.5))).toBeNull(); // between levels: restingY's
+    expect(edgeLanding(flat, at(0.5, 64, 0.5))).toBeNull(); // on the ground
+    // Deeper than a safe fall: no landing.
+    const pit = terrain((x) => (x >= 1 ? 63 : 55));
+    expect(edgeLanding(pit, over)).toBeNull();
   });
 
   it('a player left in the air by a stopped jump falls to the block below', () => {

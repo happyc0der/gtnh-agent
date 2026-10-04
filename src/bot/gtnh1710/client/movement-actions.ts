@@ -6,7 +6,14 @@ import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { outbound } from '../packets.ts';
 import { goalBlock } from '../pathing/goals.ts';
 import { fenceHolds } from '../play-area.ts';
-import { checkSupport, fallDistances, landingHazard, MAX_SAFE_FALL, restingY } from '../terrain.ts';
+import {
+  checkSupport,
+  edgeLanding,
+  fallDistances,
+  landingHazard,
+  MAX_SAFE_FALL,
+  restingY,
+} from '../terrain.ts';
 import {
   planWalk,
   renderWalkMap,
@@ -351,9 +358,10 @@ export class MovementActions {
     if (world === null || feet === null || fence === null) return;
     const support = checkSupport(world, feet);
     if (support.kind === 'unknown') return;
-    // Held up for the server, the feet may still hang a little above the ground: they come
-    // to rest on it, as in a game client (restingY).
-    const resting = support.kind === 'supported' ? restingY(world, feet) : null;
+    // Held up for the server, the feet may still hang a little above the ground, or just past
+    // an edge over nothing: they come down onto it, as in a game client (restingY, edgeLanding).
+    const resting =
+      support.kind === 'supported' ? (restingY(world, feet) ?? edgeLanding(world, feet)) : null;
     if (support.kind === 'supported' && resting === null) {
       this.#floatingNote = null;
       return;
