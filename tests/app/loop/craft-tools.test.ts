@@ -7,6 +7,7 @@ import type { PlannerProvider } from '../../../src/planner/planner-provider.ts';
 import { DeterministicDecisionProvider } from '../../../src/system1/decision-provider.ts';
 import { sequentialIds } from '../../../src/util/ids.ts';
 import { makeWorld, memoryRepos, testClock, testConfig } from '../../fixtures/index.ts';
+import { ROUTE_PLANNER } from '../../../src/planner/route-plan.ts';
 import { routeActions } from '../../fixtures/route-actions.ts';
 
 const TOOLS = {
@@ -103,18 +104,11 @@ describe('the quest "Tools" on the mock world', { timeout: 60_000 }, () => {
       results.every((r) => r.status === 'succeeded'),
       results.map((r) => r.summary).join('\n'),
     ).toBe(true);
-    // The first route: the table is held, so it is placed first, on the floor beside the
-    // player; the 3x3 crafts name the table it will be.
-    const first = requests[0]?.route?.steps ?? [];
-    const station = first.find((s) => s.startsWith('station: crafting_table:'));
-    expect(station).toMatch(/is held: place it => PLACE_BLOCK \{"position":\{"x":2,"y":65,"z":1\}/);
-    expect(first.join('\n')).toContain(
-      'craft minecraft:wooden_pickaxe#1 x1 -> 1 minecraft:wooden_pickaxe (crafting_table; uses 3 minecraft:planks, 2 minecraft:stick) => CRAFT_ITEM {"recipe":"minecraft:wooden_pickaxe#1","times":1,"craftingTableId":"crafting_table:2.65.1"}',
-    );
-    // Once placed, the table is one the agent sees: the next route uses it as it is.
-    const later = requests.at(-1)?.route?.steps ?? [];
-    expect(later.some((s) => s.startsWith('station:'))).toBe(false);
-    expect(later.join('\n')).toContain('"craftingTableId":"crafting_table:2.65.1"');
+    // Every step of the route an exact action with what is held (the table placed first, on
+    // the floor beside the player, the 3x3 crafts at it): code followed the route itself
+    // (route-plan.ts), and the model was never asked.
+    expect(requests).toHaveLength(0);
+    expect(repos.plans.latestForTask('quest-0:5')?.planner).toBe(ROUTE_PLANNER);
 
     const performed = client.performed.map(
       (p) => ({ type: p.action.type, args: p.action.args }) as ActionSpec,
@@ -147,6 +141,5 @@ describe('the quest "Tools" on the mock world', { timeout: 60_000 }, () => {
       'minecraft:crafting_table': 0,
       'minecraft:bread': 6,
     });
-    expect(requests).toHaveLength(2);
   });
 });

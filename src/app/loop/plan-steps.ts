@@ -31,6 +31,7 @@ import {
   type PlannerResponse,
 } from '../../planner/plan-schema.ts';
 import { trimStaleSteps, validatePlan } from '../../planner/plan-validator.ts';
+import { planFromRoute, ROUTE_PLANNER } from '../../planner/route-plan.ts';
 import {
   buildPlannerRequest,
   goalRouteOf,
@@ -836,7 +837,12 @@ export async function consultPlanner(
       };
     }
   };
-  let response = await ask(request);
+  // Every step of the route an exact action the player can do with what it holds: code
+  // follows the route itself (route-plan.ts), and the model is not asked.
+  const followed = planFromRoute(request.route, config.planner.maxPlanSteps);
+  let plannedBy = followed === null ? planner.name : ROUTE_PLANNER;
+  let response: PlannerResponse =
+    followed === null ? await ask(request) : { kind: 'plan', plan: followed };
   // An escalation for want of a place while exploring is open, in daylight, with the route
   // saying where to look, contradicts the request: ask once more and say so (seen live: the
   // model kept escalating "no way to explore" with EXPLORE allowed and a forest in the route).
@@ -852,7 +858,7 @@ export async function consultPlanner(
     );
     response = await ask({ ...request, journal: [...request.journal, EXPLORE_REMINDER] });
   }
-  repos.events.append(cycleId, 'PLAN', { provider: planner.name, response });
+  repos.events.append(cycleId, 'PLAN', { provider: plannedBy, response });
 
   if (response.kind === 'escalation') {
     const e = response.escalation;
@@ -940,13 +946,14 @@ export async function consultPlanner(
     if (againTrim !== null && checked?.ok === true && checked.plan !== null) {
       plan = checked.plan;
       trimmed = againTrim.note;
+      plannedBy = planner.name;
     }
   }
   const stored = repos.plans.create(
     taskId,
     plan,
     plan.requiresUserApproval ? 'pending_approval' : 'active',
-    planner.name,
+    plannedBy,
   );
   repos.checkpoints.add(
     taskId,
