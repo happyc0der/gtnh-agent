@@ -1,4 +1,5 @@
 import type { WorldTime } from '../../domain/game-state.ts';
+import { gtOreByName } from '../../goals/ore-names.ts';
 import type { Position } from '../../domain/common.ts';
 import {
   describeCommand,
@@ -215,7 +216,7 @@ function intake(play: PlayState): void {
   const commands = play.deps.commands;
   if (commands === undefined) return;
   for (const heard of commands.take()) {
-    const parsed = parseOwnerCommand(heard.text);
+    const parsed = parseOwnerCommand(heard.text, { ore: gtOreByName });
     const record = play.deps.repos.commands.add({
       source: 'chat',
       sender: heard.sender,

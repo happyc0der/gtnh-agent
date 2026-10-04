@@ -220,7 +220,7 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   follow: 'usage: !follow [player]',
   goto: 'usage: !goto <x> <y> <z>, !goto <x> <z> or !goto <waypoint>',
   get: 'usage: !get <count> <item>, e.g. !get 20 logs',
-  mine: 'usage: !mine <count> <block>, e.g. !mine 10 sand',
+  mine: 'usage: !mine <count> <block>, e.g. !mine 10 sand or !mine 16 iron ore',
   quests: 'usage: !quests on or !quests off',
   waypoint: 'usage: !waypoint <name>, !waypoint delete <name> or !waypoints',
 };
@@ -229,6 +229,15 @@ export const HELP_TEXT =
   'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z> | <waypoint> ' +
   '!get <n> <item> !mine <n> <block> !sethome !home !waypoint <name> | delete <name> ' +
   '!waypoints !quests on|off';
+
+/**
+ * Names the parser cannot know by itself (the domain holds no game data): `ore` resolves a
+ * GregTech ore a person names ("iron ore") to the block to dig and the raw ore it yields
+ * (src/goals/ore-names.ts gtOreByName). Without it, ores are not understood.
+ */
+export interface CommandNames {
+  ore?: (name: string) => { block: string; item: string } | null;
+}
 
 /** How an owner's text parses. */
 export type CommandParse =
@@ -255,7 +264,7 @@ const NUMBER = /^[+-]?\d+(?:\.\d+)?$/;
  * "please" are ignored. Anything that is not a known verb is 'unknown' (natural language);
  * a known verb with arguments it does not take gives its usage.
  */
-export function parseOwnerCommand(text: string): CommandParse {
+export function parseOwnerCommand(text: string, names: CommandNames = {}): CommandParse {
   const body = text
     .trim()
     .replace(/^[!#]\s*/, '')
@@ -310,7 +319,7 @@ export function parseOwnerCommand(text: string): CommandParse {
       return none ? ok({ verb: 'sethome' }) : usage(verb);
     case 'get':
     case 'mine':
-      return goalCommand(verb, args);
+      return goalCommand(verb, args, names);
     case 'quests':
       return args.length === 1 && (lower(0) === 'on' || lower(0) === 'off')
         ? ok({ verb: 'quests', on: lower(0) === 'on' })
@@ -351,7 +360,11 @@ function gotoCommand(args: readonly string[]): CommandParse {
   return parsed.success ? { ok: true, command: parsed.data } : usage('goto');
 }
 
-function goalCommand(verb: 'get' | 'mine', args: readonly string[]): CommandParse {
+function goalCommand(
+  verb: 'get' | 'mine',
+  args: readonly string[],
+  names: CommandNames,
+): CommandParse {
   // "get 20 logs" or "get logs 20"; an item name may hold spaces ("Natura:N Crops").
   let count: string | undefined;
   let words: readonly string[];
@@ -359,7 +372,10 @@ function goalCommand(verb: 'get' | 'mine', args: readonly string[]): CommandPars
   else if (NUMBER.test(args.at(-1) ?? '')) [count, words] = [args.at(-1), args.slice(0, -1)];
   else return usage(verb);
   const n = Number(count);
-  const name = resolveItemName(words.join(' '));
+  // "iron ore", "copper ores": a GregTech ore, mined for its raw ore (the caller's names).
+  const text = words.join(' ');
+  const ore = /\sores?$/i.test(text) ? (names.ore?.(text) ?? null) : null;
+  const name = ore === null ? resolveItemName(text) : ore.item;
   if (!Number.isInteger(n) || name === null) return usage(verb);
   if (n < 1 || n > MAX_GOAL_COUNT) {
     return { ok: false, kind: 'usage', usage: `the count must be 1-${MAX_GOAL_COUNT}` };
@@ -367,7 +383,9 @@ function goalCommand(verb: 'get' | 'mine', args: readonly string[]): CommandPars
   const command =
     verb === 'get'
       ? { verb, count: n, item: name }
-      : { verb, count: n, block: name, item: MINE_DROPS[name] ?? name };
+      : ore !== null
+        ? { verb, count: n, block: ore.block, item: ore.item }
+        : { verb, count: n, block: name, item: MINE_DROPS[name] ?? name };
   const parsed = OwnerCommandSchema.safeParse(command);
   return parsed.success ? { ok: true, command: parsed.data } : usage(verb);
 }

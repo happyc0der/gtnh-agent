@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { gtOreByName } from '../../src/goals/ore-names.ts';
 import {
   commandTextOf,
   describeCommand,
@@ -74,6 +75,42 @@ describe('which chat is a command', () => {
     expect(commandTextOf(whisper('DankAxon', '!come'), [], SELF)).toBeNull();
     // RCON is an owner only when listed by its exact name (the live test).
     expect(commandTextOf(whisper('Rcon', 'status'), ['Rcon'], SELF)?.sender).toBe('Rcon');
+  });
+});
+
+describe('GregTech ores by name (the caller resolves them: src/goals/ore-names.ts)', () => {
+  const names = { ore: gtOreByName };
+  it('mines an ore for its raw ore, and gets the raw ore, by the name a person uses', () => {
+    expect(parseOwnerCommand('!mine 16 iron ore', names)).toEqual({
+      ok: true,
+      command: {
+        verb: 'mine',
+        count: 16,
+        block: 'gregtech:gt.blockores',
+        item: 'gregtech:gt.metaitem.03@5032',
+      },
+    });
+    expect(parseOwnerCommand('!mine 8 brown limonite ores', names)).toMatchObject({
+      ok: true,
+      command: { verb: 'mine', item: 'gregtech:gt.metaitem.03@5930' },
+    });
+    expect(parseOwnerCommand('!get 4 copper ore', names)).toEqual({
+      ok: true,
+      command: { verb: 'get', count: 4, item: 'gregtech:gt.metaitem.03@5035' },
+    });
+  });
+
+  it('without names, or for an ore that does not generate, it gives the usage', () => {
+    expect(parseOwnerCommand('!mine 16 iron ore')).toMatchObject({ ok: false, kind: 'usage' });
+    expect(parseOwnerCommand('!mine 2 unobtainium ore', names)).toMatchObject({
+      ok: false,
+      kind: 'usage',
+    });
+    // Not an ore: as before.
+    expect(parseOwnerCommand('!mine 10 sand', names)).toMatchObject({
+      ok: true,
+      command: { block: 'minecraft:sand' },
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { gtOreByName } from '../../goals/ore-names.ts';
 import { describeCommand, isStructured, parseOwnerCommand } from '../../domain/owner-commands.ts';
 import { TaskStatusSchema } from '../../domain/tasks.ts';
 import { NOT_UNDERSTOOD } from '../play/commands.ts';
@@ -94,7 +95,7 @@ export function commandCommand(cli: Cli): number {
     process.stderr.write('no owner is configured (MC_OWNERS): owner commands are off\n');
     return 1;
   }
-  const parsed = parseOwnerCommand(text);
+  const parsed = parseOwnerCommand(text, { ore: gtOreByName });
   if (!parsed.ok && (parsed.kind === 'usage' || isStructured(text))) {
     process.stderr.write(`${parsed.kind === 'usage' ? parsed.usage : NOT_UNDERSTOOD}\n`);
     return 1;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { gtOreByName } from '../goals/ore-names.ts';
 import {
   MAX_COMMAND_TEXT,
   parseOwnerCommand,
@@ -53,7 +54,7 @@ come: walk to the owner
 follow: follow the owner; args [player] to follow that player
 goto: args [x, y, z], [x, z] or [waypoint]: travel there
 get: args [count, item]: gather until it has that many (item like log, sand, cobblestone, minecraft:dirt)
-mine: args [count, block]: mine that block until it has that many of what it drops
+mine: args [count, block]: mine that block until it has that many of what it drops (a GregTech ore by its name and "ore": ["16", "iron", "ore"])
 sethome: home is where it stands; home: go home
 quests: args [on] or [off]
 waypoint: args [name] saves where it stands, [delete, name] forgets one; waypoints: list them
@@ -109,7 +110,9 @@ export class OllamaCommandProvider implements CommandTranslator {
     if (!reply.success)
       return { ok: false, reason: 'the model replied outside the command schema' };
     if (reply.data.verb === 'unknown') return { ok: false, reason: 'the model found no command' };
-    const parsed = parseOwnerCommand(`!${[reply.data.verb, ...reply.data.args].join(' ')}`);
+    const parsed = parseOwnerCommand(`!${[reply.data.verb, ...reply.data.args].join(' ')}`, {
+      ore: gtOreByName,
+    });
     if (!parsed.ok) {
       return {
         ok: false,
