@@ -1991,6 +1991,10 @@ farther from every hostile or unidentified entity near than the nearest is now),
 toward it as the play area allows, at most 32 blocks, as an escape. Seen live: a fishing zombie
 2.3 blocks off and a husk 11, the trail too close to them, home 90 blocks back over a cliff; the
 retreat home failed four times on the spot, and play stopped.
+The threats it flees are those System 1 retreats from: any within the threat radius (10), and a
+ranged one (a skeleton) anywhere in the entity scan (16). Seen live 2026-10-04: a sniper
+skeleton on a hill 10.3 blocks off made every retreat fail on the spot (the pit sealed, home far),
+and the flee, looking only within 10 blocks, found nothing to flee from.
 
 This is the long-distance idea of Baritone (path to the best reachable node toward a goal beyond
 the loaded area, then re-plan as chunks arrive) and of mineflayer-pathfinder's `GoalXZ`
