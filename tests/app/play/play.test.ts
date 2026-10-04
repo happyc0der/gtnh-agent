@@ -10,6 +10,7 @@ import {
 } from '../../../src/app/play/play.ts';
 import { describePlayEvent } from '../../../src/app/play/narration.ts';
 import {
+  MOB_SHELTER_MAX_MS,
   MOB_SHELTER_POLL_MS,
   nightSoon,
   untilSunrise,
@@ -872,6 +873,46 @@ describe('autonomous play', () => {
       'goal: "leave the shelter"',
       'goal: "Q2" - missing 100 minecraft:sand (new task)',
     ]);
+  });
+
+  it('waits offline once hostiles have stayed near the sealed shelter for MOB_SHELTER_MAX_MS', async () => {
+    // A mob in a cave beside the pit, or a creeper, may stay all day (seen live 2026-10-04).
+    const repos = open();
+    const clock = { t: 0 };
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const base = deps(repos, world, clock);
+    const result = await runPlay(
+      {
+        ...base,
+        time: () => Promise.resolve(worldTime(1_000, true)), // morning
+        sleep: (ms) => {
+          clock.t += ms;
+          return Promise.resolve();
+        },
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit',
+            sheltered: true,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: true,
+            exit: [],
+            hostiles:
+              '1 hostile(s), nearest at 4.0 blocks: minecraft:Zombie 4 blocks away, 3 below',
+          }),
+      },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(result.mobNearby).toBe(
+      '1 hostile(s), nearest at 4.0 blocks: minecraft:Zombie 4 blocks away, 3 below',
+    );
+    expect(result.stopReason).toMatch(
+      /^hostiles stayed near the sealed shelter for 5 min .*: waiting offline for them to leave$/,
+    );
+    expect(clock.t).toBeGreaterThanOrEqual(MOB_SHELTER_MAX_MS);
+    expect(world.calls).toBe(0); // no session: nothing System 1 would refuse ran
   });
 
   it('stops and says so when walled in with no way out', async () => {

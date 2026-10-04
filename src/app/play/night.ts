@@ -274,6 +274,12 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         missing: {},
         maxCycles: status.exit.length * 2 + 2,
       });
+      // A hostile came near while the player is still sealed in (System 1's SHELTERED pause):
+      // the next round waits inside for it to go (waitOutMobs), as a morning that began so.
+      if (play.lastDecision?.reasonCodes.includes('SHELTERED') === true) {
+        play.exitTries -= 1;
+        return 'next-round';
+      }
       if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
         return done(play, result.stopReason);
       }
@@ -292,6 +298,12 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
 
 /** How often play looks again while it waits in its shelter for hostiles to go. */
 export const MOB_SHELTER_POLL_MS = 5_000;
+/**
+ * How long play waits in its shelter for hostiles to go before it waits offline instead, as
+ * for a mob near home (play.ts MOB_WAIT_MS): a mob that cannot reach the player and does not
+ * burn (one in a cave, a creeper) may stay all day.
+ */
+export const MOB_SHELTER_MAX_MS = 5 * 60_000;
 
 /**
  * Morning, sealed in its shelter with hostiles near (the safety rules' HOSTILES_NEARBY): no
@@ -299,16 +311,30 @@ export const MOB_SHELTER_POLL_MS = 5_000;
  * inside for them to go (the sun burns zombies and skeletons), hearing and answering owners'
  * commands as at night, and no exit try is spent (seen live 2026-10-04: zombies about the
  * night pit at sunrise; the exit gave up after three sessions, and the retreat home could
- * not leave the pit). A round of it: the next looks again.
+ * not leave the pit). A round of it: the next looks again. After MOB_SHELTER_MAX_MS of it,
+ * play ends to wait offline (the caller waits a while and plays on), as for a mob near home.
  */
 async function waitOutMobs(play: PlayState, mobs: string): Promise<RoundEnd> {
+  const since =
+    play.sheltered !== null && 'mobs' in play.sheltered ? play.sheltered.since : play.now();
   if (play.sheltered === null || !('mobs' in play.sheltered)) {
     play.emit({
       kind: 'night',
       message: `morning: hostiles near the shelter (${mobs}): waiting inside for them to go`,
     });
   }
-  play.sheltered = { mobs };
+  if (play.now() - since >= MOB_SHELTER_MAX_MS) {
+    play.sheltered = null;
+    const minutes = Math.round(MOB_SHELTER_MAX_MS / 60_000);
+    return {
+      ...done(
+        play,
+        `hostiles stayed near the sealed shelter for ${minutes} min (${mobs}): waiting offline for them to leave`,
+      ),
+      mobNearby: mobs,
+    };
+  }
+  play.sheltered = { mobs, since };
   await play.whileSheltered();
   const sleep = play.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   await sleep(MOB_SHELTER_POLL_MS);

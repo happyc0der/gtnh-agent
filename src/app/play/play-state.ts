@@ -77,7 +77,7 @@ export interface PlayState {
    * In the shelter, waiting: for the morning (until when, on play.now's clock), or in the
    * morning for the hostiles near it to go (what they are); else null.
    */
-  sheltered: { until: number } | { mobs: string } | null;
+  sheltered: { until: number } | { mobs: string; since: number } | null;
 }
 
 /** How an owner's running command is going (commands.ts). */

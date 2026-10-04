@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { parseObservedStorageId } from '../../../domain/interactions.ts';
 import { toolInfo } from '../../../domain/tools.ts';
+import { WALKABLE_SURFACES } from '../walking.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import {
   applyClick,
@@ -33,7 +34,7 @@ type ClickOutcome = 'accepted' | 'rejected' | 'unanswered' | 'unpredictable';
 
 /**
  * Vanilla chests (OPEN_CONTAINER, DEPOSIT_ITEM, WITHDRAW_ITEM; container.ts plans the moves),
- * and the window work the other actions build on: opening a block's window with an empty hand,
+ * and the window work the other actions build on: opening a block's window (clickHand),
  * the hotbar, one predicted click at a time confirmed by the server, emptying the cursor after
  * a failed click, moving a stack into the hotbar, and closing a window (never with items on
  * the cursor or in a crafting table's grid).
@@ -161,8 +162,9 @@ export class InventoryActions {
   }
 
   /**
-   * Right-clicks a configured block with an EMPTY hand, so the click can only open it (never
-   * place or use an item), and waits for its window. A failure, or null once it is open.
+   * Right-clicks a configured block (a chest or a crafting table, which always answer the
+   * click) with an empty hand, else a vanilla tool or plain block (clickHand), so the click
+   * can only open it, and waits for its window. A failure, or null once it is open.
    */
   async openBlockWindow(
     containerId: string,
@@ -243,27 +245,28 @@ export class InventoryActions {
   }
 
   /**
-   * A hotbar slot to right-click a block with when only the block may act (open its window,
-   * turn a door): an empty one; else, the held slot first, a stack with no NBT data of a
-   * vanilla tool or a vanilla block. Forge asks the held item's onItemUseFirst before the
-   * block's onBlockActivated, and only modded items hook it (a GregTech tool, a wand); a
-   * block that opens or turns then answers the click, so nothing is placed. Null when no slot
-   * is fit (seen live 2026-10-04: a full hotbar of dirt, sand, saplings and planks refused
-   * to open the crafting table).
+   * A hotbar slot to right-click a block with whose onBlockActivated always answers the click
+   * (a crafting table, a chest, a block with an interaction profile, a door or a gate): an
+   * empty one; else, the held slot first, a stack with no NBT data of a vanilla tool or a plain
+   * full vanilla block (WALKABLE_SURFACES: dirt, cobblestone, planks...). Forge asks the held
+   * item's onItemUseFirst before the block's onBlockActivated, and only modded items hook it
+   * (a GregTech tool, a wand); the block then answers, so nothing is placed. Never for a block
+   * that may not answer (an observe-only one: the click would place the held block): those get
+   * an empty hand only. Null when no slot is fit (seen live 2026-10-04: a full hotbar of dirt,
+   * sand, saplings and planks refused to open the crafting table).
    */
   clickHand(): number | null {
     const empty = this.emptyHotbarSlot();
     if (empty !== null) return empty;
     const registry = this.#world.registry;
     if (registry === null) return null;
-    const blocks = new Set(registry.blocks.values());
     const held = this.#world.heldSlot;
     for (const j of [held, ...[0, 1, 2, 3, 4, 5, 6, 7, 8].filter((k) => k !== held)]) {
       const s = this.hotbar(j);
       if (s == null || s.hasNbt) continue;
       const item = registry.items.get(s.id) ?? registry.blocks.get(s.id);
       if (item === undefined || !item.startsWith('minecraft:')) continue;
-      if (toolInfo(item) !== null || blocks.has(item)) return j;
+      if (toolInfo(item) !== null || WALKABLE_SURFACES.has(item)) return j;
     }
     return null;
   }

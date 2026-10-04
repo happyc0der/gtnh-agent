@@ -179,17 +179,33 @@ describe('a tunnel one wide and two high, as Baritone digs one (tunnel.ts)', () 
     });
   });
 
-  it('only from the tunnel line: the start level, its row, at or past its start', () => {
+  it('off its line (a retreat took it away): first a walk back to the last cell open so far', () => {
+    const away = planTunnel(land(dugTo(3)), { x: 9.5, y: 64, z: 4.5 }, START, 'east', 6, {
+      area: AREA,
+    });
+    expect(away).toMatchObject({
+      ok: true,
+      done: 3,
+      steps: [
+        {
+          spec: { type: 'MOVE_TO', args: { target: { x: 3.5, y: 61, z: 0.5 }, tolerance: 0.5 } },
+        },
+      ],
+      problem: null,
+    });
+  });
+
+  it('off its line with nothing dug yet: back to the start, whichever way it is off', () => {
     for (const feet of [
       { x: 0.5, y: 61, z: 1.5 },
       { x: 0.5, y: 62, z: 0.5 },
       { x: -0.5, y: 61, z: 0.5 },
     ]) {
       const plan = planTunnel(land(), feet, START, 'east', 4, { area: AREA });
-      expect(plan.ok).toBe(false);
-      expect(plan.ok ? '' : plan.reason).toMatch(
-        /is not in the tunnel's line from \(0, 61, 0\) east$/,
-      );
+      expect(plan).toMatchObject({ ok: true, done: 0, problem: null });
+      expect(plan.ok ? plan.steps.map((st) => st.spec) : []).toEqual([
+        { type: 'MOVE_TO', args: { target: { x: 0.5, y: 61, z: 0.5 }, tolerance: 0.5 } },
+      ]);
     }
   });
 });

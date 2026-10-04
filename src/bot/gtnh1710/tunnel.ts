@@ -52,8 +52,9 @@ export type TunnelPlan =
 /**
  * The next steps of the tunnel that starts at feet block `start` and goes `length` cells
  * `direction` (and, with `slope` 'down', one block down for each), for the player with its
- * feet at `feet`, which must stand in the tunnel's line (in its row, at the level the cells
- * dug so far reach).
+ * feet at `feet`. Standing in the tunnel's line (in its row, at the level the cells dug so far
+ * reach), the next cells; elsewhere (a retreat, a food trip or the night took it away), a walk
+ * back to the last cell of the tunnel open so far, from which the next round goes on.
  */
 export function planTunnel(
   world: WalkWorld,
@@ -71,10 +72,29 @@ export function planTunnel(
   const fz = Math.floor(feet.z);
   const done = (fx - start.x) * dx + (fz - start.z) * dz;
   const aside = dx !== 0 ? fz - start.z : fx - start.x;
+  const cellAt = (k: number): BlockPos => ({
+    x: start.x + k * dx,
+    y: start.y - drop * k,
+    z: start.z + k * dz,
+  });
   if (fy !== start.y - drop * done || aside !== 0 || done < 0) {
+    // The cells open so far, from the start: the tunnel as dug (an earlier session's).
+    let open = 0;
+    while (open < length && bodyOpen(world, cellAt(open + 1))) open += 1;
+    const back = cellAt(open);
     return {
-      ok: false,
-      reason: `the player at ${fmt({ x: fx, y: fy, z: fz })} is not in the tunnel's line from ${fmt(start)} ${direction}`,
+      ok: true,
+      done: open,
+      steps: [
+        {
+          spec: {
+            type: 'MOVE_TO',
+            args: { target: { x: back.x + 0.5, y: back.y, z: back.z + 0.5 }, tolerance: 0.5 },
+          },
+          text: `walk back to the tunnel at ${fmt(back)} (the player is at ${fmt({ x: fx, y: fy, z: fz })}, off its line)`,
+        },
+      ],
+      problem: null,
     };
   }
   if (done >= length) return { ok: true, done: length, steps: [], problem: null };
@@ -122,6 +142,13 @@ export function planTunnel(
     at = { x: cell.x + 0.5, y: cell.y, z: cell.z + 0.5 };
   }
   return { ok: true, done, steps, problem };
+}
+
+/** Feet and head cells of `p` both open (dug, or air). */
+function bodyOpen(world: WalkWorld, p: BlockPos): boolean {
+  return (
+    passProblem(world, p.x, p.y, p.z) === null && passProblem(world, p.x, p.y + 1, p.z) === null
+  );
 }
 
 /** Why the block under a tunnel cell will not hold the player, or null: a known solid block. */

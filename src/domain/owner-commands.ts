@@ -453,7 +453,10 @@ function tunnelCommand(args: readonly string[]): CommandParse {
     if (NUMBER.test(a)) length = Number(a);
     else if (a.toLowerCase() === 'down') slope = 'down';
     else if (direction !== null) return usage('tunnel');
-    else direction = directionOf(a);
+    else {
+      direction = directionOf(a);
+      if (direction === null) return usage('tunnel');
+    }
   }
   const parsed = OwnerCommandSchema.safeParse({ verb: 'tunnel', direction, length, slope });
   return parsed.success ? { ok: true, command: parsed.data } : usage('tunnel');

@@ -19,6 +19,7 @@ import { playArea } from '../../bot/gtnh1710/play-area.ts';
 import type { AgentConfig } from '../../config/env.ts';
 import type { Decision } from '../../domain/decisions.ts';
 import { diggableInfo } from '../../domain/dig-time.ts';
+import { recentHurtMs } from '../../domain/combat.ts';
 import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
 import type { GameState } from '../../domain/game-state.ts';
 import { carriedHarvester } from '../../domain/tools.ts';
@@ -189,10 +190,12 @@ export function liveShelter(
       const mobs = assessDangers(state, safety).filter(
         (v) => v.code === 'HOSTILES_NEARBY' || v.code === 'UNCLASSIFIED_ENTITY_NEARBY',
       );
+      // Hurt a moment ago, sealed or not, something reaches the player: not sheltered.
+      const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp) !== null;
       const stuck: ShelterStatus = {
         ...base,
         walled: true,
-        sheltered: state.player.sealed === true,
+        sheltered: state.player.sealed === true && !hurt,
         hostiles:
           mobs.length === 0 ? null : `${mobs.map((v) => v.message).join('; ')}${whoIsNear(state)}`,
       };

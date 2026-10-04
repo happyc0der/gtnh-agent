@@ -241,7 +241,10 @@ export async function playCommand(cli: Cli): Promise<number> {
         minutes: Number(((Date.now() - started) / 60_000).toFixed(1)),
         ...(decided === null ? {} : { system1: decided }),
       };
-      mobWaits = out.mobNearby === null ? 0 : mobWaits + 1;
+      // A mob that came after the bot had played on a while is a new one: its waits count
+      // from one (else one mob that stayed made every later mob wait 5 minutes offline).
+      mobWaits =
+        out.mobNearby === null ? 0 : out.elapsedMs >= NEW_MOB_EPISODE_MS ? 1 : mobWaits + 1;
       // Until the next sunrise: also from a day that night will end soon (seen live: with
       // no shelter possible two minutes before dusk, it slept 15 s and came back, again
       // and again, until the evening).
@@ -283,6 +286,9 @@ export async function playCommand(cli: Cli): Promise<number> {
     process.removeListener('SIGINT', onInterrupt);
   }
 }
+
+/** A play that ran this long before a mob ended it began a new mob episode (cli play). */
+const NEW_MOB_EPISODE_MS = 2 * 60_000;
 
 /**
  * With --listen, how long to wait before reconnecting after `attempt` failed attempts in a

@@ -334,14 +334,19 @@ export function planPath(
   let currentPlaced = 0;
   let opened = 1;
   const avoid = (options.avoid ?? []).filter((a) => a.coefficient > 1 && a.radius > 0);
-  /** The cost factor of a movement ending at feet block (x, y, z): 1 away from every place to avoid. */
+  /**
+   * The cost factor of a movement ending at feet block (x, y, z): 1 away from every place to
+   * avoid, else the largest coefficient of those it is near (not their product: two creepers
+   * side by side must not make a walk near both a thousand times dearer, past the search's
+   * limits).
+   */
   const avoidFactor = (x: number, y: number, z: number): number => {
     let f = 1;
     for (const a of avoid) {
       const dx = x + 0.5 - a.x;
       const dy = y - a.y;
       const dz = z + 0.5 - a.z;
-      if (dx * dx + dy * dy + dz * dz <= a.radius * a.radius) f *= a.coefficient;
+      if (dx * dx + dy * dy + dz * dz <= a.radius * a.radius) f = Math.max(f, a.coefficient);
     }
     return f;
   };

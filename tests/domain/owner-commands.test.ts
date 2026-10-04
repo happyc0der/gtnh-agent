@@ -293,6 +293,7 @@ describe('tunnel (Baritone #tunnel)', () => {
       '!tunnel east 100',
       '!tunnel east west',
       '!tunnel 20',
+      '!tunnel foo east',
     ]) {
       const p = parseOwnerCommand(text);
       expect(p, text).toMatchObject({ ok: false, kind: 'usage' });

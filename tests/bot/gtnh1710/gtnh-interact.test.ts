@@ -522,6 +522,24 @@ describe('Gtnh1710Client interacting with blocks', () => {
     expect(learned[0]?.sample[0]).toMatchObject({ slot: 0, count: 1 });
   });
 
+  it('with no empty hotbar slot: a profiled block opens holding a plain block, an observe-only one is refused', async () => {
+    // An observe-only block may not answer a click, which would then place the held block.
+    const hotbar = Array.from({ length: 9 }, (_, j) => ({
+      slot: 36 + j,
+      id: ID.cobble,
+      count: 1,
+      damage: 0,
+    }));
+    const { server, client } = await start({ server: { inventory: [...INVENTORY, ...hotbar] } });
+    const drive = await perform(client, interact(DRIVE));
+    expect(drive).toMatchObject({ ok: false, code: 'REFUSED' });
+    expect(drive.message).toMatch(/no empty hotbar slot to click with/);
+    const furnace = await perform(client, interact(FURNACE));
+    expect(furnace).toMatchObject({ ok: true });
+    // Only the furnace was clicked: nothing placed beside the drive.
+    expect(server.chestSim.activations.map((a) => `${a.x},${a.y},${a.z}`)).toEqual([key(FURNACE)]);
+  });
+
   it('a mod window with the player inventory first: recorded, the inventory part located, never clicked', async () => {
     const { server, client } = await start({
       server: {
