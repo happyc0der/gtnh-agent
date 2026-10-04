@@ -514,7 +514,15 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   checked before each step), and the steps run as known safe steps (`blueprintSession`), each
   validated, executed and verified. It stops and says why, and how far it got, at a fluid,
   lava, an open floor (a cave, a drop), sand or gravel that would fall, or a block it cannot
-  harvest; dusk, a nearly empty food bar and a new command interrupt it as they do a trip.
+  harvest; dusk, a nearly empty food bar and a new command interrupt it as they do a trip. A
+  step that fails (a hostile stopped its walk) is planned again next round, as a trip's is, 3
+  times in a row at most, and the reply quotes the step's or the safety rule's own words.
+  With no direction (`!tunnel down 10`, "dig down"), code picks the way (`pickWay` in
+  `command-dig.ts`): of north, east, south and west, most room to the boundary first, the
+  first whose next cells are all clear, else the one reaching furthest; where that way is
+  blocked midway, it turns from the tunnel's last cell for the rest of the length (at most 3
+  times, never straight back, nor back along the leg before). The way picked and the legs dug
+  are kept in the command's progress across restarts.
 - **Strip mining** (the idea of Baritone's legitMine): a `!mine` of a GregTech ore with none
   of its material in view digs for it, as a person does, since GregTech tells a client an
   ore's material only once a face of it is open (no x-ray). `src/app/play/strip-mine.ts`
@@ -939,7 +947,13 @@ below the feet); in the air, it falls onto the block below with vanilla gravity,
 is allowed, within the fence, at most 3 blocks (no damage) and with no hazard next to the landing.
 Feet the server holds up but that hang a little above a block (a player saved mid-jump at logout
 joins 0.42 above the sand) come to rest on it the same way (`restingY`), and an observation lands
-them first, so the night pit sees the player on the ground. A walk starts from the block the
+them first, so the night pit sees the player on the ground. So do feet on a block level with
+nothing under the player's own box (0.3 each way) that the server's wider box still holds up
+(`edgeLanding`; seen live 2026-10-04: a walk stopped 0.03 past an edge stepping down into a
+hole, and every walk after refused, "no known full block underfoot"). A walk itself never
+stops on such a step: 1.7.10 moves along y before x and z, so the step off an edge still lands
+on it and counts as on the ground, and the walk's own stops (threats, the stop file) wait for
+the landing. A walk starts from the block the
 player stands on: the one under the centre of its feet, or, on the edge of a neighbour (its box,
 0.3 each way, reaches over it), that neighbour (`standingCell`; seen live: a walk stopped at
 z 9.1 over air, on the edge of the block at z 8, and every walk from there was refused).
@@ -1475,8 +1489,10 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
 1. **Observation.** The `GameState` lists `nearbyBlocks`, computed from the chunk data
    (`resource-scan.ts`):
    - `resources`: allowlisted blocks within 16 blocks, at or above the feet level, nearest
-     first, plus sand, gravel and clay one level below the feet and the nearest 8 dirt and
-     grass blocks of the floor (a sample: the floor is everywhere). At most 64, shared fairly
+     first, plus sand, gravel and clay one level below the feet, any kind one level below in
+     the columns right beside the player (the next step of stairs down: seen live 2026-10-04,
+     stairs stopped at their first stone step, NOT_DIGGABLE), and the nearest 8 dirt and grass
+     blocks of the floor (a sample: the floor is everywhere). At most 64, shared fairly
      between kinds (`nearestOfEachKind`: every kind's nearest before any kind's second), so a
      kind not listed has none within the declared radius; that radius shrinks only when more
      kinds are found than the list holds. Seen live: 31 grass, 27 sand and 6 leaves filled the
