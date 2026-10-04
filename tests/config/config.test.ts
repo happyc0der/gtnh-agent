@@ -105,6 +105,7 @@ describe('configuration', () => {
       allowSprint: false,
       allowWater: false,
       allowDoors: true,
+      allowClimb: true,
       throwawayReserve: 4,
     });
     const { config } = loadConfig({
@@ -117,6 +118,7 @@ describe('configuration', () => {
         MC_PATH_ALLOW_SPRINT: 'true',
         MC_PATH_ALLOW_WATER: 'true',
         MC_PATH_ALLOW_DOORS: 'false',
+        MC_PATH_ALLOW_CLIMB: 'false',
         MC_PATH_THROWAWAY_RESERVE: '8',
       },
     });
@@ -128,6 +130,7 @@ describe('configuration', () => {
       allowSprint: true,
       allowWater: true,
       allowDoors: false,
+      allowClimb: false,
       throwawayReserve: 8,
     });
     expect(() =>

@@ -1154,8 +1154,11 @@ same movements, options and limits. Where to stand to dig a block is a look-up i
 classified with the walkers' own rules (what the body passes is `passable.ts`'s, what can be
 stood on `terrain.ts`'s, hazards `block-hazards.ts`'s), with derived facts kept per cell: near a
 hazard (one in the 3 x 3 x 3 cube, or an unloaded or unnamed block), standable (exactly
-`standProblem`, and never with the feet in a vine: a game client climbs vines like ladders, and
-that is not modelled), calm one-deep water (vanilla's flow vector is zero).
+`standProblem`, and never with the feet in a vine: a game client climbs vines, and that is not
+modelled), calm one-deep water (vanilla's flow vector is zero). A ladder on a wall
+(`minecraft:ladder`, metadata 2-5) is a climbable cell (`CLIMB`): neither passable nor solid, its
+box a 1/8 slab along the wall's edge (`bodyFitsLadder`), so a body centred in its column is clear
+of it; the feet are held there (`held`), floor or not.
 
 **Goals** (`goals.ts`): plain data, each with an admissible and consistent heuristic built from
 the cheapest cost per block across, up and down over the movements allowed (tested along every
@@ -1174,26 +1177,31 @@ movement of a test world):
 **Movements and their costs** (`movements.ts`, `costs.ts`), in ticks, derived from the physics
 below and the client's waits:
 
-| Movement | What                                                                                       | Cost (ticks)                                               |
-| -------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| traverse | one block cardinal; may break its way open (head, then feet)                               | 4.63 walking (20 / 4.317), 3.56 sprinting                  |
-| diagonal | one block diagonally, both corners open (no corner cutting), never breaking                | 6.55, 5.04 sprinting                                       |
-| ascend   | a jump onto the next block, one higher; may break the room above the start and on the step | 12 (the jump lands on its 9th tick, + 1, + jump penalty 2) |
-| descend  | off the edge one block down; may break its way                                             | 9.63 (walk off, 5 ticks of fall, centre)                   |
-| fall     | 2 or 3 blocks onto dry ground (no damage: 4 would deal 1), or into calm one-deep water     | 11.63, 13.63; water: 17.75 from 5, 22.75 from 10           |
-| parkour  | a running jump over a gap of 1-2 blocks (3 sprinting) to the same level, the arc clear     | 16.78, 18.47 walking; 16.14 sprinting                      |
-| pillar   | jump and place a block in the cell the feet left, land on it; may break the room above     | 33 (with the placement penalty 20)                         |
-| bridge   | place a block in the gap ahead against the side of the block underfoot, walk on            | 32.63 (with the placement penalty 20)                      |
-| downward | dig the block underfoot, drop one block (only when the caller enables it)                  | 17 + the dig                                               |
-| wading   | a traverse or diagonal in calm one-deep water (into it, out of it, within it)              | 10.20, 14.43                                               |
-| (ascend) | out of calm one-deep water onto a bank one higher, the cells 3 above open                  | 20 (about 18 ticks, + jump penalty 2)                      |
+| Movement    | What                                                                                             | Cost (ticks)                                               |
+| ----------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| traverse    | one block cardinal; may break its way open (head, then feet)                                     | 4.63 walking (20 / 4.317), 3.56 sprinting                  |
+| diagonal    | one block diagonally, both corners open (no corner cutting), never breaking                      | 6.55, 5.04 sprinting                                       |
+| ascend      | a jump onto the next block, one higher; may break the room above the start and on the step       | 12 (the jump lands on its 9th tick, + 1, + jump penalty 2) |
+| descend     | off the edge one block down; may break its way                                                   | 9.63 (walk off, 5 ticks of fall, centre)                   |
+| fall        | 2 or 3 blocks onto dry ground (no damage: 4 would deal 1), or into calm one-deep water           | 11.63, 13.63; water: 17.75 from 5, 22.75 from 10           |
+| parkour     | a running jump over a gap of 1-2 blocks (3 sprinting) to the same level, the arc clear           | 16.78, 18.47 walking; 16.14 sprinting                      |
+| pillar      | jump and place a block in the cell the feet left, land on it; may break the room above           | 33 (with the placement penalty 20)                         |
+| bridge      | place a block in the gap ahead against the side of the block underfoot, walk on                  | 32.63 (with the placement penalty 20)                      |
+| downward    | dig the block underfoot, drop one block (only when the caller enables it)                        | 17 + the dig                                               |
+| wading      | a traverse or diagonal in calm one-deep water (into it, out of it, within it)                    | 10.20, 14.43                                               |
+| (ascend)    | out of calm one-deep water onto a bank one higher, the cells 3 above open                        | 20 (about 18 ticks, + jump penalty 2)                      |
+| climbUp     | up a ladder one block, the body centred in its column (clear of the ladder's slab)               | 9.50 (1 / 0.1176 a tick, + 1 to start)                     |
+| climbDown   | down a ladder one block                                                                          | 7.67 (1 / 0.15 a tick, + 1)                                |
+| climbOn     | across from a ledge over a ladder's top, then down into it                                       | 12.30                                                      |
+| climbOff    | up out of a ladder's top, then across onto a ledge                                               | 14.13                                                      |
+| climbAcross | across one block held by a ladder (no floor at one end): on or off it partway up, or along a row | 7.67 (1 / 0.15 a tick, + 1)                                |
 
 A break costs its dig ticks (the caller's `canBreak`, with the tool the player would hold), the
 client's wait for the server's verdict (6) and a penalty (4), plus 2 once for stopping first, so
 going round wins unless breaking is clearly cheaper (`penalties` changes them). Breaking and
 placing are policies the caller passes: `canBreak(cell)` (dig ticks or null), `canPlace(cell)`,
 `throwaway` (how many blocks, which: a surface the walker stands on, whether it falls), and the
-flags `parkour`, `pillar`, `bridge`, `downward`, `sprint` and `water`, all off by default. The
+flags `parkour`, `pillar`, `bridge`, `downward`, `sprint`, `water` and `climb`, all off by default. The
 client's walk policy sets them from its config (`downward` with breaking, where `checkDigDown`
 allows it: `canDigDown`); see
 [Walking on the pathfinder](#walking-on-the-pathfinder).
@@ -1258,6 +1266,29 @@ position the click goes (`afterStep`) and the first step that stands on it (`nee
   reproduces); once the space 0.6 higher holds no water, the game pushes the player up (motionY
   0.3), the feet clear the bank's top and the box moves over it, about 18 ticks in all. So a fall
   into one-deep water has a way out wherever a bank one block higher has room above it.
+- On a ladder (climbUp, climbDown, climbOn, climbOff, climbAcross: from rest at the start
+  block's centre) the steps are a climbing client's moves, without gravity: straight up the
+  column's centre at 0.1176 a tick (1.7.10 sets motionY to 0.2 while the player presses against
+  the ladder, then gravity and drag), down at 0.15 (motionY is never below -0.15 there), across
+  at 0.15 (motionX and Z are clamped there), flagged `climb`. The server checks nothing of them but the blocks in
+  the way, which the slab never is for a centred body, and the player's living update zeroes the
+  fall on a ladder (`isOnLadder`, where the step began), so a long climb down hurts nothing; the
+  step validator checks climb steps by those limits, with a ladder where the feet are, or right
+  under them at a block's level (over its top), or a block holding them up (the ledge beside the
+  top). A walk may stop between climbs where a ladder holds the feet at a block's level, centred
+  in its column (never over a ladder's top or partway across: `terrain.ts` `onLadder`), and a
+  walk from there begins with a climb; from a ladder with no floor under it, nothing but a climb
+  starts. Nothing heads toward a ladder's wall from its foot but climbOff (the slab is in the
+  way until the feet are over its top). Idle, a ladder holds the player at a block's level (no
+  idle fall off it); between levels (a correction mid-climb) it climbs down to the level below
+  at 0.15 a tick.
+- Where a walk starts (`search.ts` `startOf`): with climbing on, the ladder holding the feet
+  (between levels too), else standingCell's block, else the foot of a ladder the body rests over
+  (its floor holding the body up), else the ladder's top block right under feet over it; held by
+  a ladder with no floor, the walk first moves to its column's centre and level by climbing
+  steps, and otherwise centres on the start block by walking (the block the search chose, which
+  a walk with no movements gets as `ExecutionOptions.start`). An independent review
+  (2026-10-04) stranded the player at each of these spots before: no walk could start there.
 - A movement that breaks, pillars or digs down starts at rest; when a movement cannot be driven
   from the way the one before it ends, the plan is made again with that one stopping.
 
@@ -1310,8 +1341,8 @@ test run.
 
 - swimming: water deeper than one block is never entered, and water that flows (it pushes) is
   never waded;
-- vines and ladders (the body never has its feet in one), slabs, stairs, soul sand, ice and other
-  partial or slippery blocks (not surfaces), doors and fence gates;
+- vines (the body never has its feet in one; ladders are climbed since 2026-10-04), slabs,
+  stairs, soul sand, ice and other partial or slippery blocks (not surfaces);
 - falling blocks are avoided, not handled (Baritone breaks a falling column again and again);
 - diagonal ascends and descends, and Baritone's "edging" diagonals past one blocked corner.
 

@@ -36,6 +36,7 @@ import {
 } from '../pathing/search.ts';
 import { stepProblem, validatePlan } from '../pathing/validate.ts';
 import type { PlaceArea } from '../placing.ts';
+import { onLadder } from '../terrain.ts';
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
 import type { BlockWatch, WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
@@ -361,11 +362,11 @@ export class PathActions {
       }
       movements = kept;
     }
-    let exec = planExecution(world, fence, from, movements, { water: policy.water });
+    let exec = planExecution(world, fence, from, movements, { water: policy.water, start });
     if (!exec.ok && request.partial && exec.movement > 0) {
       // Walk the part before the movement that cannot be driven; the next plan goes on.
       movements = movements.slice(0, exec.movement);
-      exec = planExecution(world, fence, from, movements, { water: policy.water });
+      exec = planExecution(world, fence, from, movements, { water: policy.water, start });
     }
     if (!exec.ok) return refuse(`the path to ${request.what} cannot be walked: ${exec.reason}`);
     const valid = validatePlan(world, fence, from, exec, { water: policy.water });
@@ -645,7 +646,17 @@ export class PathActions {
                   z: placing[0].against.z + placing[0].cursor.z / 16,
                 };
           send(step, point);
-          airborne = !step.onGround;
+          // Held by a ladder (one where the feet are) at a block's level, centred in its column,
+          // a walk may stop there (a walk from there begins with a climb); between levels it
+          // climbs on, and over a ladder's top or across beside its column too (an independent
+          // review, 2026-10-04, stranded the player at both).
+          const held =
+            step.climb === true &&
+            Math.abs(step.pos.y - Math.round(step.pos.y)) < 1e-9 &&
+            Math.abs(step.pos.x - Math.floor(step.pos.x) - 0.5) < 1e-6 &&
+            Math.abs(step.pos.z - Math.floor(step.pos.z) - 0.5) < 1e-6 &&
+            this.#heldAt(step.pos);
+          airborne = !step.onGround && !held;
           overEdge =
             step.onGround && seg.steps[i + 1]?.onGround === false && !this.#overBlock(step.pos);
           if (placing.length > 0) setSprint(false);
@@ -795,6 +806,12 @@ export class PathActions {
       prev = step.pos;
     }
     return null;
+  }
+
+  /** Whether a ladder holds feet at `pos` (terrain.ts onLadder); not when blocks are unknown. */
+  #heldAt(pos: Vec3): boolean {
+    const world = this.#world.walkWorld();
+    return world !== null && onLadder(world, pos);
   }
 
   /**

@@ -13,14 +13,16 @@ import { PASSABLE_BLOCKS, PASSABLE_BY_METADATA } from '../../../../src/bot/gtnh1
  *    the move ends more than 0.25 away horizontally from where the packet says ("moved
  *    wrongly"; the vertical difference is ignored) or the box, shrunk by 0.0625, overlaps a
  *    block where the packet puts it;
- *  - the fall accounting (Entity.updateFallState): a packet in the air adds its drop to the
+ *  - the fall accounting (Entity.updateFallState): zeroed on a ladder (the player's living
+ *    update, EntityLivingBase.moveEntityWithHeading); a packet in the air adds its drop to the
  *    fall distance, one on the ground deals ceil(distance - 3) damage and resets it; a player
  *    whose last position was in water has it reset first.
  * Blocks with a collision box: every block but air, the plants the walker passes (passable.ts,
  * which lists blocks with no box), fluids, fire and thin snow. Unloaded columns are solid.
  * Doors and fence gates have vanilla's own boxes (BlockDoor.func_150011_b: a 3/16 panel along
  * one edge, by the facing, the open bit and the upper half's hinge bit; BlockFenceGate: a bar
- * 1.5 high across the middle when closed, nothing when open).
+ * 1.5 high across the middle when closed, nothing when open); so do ladders (BlockLadder
+ * func_149797_b: a 1/8 slab along the edge by its metadata, 2 south, 3 north, 4 east, 5 west).
  * Not modelled: the step-up assist (no block here is a slab), the "moved too quickly" check
  * (no walk comes near it) and the floating kick (the test server allows flight).
  */
@@ -33,6 +35,7 @@ export interface FakeMoveWorld {
 }
 
 const DOOR_THICKNESS = 0.1875;
+const LADDER_THICKNESS = 0.125;
 const DOORS: ReadonlySet<string> = new Set(['minecraft:wooden_door', 'minecraft:iron_door']);
 
 /** BlockDoor.func_150011_b: the panel [minX, minZ, maxX, maxZ] in its cell, from the halves' metadata. */
@@ -142,6 +145,16 @@ export class FakeMoveSim {
       maxY: y + h,
       maxZ: z + b[3],
     });
+    if (name === 'minecraft:ladder') {
+      const slabs: Record<number, [number, number, number, number]> = {
+        2: [0, 1 - LADDER_THICKNESS, 1, 1],
+        3: [0, 0, 1, LADDER_THICKNESS],
+        4: [1 - LADDER_THICKNESS, 0, 1, 1],
+        5: [0, 0, LADDER_THICKNESS, 1],
+      };
+      const slab = slabs[meta(y)];
+      return [at(slab ?? [0, 0, 1, 1], 1)];
+    }
     if (name !== undefined && DOORS.has(name)) {
       const upper = (meta(y) & 8) !== 0;
       const lower = upper ? meta(y - 1) : meta(y);
@@ -237,6 +250,12 @@ export class FakeMoveSim {
     return false;
   }
 
+  /** EntityLivingBase.isOnLadder: the block at the feet is a ladder. */
+  #onLadder(p: { x: number; y: number; z: number }): boolean {
+    const id = this.#world.blockAt(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+    return id !== 0 && this.#world.blockName(id) === 'minecraft:ladder';
+  }
+
   /** Entity.handleWaterMovement: the box shrunk by 0.4 at top and bottom touches water. */
   #inWater(p: { x: number; y: number; z: number }): boolean {
     for (let cx = Math.floor(p.x - HALF + 0.001); cx <= Math.floor(p.x + HALF - 0.001); cx++) {
@@ -287,8 +306,10 @@ export class FakeMoveSim {
       this.corrections.push({ from: { ...last }, to: { x: p.x, y: p.feetY, z: p.z }, reason });
       return { ...last };
     }
-    // The fall accounting, then the new position.
-    if (this.#inWater(last)) this.#fallDistance = 0;
+    // The fall accounting, then the new position. The player's living update before it
+    // (onUpdateEntity: moveEntityWithHeading) zeroes the fall on a ladder (isOnLadder: the
+    // block at the feet).
+    if (this.#inWater(last) || this.#onLadder(last)) this.#fallDistance = 0;
     const drop = p.feetY - last.y;
     if (p.onGround) {
       if (this.#fallDistance > 0) {

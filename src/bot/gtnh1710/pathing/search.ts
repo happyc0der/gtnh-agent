@@ -1,7 +1,8 @@
-import { standingCell, standProblem, TERRAIN_SURFACES, type Cell } from '../terrain.ts';
+import { onLadder, standingCell, standProblem, TERRAIN_SURFACES, type Cell } from '../terrain.ts';
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
 import { CELL, CellCache, changedWorld, type BlockChange, type CellBox } from './cells.ts';
 import {
+  CLIMB_DOWN_PER_TICK,
   DEFAULT_PENALTIES,
   heuristicRates,
   pathCosts,
@@ -70,6 +71,8 @@ export interface PathOptions {
   readonly water?: boolean;
   /** Through doorways, opening (or closing) wooden doors and fence gates to pass (off by default). */
   readonly doors?: boolean;
+  /** Climbing ladders (off by default). */
+  readonly climb?: boolean;
   /** The highest fall onto dry ground, 1..3 (default 3: higher ones hurt). */
   readonly maxFall?: number;
   /** The dig time in ticks (with the tool the player would hold), or null: may not be broken. */
@@ -152,6 +155,7 @@ export function resolvePathOptions(options: PathOptions): ResolvedPathOptions | 
     canDigDown: options.canDigDown ?? null,
     water: options.water ?? false,
     doors: options.doors ?? false,
+    climb: options.climb ?? false,
     maxFall: Math.max(1, Math.min(3, Math.floor(options.maxFall ?? 3))),
     canBreak: options.canBreak ?? null,
     canPlace: options.canPlace ?? null,
@@ -213,12 +217,14 @@ function prepare(
   if (volume > MAX_AREA_CELLS) {
     return refused(`the search area holds ${volume} feet blocks (at most ${MAX_AREA_CELLS})`);
   }
-  if (Math.abs(from.y - Math.round(from.y)) > 1e-6) {
+  // Between levels only where a ladder holds the feet (a correction mid-climb).
+  const level = Math.abs(from.y - Math.round(from.y)) <= 1e-6;
+  if (!level && !(move.climb && onLadder(world, from))) {
     return refused(`the player's feet are at y=${from.y}, not on a block top`);
   }
   const cells = new CellCache(world, cacheBox(area));
   const ctx = new MoveContext(cells, area, move, costs);
-  const start = standingCell(world, from);
+  const start = startOf(world, cells, from, move.climb);
   if (!ctx.inFence(start.x, start.y, start.z)) {
     return refused('the start is outside the search area', start);
   }
@@ -226,7 +232,9 @@ function prepare(
   const inDoorway =
     cells.has(start.x, start.y, start.z, CELL.DOORWAY) &&
     cells.has(start.x, start.y - 1, start.z, CELL.SURFACE);
-  if (!inDoorway && !cells.footing(start.x, start.y, start.z, move.water)) {
+  // Or holding on to a ladder (a climb ended there), floor or not.
+  const holding = move.climb && cells.held(start.x, start.y, start.z);
+  if (!inDoorway && !holding && !cells.footing(start.x, start.y, start.z, move.water)) {
     const why = cells.has(start.x, start.y, start.z, CELL.WATER)
       ? 'its feet are in water (wading is off, or the water is not calm and one deep)'
       : (standProblem(world, start.x, start.y, start.z) ??
@@ -241,7 +249,8 @@ function prepare(
         const open =
           cells.has(x, y, z, CELL.PASSABLE) ||
           (move.water && cells.calmWater(x, y, z)) ||
-          cells.bodyFitsDoorway(x, y, z, from.x - 0.3, from.x + 0.3, from.z - 0.3, from.z + 0.3);
+          cells.bodyFitsDoorway(x, y, z, from.x - 0.3, from.x + 0.3, from.z - 0.3, from.z + 0.3) ||
+          cells.bodyFitsLadder(x, y, z, from.x - 0.3, from.x + 0.3, from.z - 0.3, from.z + 0.3);
         if (!open || cells.nearHazard(x, y, z)) {
           return refused(
             `cannot walk from here: the body touches the block at (${x}, ${y}, ${z}), which is not open or is next to a hazard`,
@@ -254,8 +263,45 @@ function prepare(
   const wet = cells.has(start.x, start.y, start.z, CELL.WATER);
   const startCost =
     Math.hypot(start.x + 0.5 - from.x, start.z + 0.5 - from.z) *
-    (wet ? WADE_ONE_BLOCK : WALK_ONE_BLOCK);
+      (wet ? WADE_ONE_BLOCK : WALK_ONE_BLOCK) +
+    Math.abs(from.y - start.y) / CLIMB_DOWN_PER_TICK;
   return { resolved, cells, ctx, start, startCost, sx, sy, sz };
+}
+
+/**
+ * The block a walk starts from: standingCell's, and with climbing on, first the ladder that
+ * holds the feet (its block, between levels too); then, where no block under the body is
+ * standable, the foot of a ladder the body rests over (the foot's floor holds it up), or the
+ * ladder's top block right under feet over it. An independent review (2026-10-04) stranded the
+ * player at each: stopped beside a ladder's column, just off its foot, and over its top, it
+ * could start no walk. The walk first moves to the start block's centre (execute.ts build: a
+ * climbing client's moves where a ladder holds the body).
+ */
+function startOf(world: WalkWorld, cells: CellCache, from: Vec3, climb: boolean): Cell {
+  const feet = { x: Math.floor(from.x), y: Math.floor(from.y + 1e-9), z: Math.floor(from.z) };
+  if (climb && cells.held(feet.x, feet.y, feet.z) && onLadder(world, from)) return feet;
+  const standing = standingCell(world, from);
+  if (!climb || standProblem(world, standing.x, standing.y, standing.z) === null) return standing;
+  const y = Math.round(from.y);
+  const [x0, x1, , , z0, z1] = overlappedCells(from.x, from.y, from.z);
+  let foot: Cell | null = null;
+  let nearest = Infinity;
+  for (let x = x0; x <= x1; x++) {
+    for (let z = z0; z <= z1; z++) {
+      if (!cells.held(x, y, z) || !cells.has(x, y - 1, z, CELL.SURFACE)) continue;
+      if (!cells.bodyFitsLadder(x, y, z, from.x - 0.3, from.x + 0.3, from.z - 0.3, from.z + 0.3)) {
+        continue;
+      }
+      const d = Math.hypot(x + 0.5 - from.x, z + 0.5 - from.z);
+      if (d < nearest) {
+        foot = { x, y, z };
+        nearest = d;
+      }
+    }
+  }
+  if (foot !== null) return foot;
+  if (cells.held(feet.x, y - 1, feet.z)) return { x: feet.x, y: y - 1, z: feet.z };
+  return standing;
 }
 
 /**
@@ -293,6 +339,7 @@ export function planPath(
     pillar: move.pillar,
     downward: move.downward,
     minDigTicks: 0,
+    climb: move.climb,
   });
   const target = compileGoal(goal, rates);
   const maxNodes = Math.max(1, Math.floor(options.maxNodes ?? DEFAULT_MAX_NODES));

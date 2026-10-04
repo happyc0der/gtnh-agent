@@ -183,6 +183,7 @@ describe('a target below', () => {
         allowSprint: false,
         allowWater: false,
         allowDoors: false,
+        allowClimb: false,
         throwawayReserve: 4,
       },
       breaking: true,
@@ -301,6 +302,7 @@ describe('owner travel on the pathfinder', () => {
       allowSprint: false,
       allowWater: false,
       allowDoors: true,
+      allowClimb: true,
       throwawayReserve: 4,
     };
     const policy = (players: Array<{ x: number; y: number; z: number }>) =>

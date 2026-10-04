@@ -153,7 +153,24 @@ export interface PathCosts {
    * and the one after it that leaves the door as it was.
    */
   readonly door: number;
+  /**
+   * One block up a ladder, down one, and across one held by a ladder (CLIMB_UP_PER_TICK,
+   * CLIMB_DOWN_PER_TICK, CLIMB_ACROSS_PER_TICK).
+   */
+  readonly climbUp: number;
+  readonly climbDown: number;
+  readonly climbAcross: number;
 }
+
+/**
+ * A client climbing a ladder pressed against it: 1.7.10 sets motionY to 0.2, then gravity and
+ * drag, (0.2 - 0.08) x 0.98, so each tick's move up is 0.1176.
+ */
+export const CLIMB_UP_PER_TICK = 0.1176;
+/** Down a ladder, motionY is never below -0.15 (EntityLivingBase.moveEntityWithHeading). */
+export const CLIMB_DOWN_PER_TICK = 0.15;
+/** The most a step on a ladder moves across: 1.7.10 clamps motionX and motionZ there to 0.15. */
+export const CLIMB_ACROSS_PER_TICK = 0.15;
 
 export interface CostOptions extends Penalties {
   readonly sprint: boolean;
@@ -203,6 +220,9 @@ export function pathCosts(o: CostOptions): PathCosts {
     breakExtra: BREAK_VERDICT_TICKS + o.breakPenalty,
     breakStart: STOP_START_TICKS,
     door: 2 * STOP_START_TICKS + 2 * DOOR_CLICK_TICKS,
+    climbUp: STOP_START_TICKS / 2 + 1 / CLIMB_UP_PER_TICK,
+    climbDown: STOP_START_TICKS / 2 + 1 / CLIMB_DOWN_PER_TICK,
+    climbAcross: STOP_START_TICKS / 2 + 1 / CLIMB_ACROSS_PER_TICK,
   };
 }
 
@@ -220,7 +240,7 @@ export interface HeuristicRates {
 
 export function heuristicRates(
   c: PathCosts,
-  o: { pillar: boolean; downward: boolean; minDigTicks: number },
+  o: { pillar: boolean; downward: boolean; minDigTicks: number; climb?: boolean },
 ): HeuristicRates {
   let across = Math.min(c.walk, c.diagonal / Math.SQRT2, c.wade, c.bridge);
   for (let gap = 1; gap < c.parkour.length; gap++) {
@@ -230,12 +250,14 @@ export function heuristicRates(
   across = Math.min(across, c.ascend, c.waterExit);
   let up = Math.min(c.ascend, c.waterExit);
   if (o.pillar) up = Math.min(up, c.pillar);
+  if (o.climb === true) up = Math.min(up, c.climbUp);
   let down = Infinity;
   for (let h = 1; h < c.fall.length; h++) down = Math.min(down, (c.fall[h] as number) / h);
   for (let h = 1; h < c.waterFall.length; h++) {
     down = Math.min(down, (c.waterFall[h] as number) / h);
   }
   if (o.downward) down = Math.min(down, c.downward + o.minDigTicks);
+  if (o.climb === true) down = Math.min(down, c.climbDown);
   // Descends and falls (dry or into water) move one block across too.
   for (let h = 1; h < c.fall.length; h++) across = Math.min(across, c.fall[h] as number);
   for (let h = 1; h < c.waterFall.length; h++) across = Math.min(across, c.waterFall[h] as number);

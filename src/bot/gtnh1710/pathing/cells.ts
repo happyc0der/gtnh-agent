@@ -61,6 +61,12 @@ export const CELL = {
   CLEAR_Z: 1 << 14,
   /** A right-click opens or closes it: a wooden door, a fence gate (not an iron door). */
   TOGGLE: 1 << 16,
+  /**
+   * A ladder on its wall (minecraft:ladder, metadata 2-5): neither passable nor solid. Its box
+   * is a slab along the wall's edge (bodyFitsLadder), so a body centred in the cell is clear of
+   * it, and only the climb movements (and a traverse in or out) take the body there.
+   */
+  CLIMB: 1 << 19,
 } as const;
 
 /** Internal: a plant passable only at some metadata, decided per cell. */
@@ -68,6 +74,11 @@ const BY_METADATA = 1 << 15;
 /** Internal: a door or a fence gate, its doorway decided per cell from its metadata. */
 const DOOR_ID = 1 << 17;
 const GATE_ID = 1 << 18;
+/** Internal: a ladder, climbable when its metadata says which wall it is on. */
+const LADDER_ID = 1 << 20;
+
+/** A ladder's box is this thick (BlockLadder: 0.125), along the edge of its wall. */
+export const LADDER_THICKNESS = 0.125;
 
 /** A door's panel is this thick (BlockDoor: 0.1875), along one edge of its cell. */
 export const DOOR_THICKNESS = 0.1875;
@@ -109,11 +120,11 @@ const WATER_BLOCKS: ReadonlySet<string> = new Set(['minecraft:water', 'minecraft
 const LAVA_BLOCKS: ReadonlySet<string> = new Set(['minecraft:lava', 'minecraft:flowing_lava']);
 /**
  * Vines: BlockVine.isLadder (Forge) is true, and BiomesOPlenty's ivy, willow, tree moss,
- * flower vines and moss extend BlockVine (passable.ts). Ladders themselves are never passable.
+ * flower vines and moss extend BlockVine (passable.ts): a client climbs them, which the
+ * pathfinder does not model, so the feet are never in one. Ladders are climbed (CELL.CLIMB).
  */
 const LADDER_BLOCKS: ReadonlySet<string> = new Set([
   'minecraft:vine',
-  'minecraft:ladder',
   'BiomesOPlenty:ivy',
   'BiomesOPlenty:willow',
   'BiomesOPlenty:treeMoss',
@@ -145,6 +156,8 @@ const D = {
   ROW: 2048,
   LAYER_KNOWN: 4096,
   LAYER: 8192,
+  HELD_KNOWN: 16384,
+  HELD: 32768,
 } as const;
 
 /** An inclusive box of block cells. */
@@ -229,7 +242,13 @@ export class CellCache implements PhysicsWorld {
       f |= (f & DOOR_ID) !== 0 ? doorFlags(world, x, y, z, id) : gateFlags(world, x, y, z);
       f &= ~(DOOR_ID | GATE_ID);
     }
-    if ((f & (CELL.PASSABLE | CELL.LIQUID | CELL.DOORWAY)) === 0) f |= CELL.SOLID;
+    if ((f & LADDER_ID) !== 0) {
+      // A ladder on a wall (BlockLadder metadata 2-5); any other is solid.
+      f &= ~LADDER_ID;
+      const meta = world.metaAt?.(x, y, z);
+      if (meta !== undefined && meta >= 2 && meta <= 5) f |= CELL.CLIMB;
+    }
+    if ((f & (CELL.PASSABLE | CELL.LIQUID | CELL.DOORWAY | CELL.CLIMB)) === 0) f |= CELL.SOLID;
     return f;
   }
 
@@ -250,6 +269,7 @@ export class CellCache implements PhysicsWorld {
       if (isLiquidName(name)) f |= CELL.LIQUID;
       if ((FALLING_DIGGABLE_BLOCKS as ReadonlySet<string>).has(name)) f |= CELL.FALLING;
       if (LADDER_BLOCKS.has(name)) f |= CELL.LADDER;
+      if (name === 'minecraft:ladder') f |= LADDER_ID;
       if (PLACE_TARGETS.has(name)) f |= CELL.REPLACEABLE;
       if (CLICKABLE_SUPPORTS.has(name)) f |= CELL.CLICKABLE;
       const door = DOORS.get(name);
@@ -294,6 +314,62 @@ export class CellCache implements PhysicsWorld {
     if (clearX) return minZ >= z + DOOR_THICKNESS - eps && maxZ <= z + 1 - DOOR_THICKNESS + eps;
     if (clearZ) return minX >= x + DOOR_THICKNESS - eps && maxX <= x + 1 - DOOR_THICKNESS + eps;
     return false;
+  }
+
+  /**
+   * Whether a body spanning [minX, maxX] x [minZ, maxZ] stays clear of the box of the ladder at
+   * (x, y, z): a slab LADDER_THICKNESS thick along its wall's edge (BlockLadder: metadata 2 on
+   * the south edge, 3 north, 4 east, 5 west). A body centred in the cell is clear of it.
+   */
+  bodyFitsLadder(
+    x: number,
+    y: number,
+    z: number,
+    minX: number,
+    maxX: number,
+    minZ: number,
+    maxZ: number,
+  ): boolean {
+    if ((this.flags(x, y, z) & CELL.CLIMB) === 0) return false;
+    const eps = 1e-7;
+    const t = LADDER_THICKNESS;
+    const meta = this.world.metaAt?.(x, y, z);
+    if (meta === 2) return maxZ <= z + 1 - t + eps;
+    if (meta === 3) return minZ >= z + t - eps;
+    if (meta === 4) return maxX <= x + 1 - t + eps;
+    if (meta === 5) return minX >= x + t - eps;
+    return false;
+  }
+
+  /**
+   * The wall a climbable ladder at (x, y, z) hangs on, as a step (dx, dz) from it (metadata 2:
+   * south, 3 north, 4 east, 5 west), or null.
+   */
+  ladderWall(x: number, y: number, z: number): readonly [number, number] | null {
+    if ((this.flags(x, y, z) & CELL.CLIMB) === 0) return null;
+    const meta = this.world.metaAt?.(x, y, z);
+    if (meta === 2) return [0, 1];
+    if (meta === 3) return [0, -1];
+    if (meta === 4) return [1, 0];
+    if (meta === 5) return [-1, 0];
+    return null;
+  }
+
+  /** A ladder the body may pass through, centred: climbable, and no hazard next to it. */
+  climbOpen(x: number, y: number, z: number): boolean {
+    return (this.flags(x, y, z) & CELL.CLIMB) !== 0 && !this.nearHazard(x, y, z);
+  }
+
+  /**
+   * The player may hold on with its feet in the cell: a ladder (climbOpen), the head in an
+   * open cell or the ladder going on; no floor needed (a client on a ladder does not fall).
+   */
+  held(x: number, y: number, z: number): boolean {
+    const i = this.#index(x, y, z);
+    const k = this.#known(i, D.HELD_KNOWN, D.HELD);
+    if (k >= 0) return k === 1;
+    const v = this.climbOpen(x, y, z) && (this.open(x, y + 1, z) || this.climbOpen(x, y + 1, z));
+    return this.#keep(i, D.HELD_KNOWN, D.HELD, v);
   }
 
   // PhysicsWorld

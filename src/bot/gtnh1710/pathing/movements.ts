@@ -32,7 +32,12 @@ import { MAX_WATER_FALL, type PathCosts } from './costs.ts';
  *  - nothing leaves the search area (the fence): every feet block is inside it;
  *  - a doorway (a door or a fence gate, cells.ts) is entered only by the door movement, along
  *    an axis its box leaves clear, opened or closed first only when a right-click turns it (a
- *    wooden door, a gate; never an iron door), and left only along the same axis.
+ *    wooden door, a gate; never an iron door), and left only along the same axis;
+ *  - a ladder (cells.ts CLIMB) is climbed only when the caller allows it, the body centred in
+ *    its column, clear of the ladder's slab: up and down within it, onto it from the floor at
+ *    its foot, from a ledge at its top or from a floor beside it partway up, and off it onto
+ *    one; never toward its wall but off its top; from a feet block held by a ladder with no
+ *    floor under it nothing but a climb starts.
  */
 
 export const MOVEMENT_KINDS = [
@@ -46,6 +51,11 @@ export const MOVEMENT_KINDS = [
   'bridge',
   'downward',
   'door',
+  'climbUp',
+  'climbDown',
+  'climbOn',
+  'climbOff',
+  'climbAcross',
 ] as const;
 export type MovementKind = (typeof MOVEMENT_KINDS)[number];
 
@@ -60,6 +70,11 @@ const KIND = {
   bridge: 7,
   downward: 8,
   door: 9,
+  climbUp: 10,
+  climbDown: 11,
+  climbOn: 12,
+  climbOff: 13,
+  climbAcross: 14,
 } as const;
 
 /** Unit steps across: the four cardinal ones, then the four diagonal ones. */
@@ -113,7 +128,7 @@ export interface Movement {
   readonly kind: MovementKind;
   readonly from: Cell;
   readonly to: Cell;
-  /** The step across (a unit, cardinal or diagonal); 0, 0 for pillar and downward. */
+  /** The step across (a unit, cardinal or diagonal); 0, 0 for pillar, downward and climbs. */
   readonly dir: { readonly x: number; readonly z: number };
   /** Ticks, with the penalties. */
   readonly cost: number;
@@ -161,6 +176,8 @@ export interface MoveOptions {
   readonly throwaway: Throwaway | null;
   /** Walking through doorways, opening (or closing) wooden doors and fence gates to pass. */
   readonly doors: boolean;
+  /** Climbing ladders (cells.ts CLIMB): up, down, onto and off them. */
+  readonly climb: boolean;
 }
 
 /** What a movement's evaluation collects when the path is rebuilt. */
@@ -433,6 +450,8 @@ const traverse: Evaluate = (ctx, x, y, z, d, detail) => {
     if (detail !== null) detail.sprint = o.sprint;
     return ctx.costs.walk;
   }
+  // Onto a ladder at its foot: the feet in its column, on the floor under it.
+  if (o.climb && c.held(nx, y, nz) && c.has(nx, y - 1, nz, CELL.SURFACE)) return ctx.costs.walk;
   const head = ctx.open(nx, y + 1, nz, detail);
   if (head < 0) return Infinity;
   const feet = ctx.open(nx, y, nz, detail);
@@ -714,6 +733,87 @@ const downward: Evaluate = (ctx, x, y, z, _d, detail) => {
   return ctx.costs.downward + t;
 };
 
+/**
+ * Up a ladder one block: from a feet block a ladder holds (cells.ts held) to the one above, the
+ * body centred in the column, clear of the ladder's slab. A client climbs pushing against the
+ * ladder: 1.7.10 sets motionY to 0.2 while it is pressed there, and gravity and drag leave
+ * 0.1176 a tick; the server checks only that no block stops the move (none does).
+ */
+const climbUp: Evaluate = (ctx, x, y, z) => {
+  ctx.begin(KIND.climbUp, x, y + 1, z, 0);
+  const c = ctx.cells;
+  if (!ctx.options.climb || !ctx.inFence(x, y + 1, z)) return Infinity;
+  if (!c.held(x, y, z) || !c.held(x, y + 1, z)) return Infinity;
+  return ctx.costs.climbUp;
+};
+
+/** Down a ladder one block, to a feet block it holds (its foot, or on down): 0.15 a tick. */
+const climbDown: Evaluate = (ctx, x, y, z) => {
+  ctx.begin(KIND.climbDown, x, y - 1, z, 0);
+  const c = ctx.cells;
+  if (!ctx.options.climb || !ctx.inFence(x, y - 1, z)) return Infinity;
+  if (!c.held(x, y, z) || !c.held(x, y - 1, z)) return Infinity;
+  return ctx.costs.climbDown;
+};
+
+/**
+ * Onto a ladder from a ledge at its top, one block cardinal: across at the ledge's level into
+ * the column above the ladder's top (open for the body), then down into its top block.
+ */
+const climbOn: Evaluate = (ctx, x, y, z, d) => {
+  const [dx, dz] = DIRECTIONS[d] as readonly [number, number];
+  const nx = x + dx;
+  const nz = z + dz;
+  ctx.begin(KIND.climbOn, nx, y - 1, nz, 0);
+  const c = ctx.cells;
+  if (!ctx.options.climb || !ctx.inFence(nx, y - 1, nz)) return Infinity;
+  if (!c.standable(x, y, z)) return Infinity;
+  if (!c.open(nx, y, nz) || !c.open(nx, y + 1, nz) || !c.held(nx, y - 1, nz)) return Infinity;
+  return ctx.costs.walk + ctx.costs.climbDown;
+};
+
+/**
+ * Off a ladder onto a ledge at its top, one block cardinal: up out of the ladder's top block
+ * into the open column above it, then across onto the ledge.
+ */
+const climbOff: Evaluate = (ctx, x, y, z, d) => {
+  const [dx, dz] = DIRECTIONS[d] as readonly [number, number];
+  const nx = x + dx;
+  const nz = z + dz;
+  ctx.begin(KIND.climbOff, nx, y + 1, nz, 0);
+  const c = ctx.cells;
+  if (!ctx.options.climb || !ctx.inFence(nx, y + 1, nz)) return Infinity;
+  if (!c.held(x, y, z) || !c.open(x, y + 1, z) || !c.open(x, y + 2, z)) return Infinity;
+  if (!c.standable(nx, y + 1, nz)) return Infinity;
+  return ctx.costs.climbUp + ctx.costs.walk;
+};
+
+/**
+ * Across one block cardinal at the same level, held by a ladder at one end or both where it has
+ * no floor under it: off a ladder onto a floor beside it partway up, onto one from a floor
+ * beside it, or along a row of them. Never toward a ladder's wall: its slab, then the wall, are
+ * in the way. (Where both ends have floors it is a traverse.)
+ */
+const climbAcross: Evaluate = (ctx, x, y, z, d) => {
+  const [dx, dz] = DIRECTIONS[d] as readonly [number, number];
+  const nx = x + dx;
+  const nz = z + dz;
+  ctx.begin(KIND.climbAcross, nx, y, nz, 0);
+  const c = ctx.cells;
+  if (!ctx.options.climb || !ctx.inFence(nx, y, nz)) return Infinity;
+  const fromHeld = c.held(x, y, z);
+  const toHeld = c.held(nx, y, nz);
+  const hanging =
+    (fromHeld && !c.has(x, y - 1, z, CELL.SURFACE)) ||
+    (toHeld && !c.has(nx, y - 1, nz, CELL.SURFACE));
+  if (!hanging) return Infinity;
+  if (!fromHeld && !c.standable(x, y, z)) return Infinity;
+  if (!toHeld && !c.standable(nx, y, nz)) return Infinity;
+  const wall = c.ladderWall(nx, y, nz);
+  if (wall !== null && wall[0] === -dx && wall[1] === -dz) return Infinity;
+  return ctx.costs.climbAcross;
+};
+
 /** The evaluation that decides each kind (traverse also yields bridges, drop descends and falls). */
 const BY_KIND: readonly Evaluate[] = [
   traverse,
@@ -726,6 +826,11 @@ const BY_KIND: readonly Evaluate[] = [
   traverse,
   downward,
   door,
+  climbUp,
+  climbDown,
+  climbOn,
+  climbOff,
+  climbAcross,
 ];
 
 export type Emit = (
@@ -738,8 +843,19 @@ export type Emit = (
   places: number,
 ) => void;
 
-const CARDINAL_MOVES: readonly Evaluate[] = [traverse, ascend, drop, parkour, door];
-const VERTICAL_MOVES: readonly Evaluate[] = [pillar, downward];
+const CARDINAL_MOVES: readonly Evaluate[] = [
+  traverse,
+  ascend,
+  drop,
+  parkour,
+  door,
+  climbOn,
+  climbAcross,
+];
+const VERTICAL_MOVES: readonly Evaluate[] = [pillar, downward, climbUp, climbDown];
+/** From a feet block a ladder holds with no floor under it: only climbs. */
+const HELD_VERTICAL: readonly Evaluate[] = [climbUp, climbDown];
+const HELD_ACROSS: readonly Evaluate[] = [climbOff, climbAcross];
 const DOORWAY_MOVES: readonly Evaluate[] = [traverse, door];
 
 /** MoveContext.doorway: the feet block is a doorway (with the axes it may be left along). */
@@ -758,6 +874,24 @@ export function doorwayAxes(code: number): number {
 
 /** Every movement possible from feet block (x, y, z), each passed to `emit`. */
 export function expand(ctx: MoveContext, x: number, y: number, z: number, emit: Emit): void {
+  const c = ctx.cells;
+  if (c.has(x, y, z, CELL.CLIMB) && !c.has(x, y - 1, z, CELL.SURFACE)) {
+    // On a ladder in mid-air: up, down, off at its top, or across at this level (a walk from
+    // here would fall).
+    for (const evaluate of HELD_VERTICAL) {
+      const cost = evaluate(ctx, x, y, z, 0, null);
+      if (cost < Infinity) emit(ctx.nx, ctx.ny, ctx.nz, cost, ctx.code(0), 0, 0);
+    }
+    const wall = c.ladderWall(x, y, z);
+    for (let d = 0; d < 4; d++) {
+      for (const evaluate of HELD_ACROSS) {
+        if (evaluate === climbAcross && wall !== null && towards(d, wall)) continue;
+        const cost = evaluate(ctx, x, y, z, d, null);
+        if (cost < Infinity) emit(ctx.nx, ctx.ny, ctx.nz, cost, ctx.code(d), 0, 0);
+      }
+    }
+    return;
+  }
   if (ctx.doorway !== 0) {
     // In a doorway: only a walk on (or back) along its clear axis, or into the next doorway.
     for (let d = 0; d < 4; d++) {
@@ -771,13 +905,19 @@ export function expand(ctx: MoveContext, x: number, y: number, z: number, emit: 
     }
     return;
   }
+  // At a ladder's foot, nothing heads toward its wall but climbOff: the ladder's slab is in the
+  // body's way until the feet are over its top (an independent review, 2026-10-04: a jump
+  // from a ladder's foot onto the block it hangs on was planned, and its steps hit the slab).
+  const wall = c.ladderWall(x, y, z);
   for (let d = 0; d < 4; d++) {
+    if (wall !== null && towards(d, wall)) continue;
     for (const evaluate of CARDINAL_MOVES) {
       const cost = evaluate(ctx, x, y, z, d, null);
       if (cost < Infinity) emit(ctx.nx, ctx.ny, ctx.nz, cost, ctx.code(d), ctx.breaks, ctx.places);
     }
   }
   for (let d = 4; d < 8; d++) {
+    if (wall !== null && towards(d, wall)) continue;
     const cost = diagonal(ctx, x, y, z, d, null);
     if (cost < Infinity) emit(ctx.nx, ctx.ny, ctx.nz, cost, ctx.code(d), 0, 0);
   }
@@ -785,7 +925,27 @@ export function expand(ctx: MoveContext, x: number, y: number, z: number, emit: 
     const cost = evaluate(ctx, x, y, z, 0, null);
     if (cost < Infinity) emit(ctx.nx, ctx.ny, ctx.nz, cost, ctx.code(0), ctx.breaks, ctx.places);
   }
+  if (c.has(x, y, z, CELL.CLIMB)) {
+    // At a ladder's foot: off it onto a ledge one up is a climb too.
+    for (let d = 0; d < 4; d++) {
+      const cost = climbOff(ctx, x, y, z, d, null);
+      if (cost < Infinity) emit(ctx.nx, ctx.ny, ctx.nz, cost, ctx.code(d), 0, 0);
+    }
+  }
 }
+
+/** Whether direction `d` (an index into DIRECTIONS) heads at all along (dx, dz). */
+function towards(d: number, [dx, dz]: readonly [number, number]): boolean {
+  const [x, z] = DIRECTIONS[d] as readonly [number, number];
+  return x * dx + z * dz > 0;
+}
+
+/** Whether movement kind `kind` (KIND) goes straight up or down: no step across. */
+const isVertical = (kind: number): boolean =>
+  kind === KIND.pillar ||
+  kind === KIND.downward ||
+  kind === KIND.climbUp ||
+  kind === KIND.climbDown;
 
 /** The code of a plain traverse or diagonal in direction (dx, dz) (a unit step). */
 export function walkCode(dx: number, dz: number): number {
@@ -794,10 +954,10 @@ export function walkCode(dx: number, dz: number): number {
   return (d < 4 ? KIND.traverse : KIND.diagonal) | (d << 4);
 }
 
-/** The direction (an index into DIRECTIONS) the movement with `code` goes in; -1 for pillar and downward. */
+/** The direction (an index into DIRECTIONS) the movement with `code` goes in; -1 for vertical ones. */
 export function directionOf(code: number): number {
   const kind = code & 15;
-  return kind === KIND.pillar || kind === KIND.downward ? -1 : (code >> 4) & 15;
+  return isVertical(kind) ? -1 : (code >> 4) & 15;
 }
 
 /** Whether the movement with `code` leaves the player on a block it placed (pillar, bridge). */
@@ -820,8 +980,7 @@ export function describe(ctx: MoveContext, from: Cell, code: number): Movement |
   const detail: Detail = { breaks: [], place: null, water: false, sprint: false, toggle: null };
   const cost = evaluate(ctx, from.x, from.y, from.z, d, detail);
   if (!(cost < Infinity) || ctx.kind !== kind || ctx.param !== param) return null;
-  const vertical = kind === KIND.pillar || kind === KIND.downward;
-  const [dx, dz] = vertical ? [0, 0] : (DIRECTIONS[d] as readonly [number, number]);
+  const [dx, dz] = isVertical(kind) ? [0, 0] : (DIRECTIONS[d] as readonly [number, number]);
   return {
     kind: name,
     from: { x: from.x, y: from.y, z: from.z },

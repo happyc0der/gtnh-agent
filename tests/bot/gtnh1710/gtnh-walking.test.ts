@@ -458,6 +458,246 @@ describe('Gtnh1710Client walking over terrain', () => {
     expect(server.moveSim.corrections).toEqual([]);
   });
 
+  it('climbs a ladder up a wall onto its top, and back down: the server takes every step', async () => {
+    // A stone wall at x = -5 four high (y 106-109) at z = -10, a ladder up its west face at
+    // x = -6 (metadata 4: the slab on its cell's east edge, against the wall); the wall's top
+    // a ledge at feet level 110.
+    const blocks = new Map<string, number>();
+    const metas = new Map<string, number>();
+    for (let y = FEET_Y; y <= FEET_Y + 3; y++) {
+      blocks.set(`-5,${y},-10`, BLOCK.stone);
+      blocks.set(`-6,${y},-10`, BLOCK.ladder);
+      metas.set(`-6,${y},-10`, 4);
+    }
+    const { server, client } = await start(
+      { blockOverrides: blocks, blockMeta: metas },
+      { fence: { min: { x: -9, y: FEET_Y, z: -12 }, max: { x: -1, y: FEET_Y + 6, z: -4 } } },
+    );
+    const up = await perform(client, moveTo(-4.5, -9.5, FEET_Y + 4));
+    expect(up, up.message).toMatchObject({ ok: true, code: 'OK' });
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -4.5, y: FEET_Y + 4, z: -9.5 },
+    });
+    // Up the ladder's column at its centre, at a climbing client's pace.
+    const climbing = server
+      .walkSteps()
+      .filter((p) => Math.abs(p.x + 5.5) < 1e-9 && p.feetY > FEET_Y);
+    expect(climbing.length).toBeGreaterThan(20);
+    const down = await perform(client, moveTo(-4.5, -7.5, FEET_Y));
+    expect(down, down.message).toMatchObject({ ok: true, code: 'OK' });
+    // Never corrected, never hurt by a fall.
+    expect(server.moveSim.corrections).toEqual([]);
+    expect(server.moveSim.falls.filter((f) => f.damage > 0)).toEqual([]);
+  }, 20_000);
+
+  it('a hostile coming near as it climbs off a ladder stops the walk on the ledge, not over the ladder', async () => {
+    // An independent review (2026-10-04): a climb step over a ladder's top counted as held, a
+    // soft stop could end the walk there, and every walk from there was refused.
+    const blocks = new Map<string, number>();
+    const metas = new Map<string, number>();
+    for (let y = FEET_Y; y <= FEET_Y + 3; y++) {
+      blocks.set(`-5,${y},-10`, BLOCK.stone);
+      blocks.set(`-6,${y},-10`, BLOCK.ladder);
+      metas.set(`-6,${y},-10`, 4);
+    }
+    const { server, client } = await start(
+      { blockOverrides: blocks, blockMeta: metas },
+      { fence: { min: { x: -9, y: FEET_Y, z: -12 }, max: { x: -1, y: FEET_Y + 6, z: -4 } } },
+    );
+    const walk = perform(client, moveTo(-4.5, -9.5, FEET_Y + 4));
+    // The step out of the ladder's top: the feet over it, at the ledge's level.
+    const overTop = (): boolean =>
+      server.walkSteps().some((s) => Math.abs(s.x + 5.5) < 1e-9 && s.feetY === FEET_Y + 4);
+    const deadline = Date.now() + 10_000;
+    while (!overTop() && Date.now() < deadline) await delay(2);
+    expect(overTop()).toBe(true);
+    server.broadcast(
+      spawnFrame({ kind: 'mob', entityId: 702, mobType: 54, x: -7.5, y: FEET_Y, z: -8.5 }),
+    );
+    const result = await walk;
+    expect(result).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(result.message).toMatch(/hostile entity minecraft:Zombie/);
+    // On the ledge, held up by it: not hanging over the ladder.
+    const last = server.confirmedPositions.at(-1);
+    expect(last).toMatchObject({ feetY: FEET_Y + 4, onGround: true });
+    expect(last?.x).toBeGreaterThan(-5.3);
+  }, 20_000);
+
+  it('gets off a ladder partway up onto a ledge beside it, and back on: the server takes every step', async () => {
+    // A ladder six high up a wall at x = -5 (y 106-111); beside it at x = -7 a ledge whose
+    // top is at feet level 110, partway up.
+    const blocks = new Map<string, number>();
+    const metas = new Map<string, number>();
+    for (let y = FEET_Y; y <= FEET_Y + 5; y++) {
+      blocks.set(`-5,${y},-10`, BLOCK.stone);
+      blocks.set(`-6,${y},-10`, BLOCK.ladder);
+      metas.set(`-6,${y},-10`, 4);
+    }
+    blocks.set(`-7,${FEET_Y + 3},-10`, BLOCK.stone);
+    const { server, client } = await start(
+      { blockOverrides: blocks, blockMeta: metas },
+      { fence: { min: { x: -9, y: FEET_Y, z: -12 }, max: { x: -1, y: FEET_Y + 7, z: -4 } } },
+    );
+    const off = await perform(client, moveTo(-6.5, -9.5, FEET_Y + 4));
+    expect(off, off.message).toMatchObject({ ok: true, code: 'OK' });
+    expect((await client.observe()).player.position).toEqual({
+      known: true,
+      value: { x: -6.5, y: FEET_Y + 4, z: -9.5 },
+    });
+    const back = await perform(client, moveTo(-4.5, -7.5, FEET_Y));
+    expect(back, back.message).toMatchObject({ ok: true, code: 'OK' });
+    expect(server.moveSim.corrections).toEqual([]);
+    expect(server.moveSim.falls.filter((f) => f.damage > 0)).toEqual([]);
+  }, 20_000);
+
+  // An independent review (2026-10-04) stranded the player at each of the next three spots: it
+  // stopped there (or was put there), and every walk from there was refused.
+  it('put beside a ladder column (a correction partway across), walks start again', async () => {
+    // A wall at z = -11; ladders on its south face at z = -10 (metadata 3): at x = -5 from the
+    // ground up (y 106-111), at x = -6 hanging (y 108-111, air under it).
+    const blocks = new Map<string, number>();
+    const metas = new Map<string, number>();
+    for (let x = -8; x <= -2; x++) {
+      for (let y = FEET_Y; y <= FEET_Y + 6; y++) blocks.set(`${x},${y},-11`, BLOCK.stone);
+    }
+    for (let y = FEET_Y; y <= FEET_Y + 5; y++) {
+      blocks.set(`-5,${y},-10`, BLOCK.ladder);
+      metas.set(`-5,${y},-10`, 3);
+    }
+    for (let y = FEET_Y + 2; y <= FEET_Y + 5; y++) {
+      blocks.set(`-6,${y},-10`, BLOCK.ladder);
+      metas.set(`-6,${y},-10`, 3);
+    }
+    const { server, client } = await start(
+      {
+        blockOverrides: blocks,
+        blockMeta: metas,
+        spawn: { x: -5.2, eyeY: FEET_Y + 4 + PLAYER_EYE_HEIGHT, z: -9.5, yaw: 0, pitch: 0 },
+      },
+      { fence: { min: { x: -9, y: FEET_Y, z: -12 }, max: { x: -1, y: FEET_Y + 6, z: -4 } } },
+    );
+    const down = await perform(client, moveTo(-4.5, -7.5, FEET_Y));
+    expect(down, down.message).toMatchObject({ ok: true, code: 'OK' });
+    expect(server.moveSim.corrections).toEqual([]);
+    expect(server.moveSim.falls.filter((f) => f.damage > 0)).toEqual([]);
+  }, 20_000);
+
+  it('stopped just off a ladder foot, over the drop beside it, walks start again', async () => {
+    // A ladder up a wall's east face (metadata 5) at x = -5, z = -8, y 106-108; north of z = -8
+    // the ground is a block lower (feet 105).
+    const blocks = new Map<string, number>();
+    const metas = new Map<string, number>();
+    for (let x = -9; x <= -1; x++) {
+      for (let z = -12; z <= -9; z++) {
+        blocks.set(`${x},105,${z}`, BLOCK.air);
+        blocks.set(`${x},104,${z}`, BLOCK.grass);
+      }
+    }
+    for (let y = FEET_Y; y <= FEET_Y + 2; y++) {
+      blocks.set(`-6,${y},-8`, BLOCK.stone);
+      blocks.set(`-5,${y},-8`, BLOCK.ladder);
+      metas.set(`-5,${y},-8`, 5);
+    }
+    const { server, client } = await start(
+      {
+        blockOverrides: blocks,
+        blockMeta: metas,
+        spawn: { x: -4.5, eyeY: FEET_Y + 2 + PLAYER_EYE_HEIGHT, z: -7.5, yaw: 0, pitch: 0 },
+      },
+      { fence: { min: { x: -9, y: FEET_Y - 1, z: -12 }, max: { x: -1, y: FEET_Y + 4, z: -4 } } },
+    );
+    await client.observe();
+    const walk = perform(client, moveTo(-4.5, -11.5, FEET_Y - 1));
+    // The step whose feet have just passed z = -8 (over the lower ground), the box still over
+    // the ladder foot's floor.
+    const edge = (): boolean =>
+      server.walkSteps().some((s) => s.feetY === FEET_Y && s.z < -8 && s.z > -8.3);
+    const deadline = Date.now() + 10_000;
+    while (!edge() && Date.now() < deadline) await delay(2);
+    expect(edge()).toBe(true);
+    server.broadcast(
+      spawnFrame({ kind: 'mob', entityId: 704, mobType: 54, x: -4.5, y: FEET_Y - 1, z: -11.5 }),
+    );
+    expect(await walk).toMatchObject({ ok: false, code: 'FAILED' });
+    // The mob gone, the walk goes on from wherever it stopped.
+    server.destroyEntities([704]);
+    const deadline2 = Date.now() + 5_000;
+    while (Date.now() < deadline2) {
+      const seen = (await client.observe()).nearbyEntities;
+      if (seen.known && seen.value.entities.length === 0) break;
+      await delay(20);
+    }
+    const on = await perform(client, moveTo(-4.5, -11.5, FEET_Y - 1));
+    expect(on, on.message).toMatchObject({ ok: true, code: 'OK' });
+    expect(server.moveSim.corrections).toEqual([]);
+  }, 30_000);
+
+  it('put over a ladder top (a correction or a login there), walks start again', async () => {
+    const blocks = new Map<string, number>();
+    const metas = new Map<string, number>();
+    for (let y = FEET_Y; y <= FEET_Y + 3; y++) {
+      blocks.set(`-5,${y},-10`, BLOCK.stone);
+      blocks.set(`-6,${y},-10`, BLOCK.ladder);
+      metas.set(`-6,${y},-10`, 4);
+    }
+    const { server, client } = await start(
+      {
+        blockOverrides: blocks,
+        blockMeta: metas,
+        spawn: { x: -5.5, eyeY: FEET_Y + 4 + PLAYER_EYE_HEIGHT, z: -9.5, yaw: 0, pitch: 0 },
+      },
+      { fence: { min: { x: -9, y: FEET_Y, z: -12 }, max: { x: -1, y: FEET_Y + 6, z: -4 } } },
+    );
+    await client.observe();
+    const up = await perform(client, moveTo(-4.5, -9.5, FEET_Y + 4));
+    expect(up, up.message).toMatchObject({ ok: true, code: 'OK' });
+    const down = await perform(client, moveTo(-4.5, -7.5, FEET_Y));
+    expect(down, down.message).toMatchObject({ ok: true, code: 'OK' });
+    expect(server.moveSim.corrections).toEqual([]);
+    expect(server.moveSim.falls.filter((f) => f.damage > 0)).toEqual([]);
+  }, 30_000);
+
+  it('held by a ladder it stays there, and between levels it climbs down to the level below', async () => {
+    // A ladder up a wall from y 108 (two blocks of air under it), the player held at its foot.
+    const blocks = new Map<string, number>();
+    const metas = new Map<string, number>();
+    for (let y = FEET_Y; y <= FEET_Y + 3; y++) blocks.set(`-5,${y},-10`, BLOCK.stone);
+    for (let y = FEET_Y + 2; y <= FEET_Y + 3; y++) {
+      blocks.set(`-6,${y},-10`, BLOCK.ladder);
+      metas.set(`-6,${y},-10`, 4);
+    }
+    const held = await start(
+      {
+        blockOverrides: blocks,
+        blockMeta: metas,
+        spawn: { x: -5.5, eyeY: FEET_Y + 2 + PLAYER_EYE_HEIGHT, z: -9.5, yaw: 0, pitch: 0 },
+      },
+      { fence: { min: { x: -9, y: FEET_Y, z: -12 }, max: { x: -1, y: FEET_Y + 6, z: -4 } } },
+    );
+    await held.client.observe();
+    await delay(1_500);
+    // No fall off it (the idle gravity check runs every few ticks).
+    expect((await held.client.observe()).player.position).toMatchObject({
+      value: { x: -5.5, y: FEET_Y + 2, z: -9.5 },
+    });
+    // Put between levels (a correction mid-climb): down to the ladder's level below.
+    const between = await start(
+      {
+        blockOverrides: blocks,
+        blockMeta: metas,
+        spawn: { x: -5.5, eyeY: FEET_Y + 3.4 + PLAYER_EYE_HEIGHT, z: -9.5, yaw: 0, pitch: 0 },
+      },
+      { fence: { min: { x: -9, y: FEET_Y, z: -12 }, max: { x: -1, y: FEET_Y + 6, z: -4 } } },
+    );
+    await between.client.observe();
+    expect((await between.client.observe()).player.position).toMatchObject({
+      value: { x: -5.5, y: FEET_Y + 3, z: -9.5 },
+    });
+    expect(between.server.moveSim.corrections).toEqual([]);
+    expect(between.server.moveSim.falls.filter((f) => f.damage > 0)).toEqual([]);
+  }, 20_000);
+
   it('a hostile coming near as it steps off an edge stops the walk on the ground below, not over it', async () => {
     // Seen live 2026-10-04: a Mirage Enderman stopped a walk the tick its body passed an edge
     // (a step still on the ground: 1.7.10 moves along y first), and the bot hung over the hole.

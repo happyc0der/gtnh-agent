@@ -1,6 +1,13 @@
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
 import { CELL, CellCache, changedWorld, type BlockChange, type CellBox } from './cells.ts';
-import type { DoorClick, ExecutionPlan, PathStep, Segment } from './execute.ts';
+import { CLIMB_ACROSS_PER_TICK, CLIMB_DOWN_PER_TICK, CLIMB_UP_PER_TICK } from './costs.ts';
+import {
+  standingOn,
+  type DoorClick,
+  type ExecutionPlan,
+  type PathStep,
+  type Segment,
+} from './execute.ts';
 import {
   blocksX,
   blocksZ,
@@ -121,8 +128,55 @@ class Replay {
     return s.onGround ? 'ground' : 'air';
   }
 
+  /**
+   * A step on a ladder (execute.ts climb): 1.7.10's ladder motion, not gravity's. At most
+   * CLIMB_UP_PER_TICK up (a client pressed against the ladder), CLIMB_DOWN_PER_TICK down
+   * (motionY is never below -0.15 there) and CLIMB_ACROSS_PER_TICK across (motionX and Z are
+   * clamped there), with a ladder where the feet are (1.7.10's isOnLadder), or at a block's
+   * level right under them (over its top, onto or off it), or a block holding the feet (the
+   * ledge beside the top); the box clear of every block (a ladder's slab included); onGround
+   * exactly when a block holds the feet; the server resets the fall when the step begins on a
+   * ladder (the player's living update, before the packet is applied). `s` becomes the state
+   * after it, at rest.
+   */
+  climbStep(s: State, step: PathStep): string | null {
+    const v = this.view;
+    const p = step.pos;
+    const dy = p.y - s.y;
+    if (dy > CLIMB_UP_PER_TICK + 1e-9) return `a climb of ${dy.toFixed(4)} up in one tick`;
+    if (dy < -CLIMB_DOWN_PER_TICK - 1e-9) return `a climb of ${(-dy).toFixed(4)} down in one tick`;
+    const across = Math.hypot(p.x - s.x, p.z - s.z);
+    if (across > CLIMB_ACROSS_PER_TICK + 1e-9) return `a climb of ${across.toFixed(4)} across`;
+    const fx = Math.floor(p.x);
+    const fy = Math.floor(p.y + 1e-9);
+    const fz = Math.floor(p.z);
+    const level = Math.abs(p.y - fy) < 1e-9;
+    const ground = standingOn(v, p);
+    const ladder =
+      v.has(fx, fy, fz, CELL.CLIMB) || (level && v.has(fx, fy - 1, fz, CELL.CLIMB)) || ground;
+    if (!ladder) return 'a climb with no ladder where the feet are';
+    const problem =
+      this.cellsAt(s.x, Math.min(s.y, p.y), Math.max(s.y, p.y), s.z) ??
+      this.cellsAt(p.x, p.y, p.y, p.z);
+    if (problem !== null) return problem;
+    if (step.onGround !== ground)
+      return `onGround is ${step.onGround} on the ladder, not ${ground}`;
+    const fromLadder = v.has(Math.floor(s.x), Math.floor(s.y + 1e-9), Math.floor(s.z), CELL.CLIMB);
+    const damage = this.fall.packet(fromLadder, dy, step.onGround);
+    if (damage > 0) return `the landing deals ${damage} fall damage`;
+    s.x = p.x;
+    s.y = p.y;
+    s.z = p.z;
+    s.cx = 0;
+    s.cz = 0;
+    s.vy = ground ? GROUND_MOTION_Y : 0;
+    s.onGround = ground;
+    return null;
+  }
+
   /** Why the step from `s` breaks a rule, or null; `s` becomes the state after it. */
   step(s: State, step: PathStep): string | null {
+    if (step.climb === true) return this.climbStep(s, step);
     const v = this.view;
     const p = step.pos;
     const mode = this.mode(s);
@@ -236,6 +290,15 @@ class Replay {
             !v.has(cx, cy, cz, CELL.PASSABLE) &&
             !(this.#water && v.calmWater(cx, cy, cz)) &&
             !v.bodyFitsDoorway(
+              cx,
+              cy,
+              cz,
+              x - HALF_WIDTH,
+              x + HALF_WIDTH,
+              z - HALF_WIDTH,
+              z + HALF_WIDTH,
+            ) &&
+            !v.bodyFitsLadder(
               cx,
               cy,
               cz,
@@ -382,7 +445,16 @@ export function validatePlan(
     const m = seg.movement;
     if (m !== null) {
       const feet = { x: Math.floor(s.x), y: Math.round(s.y), z: Math.floor(s.z) };
-      if (feet.x !== m.to.x || feet.y !== m.to.y || feet.z !== m.to.z || !s.onGround) {
+      // On the ground, or (a climb up, down, onto one or across) held by the ladder at a
+      // block's level.
+      const held =
+        (m.kind === 'climbUp' ||
+          m.kind === 'climbDown' ||
+          m.kind === 'climbOn' ||
+          m.kind === 'climbAcross') &&
+        replay.view.held(feet.x, feet.y, feet.z) &&
+        Math.abs(s.y - feet.y) < 1e-9;
+      if (feet.x !== m.to.x || feet.y !== m.to.y || feet.z !== m.to.z || !(s.onGround || held)) {
         return fault(
           seg.steps.length - 1,
           `the ${m.kind} ends at (${feet.x}, ${feet.y}, ${feet.z}), not on its block (${m.to.x}, ${m.to.y}, ${m.to.z})`,

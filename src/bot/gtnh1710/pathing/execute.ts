@@ -1,7 +1,12 @@
 import type { Cell } from '../terrain.ts';
 import type { Fence, Vec3, WalkWorld } from '../walking.ts';
 import { CELL, CellCache, changedWorld, type BlockChange, type CellBox } from './cells.ts';
-import { LEVEL_JUMP_TICKS } from './costs.ts';
+import {
+  CLIMB_ACROSS_PER_TICK,
+  CLIMB_DOWN_PER_TICK,
+  CLIMB_UP_PER_TICK,
+  LEVEL_JUMP_TICKS,
+} from './costs.ts';
 import type { BlockBreak, DoorToggle, Movement } from './movements.ts';
 import {
   AIR_DRAG,
@@ -84,6 +89,26 @@ export interface PathStep {
    * along x and/or z (-1 or 1): only climbing out of water does that (the push up a bank).
    */
   readonly bump?: { readonly x: number; readonly z: number };
+  /**
+   * A step on a ladder (or just off its top): no gravity, at most CLIMB_UP_PER_TICK up,
+   * CLIMB_DOWN_PER_TICK down and CLIMB_ACROSS_PER_TICK across (validate.ts checks it by those
+   * rules; the server checks only the blocks in the way, and resets the fall on a ladder).
+   */
+  readonly climb?: boolean;
+}
+
+/**
+ * Whether feet at `p` rest on a block: on a block top (a whole y), with a block that has a box
+ * under the body's footprint (one it overlaps by more than a hair).
+ */
+export function standingOn(world: CellCache, p: Vec3): boolean {
+  if (Math.abs(p.y - Math.round(p.y)) > 1e-9) return false;
+  const [x0, x1, , , z0, z1] = overlappedCells(p.x, p.y, p.z);
+  const y = Math.round(p.y) - 1;
+  for (let x = x0; x <= x1; x++) {
+    for (let z = z0; z <= z1; z++) if (world.solid(x, y, z)) return true;
+  }
+  return false;
 }
 
 /** A block placed during a segment. */
@@ -146,6 +171,11 @@ export type ExecutionPlan =
 export interface ExecutionOptions {
   /** Cells of calm one-deep water may hold the body (the path's movements wade). */
   readonly water?: boolean;
+  /**
+   * The feet block the path starts from (planPath's `start`), where the walk first centres:
+   * the first movement's own, else the block under the feet.
+   */
+  readonly start?: Cell | null;
 }
 
 /** The box (and its motion) at the end of a tick. */
@@ -276,10 +306,23 @@ function lengthOf(m: Movement): number {
   return Math.hypot(m.to.x - m.from.x, m.to.z - m.from.z);
 }
 
-/** Starts at rest: breaks first, a door to open first, or a vertical movement. */
+/** Starts at rest: breaks first, a door to open first, a vertical movement, or a ladder's. */
 function needsRest(m: Movement): boolean {
-  return m.breaks.length > 0 || m.toggle !== null || m.kind === 'pillar' || m.kind === 'downward';
+  return (
+    m.breaks.length > 0 ||
+    m.toggle !== null ||
+    m.kind === 'pillar' ||
+    m.kind === 'downward' ||
+    isClimb(m)
+  );
 }
+
+const isClimb = (m: Movement): boolean =>
+  m.kind === 'climbUp' ||
+  m.kind === 'climbDown' ||
+  m.kind === 'climbOn' ||
+  m.kind === 'climbOff' ||
+  m.kind === 'climbAcross';
 
 /** The face of a block turned along (dx, dz): east 5, west 4, south 3, north 2. */
 function faceAlong(dx: number, dz: number): number {
@@ -499,6 +542,64 @@ class StepBuilder {
   }
 
   /**
+   * Steps on a ladder (climbing pressed against it, or onto or off its top): straight toward
+   * (x, y, z), first along y then across (`acrossFirst`: across then along y), at
+   * CLIMB_UP_PER_TICK up, CLIMB_DOWN_PER_TICK down and CLIMB_ACROSS_PER_TICK across, with no
+   * gravity: a climbing client's moves, which the server checks only for blocks in the way.
+   * Every step is checked like any other (the box clear of every block, a ladder's slab
+   * included); it ends at rest there, on the ground when a block is under it.
+   */
+  climb(x: number, y: number, z: number, acrossFirst: boolean): void {
+    const vertical = (): void => {
+      while (Math.abs(this.body.y - y) > 1e-9) {
+        const dy = y - this.body.y;
+        const step = dy > 0 ? Math.min(dy, CLIMB_UP_PER_TICK) : Math.max(dy, -CLIMB_DOWN_PER_TICK);
+        this.#climbTo(this.body.x, this.body.y + step, this.body.z);
+      }
+    };
+    const across = (): void => {
+      for (;;) {
+        const dx = x - this.body.x;
+        const dz = z - this.body.z;
+        const d = Math.hypot(dx, dz);
+        if (d <= 1e-9) return;
+        const k = Math.min(1, CLIMB_ACROSS_PER_TICK / d);
+        this.#climbTo(this.body.x + dx * k, this.body.y, this.body.z + dz * k);
+      }
+    };
+    if (acrossFirst) {
+      across();
+      vertical();
+    } else {
+      vertical();
+      across();
+    }
+  }
+
+  #climbTo(x: number, y: number, z: number): void {
+    const ground = standingOn(this.view, { x, y, z });
+    const next: Body = {
+      x,
+      y,
+      z,
+      cx: 0,
+      cz: 0,
+      vy: ground ? GROUND_MOTION_Y : 0,
+      onGround: ground,
+    };
+    const problem = this.unsafe(this.body, next);
+    if (problem !== null) throw new Fail(problem);
+    this.body = next;
+    this.steps.push({
+      pos: { x, y, z },
+      onGround: ground,
+      sprint: false,
+      jump: false,
+      climb: true,
+    });
+  }
+
+  /**
    * Why the box going from `a` to `b` would touch a cell it must not (not passable, or
    * next to a hazard, or outside the fence), or null. The Y move's sweep (at a's x and z) and
    * the end are checked; the X and Z moves are shorter than the box, so their sweeps lie
@@ -537,7 +638,8 @@ class StepBuilder {
             if (
               (flags & CELL.PASSABLE) === 0 &&
               !(this.#water && v.calmWater(x, y, z)) &&
-              !v.bodyFitsDoorway(x, y, z, px - h, px + h, pz - h, pz + h)
+              !v.bodyFitsDoorway(x, y, z, px - h, px + h, pz - h, pz + h) &&
+              !v.bodyFitsLadder(x, y, z, px - h, px + h, pz - h, pz + h)
             ) {
               return `a step would put the body in the block at (${x}, ${y}, ${z})`;
             }
@@ -683,7 +785,7 @@ export function planExecution(
 ): ExecutionPlan {
   const restBefore = new Set<number>();
   for (let attempt = 0; attempt <= movements.length; attempt++) {
-    const r = build(world, area, from, movements, options.water ?? false, restBefore);
+    const r = build(world, area, from, movements, options, restBefore);
     if (r.ok) return r;
     // Drive the failing movement from rest: the one before it stops at its end.
     if (r.movement < 0 || restBefore.has(r.movement)) return r;
@@ -714,25 +816,36 @@ function build(
   area: Fence,
   from: Vec3,
   movements: readonly Movement[],
-  water: boolean,
+  options: ExecutionOptions,
   restBefore: ReadonlySet<number>,
 ): ExecutionPlan {
+  const water = options.water ?? false;
   const b = new StepBuilder(world, boxAround(area, from, movements), area, water, from);
   const segments: Segment[] = [];
   let index = -1;
   try {
     // Centre on the start block.
     const first = movements[0];
-    const startCell = first?.from ?? {
-      x: Math.floor(from.x),
-      y: Math.round(from.y),
-      z: Math.floor(from.z),
-    };
+    const startCell = first?.from ??
+      options.start ?? {
+        x: Math.floor(from.x),
+        y: Math.round(from.y),
+        z: Math.floor(from.z),
+      };
     const cx = startCell.x + 0.5;
     const cz = startCell.z + 0.5;
     const dist = Math.hypot(cx - from.x, cz - from.z);
     const startWet = b.view.has(startCell.x, startCell.y, startCell.z, CELL.WATER);
-    if (dist > 1e-9) {
+    // Held by a ladder with no floor (beside its column's centre, over its top, or between
+    // levels): across to the column's centre and up or down to the start block's level, as a
+    // climbing client moves (search.ts startOf).
+    const hanging =
+      b.view.has(startCell.x, startCell.y, startCell.z, CELL.CLIMB) &&
+      (!b.view.has(startCell.x, startCell.y - 1, startCell.z, CELL.SURFACE) ||
+        Math.abs(from.y - startCell.y) > 1e-9);
+    if (hanging) {
+      b.climb(cx, startCell.y, cz, true);
+    } else if (dist > 1e-9) {
       const l: Line = {
         ox: from.x,
         oz: from.z,
@@ -819,6 +932,19 @@ function drive(
   next: Movement | undefined,
   restNext: boolean,
 ): { places: StepPlace[]; fallback: Segment['fallback'] } {
+  if (isClimb(m)) {
+    // A ladder's movements start at rest at the centre of the start block.
+    const body = b.body;
+    if (
+      Math.hypot(body.x - (m.from.x + 0.5), body.z - (m.from.z + 0.5)) > 1e-6 ||
+      Math.hypot(body.cx, body.cz) > 1e-9
+    ) {
+      throw new Fail('not at rest at the start block centre');
+    }
+    // Onto a ladder from its top: across over it first, then down into it.
+    b.climb(m.to.x + 0.5, m.to.y, m.to.z + 0.5, m.kind === 'climbOn');
+    return { places: [], fallback: null };
+  }
   if (m.kind === 'pillar' || m.kind === 'downward') {
     // Both start at rest at the centre of the start block (the movement before stopped).
     const body = b.body;
@@ -860,6 +986,13 @@ function drive(
     case 'parkour':
       parkour(b, m, l, exit);
       return { places: [], fallback: null };
+    case 'climbUp':
+    case 'climbDown':
+    case 'climbOn':
+    case 'climbOff':
+    case 'climbAcross':
+      // Ladder movements were driven above.
+      throw new Fail(`internal: ${m.kind} is not driven along a line`);
   }
 }
 

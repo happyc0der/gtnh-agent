@@ -41,6 +41,17 @@ function walk(
   };
 }
 
+/**
+ * A wall of stone at x = 2, four high (y 64-67), with a ladder up its west face at x = 1
+ * (metadata 4: the ladder's slab on the east edge of its cell, against the wall): its top at
+ * y = 67, the ledge on the wall's top at feet level 68.
+ */
+const ladderWorld = (): TestWorld => {
+  const w = new TestWorld().fill({ x: 2, y: 64, z: 0 }, { x: 2, y: 67, z: 0 }, B.stone);
+  for (let y = 64; y <= 67; y++) w.set(1, y, 0, B.ladder, 4);
+  return w;
+};
+
 const seg = (segments: readonly Segment[], kind: string): Segment => {
   const s = segments.find((x) => x.movement?.kind === kind);
   if (s === undefined) throw new Error(`no ${kind}`);
@@ -48,6 +59,137 @@ const seg = (segments: readonly Segment[], kind: string): Segment => {
 };
 
 describe('execution plans', () => {
+  it('climbs a ladder: onto its foot, up it centred in its column, off onto the ledge at its top', () => {
+    const w = ladderWorld();
+    // Only climbing gets up the wall in a strip one block wide.
+    expect(planPath(w, STRIP, FROM, goalBlock(2, 68, 0)).status).toBe('none');
+    const up = walk(w, STRIP, FROM, [2, 68, 0], { climb: true });
+    expect(up.segments.flatMap((x) => x.movement?.kind ?? [])).toEqual([
+      'traverse',
+      'climbUp',
+      'climbUp',
+      'climbUp',
+      'climbOff',
+    ]);
+    const climbing = up.steps.filter((x) => x.climb === true);
+    // Up the column at its centre, never faster than a climbing client, off it on the ledge.
+    expect(climbing.length).toBeGreaterThan(30);
+    for (const [i, x] of climbing.entries()) {
+      const prev = i === 0 ? null : climbing[i - 1];
+      if (prev !== null && prev !== undefined) {
+        expect(x.pos.y - prev.pos.y).toBeLessThanOrEqual(0.1176 + 1e-9);
+      }
+    }
+    expect(up.steps.at(-1)).toMatchObject({ pos: { x: 2.5, y: 68, z: 0.5 }, onGround: true });
+    // And down again: onto the ladder from the ledge, down it, off at its foot.
+    const down = walk(w, STRIP, centre(2, 68, 0), [0, 64, 0], { climb: true });
+    expect(down.segments.flatMap((x) => x.movement?.kind ?? [])).toEqual([
+      'climbOn',
+      'climbDown',
+      'climbDown',
+      'climbDown',
+      'traverse',
+    ]);
+    expect(down.steps.at(-1)).toMatchObject({ pos: { x: 0.5, y: 64, z: 0.5 }, onGround: true });
+  });
+
+  it("from a ladder's foot onto the block it hangs on: climbing off, never a jump into its slab", () => {
+    // An independent review (2026-10-04): a one-high ladder on a one-high block; a jump from
+    // the ladder's foot onto the block was planned, and its steps hit the ladder's slab.
+    const w = new TestWorld().set(2, 64, 0, B.stone).set(1, 64, 0, B.ladder, 4);
+    const up = walk(w, STRIP, FROM, [2, 65, 0], { climb: true });
+    expect(up.segments.flatMap((x) => x.movement?.kind ?? [])).toEqual(['traverse', 'climbOff']);
+    expect(up.steps.at(-1)).toMatchObject({ pos: { x: 2.5, y: 65, z: 0.5 }, onGround: true });
+  });
+
+  it('gets off a ladder onto a floor beside it partway up, and back on from there', () => {
+    // A ladder six high up a wall at x = 2 (y 64-69), and a ledge beside it at x = 0 whose
+    // top is at feet level 68, partway up: the ladder goes on above it.
+    const w = new TestWorld()
+      .fill({ x: 2, y: 64, z: 0 }, { x: 2, y: 69, z: 0 }, B.stone)
+      .set(0, 67, 0, B.stone);
+    for (let y = 64; y <= 69; y++) w.set(1, y, 0, B.ladder, 4);
+    const from = centre(-2, 64, 0);
+    const off = walk(w, STRIP, from, [0, 68, 0], { climb: true });
+    expect(off.segments.flatMap((x) => x.movement?.kind ?? []).slice(-5)).toEqual([
+      'climbUp',
+      'climbUp',
+      'climbUp',
+      'climbUp',
+      'climbAcross',
+    ]);
+    expect(off.steps.at(-1)).toMatchObject({ pos: { x: 0.5, y: 68, z: 0.5 }, onGround: true });
+    const on = walk(w, STRIP, centre(0, 68, 0), [-2, 64, 0], { climb: true });
+    expect(on.segments.flatMap((x) => x.movement?.kind ?? []).slice(0, 5)).toEqual([
+      'climbAcross',
+      'climbDown',
+      'climbDown',
+      'climbDown',
+      'climbDown',
+    ]);
+    // Across, the body never reaches the ladder's slab (x 1.875 to 2).
+    for (const s of on.steps) expect(s.pos.x + 0.3).toBeLessThan(1.875);
+  });
+
+  it('a walk to the block the player stands on the edge of centres on that block', () => {
+    // Its feet at x 1.1, over the hole at x 1, the box (0.3 each way) still on the block at x 0.
+    const w = new TestWorld().set(1, 63, 0, B.air).set(1, 62, 0, B.air).set(1, 61, 0, B.air);
+    const from = { x: 1.1, y: 64, z: 0.5 };
+    const r = planPath(w, STRIP, from, goalBlock(0, 64, 0));
+    expect(r).toMatchObject({ status: 'reached', start: { x: 0, y: 64, z: 0 }, movements: [] });
+    const plan = planExecution(w, STRIP, from, r.movements, { start: r.start });
+    expect(plan).toMatchObject({ ok: true, end: { x: 0.5, y: 64, z: 0.5 } });
+    expect(validatePlan(w, STRIP, from, plan)).toMatchObject({ ok: true });
+  });
+
+  it('a climb step needs a ladder where the feet are, not one beside them', () => {
+    const w = ladderWorld();
+    const climb = (x: number, y: number): PathStep => ({
+      pos: { x, y, z: 0.5 },
+      onGround: false,
+      sprint: false,
+      jump: false,
+      climb: true,
+    });
+    const plan = (x: number): ExecutionPlan => ({
+      ok: true,
+      ticks: 1,
+      end: { x, y: 64.1176, z: 0.5 },
+      segments: [
+        {
+          movement: null,
+          start: { x, y: 64, z: 0.5 },
+          breaks: [],
+          steps: [climb(x, 64.1176)],
+          places: [],
+          fallback: null,
+        },
+      ],
+    });
+    // Up the column beside the ladder (x = 0): no ladder holds the feet there.
+    expect(validatePlan(w, STRIP, centre(0, 64, 0), plan(0.5))).toMatchObject({
+      ok: false,
+      reason: 'a climb with no ladder where the feet are',
+    });
+    // Up the ladder's own column: a climb.
+    expect(validatePlan(w, STRIP, centre(1, 64, 0), plan(1.5))).toMatchObject({ ok: true });
+    // Faster across than a climbing client (motionX and Z clamped to 0.15): refused.
+    const across = plan(1.5);
+    const fast: ExecutionPlan = across.ok
+      ? {
+          ...across,
+          segments: across.segments.map((s) => ({
+            ...s,
+            steps: [{ ...climb(1.5, 64.1176), pos: { x: 1.5, y: 64.1176, z: 0.3 } }],
+          })),
+        }
+      : across;
+    expect(validatePlan(w, STRIP, centre(1, 64, 0), fast)).toMatchObject({
+      ok: false,
+      reason: 'a climb of 0.2000 across',
+    });
+  });
+
   it('walk at no more than the vanilla walking speed, on the ground, ending at rest on the goal', () => {
     const { steps, plan } = walk(new TestWorld(), area(12, 60, 70), FROM, [9, 64, 4]);
     let at = FROM;

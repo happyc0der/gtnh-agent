@@ -705,6 +705,33 @@ export function checkSupport(world: WalkWorld, feet: Vec3): Support {
 }
 
 /**
+ * Whether a ladder holds feet at `feet`: a ladder on a wall (minecraft:ladder, metadata 2-5)
+ * in the block the feet are in, where 1.7.10's isOnLadder looks (the box's bottom). Feet just
+ * over a ladder's top are not held.
+ */
+export function onLadder(world: WalkWorld, feet: Vec3): boolean {
+  const x = Math.floor(feet.x);
+  const y = Math.floor(feet.y + 1e-9);
+  const z = Math.floor(feet.z);
+  const id = world.blockAt(x, y, z);
+  if (id === undefined || id === 0 || world.blockName(id) !== 'minecraft:ladder') return false;
+  const meta = world.metaAt?.(x, y, z);
+  return meta !== undefined && meta >= 2 && meta <= 5;
+}
+
+/** Whether a known full block (TERRAIN_SURFACES) is under the footprint of feet at a whole y. */
+export function onBlock(world: WalkWorld, feet: Vec3): boolean {
+  const y = Math.round(feet.y) - 1;
+  for (const x of cellsAcross(feet.x - PLAYER_HALF_WIDTH, feet.x + PLAYER_HALF_WIDTH)) {
+    for (const z of cellsAcross(feet.z - PLAYER_HALF_WIDTH, feet.z + PLAYER_HALF_WIDTH)) {
+      const id = world.blockAt(x, y, z);
+      if (id !== undefined && id !== 0 && TERRAIN_SURFACES.has(name(world, id))) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Where feet that hang a little above the ground come to rest: the top of the block below,
  * when every cell at the feet's level across the player's box (0.3 each way) is air and a
  * block the player may not enter lies under at least one of them. Null when the feet are on

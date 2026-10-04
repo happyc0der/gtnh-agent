@@ -63,6 +63,8 @@ export const PathConfigSchema = z.strictObject({
    * and close it again once through (it is left as it was found). Never an iron door.
    */
   allowDoors: z.boolean().default(true),
+  /** Climb ladders: up, down, onto and off them (never a vine). */
+  allowClimb: z.boolean().default(true),
   /** Dirt never placed on a walk: kept for the night shelter's roof. */
   throwawayReserve: z.int().min(0).max(64).default(4),
 });
@@ -508,6 +510,7 @@ export function envOverrides(env: NodeJS.ProcessEnv): Json {
   path('MC_PATH_ALLOW_SPRINT', 'allowSprint');
   path('MC_PATH_ALLOW_WATER', 'allowWater');
   path('MC_PATH_ALLOW_DOORS', 'allowDoors');
+  path('MC_PATH_ALLOW_CLIMB', 'allowClimb');
   if ((v = e('MC_PATH_THROWAWAY_RESERVE'))) {
     set(['minecraft', 'movement', 'path', 'throwawayReserve'], num('MC_PATH_THROWAWAY_RESERVE', v));
   }

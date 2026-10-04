@@ -27,6 +27,7 @@ const SETTINGS: WalkSettings = {
   allowSprint: false,
   allowWater: false,
   allowDoors: true,
+  allowClimb: true,
   throwawayReserve: 4,
 };
 const NO_ONE = { boundary: null, players: [] };
@@ -60,7 +61,9 @@ describe('the walk policy (path-policy.ts)', () => {
       maxBreaks: MAX_PATH_BREAKS,
       throwaway: { count: 8, block: 'minecraft:cobblestone' },
     });
-    expect(all.summary).toBe('breaking, placing up to 8 minecraft:cobblestone, parkour, doors');
+    expect(all.summary).toBe(
+      'breaking, placing up to 8 minecraft:cobblestone, parkour, doors, ladders',
+    );
     // Each needs its ability, a throwaway block, and digging's heights for an ascend's room.
     expect(walkPolicy(input({ breaking: false })).options.canBreak).toBeUndefined();
     expect(walkPolicy(input({ digHeight: 1 })).options.canBreak).toBeUndefined();
@@ -74,6 +77,7 @@ describe('the walk policy (path-policy.ts)', () => {
           allowPlace: false,
           allowParkour: false,
           allowDoors: false,
+          allowClimb: false,
         },
       }),
     );

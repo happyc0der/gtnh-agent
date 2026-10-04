@@ -4,6 +4,7 @@ import type { Position } from '../../../domain/common.ts';
 import { failed, ok, type ClientActionResult } from '../../minecraft-client.ts';
 import type { Gtnh1710ClientOptions } from '../gtnh-client.ts';
 import { outbound } from '../packets.ts';
+import { CLIMB_DOWN_PER_TICK } from '../pathing/costs.ts';
 import { goalBlock } from '../pathing/goals.ts';
 import { fenceHolds } from '../play-area.ts';
 import {
@@ -12,6 +13,8 @@ import {
   fallDistances,
   landingHazard,
   MAX_SAFE_FALL,
+  onBlock,
+  onLadder,
   restingY,
 } from '../terrain.ts';
 import {
@@ -23,6 +26,7 @@ import {
   type Fence,
   type Vec3,
   type WalkPlan,
+  type WalkWorld,
 } from '../walking.ts';
 import type { WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
@@ -363,6 +367,17 @@ export class MovementActions {
     const feet = this.#world.ownPosition;
     const fence = this.#core.fence().fence;
     if (world === null || feet === null || fence === null) return;
+    if (onLadder(world, feet)) {
+      // Held by a ladder: at a block's level it hangs on (a walk from there climbs). Between
+      // levels (a correction mid-climb, a login there), it climbs down to the level below as
+      // a client holding on slides, 0.15 a tick, within the cells its body is in already (an
+      // independent review, 2026-10-04: walks refused to start there, and nothing brought it
+      // down).
+      const level = Math.floor(feet.y + 1e-9);
+      if (feet.y - level > 1e-6) await this.#slideDown(world, feet, level);
+      this.#floatingNote = null;
+      return;
+    }
     const support = checkSupport(world, feet);
     if (support.kind === 'unknown') return;
     // Held up for the server, the feet may still hang a little above the ground, or just past
@@ -398,9 +413,12 @@ export class MovementActions {
     // Falling is a walk of its own: nothing else may start meanwhile.
     this.#core.walking = true;
     this.stopIdle();
+    const placements = this.#core.confirmedPositions;
     try {
       const fallen = fallDistances(feet.y - landY);
       for (const [i, d] of fallen.entries()) {
+        // The server put the player somewhere (a correction), or the connection closed.
+        if (this.#core.phase !== 'play' || this.#core.confirmedPositions !== placements) return;
         const pos = { x: feet.x, y: i === fallen.length - 1 ? landY : feet.y - d, z: feet.z };
         this.#core.send(
           outbound.playerMove(
@@ -413,6 +431,36 @@ export class MovementActions {
       }
       this.#floatingNote = null;
       this.#core.log(`fell ${(feet.y - landY).toFixed(2)} blocks onto the ground at y=${landY}`);
+    } finally {
+      this.#core.walking = false;
+      if (this.#core.phase === 'play') this.startIdle();
+    }
+  }
+
+  /** Down a ladder from `feet` to `level` (a whole y in the same block), 0.15 a tick. */
+  async #slideDown(world: WalkWorld, feet: Vec3, level: number): Promise<void> {
+    // A walk of its own: nothing else may start meanwhile.
+    this.#core.walking = true;
+    this.stopIdle();
+    const placements = this.#core.confirmedPositions;
+    try {
+      let y = feet.y;
+      while (y > level) {
+        // The server put the player somewhere (a correction), or the connection closed.
+        if (this.#core.phase !== 'play' || this.#core.confirmedPositions !== placements) return;
+        y = Math.max(level, y - CLIMB_DOWN_PER_TICK);
+        const pos = { x: feet.x, y, z: feet.z };
+        const ground = y === level && onBlock(world, pos);
+        this.#core.send(
+          outbound.playerMove(
+            { x: pos.x, feetY: pos.y, z: pos.z, yaw: this.#core.lastYaw, pitch: 0 },
+            ground,
+          ),
+        );
+        this.#world.setOwnPosition(pos);
+        await delay(WALK_TICK_MS);
+      }
+      this.#core.log(`climbed down ${(feet.y - level).toFixed(2)} on a ladder, to y=${level}`);
     } finally {
       this.#core.walking = false;
       if (this.#core.phase === 'play') this.startIdle();

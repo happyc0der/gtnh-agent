@@ -57,6 +57,10 @@ import type { Fence, Vec3, WalkWorld } from './walking.ts';
  *    live 2026-10-04: a retreat walked past a concussion creeper, and the bot died).
  *  - Doors (allowDoors): wooden doors and fence gates in the way are opened with a right-click
  *    and closed again once the walk is through (pathing/movements.ts door); never an iron one.
+ *  - Ladders (allowClimb): climbed up and down, the body centred in the ladder's column, onto
+ *    one from its foot, from a ledge at its top or from a floor beside it partway up, and off it
+ *    onto one (pathing/movements.ts climbUp, climbDown, climbOn, climbOff, climbAcross); never a
+ *    vine.
  *  - Parkour (allowParkour): only over gaps that falling into would not hurt, unless
  *    parkourOverDeepGaps; sprinting (allowSprint) only when the caller says the walk is long
  *    and the food bar high enough (client/path-actions.ts); wading (allowWater) in calm
@@ -110,6 +114,8 @@ export interface WalkSettings {
   readonly allowWater: boolean;
   /** Through doorways, opening and closing wooden doors and fence gates. */
   readonly allowDoors: boolean;
+  /** Up and down ladders. */
+  readonly allowClimb: boolean;
   /** Dirt never placed on a walk: kept for the night shelter's roof. */
   readonly throwawayReserve: number;
 }
@@ -390,6 +396,7 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
     water: s.allowWater,
     // Doors and gates are opened (and closed again) on any walk: an escape into a house too.
     doors: s.allowDoors,
+    climb: s.allowClimb,
     ...((input.hostiles ?? []).length === 0
       ? {}
       : {
@@ -451,6 +458,7 @@ export function walkPolicy(input: WalkPolicyInput): WalkPolicy {
     input.sprint ? 'sprinting' : null,
     s.allowWater ? 'wading' : null,
     s.allowDoors ? 'doors' : null,
+    s.allowClimb ? 'ladders' : null,
   ].filter((w) => w !== null);
   return { options, summary: words.join(', '), water: s.allowWater };
 }
