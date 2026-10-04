@@ -121,8 +121,11 @@ export interface CommandRun {
   /** Tunnel: its first cell (where the bot stood when it began), and the cells dug then. */
   tunnelFrom: BlockPosition | null;
   tunnelDone: number | null;
-  /** A tunnel whose owner named no way: the way code picked when it began. */
+  /** A tunnel whose owner named no way: the way code picked for its leg now. */
   tunnelDirection: TunnelDirection | null;
+  /** A tunnel whose way code picks: the cells its legs before this one dug, and its turns. */
+  tunnelBefore: number;
+  tunnelTurns: number;
 }
 
 /**

@@ -1290,6 +1290,63 @@ describe("owners' commands in play", () => {
     );
   });
 
+  it('turns where the way it picked is blocked, from where it got to, for the rest of the length', async () => {
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!tunnel down 3')] });
+    const STEPS = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] } as const;
+    const requests: TunnelRequest[] = [];
+    // From where it starts: north is lava at once, east has sand over its second cell, south
+    // and west may not be dug. From the end of east's first cell, north is clear.
+    const cellsOpen = (req: TunnelRequest): number | null => {
+      const fromStart = req.start.x === 0 && req.start.z === 0;
+      if (req.direction === 'east' && fromStart) return 1;
+      if (req.direction === 'north') return fromStart ? 0 : Infinity;
+      return null;
+    };
+    const tunnel = (req: TunnelRequest): Promise<TunnelPlan> => {
+      requests.push(req);
+      const open = cellsOpen(req);
+      if (open === null) return Promise.resolve({ ok: false, reason: 'not this way' });
+      const [dx, dz] = STEPS[req.direction];
+      const p = sim.position;
+      const done = Math.max(
+        0,
+        (Math.floor(p.x) - req.start.x) * dx + (Math.floor(p.z) - req.start.z) * dz,
+      );
+      if (done >= req.length) {
+        return Promise.resolve({ ok: true, done: req.length, steps: [], problem: null });
+      }
+      const blocked = done >= open ? 'sand above would fall into the hole' : null;
+      if (blocked !== null) return Promise.resolve({ ok: true, done, steps: [], problem: blocked });
+      const k = done + 1;
+      const target = {
+        x: req.start.x + k * dx + 0.5,
+        y: req.start.y - k,
+        z: req.start.z + k * dz + 0.5,
+      };
+      return Promise.resolve({
+        ok: true,
+        done,
+        steps: [{ spec: { type: 'MOVE_TO', args: { target, tolerance: 0.5 } }, text: 'step' }],
+        problem: k >= open ? 'sand above would fall into the hole' : null,
+      });
+    };
+    await runPlay(deps(repos, sim, { tunnel }), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: digging stairs 3 blocks down from 0 64 0',
+      'I dig stairs 3 blocks down, going east',
+      'sand above would fall into the hole: I turn north (1 of 3 blocks dug)',
+      'Done: dug stairs 3 blocks down',
+    ]);
+    expect(sim.steps).toEqual(['MOVE_TO 1.5 0.5', 'MOVE_TO 1.5 -0.5', 'MOVE_TO 1.5 -1.5']);
+    // The second leg: from where the first ended, the 2 blocks left, never east or west again.
+    const second = requests.filter((r) => r.start.x === 1);
+    expect(second.length).toBeGreaterThan(0);
+    expect(second.every((r) => r.direction === 'north' || r.direction === 'south')).toBe(true);
+    expect(second.every((r) => r.length === 2 && r.start.y === 63)).toBe(true);
+    expect(repos.tasks.get('command-1')?.status).toBe('completed');
+  });
+
   it('idle with a mob near home: play waits offline for it to leave (it stood there once and died)', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!pause')] });

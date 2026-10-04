@@ -62,6 +62,16 @@ export function oreDepthHint(item: string, at: Position | null): string {
   );
 }
 
+/** Where a way code picked for a tunnel is blocked, it turns at most this often. */
+export const MAX_TUNNEL_TURNS = 3;
+
+const OPPOSITE: Readonly<Record<TunnelDirection, TunnelDirection>> = {
+  north: 'south',
+  south: 'north',
+  east: 'west',
+  west: 'east',
+};
+
 /**
  * One session of an owner's tunnel: the next few cells, planned by code from where the bot
  * stands (PlayDeps.tunnel: tunnel.ts), run as known safe steps, each validated, executed and
@@ -69,7 +79,9 @@ export function oreDepthHint(item: string, at: Position | null): string {
  * length; failed, saying why and how far it got, when the next cell may not be dug (a fluid,
  * a cave floor, a block it cannot harvest...), when a step fails, or after sessions with no
  * cell gained. Dusk, a food bar nearly empty and an owner's new command interrupt it, as they
- * do a trip.
+ * do a trip. A tunnel whose owner named no way ("dig down") goes the way code picks (pickWay),
+ * and where that way is blocked, turns from where it got to for the rest of its length, at
+ * most MAX_TUNNEL_TURNS times (as the strip mine turns).
  */
 export async function tunnelRound(
   play: PlayState,
@@ -89,9 +101,11 @@ export async function tunnelRound(
     run.tunnelFrom = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-6), z: Math.floor(at.z) };
     saveProgress(play, cmd.id);
   }
+  const before = run.tunnelBefore;
+  const length = command.length - before;
   let direction = command.direction ?? run.tunnelDirection;
   if (direction === null) {
-    const picked = await pickWay(play, command, run.tunnelFrom);
+    const picked = await pickWay(play, command, run.tunnelFrom, length, []);
     if (picked !== null && 'problem' in picked) return fail(picked.problem);
     if (picked !== null) {
       direction = picked.direction;
@@ -103,12 +117,7 @@ export async function tunnelRound(
   const plan =
     direction === null
       ? null
-      : await deps.tunnel({
-          start: run.tunnelFrom,
-          direction,
-          length: command.length,
-          slope: command.slope,
-        });
+      : await deps.tunnel({ start: run.tunnelFrom, direction, length, slope: command.slope });
   if (plan === null) {
     // Just after joining or respawning the chunks are still coming: wait a moment between tries.
     run.failures += 1;
@@ -117,14 +126,40 @@ export async function tunnelRound(
     return 'next-round';
   }
   if (!plan.ok) return fail(plan.reason);
-  const dug = `${plan.done} of ${command.length} blocks dug`;
+  const total = before + plan.done;
+  const dug = `${total} of ${command.length} blocks dug`;
   if (plan.steps.length === 0) {
-    if (plan.done >= command.length) {
-      const dugIt = describeCommand({ ...command, direction }).replace(/^dig /, 'dug ');
+    if (plan.done >= length) {
+      const one = run.tunnelTurns === 0 ? direction : null;
+      const dugIt = describeCommand({ ...command, direction: one }).replace(/^dig /, 'dug ');
       finish(play, cmd, 'done', `Done: ${dugIt}`);
       return 'next-round';
     }
-    return fail(`${plan.problem ?? 'there is nothing to dig'} (${dug})`);
+    const problem = plan.problem ?? 'there is nothing to dig';
+    if (command.direction === null && direction !== null && run.tunnelTurns < MAX_TUNNEL_TURNS) {
+      // Blocked on a way code picked: another one from where the tunnel got to (the bot stands
+      // in its last cell), for the rest of the length; never straight back.
+      const at = (deps.commands as CommandDeps).view().position;
+      const from =
+        at === null
+          ? null
+          : { x: Math.floor(at.x), y: Math.floor(at.y + 1e-6), z: Math.floor(at.z) };
+      const exclude = [direction, OPPOSITE[direction]];
+      const picked =
+        from === null ? null : await pickWay(play, command, from, command.length - total, exclude);
+      if (from !== null && picked !== null && 'direction' in picked) {
+        run.tunnelFrom = from;
+        run.tunnelDirection = picked.direction;
+        run.tunnelBefore = total;
+        run.tunnelTurns += 1;
+        run.tunnelDone = null;
+        run.stuck = 0;
+        saveProgress(play, cmd.id);
+        say(play, cmd, `${problem}: I turn ${picked.direction} (${dug})`.slice(0, 300));
+        return 'next-round';
+      }
+    }
+    return fail(`${problem} (${dug})`);
   }
   run.stuck = run.tunnelDone !== null && plan.done <= run.tunnelDone ? run.stuck + 1 : 0;
   run.tunnelDone = plan.done;
@@ -135,30 +170,37 @@ export async function tunnelRound(
 }
 
 /**
- * The way for a tunnel whose owner named none ("!tunnel down 10"): of north, east, south and
- * west, most room to the safety boundary first (as a strip mine starts), the first whose next
- * cells may be dug. Null while the blocks around are not known.
+ * The way for a tunnel whose owner named none ("!tunnel down 10"), `length` cells from
+ * `start`: of north, east, south and west (but `exclude`), most room to the safety boundary
+ * first (as a strip mine starts), the first whose next cells (a plan's segment) may all be
+ * dug; else the one whose plan digs the most of them. Null while the blocks around are not
+ * known.
  */
 async function pickWay(
   play: PlayState,
   command: TunnelCommand,
   start: BlockPosition,
+  length: number,
+  exclude: readonly TunnelDirection[],
 ): Promise<{ direction: TunnelDirection } | { problem: string } | null> {
   const tunnel = play.deps.tunnel;
   if (tunnel === undefined) return { problem: 'I cannot dig a tunnel here' };
   const room = roomFrom(play, start);
   const why: string[] = [];
-  for (const d of waysByRoom(room)) {
-    const plan = await tunnel({
-      start,
-      direction: d,
-      length: command.length,
-      slope: command.slope,
-    });
+  let best: { direction: TunnelDirection; cells: number } | null = null;
+  for (const d of waysByRoom(room).filter((w) => !exclude.includes(w))) {
+    const plan = await tunnel({ start, direction: d, length, slope: command.slope });
     if (plan === null) return null;
-    if (plan.ok && plan.steps.length > 0) return { direction: d };
-    why.push(`${d}: ${plan.ok ? (plan.problem ?? 'already open') : plan.reason}`);
+    if (!plan.ok || plan.steps.length === 0) {
+      why.push(`${d}: ${plan.ok ? (plan.problem ?? 'already open') : plan.reason}`);
+      continue;
+    }
+    if (plan.problem === null) return { direction: d };
+    const cells = plan.steps.filter((s) => s.spec.type === 'MOVE_TO').length;
+    if (best === null || cells > best.cells) best = { direction: d, cells };
+    why.push(`${d}: ${plan.problem}`);
   }
+  if (best !== null) return { direction: best.direction };
   return { problem: `no way may be dug (${why.join('; ')})`.slice(0, 380) };
 }
 

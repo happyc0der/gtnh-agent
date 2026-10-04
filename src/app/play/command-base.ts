@@ -135,6 +135,8 @@ const ProgressSchema = z.strictObject({
   tunnelFrom: BlockPositionSchema.nullable(),
   /** Kept since 2026-10-04: progress saved before has none. */
   tunnelDirection: z.enum(TUNNEL_DIRECTIONS).nullable().default(null),
+  tunnelBefore: z.int().min(0).default(0),
+  tunnelTurns: z.int().min(0).default(0),
 });
 
 /** Keeps the run's lasting progress (PROGRESS_KEY) for a restart of play. */
@@ -147,6 +149,8 @@ export function saveProgress(play: PlayState, id: number): void {
       stripSkipped: [...run.stripSkipped].slice(-256),
       tunnelFrom: run.tunnelFrom,
       tunnelDirection: run.tunnelDirection,
+      tunnelBefore: run.tunnelBefore,
+      tunnelTurns: run.tunnelTurns,
     }),
   );
 }
@@ -182,6 +186,8 @@ export function runOf(play: PlayState, id: number): CommandRun {
       tunnelFrom: kept?.tunnelFrom ?? null,
       tunnelDone: null,
       tunnelDirection: kept?.tunnelDirection ?? null,
+      tunnelBefore: kept?.tunnelBefore ?? 0,
+      tunnelTurns: kept?.tunnelTurns ?? 0,
       worked: false,
       interrupted: false,
     };
