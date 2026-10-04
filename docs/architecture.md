@@ -848,6 +848,207 @@ The `move` command runs one such action for a human (origin `user`). The repeate
 not apply to it (it is the human's decision each time), and its failures do not count against the
 agent's own attempts.
 
+## Pathfinding
+
+`src/bot/gtnh1710/pathing/` is the terrain walker's successor: a pure pathfinder (no I/O, no
+client code) that plans where to walk and how, tick by tick. Nothing calls it yet. The executor
+(`walkTo` in `client/movement-actions.ts`) still plans with `terrain.ts`, and can switch over
+gradually: a path converts to terrain moves (walk, step-up, drop) wherever it has them
+(`toTerrainMoves`). The design follows Baritone, the Minecraft pathfinding bot (LGPL-3.0): A*
+with a binary heap and packed node keys, movements checked against the blocks with costs in
+ticks from the game's physics (its ActionCosts), penalties for breaking and placing, its goal
+kinds and its best-so-far partial paths. Only the ideas were taken: no Baritone code was copied,
+and every rule and number was worked out anew for 1.7.10 and this walker.
+
+```ts
+const found = planPath(world, fence, from, goalBlock(x, y, z), { canBreak, maxNodes: 100_000 });
+if (found.status === 'none') return failed(`not walking: ${found.reason}`);
+const plan = planExecution(world, fence, from, found.movements);
+// For each segment: dig plan.breaks standing still, then send each step (C06 position and
+// onGround), clicking each place right after its afterStep; on 'partial', plan again from
+// its end once new chunks have come.
+```
+
+**The search** (`search.ts`) is A\* over feet blocks inside the search area (the fence, a hard
+bound: at most 2^21 feet blocks, a 64 x 64 x 32 play area is 131,072).
+
+- Node keys are the feet block's index in the area box; costs, parents, the blocks broken and
+  placed so far, and the open/closed state live in typed arrays, and the open list is a binary
+  heap with decrease-key (`heap.ts`).
+- Limits: `maxNodes` (100,000) and `maxTimeMs` (1,000). The result says `reached`, `partial` or
+  `none`, why it stopped (`goal`, `exhausted`, `node-limit`, `time-limit`, `refused`) and, in
+  words, why (`reason`).
+- When the goal cannot be reached inside the area (beyond the loaded chunks or the area itself)
+  or a limit stops the search, the result is Baritone's best-so-far partial path: for each of
+  its coefficients K (1.5 to 10), the node that minimises heuristic + cost / K, taking the
+  first one at least `minPartialDistance` (5) from the start, and never one in water. A long
+  trip is walked in segments, planning again from each end as new chunks arrive.
+- Resources: blocks broken (`maxBreaks`) and placed (the throwaway count) go with each node's
+  best way there; a movement past either is not taken.
+- An 8-way grid has many shortest paths; each run of plain walking is laid out again with the
+  same steps in one turn (every turn costs the walk ticks).
+- The world changes along a path. Like Baritone's, the search checks movements against the
+  world as it is; the found path is then replayed over the blocks it breaks and places, each
+  movement checked again, and cut where one no longer holds. A pillar or bridge after another
+  clicks the block the one before placed.
+
+**Blocks** (`cells.ts`): each block of the search box is read once into typed arrays and
+classified with the walkers' own rules (what the body passes is `passable.ts`'s, what can be
+stood on `terrain.ts`'s, hazards `block-hazards.ts`'s), with derived facts kept per cell: near a
+hazard (one in the 3 x 3 x 3 cube, or an unloaded or unnamed block), standable (exactly
+`standProblem`, and never with the feet in a vine: a game client climbs vines like ladders, and
+that is not modelled), calm one-deep water (vanilla's flow vector is zero).
+
+**Goals** (`goals.ts`): plain data, each with an admissible and consistent heuristic built from
+the cheapest cost per block across, up and down over the movements allowed (tested along every
+movement of a test world):
+
+| Goal           | Met where                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `block`        | the feet in exactly this block                                                                                                  |
+| `xz`           | the feet in this column, at any height                                                                                          |
+| `near`         | the feet within a radius of a point                                                                                             |
+| `y`            | the feet at this level                                                                                                          |
+| `get-to-block` | the eyes within reach (4.5) of a block's centre, never in its column at or above it; `adjacent`: in the 3 x 3 columns around it |
+| `any`          | any of several goals                                                                                                            |
+| `away`         | at least a distance (across) from every one of some points: running away                                                        |
+
+**Movements and their costs** (`movements.ts`, `costs.ts`), in ticks, derived from the physics
+below and the client's waits:
+
+| Movement | What                                                                                       | Cost (ticks)                                               |
+| -------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| traverse | one block cardinal; may break its way open (head, then feet)                               | 4.63 walking (20 / 4.317), 3.56 sprinting                  |
+| diagonal | one block diagonally, both corners open (no corner cutting), never breaking                | 6.55, 5.04 sprinting                                       |
+| ascend   | a jump onto the next block, one higher; may break the room above the start and on the step | 12 (the jump lands on its 9th tick, + 1, + jump penalty 2) |
+| descend  | off the edge one block down; may break its way                                             | 9.63 (walk off, 5 ticks of fall, centre)                   |
+| fall     | 2 or 3 blocks onto dry ground (no damage: 4 would deal 1), or into calm one-deep water     | 11.63, 13.63; water: 17.75 from 5, 22.75 from 10           |
+| parkour  | a running jump over a gap of 1-2 blocks (3 sprinting) to the same level, the arc clear     | 16.78, 18.47 walking; 16.14 sprinting                      |
+| pillar   | jump and place a block in the cell the feet left, land on it; may break the room above     | 33 (with the placement penalty 20)                         |
+| bridge   | place a block in the gap ahead against the side of the block underfoot, walk on            | 32.63 (with the placement penalty 20)                      |
+| downward | dig the block underfoot, drop one block (only when the caller enables it)                  | 17 + the dig                                               |
+| wading   | a traverse or diagonal in calm one-deep water (into it, out of it, within it)              | 10.20, 14.43                                               |
+| (ascend) | out of calm one-deep water onto a bank one higher, the cells 3 above open                  | 20 (about 18 ticks, + jump penalty 2)                      |
+
+A break costs its dig ticks (the caller's `canBreak`, with the tool the player would hold), the
+client's wait for the server's verdict (6) and a penalty (4), plus 2 once for stopping first, so
+going round wins unless breaking is clearly cheaper (`penalties` changes them). Breaking and
+placing are policies the caller passes: `canBreak(cell)` (dig ticks or null), `canPlace(cell)`,
+`throwaway` (how many blocks, which: a surface the walker stands on, whether it falls), and the
+flags `parkour`, `pillar`, `bridge`, `downward`, `sprint` and `water`, all off by default.
+
+**Safety the search enforces**, whatever the caller allows:
+
+- every cell the body passes is passable (or calm one-deep water, when wading is allowed) and
+  has no hazard, unloaded or unnamed block in the 3 x 3 x 3 cube around it; every feet block a
+  movement ends on is standable; nothing leaves the fence;
+- a block is broken only where `canBreak` allows it and never next to a fluid (above or beside:
+  it would flow in), under sand or gravel (it would fall in), beside sand or gravel with nothing
+  under it (the update would drop it), next to a hazard, or under the player (only digging down
+  does that);
+- a block is placed only into air or a plant a block replaces, against a plain full block (one
+  that opens nothing when clicked), never next to a fluid or a hazard, never a falling block
+  with nothing under it;
+- a fall lands on a known full block at most 3 down, where it does no damage, or into calm
+  one-deep water from a height the server's fall accounting does not punish (the box counts as
+  in water only 0.6 above the floor, and the server resets the fall only for a packet sent from
+  inside the water: from 4, 12-14, 17, 18, 20 blocks and more, every tick skips that layer and
+  the landing hurts);
+- parkour only over gaps that falling into would be safe (`parkourOverDeepGaps` allows deeper
+  ones), never over lava.
+
+**Physics** (`physics.ts`), as read in the vanilla code the test server runs: a jump sets
+motionY to 0.42 (sprinting adds 0.2 forward); each tick motionY = (motionY - 0.08) x 0.98; the
+horizontal motion keeps x 0.546 on the ground, x 0.91 in the air, x 0.8 in water, and the keys add
+at most 0.1 on the ground (0.13 sprinting), 0.02 in the air (0.026), 0.02 in water; the box moves
+by Y, then X, then Z, each stopped by blocks, and a move down stopped sets onGround. Walking
+comes to 4.317 blocks a second, sprinting 5.612, wading 1.96; a walking jump carries 2.0 blocks,
+a sprinting one 3.6.
+
+**Execution plans** (`execute.ts`): for each movement, a segment with the steps a client sends,
+one per tick: the feet position, onGround, whether the player sprints (the client sends
+START_SPRINTING when it turns on, STOP when off) and whether the tick jumps. Before the steps,
+the blocks to break, upper first, standing still where the segment starts; and the blocks to
+place, each with the cell, the block clicked, its face, C08's cursor, the step after whose
+position the click goes (`afterStep`) and the first step that stands on it (`neededBy`).
+
+- The vertical motion is the game's own; each tick's move across is one the keys can make from
+  the motion carried over, so walking reaches the vanilla 0.216 blocks per tick, turns slow down
+  (a run brakes just in time to reach a turn exactly at the block centre at a speed the next
+  direction can take), and jumps carry only as far as real ones. No step moves into a block, so
+  the server's own move from the last position lands exactly where the client says; only
+  climbing out of water presses against one (below).
+- Walking and wading run as fast as allowed, flowing on from one straight movement to the next.
+  An ascend jumps from the start block's centre and keeps off the step until the feet are above
+  it. A descend or fall walks off the edge, then steers in the air to land inside the column,
+  never back over the start block. Parkour runs up and jumps on the last tick still on the start
+  block, flying as hard as needed to be over the landing before the feet come down to its top.
+- A pillar jumps straight up from rest and places the block in the cell the feet left right
+  after the first step with the feet above it (the third); it lands on the block six ticks
+  later (four under a block that cuts the jump short). If the server has not confirmed the
+  block before that landing step is due, the
+  executor sends the segment's `fallback` instead: the same jump coming back down where it began.
+- A bridge walks to 0.6 past the centre (the eyes beyond the edge, so the side of the block
+  underfoot faces them), stops for a tick, places against that side, and walks on once the server
+  confirms (`neededBy` is the next step).
+- Out of water onto a bank one higher, as a player climbs out: forward held, and jump held while
+  in the water (swimming up, +0.04 a tick: `jump` on those steps), the box pressed against the
+  bank (`bump` on those steps: the box ends touching the bank's face, which the server's move
+  reproduces); once the space 0.6 higher holds no water, the game pushes the player up (motionY
+  0.3), the feet clear the bank's top and the box moves over it, about 18 ticks in all. So a fall
+  into one-deep water has a way out wherever a bank one block higher has room above it.
+- A movement that breaks, pillars or digs down starts at rest; when a movement cannot be driven
+  from the way the one before it ends, the plan is made again with that one stopping.
+
+**The step validator** (`validate.ts`) replays a plan tick by tick and says where it breaks a
+rule: the vertical move and onGround must be the game's (a jump only off the ground, swimming up
+only in water, water's push up only right after a bump with the space above free); the change
+of motion across at most what the keys add in that mode (no faster than walking or sprinting, no
+jump longer than a real one, no hovering), and a bump only against a block the box ends touching
+(it then takes that axis's motion); the server's Y-X-Z move from the last position never stopped
+by a block; every cell the box touches (and the Y move sweeps) open and away from hazards,
+inside the fence; no fall damage by the server's accounting; blocks broken only standing still
+and never the one underfoot (but digging down); placed only into an empty cell outside the body,
+against a solid block touching the face clicked. Every test plan goes through it, and the fuzz
+tests plan, execute and validate several hundred random paths on rough terrain and mazes (a
+larger run of the same, done once, validated about 70,000 movements).
+
+**What the executor must still do** (the plan cannot check it):
+
+- every step: re-check the blocks the server sent (as `walkTo` does today) and stop on a
+  correction, a threat, a health drop or the stop file; send the yaw toward the motion;
+- sprinting: send C0B START/STOP_SPRINTING when `sprint` changes (packets.ts has no C0B yet,
+  so keep `sprint` off until it does) and only with food above 6, where the game allows it;
+- parkour: send the steps without pausing (a jump cannot be held in mid-air), and before the
+  take-off make sure nothing stopped it; a correction in mid-air ends in the gap, which the
+  search only allows where that fall is safe;
+- pillar: hold the block in the hotbar and look down; send the click after `afterStep` and wait
+  for the server's block change; if it has not come before `neededBy`, send the fallback;
+- bridge: hold the block, face the side of the block underfoot, click, and wait for the
+  server's confirmation before sending `neededBy`;
+- breaks and digging down: dig each with the client's dig routine and its checks (for digging
+  down `checkDigDown`), standing still, before the segment's steps; a dig refused or not
+  confirmed ends the walk, and the agent plans again.
+
+**Performance** (`scripts/path-bench.ts`, on the bench terrain of hills, a forest, a desert, a
+river and a lake; medians of warm runs on the agent's laptop): a path across a 64 x 64 x 32 play
+area takes 2-14 ms to plan walking (225-3,700 nodes), and its execution plan and validation
+about 1 ms each; with bridges and pillars allowed, a search that needs them expands more
+(5,000-42,000 nodes, 18-165 ms), and one whose goal is out of reach even with blocks expands
+every spot the blocks open (100,000 nodes, about 0.5 s: keep `maxNodes` and `maxTimeMs` for
+that). 100,000 nodes take about 0.4 s with placing allowed (about 3 µs a node walking). Each
+block is read about twice per node expanded in all (the cell cache); `performance.test.ts`
+checks that, with time bounds loose enough for a busy test run.
+
+**Not covered yet:**
+
+- swimming: water deeper than one block is never entered, and water that flows (it pushes) is
+  never waded;
+- vines and ladders (the body never has its feet in one), slabs, stairs, soul sand, ice and other
+  partial or slippery blocks (not surfaces), doors and fence gates;
+- falling blocks are avoided, not handled (Baritone breaks a falling column again and again);
+- diagonal ascends and descends, and Baritone's "edging" diagonals past one blocked corner.
+
 ## Chests
 
 `OPEN_CONTAINER`, `WITHDRAW_ITEM` and `DEPOSIT_ITEM` work on configured vanilla chests
@@ -1800,7 +2001,7 @@ src/safety       safety policy (evaluateAction) and its per-action checks (dig, 
 src/system1      router, decision providers (incl. SafetyFirstDecisionProvider and the model's cadence: decision points), action proposer
 src/planner      plan schema, validator, planner interface, mock planner
 src/llm          Ollama client, model decision provider, model planner, owner-command translator (opt-in)
-src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: chat (owners' commands in, whispers out), inventory and chests, crafting, block windows, digging, picking up drops, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, drops, placing, crafting, combat, world surveys, the world model, packets)
+src/bot          MinecraftClient interface, mock client, Mineflayer skeleton, and gtnh1710/: the live client (gtnh-client.ts, a facade over client/: core, connection, observation, and one module per kind of action: chat (owners' commands in, whispers out), inventory and chests, crafting, block windows, digging, picking up drops, placing, combat, quest book, eating, walking, travel) beside the pure rules it uses (walking, terrain, digging, drops, placing, crafting, combat, world surveys, the world model, packets), and pathing/: the pathfinder (search, movements, goals, execution plans, the step validator)
 src/executor     executor, preconditions, verifier, action log
 src/persistence  SQLite open/migrate, repositories, migrations
 src/goals        the Age 0 quest data (generated), goal selection and quest-book clicks from the server's records; routes and the GTNH knowledge base (generated)

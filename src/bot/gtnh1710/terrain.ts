@@ -25,7 +25,10 @@ import {
  */
 
 /** Natural full blocks the player may stand on, on top of the pen's list. */
-const TERRAIN_SURFACES: ReadonlySet<string> = new Set([...WALKABLE_SURFACES, 'minecraft:mycelium']);
+export const TERRAIN_SURFACES: ReadonlySet<string> = new Set([
+  ...WALKABLE_SURFACES,
+  'minecraft:mycelium',
+]);
 
 export const MAX_DROP = 2;
 const EPS = 1e-6;
