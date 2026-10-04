@@ -106,6 +106,23 @@ describe('Gtnh1710Client eating', () => {
     expect(await apples(client)).toBe(0);
   });
 
+  it('swaps food into a full hotbar, with a plain stack there (seen live: hungry, unable to eat)', async () => {
+    // Dirt (id 3) in every hotbar slot, the apple in the main inventory.
+    const { server, client } = await start({
+      inventory: [
+        ...Array.from({ length: 9 }, (_, j) => ({ slot: hotbar(j), id: 3, count: 10, damage: 0 })),
+        { slot: 12, id: APPLE, count: 1, damage: 0 },
+      ],
+    });
+    const r = await eat(client, 'minecraft:apple');
+    expect(r, r.message).toMatchObject({ ok: true });
+    expect(server.eatsStarted).toBe(1);
+    expect(await apples(client)).toBe(0);
+    // The dirt it swapped out went where the apple was.
+    expect(server.chestSim.playerSlots()[12]).toMatchObject({ id: 3, count: 10 });
+    expect(server.chestSim.cursor).toBeNull();
+  });
+
   it('ends the spawn protection with an empty-handed click on the ground, then eats', async () => {
     // Seen live: right after joining, AngerMod's spawn protection kept every EAT from working.
     const { server, client } = await start({

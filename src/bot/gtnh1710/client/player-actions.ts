@@ -105,21 +105,26 @@ export class PlayerActions {
     if (index === undefined) return refuse(`no ${item} in the inventory`);
     let slot = index - 27;
     if (index < 27) {
+      // An empty hotbar slot, else one holding a plain stack to swap with (seen live: a full
+      // hotbar, cooked beef in the main inventory, and every meal refused while hungry).
       const free = this.#core.inventory.emptyHotbarSlot();
-      if (free === null)
-        return refuse(`the ${item} is not in the hotbar, and no hotbar slot is free`);
-      const moved = await this.#core.inventory.moveToHotbar(
-        9 + index,
-        free,
-        storage[index] as Stack,
-      );
+      const to = free ?? this.#core.inventory.evictableHotbarSlot();
+      if (to === null) {
+        return refuse(
+          `the ${item} is not in the hotbar, and no hotbar slot is free or holds a plain stack to swap with`,
+        );
+      }
+      const moved =
+        free === null
+          ? await this.#core.inventory.swapIntoHotbar(9 + index, to)
+          : await this.#core.inventory.moveToHotbar(9 + index, free, storage[index] as Stack);
       if (moved !== null) {
         return refuse(
           `the ${item} could not be moved into the hotbar: ${moved}`,
           moved.startsWith('ITEMS MAY') ? 'ERROR' : 'FAILED',
         );
       }
-      slot = free;
+      slot = to;
     }
     // GTNH's AngerMod protects a player after each join (angermod.cfg ProtectionEnabled:
     // invulnerable for up to 90 s, until it walks 5 blocks, attacks or right-clicks a block),
