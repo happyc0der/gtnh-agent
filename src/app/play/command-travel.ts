@@ -28,6 +28,7 @@ import {
   runOf,
   say,
   sayOnce,
+  stepFailureOf,
   TRAVEL_RETRY_MS,
   type CommandDeps,
 } from './command-base.ts';
@@ -254,10 +255,7 @@ export async function travelRound(
     onCycle: (r, index) => {
       play.lastDecision = r.decision ?? null;
       play.emit(cycleEvent(deps.repos, session, r, index));
-      const execution = r.outcome?.execution;
-      if (execution !== null && execution !== undefined && !execution.ok) {
-        stepFailure = execution.message;
-      }
+      stepFailure = stepFailureOf(r) ?? stepFailure;
       const after = r.outcome?.stateAfter;
       if (
         after?.time.known === true &&

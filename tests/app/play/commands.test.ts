@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CycleResult } from '../../../src/app/loop/agent-loop.ts';
 import { nextKnownStep, setKnownSteps } from '../../../src/app/loop/known-steps.ts';
 import type { SessionResult, SessionStopKind } from '../../../src/app/loop/live-session.ts';
+import { stepFailureOf } from '../../../src/app/play/command-base.ts';
 import {
   chatItemName,
   clip,
@@ -1354,6 +1355,34 @@ describe("owners' commands in play", () => {
     expect(said(once).at(-1)).toBe('Done: dug a tunnel 2 blocks east');
     const thrice = await run(3);
     expect(said(thrice).at(-1)).toBe(`Failed: ${walkStopped} (0 of 2 blocks dug)`);
+  });
+
+  it('a step the safety rules reject is reported in their words, not just its code', () => {
+    const rejected = {
+      outcome: {
+        execution: null,
+        validation: {
+          ok: false,
+          violations: [
+            {
+              code: 'NOT_DIGGABLE',
+              severity: 'pause',
+              message: 'The block at (-7, 74, 23) is not an observed diggable block',
+            },
+          ],
+          preconditionFailures: [],
+          requiresUserPause: true,
+        },
+      },
+    } as unknown as CycleResult;
+    expect(stepFailureOf(rejected)).toBe(
+      'The block at (-7, 74, 23) is not an observed diggable block',
+    );
+    const failed = {
+      outcome: { execution: { ok: false, message: 'walk stopped' }, validation: { ok: true } },
+    } as unknown as CycleResult;
+    expect(stepFailureOf(failed)).toBe('walk stopped');
+    expect(stepFailureOf({ outcome: null } as unknown as CycleResult)).toBeNull();
   });
 
   it('turns where the way it picked is blocked, from where it got to, for the rest of the length', async () => {

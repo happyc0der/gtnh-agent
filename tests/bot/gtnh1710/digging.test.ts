@@ -855,6 +855,22 @@ describe('resource scan', () => {
     ]);
   });
 
+  it('lists any kind one level below the feet right beside the player: the next stair down', () => {
+    // Seen live 2026-10-04: stairs down stopped at their first stone step (NOT_DIGGABLE).
+    const store = storeOf({
+      [k(1, 105, 0)]: BLOCK.stone, // beside, one down: the next step
+      [k(-1, 105, 1)]: BLOCK.stone, // diagonally beside
+      [k(3, 105, 0)]: BLOCK.stone, // farther: the floor, not listed
+    });
+    const scan = scanResources(store, table, feet);
+    if (!scan.ok) throw new Error(scan.reason);
+    const stone = scan.resources.filter((r) => r.block === 'minecraft:stone');
+    expect(stone.map((r) => r.position)).toEqual([
+      { x: 1, y: 105, z: 0 },
+      { x: -1, y: 105, z: 1 },
+    ]);
+  });
+
   it('when too many are found, shares the list fairly: every kind shows, each its nearest', () => {
     // A 13 x 13 layer of dirt just above the player's feet level, and one log farther out
     // (seen live: grass and sand crowded the logs a GATHER wanted out of the list).

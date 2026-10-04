@@ -88,7 +88,8 @@ export const GROUND_DIRT_SAMPLE = 8;
 
 /**
  * Diggable blocks within a sphere around the feet, at or above the feet level, plus the
- * GROUND_RESOURCES one level below it; nearest first (ties by position). Like a player, the
+ * GROUND_RESOURCES one level below it, and any kind one level below in the columns right
+ * beside the player (the next step of stairs down); nearest first (ties by position). Like a player, the
  * scan sees only EXPOSED blocks: at least one face touches air (no x-ray through the
  * ground). The blocks under the player itself are left out: they are never dug. Fail
  * closed: any column in range that has not arrived or could not be decoded makes the scan
@@ -184,7 +185,16 @@ export function scanResources(
         };
         const ore = block === GT_ORE_BLOCK ? oreMeta?.(x, y, z) : undefined;
         if (ore !== undefined) resource.ore = ore;
-        if (y >= feetLevel || GROUND_RESOURCES.has(block)) found.push(resource);
+        // One level down right beside the player (any kind; dirt and grass there are the
+        // nearest of the sample anyway): the next step of stairs going down. Seen live
+        // 2026-10-04: "!tunnel down 4" stopped at its first stone step, never listed, so the
+        // dig was refused (NOT_DIGGABLE).
+        const beside =
+          y === feetLevel - 1 &&
+          Math.abs(dx) < 1.5 &&
+          Math.abs(dz) < 1.5 &&
+          !GROUND_DIRT.has(block);
+        if (y >= feetLevel || GROUND_RESOURCES.has(block) || beside) found.push(resource);
         else if (GROUND_DIRT.has(block)) groundDirt.push(resource);
       }
     }

@@ -6,6 +6,7 @@ import type { CommandTranslation } from '../../llm/ollama-command-provider.ts';
 import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
 import type { OwnerCommandRecord } from '../../persistence/owner-command-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
+import type { CycleResult } from '../loop/agent-loop.ts';
 import { setKnownSteps } from '../loop/known-steps.ts';
 import type { TravelStep, TravelTarget } from './owner-travel.ts';
 import { type CommandRun, type PlayState } from './play-state.ts';
@@ -166,6 +167,22 @@ function loadProgress(play: PlayState, id: number): z.infer<typeof ProgressSchem
   } catch {
     return null;
   }
+}
+
+/**
+ * Why a cycle's step did not go, in the client's or the safety rules' own words: a step that
+ * failed says what the client met; one the executor rejected, its first violation or unmet
+ * precondition (seen live 2026-10-04: a reply said only "rejected [NOT_DIGGABLE]"). Null for a
+ * step that went, or a cycle with none.
+ */
+export function stepFailureOf(r: CycleResult): string | null {
+  const outcome = r.outcome;
+  if (outcome === null) return null;
+  if (outcome.execution !== null && !outcome.execution.ok) return outcome.execution.message;
+  const v = outcome.validation;
+  if (v !== undefined && !v.ok)
+    return v.violations[0]?.message ?? v.preconditionFailures[0] ?? null;
+  return null;
 }
 
 export function runOf(play: PlayState, id: number): CommandRun {

@@ -37,6 +37,7 @@ import {
   type CommandDeps,
   stripTaskId,
   saveProgress,
+  stepFailureOf,
 } from './command-base.ts';
 
 /**
@@ -289,10 +290,7 @@ async function digSession(
           ? 'the food bar is nearly empty'
           : ((preempted ??= commandWaiting(play)) ?? hooks.stopRequested()),
     onCycle: (r) => {
-      const execution = r.outcome?.execution;
-      if (execution !== null && execution !== undefined && !execution.ok) {
-        stepFailure = execution.message;
-      }
+      stepFailure = stepFailureOf(r) ?? stepFailure;
       const after = r.outcome?.stateAfter;
       if (
         after?.time.known === true &&
