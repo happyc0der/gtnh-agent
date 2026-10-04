@@ -327,12 +327,16 @@ export class TravelActions {
    * it as the play area allows, at most FLEE_MAX_PATH blocks, as an escape (threats do not
    * stop it, and it breaks and places nothing). Seen live: a fishing zombie 2.3 blocks off and
    * a husk 11, the trail too close to them, home 90 blocks back over a cliff: the retreat home
-   * failed four times on the spot, and play stopped. Says where it went, or null when there
-   * was no threat near or nowhere farther from them.
+   * failed four times on the spot, and play stopped. Says where it went, or why it could not
+   * flee; null when there was no threat near.
    */
   async #flee(): Promise<string | null> {
     const feet = this.#world.ownPosition;
-    if (feet === null || this.#core.movement.movementBlocker() !== null) return null;
+    if (feet === null) return null;
+    // Why not, said: seen live, a retreat failed with a skeleton 6 blocks off and no word of
+    // a flee.
+    const blocker = this.#core.movement.movementBlocker();
+    if (blocker !== null) return `no flee: ${blocker}`;
     // The threats System 1 retreats from (safety-policy.ts assessDangers): those within the
     // threat radius, and a ranged one (a skeleton) anywhere in the entity scan. Seen live
     // 2026-10-04: a sniper skeleton on a hill 10.3 blocks off made every retreat fail on the
@@ -364,7 +368,7 @@ export class TravelActions {
     });
     const end = this.#world.ownPosition ?? feet;
     const where = `(${end.x.toFixed(1)}, ${end.y.toFixed(1)}, ${end.z.toFixed(1)})`;
-    if (walk.code === 'REFUSED') return null;
+    if (walk.code === 'REFUSED') return `no flee: ${walk.message}`;
     return walk.ok
       ? `fled instead to ${where}, ${away(end.x, end.z).toFixed(1)} blocks from the nearest threat (it was ${now.toFixed(1)})`
       : `fleeing failed at ${where}: ${walk.message}`;
