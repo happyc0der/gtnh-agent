@@ -241,6 +241,8 @@ export async function travelRound(
   let hungry: FoodStatus | null = null;
   let preempted: string | null = null;
   let distance = first.distance;
+  /** The last step's failure, in the client's words (the reply says why, not just "failed"). */
+  let stepFailure: string | null = null;
   const session = play.sessions + 1;
   const result = await deps.session(limits.session, {
     stopRequested: () =>
@@ -252,6 +254,10 @@ export async function travelRound(
     onCycle: (r, index) => {
       play.lastDecision = r.decision ?? null;
       play.emit(cycleEvent(deps.repos, session, r, index));
+      const execution = r.outcome?.execution;
+      if (execution !== null && execution !== undefined && !execution.ok) {
+        stepFailure = execution.message;
+      }
       const after = r.outcome?.stateAfter;
       if (
         after?.time.known === true &&
@@ -305,7 +311,10 @@ export async function travelRound(
   const mob = mobPause(result.stopKind, play.lastDecision);
   if (mob !== null) return waitOutMob(play, taskId, mob);
   if (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') {
-    return travelFailed(play, cmd, result.stopReason);
+    // Seen live: "Failed: stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed", when
+    // the walk had said why (a hostile 9.7 blocks off stopped its pillar).
+    const why: string = stepFailure ?? result.stopReason;
+    return travelFailed(play, cmd, why.slice(0, 300));
   }
   // A step went: the failures in a row are over. A long trip says how far is left.
   run.failures = 0;

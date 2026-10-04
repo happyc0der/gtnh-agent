@@ -326,6 +326,40 @@ describe("owners' commands in play", () => {
     expect(repos.commands.get(1)?.status).toBe('done');
   });
 
+  it("a travel command that fails says why, in the walk's own words", async () => {
+    // Seen live: "Failed: stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed".
+    const sim = newSim({ heard: [whisper('!goto 20 64 0')] });
+    const base = deps(open(), sim);
+    const why = 'walk stopped after 7 of 88 steps: hostile entity minecraft:Zombie 9.7 blocks away';
+    await runPlay(
+      {
+        ...base,
+        session: (_limits, hooks) => {
+          hooks.onCycle(
+            {
+              summary: 'EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed',
+              status: 'failed',
+              decision: null,
+              outcome: { execution: { ok: false, code: 'FAILED', message: why, data: {} } },
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed' }],
+            stopReason: 'stopped after: EXECUTE_KNOWN_SAFE_STEP -> MOVE_TO -> failed',
+            stopKind: 'cycle-failed',
+            taskId: 'command-1',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim).at(-1)).toBe(`Failed: ${why}`);
+  });
+
   it('come and follow fail at once when the player is not seen, before any OK', async () => {
     const sim = newSim({ owner: null, heard: [whisper('!come'), whisper('!follow')] });
     await runPlay(deps(open(), sim), LIMITS, noStop);
