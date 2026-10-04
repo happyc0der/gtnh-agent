@@ -540,6 +540,23 @@ describe('accepting a plan drops the steps planned from a view it replaces', () 
     );
   });
 
+  it("a dig of the route's raw material is not refused: logs for wooden tools", async () => {
+    // Seen live: "Tools" (wooden tools, made from planks and sticks from logs) had a plan that
+    // dug a log refused as giving nothing the task needs.
+    const log: MockResourceBlock = {
+      block: 'minecraft:log',
+      position: { x: 1, y: 64, z: 3 }, // within reach of the player at (1, 64, 1)
+      standAt: { x: 1.5, y: 64, z: 2.5 },
+    };
+    const digLog = plan([{ type: 'DIG_BLOCK', args: { position: log.position } }], 'Tools');
+    const g = await gathering([log], { kind: 'plan', plan: digLog });
+    if (g.world.task === null) throw new Error('no task');
+    g.world.task.requirements = { 'minecraft:wooden_pickaxe': 1 };
+    const r = await g.cycle();
+    expect(g.requests).toHaveLength(1);
+    expect(r).toMatchObject({ action: { type: 'DIG_BLOCK' } });
+  });
+
   it('a dropped step is not checked: one that would be refused does not reject the plan', async () => {
     // Seen live: a starving agent's food plan, EXPLORE, GATHER, then EAT_FOOD of the garden
     // block (no food), was rejected whole for its third step, and the agent paused.

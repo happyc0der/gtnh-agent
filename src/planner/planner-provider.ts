@@ -645,6 +645,43 @@ function foodRouteForPlanner(
 }
 
 /**
+ * The route (planRoute) for the current task's requirements, from the inventory, known places,
+ * known containers and usable stations; null when the task names no requirements. Shared by
+ * the planner's request and the agent loop's check of a plan's digs (plan-steps.ts
+ * digsForNothing: a dig must give a requirement or a raw material of this route).
+ */
+export function goalRouteOf(state: GameState, exploration?: ExplorationSummary): Route | null {
+  const goal = state.currentTask?.requirements;
+  if (goal === undefined || Object.keys(goal).length === 0) return null;
+  const inventory = state.inventory.known ? state.inventory.value.items : {};
+  const at = state.player.position.known ? state.player.position.value : null;
+  // Containers whose contents are known (seen now, or remembered by the agent).
+  const storage = state.storage.flatMap((s) =>
+    s.items.known
+      ? [
+          {
+            id: s.id,
+            where: s.position.known ? { ...s.position.value } : null,
+            distance:
+              at !== null && s.position.known
+                ? Number(distance(at, s.position.value).toFixed(1))
+                : null,
+            items: s.items.value,
+          },
+        ]
+      : [],
+  );
+  return planRoute(
+    goal,
+    inventory,
+    ROUTE_BOOK,
+    knownPlaces(state, exploration),
+    storage,
+    usableStations(state),
+  );
+}
+
+/**
  * The route (as routeForPlanner) and the GTNH-vs-vanilla changes that concern it and what
  * the player holds (request.gtnhChanges), from one route calculation.
  *
@@ -675,37 +712,9 @@ export function routeAndChangesForPlanner(
       gtnhChanges: gtnhChangesFor(null, held),
     };
   }
-  const inventory = state.inventory.known ? state.inventory.value.items : {};
-  const held = Object.keys(inventory);
-  const goal = state.currentTask?.requirements;
-  if (goal === undefined || Object.keys(goal).length === 0) {
-    return { route: null, gtnhChanges: gtnhChangesFor(null, held) };
-  }
-  const at = state.player.position.known ? state.player.position.value : null;
-  // Containers whose contents are known (seen now, or remembered by the agent).
-  const storage = state.storage.flatMap((s) =>
-    s.items.known
-      ? [
-          {
-            id: s.id,
-            where: s.position.known ? { ...s.position.value } : null,
-            distance:
-              at !== null && s.position.known
-                ? Number(distance(at, s.position.value).toFixed(1))
-                : null,
-            items: s.items.value,
-          },
-        ]
-      : [],
-  );
-  const route = planRoute(
-    goal,
-    inventory,
-    ROUTE_BOOK,
-    knownPlaces(state, exploration),
-    storage,
-    usableStations(state),
-  );
+  const held = state.inventory.known ? Object.keys(state.inventory.value.items) : [];
+  const route = goalRouteOf(state, exploration);
+  if (route === null) return { route: null, gtnhChanges: gtnhChangesFor(null, held) };
   const covered = scanCovers(state);
   const legs = route.legs.map((leg) => {
     if (leg.kind !== 'gather' || leg.places.length > 0 || exploration === undefined) return leg;

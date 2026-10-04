@@ -23,7 +23,11 @@ import {
   type PlannerResponse,
 } from '../../planner/plan-schema.ts';
 import { trimStaleSteps, validatePlan } from '../../planner/plan-validator.ts';
-import { buildPlannerRequest, rememberedPlacesOf } from '../../planner/planner-provider.ts';
+import {
+  buildPlannerRequest,
+  goalRouteOf,
+  rememberedPlacesOf,
+} from '../../planner/planner-provider.ts';
 import {
   actionFingerprint,
   assessStateReliability,
@@ -389,11 +393,13 @@ export function updatePlanProgress(
 
 /**
  * A plan's DIG_BLOCK steps that dig a listed block giving nothing the task still needs (a
- * resource goal: currentTask.requirements), as a refusal like refusedFirstStep's, with a note
- * that names them and the GATHER that digs the right blocks; null when every dig gives
- * something needed, or the task names no requirements. Seen live: "dig the nearest gravel
- * block" eight times at blocks that were sand, dirt and grass; every dig was valid, and none
- * gave gravel.
+ * resource goal: currentTask.requirements, or a raw material its route gathers for them), as a
+ * refusal like refusedFirstStep's, with a note that names them and the GATHER that digs the
+ * right blocks; null when every dig gives something needed, or the task names no
+ * requirements. Seen live: "dig the nearest gravel block" eight times at blocks that were
+ * sand, dirt and grass; every dig was valid, and none gave gravel. And the route counts: logs
+ * dug for "Tools" (wooden tools, made from planks and sticks) were refused as giving nothing
+ * the task needs before the route's raw materials were counted.
  */
 function digsForNothing(plan: Plan, state: GameState): ReturnType<typeof refusedFirstStep> {
   const needs = state.currentTask?.requirements;
@@ -401,6 +407,13 @@ function digsForNothing(plan: Plan, state: GameState): ReturnType<typeof refused
     return null;
   }
   const listed = state.nearbyBlocks.value.resources;
+  if (!plan.steps.some((s) => s.action.type === 'DIG_BLOCK')) return null;
+  // What the route gathers for the requirements: its raw materials and the blocks it digs.
+  const route = goalRouteOf(state);
+  const wanted = new Set([...Object.keys(needs), ...Object.keys(route?.raw ?? {})]);
+  const routeBlocks = new Set(
+    (route?.legs ?? []).flatMap((l) => (l.kind === 'gather' ? l.blocks : [])),
+  );
   const useless: string[] = [];
   for (const s of plan.steps) {
     if (s.action.type !== 'DIG_BLOCK') continue;
@@ -409,15 +422,15 @@ function digsForNothing(plan: Plan, state: GameState): ReturnType<typeof refused
       (r) => r.position.x === at.x && r.position.y === at.y && r.position.z === at.z,
     )?.block;
     if (block === undefined) continue; // not listed: the executor refuses it as NOT_DIGGABLE
-    if (DIG_YIELDS[block].some((y) => needs[y.item] !== undefined)) continue;
+    if (routeBlocks.has(block) || DIG_YIELDS[block].some((y) => wanted.has(y.item))) continue;
     useless.push(`(${at.x}, ${at.y}, ${at.z}) is ${block}`);
   }
   if (useless.length === 0) return null;
   const first = plan.steps.find((s) => s.action.type === 'DIG_BLOCK')?.action as ActionSpec;
-  const wanted = Object.entries(needs)
+  const needed = Object.entries(needs)
     .map(([item, n]) => `${n} ${item}`)
     .join(', ');
-  const why = `it digs blocks that give nothing the task needs (${wanted}): ${useless.join('; ')}`;
+  const why = `it digs blocks that give nothing the task needs (${needed}): ${useless.join('; ')}`;
   const tail = '. To get a block, plan GATHER {block, count}: code digs only that block.';
   const head = 'Your plan would dig the wrong blocks';
   const room = MAX_JOURNAL_LINE - head.length - tail.length - 3;
