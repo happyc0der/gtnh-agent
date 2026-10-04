@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
-import type { BlockPosition } from '../../../domain/common.ts';
+import { itemBase, type BlockPosition } from '../../../domain/common.ts';
 import type { DiggableBlock } from '../../../domain/blocks.ts';
 import {
   BARE_HAND_SPEED,
@@ -280,8 +280,13 @@ export class DigActions {
     const isTool = (item: string): boolean =>
       tool !== null && (item === tool.item || item.startsWith(`${tool.item}@`));
     const now = this.#world.inventoryItems() ?? {};
+    // A worn tool takes a new damage value: the same item, no gain (no more of its kind than
+    // before). Seen live: a walk that dug stone "picked up 1 x minecraft:wooden_pickaxe@2".
+    const total = (inv: Readonly<Record<string, number>>, base: string): number =>
+      Object.entries(inv).reduce((sum, [i, n]) => sum + (itemBase(i) === base ? n : 0), 0);
     return Object.entries(now)
       .filter(([item]) => !isTool(item))
+      .filter(([item]) => total(now, itemBase(item)) > total(before, itemBase(item)))
       .map(([item, n]): [string, number] => [item, n - (before[item] ?? 0)])
       .filter(([, d]) => d > 0);
   }

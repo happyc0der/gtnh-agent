@@ -166,6 +166,25 @@ describe('Gtnh1710Client walks through leaves (MOVE_TO over terrain, digging ena
     expect(server.moveSim.corrections).toEqual([]);
   }, 20_000);
 
+  it('digs down through stone with a pickaxe, whose wear is no pickup', async () => {
+    // Seen live: "picked up 1 x minecraft:wooden_pickaxe@2" after a walk dug stone.
+    const stone = (_x: number, y: number, _z: number): number =>
+      y === 0 ? BLOCK.bedrock : y <= 105 && y >= 100 ? BLOCK.stone : BLOCK.air;
+    const { server, client } = await start({
+      world: stone,
+      items: [[270, 'minecraft:wooden_pickaxe']],
+      inventory: [{ slot: 36, id: 270, count: 1, damage: 0 }],
+    });
+    const below: ActionSpec = {
+      type: 'MOVE_TO',
+      args: { target: { x: -4.5, y: FEET_Y - 2, z: -7.5 }, tolerance: 0.5 },
+    };
+    const result = await perform(client, below);
+    expect(result, result.message).toMatchObject({ ok: true });
+    expect(server.digSim.broken).toHaveLength(2);
+    expect(result.message).not.toMatch(/wooden_pickaxe/);
+  }, 20_000);
+
   it('only with digging enabled: otherwise the wall refuses the walk, and nothing is sent', async () => {
     const { server, client } = await start({}, false);
     const result = await perform(client, BEYOND);
