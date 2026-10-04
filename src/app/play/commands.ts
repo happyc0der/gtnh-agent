@@ -308,9 +308,14 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
     }
     case 'surface': {
       const to = surfaceTarget(play, cmd);
-      return 'problem' in to
-        ? `not going up: ${to.problem}`
-        : `going up to open sky at ${fmt(roundPoint(to))}`;
+      if ('problem' in to) return `not going up: ${to.problem}`;
+      const p = view.position;
+      const here =
+        p !== null &&
+        Math.floor(p.x) === Math.floor(to.x) &&
+        Math.floor(p.y + 1e-6) === Math.floor(to.y + 1e-6) &&
+        Math.floor(p.z) === Math.floor(to.z);
+      return here ? 'under open sky already' : `going up to open sky at ${fmt(roundPoint(to))}`;
     }
     case 'get':
     case 'mine': {

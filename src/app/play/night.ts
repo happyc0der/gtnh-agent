@@ -67,8 +67,13 @@ async function waitForMorning(
 }
 
 export function nightReason(t: WorldTime): string {
+  // By day (dusk is near), the minutes until sunrise read 0: say when the night comes.
+  const when =
+    t.phase === 'day'
+      ? `night in ${t.minutesUntilNight} min`
+      : `${t.minutesUntilDay} min until sunrise`;
   return (
-    `it is ${t.phase} (${t.minutesUntilDay} min until sunrise): without a shelter the agent ` +
+    `it is ${t.phase} (${when}): without a shelter the agent ` +
     'leaves (goes offline) before the mobs come'
   );
 }

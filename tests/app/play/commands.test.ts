@@ -784,6 +784,21 @@ describe("owners' commands in play", () => {
     expect(said(sim)).toEqual(['OK: going up to open sky at 3 64 0', 'Done: under open sky']);
     expect(sim.steps).toEqual(['MOVE_TO 3.5 0.5']);
     expect(looked).toBe(1); // fixed when it began
+    // Under open sky already: it says so.
+    const there = newSim({ heard: [whisper('!surface')], position: { x: 3.5, y: 64, z: 0.5 } });
+    const thereBase = deps(open(), there);
+    await runPlay(
+      {
+        ...thereBase,
+        commands: {
+          ...(thereBase.commands as CommandDeps),
+          surface: () => ({ point: { x: 3.5, y: 64, z: 0.5 }, here: true }),
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(said(there)).toEqual(['OK: under open sky already', 'Done: under open sky']);
     const none = newSim({ heard: [whisper('!top')] });
     await runPlay(deps(open(), none), LIMITS, noStop);
     expect(said(none)).toEqual(['Failed: I cannot look for the surface here']);
