@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { CycleResult } from '../../../src/app/loop/agent-loop.ts';
 import { nextKnownStep, setKnownSteps } from '../../../src/app/loop/known-steps.ts';
 import type { SessionResult, SessionStopKind } from '../../../src/app/loop/live-session.ts';
-import { chatItemName, NOT_UNDERSTOOD, type CommandDeps } from '../../../src/app/play/commands.ts';
+import {
+  chatItemName,
+  clip,
+  NOT_UNDERSTOOD,
+  type CommandDeps,
+} from '../../../src/app/play/commands.ts';
 import type { FoodStatus } from '../../../src/app/play/food.ts';
 import { describePlayEvent } from '../../../src/app/play/narration.ts';
 import type { TravelStep, TravelTarget } from '../../../src/app/play/owner-travel.ts';
@@ -728,5 +733,16 @@ describe('item names in chat', () => {
     expect(chatItemName('minecraft:log@2')).toBe('log');
     expect(chatItemName('dreamcraft:item.CoinForestry')).toBe('coin forestry');
     expect(chatItemName('minecraft:wooden_pickaxe')).toBe('wooden pickaxe');
+  });
+});
+
+describe('status text', () => {
+  it('cuts a long goal at a word, with "..."', () => {
+    const goal =
+      'Get food: hungry (food 12/20) with nothing to eat. Gather 10 hunger points of approved food';
+    expect(clip(goal, 80)).toBe(
+      'Get food: hungry (food 12/20) with nothing to eat. Gather 10 hunger points...',
+    );
+    expect(clip('get 10 minecraft:dirt', 80)).toBe('get 10 minecraft:dirt');
   });
 });

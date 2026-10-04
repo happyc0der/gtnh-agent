@@ -635,6 +635,14 @@ export function chatItemName(item: string): string {
     .toLowerCase();
 }
 
+/** `text` cut to at most `max` characters at a word, with "..." when cut. */
+export function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 3);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).replace(/[\s,.:;]+$/, '')}...`;
+}
+
 function statusText(play: PlayState): string {
   const { repos } = play.deps;
   const view = (play.deps.commands as CommandDeps).view();
@@ -656,7 +664,7 @@ function statusText(play: PlayState): string {
             ? `staying in my shelter until the hostiles near it go (${shelter.mobs.slice(0, 80)})`
             : `sheltered for the night (morning in about ${Math.max(1, Math.round((shelter.until - play.now()) / 60_000))} min)`
           : task !== null && task.status === 'active'
-            ? `working on: ${task.goal.slice(0, 80)}`
+            ? `working on: ${clip(task.goal, 80)}`
             : 'idle';
   const items = Object.entries(view.inventory ?? {})
     .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1))
