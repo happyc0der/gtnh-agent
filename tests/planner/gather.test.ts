@@ -195,6 +195,15 @@ describe('GATHER chooses each action in code, from the observation', () => {
       skip: [],
       skipEntities: [],
     });
+    // A remembered place it stands by already, with none in view, is gone: on all the same.
+    const gone = { x: 5, y: 64, z: 5, distance: 5.7 };
+    expect(
+      chooseGatherAction(gather(), progress, state, { ...opts(), remembered: [gone], wander }),
+    ).toMatchObject({
+      kind: 'act',
+      spec: { type: 'EXPLORE', args: { toward: { x: 1.5, z: -46.5 } } },
+      skip: [{ x: 5, y: 64, z: 5 }],
+    });
     // Remembered places come first; an EXPLORE the policy refuses ends the step, saying why.
     const far = { x: 28, y: 104, z: 107, distance: 106 };
     expect(

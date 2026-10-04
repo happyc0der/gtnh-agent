@@ -657,9 +657,9 @@ export function chooseGatherAction(
       }
       travelRefusal ??= `the one remembered at ${formatPosition(target)}: ${why}`;
     }
-    // Nothing remembered either: on into ground not seen yet.
+    // Nothing remembered either (or only places it stands by, gone): on into ground not seen yet.
     const w = opts.wander;
-    if (w != null && travelRefusal === null && (opts.remembered ?? []).length === 0) {
+    if (w != null && travelRefusal === null) {
       const explore: ActionSpec = {
         type: 'EXPLORE',
         args: {
