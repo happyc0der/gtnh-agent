@@ -256,7 +256,10 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
     // goes first, since it may be the way out (!surface, !home pillar and dig). Before, play
     // ended here every round, and with a command waiting the idle wait returned at once: a busy
     // loop that never reached the command round.
-    const commanded = deps.repos.commands.running() !== null || commandWaiting(play) !== null;
+    const commanded =
+      deps.repos.commands.running() !== null ||
+      deps.repos.commands.queued().length > 0 ||
+      commandWaiting(play) !== null;
     if (status !== null && status.walled && status.exit.length === 0) {
       if (commanded) return null;
       return done(

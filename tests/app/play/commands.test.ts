@@ -932,6 +932,33 @@ describe("owners' commands in play", () => {
       noStop,
     );
     expect(said(sim)).toEqual(['OK: coming to you', 'Done: here, 1 block from you']);
+    // A command given at night waits for the morning: seen, still queued, it goes first too.
+    const night = newSim({ heard: [whisper('!come')], time: worldTime(18_000, true) });
+    night.onSleep = () => {
+      night.time = worldTime(1_000, true);
+    };
+    await runPlay(
+      deps(open(), night, {
+        time: () => Promise.resolve(night.time ?? worldTime(1_000, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit' as const,
+            sheltered: (night.time?.phase ?? 'day') === 'night',
+            steps: [],
+            needs: {},
+            problem: 'no open ground beyond the wall',
+            walled: true,
+            exit: [],
+          }),
+      }),
+      LIMITS,
+      noStop,
+    );
+    expect(said(night)).toEqual([
+      'It is night: I stay in my shelter until morning, then I come to you',
+      'OK: coming to you',
+      'Done: here, 1 block from you',
+    ]);
   });
 
   it('strip-mines for a GregTech ore none of which is in view: stairs down to its veins, then a tunnel', async () => {
