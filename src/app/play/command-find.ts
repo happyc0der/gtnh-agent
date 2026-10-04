@@ -96,9 +96,13 @@ export const blockAck = (to: BlockTo): string =>
     ? `going to the ${to.block} at ${fmt(to.position)}`
     : `going to where I remember ${to.block} (${fmt(to.position)}, ${blocks(Math.round(to.distance))} away)`;
 
-/** A block in view: near it; a remembered place: to it (its column, when y is not known). */
+/**
+ * Near the block (a remembered place's too: its position is one block of the kind, and
+ * standing in it would break it, seen live 2026-10-04 with a log); to its column when only
+ * the chunk is known (y null).
+ */
 export const blockTravel = (to: BlockTo): TravelTarget =>
-  to.seen && to.position.y !== null
+  to.position.y !== null
     ? {
         kind: 'near',
         point: { x: to.position.x + 0.5, y: to.position.y, z: to.position.z + 0.5 },
