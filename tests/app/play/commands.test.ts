@@ -619,7 +619,13 @@ describe("owners' commands in play", () => {
   });
 
   it('a get that cannot be done at all fails at once, saying why', async () => {
-    const sim = newSim({ heard: [whisper('!mine 16 sand'), whisper('!get 4 minecraft:me')] });
+    const sim = newSim({
+      heard: [
+        whisper('!mine 16 sand'),
+        whisper('!get 4 minecraft:me'),
+        whisper('!mine 4 iron ore'),
+      ],
+    });
     const base = deps(open(), sim);
     const asked: string[] = [];
     await runPlay(
@@ -629,6 +635,9 @@ describe("owners' commands in play", () => {
           ...(base.commands as CommandDeps),
           goalProblem: (item, count, anyKind) => {
             asked.push(`${count} ${item} ${anyKind}`);
+            if (item === 'gregtech:gt.metaitem.03@5032') {
+              return 'digging gregtech:gt.blockores (Iron ore (gregtech:gt.blockores@32): GT vein Magnetite (in-between): y 60-180) needs a pickaxe level >= 2: none held, none known to make';
+            }
             return item === 'minecraft:me' ? 'no recipe or source known' : null;
           },
         },
@@ -636,8 +645,12 @@ describe("owners' commands in play", () => {
       LIMITS,
       noStop,
     );
-    expect(asked).toEqual(['16 minecraft:sand true', '4 minecraft:me true']);
+    expect(asked.slice(0, 2)).toEqual(['16 minecraft:sand true', '4 minecraft:me true']);
     expect(said(sim)).toContain('Failed: I cannot get minecraft:me: no recipe or source known');
+    // A GregTech ore in a few words (the route's own were cut off in a whisper).
+    expect(said(sim)).toContain(
+      'Failed: I cannot mine iron ore: it takes a pickaxe of level 2 or more, and I have none and know no way to make one',
+    );
   });
 
   it('halfway counts from what was held when the command began', async () => {

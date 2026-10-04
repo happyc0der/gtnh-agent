@@ -11,7 +11,7 @@ import {
   type InstantCommand,
   type OwnerCommand,
 } from '../../domain/owner-commands.ts';
-import { gtOreByName } from '../../goals/ore-names.ts';
+import { gtOreByItem, gtOreByName } from '../../goals/ore-names.ts';
 import {
   CURRENT_TASK_KEY,
   OWNER_PAUSED_KEY,
@@ -280,7 +280,16 @@ function checkAction(
         command.count,
         anyKindOf(command).length > 0,
       );
-      return why === undefined || why === null ? null : `I cannot get ${command.item}: ${why}`;
+      if (why === undefined || why === null) return null;
+      // A GregTech ore by its name, and its pickaxe in a few words: the route's own words
+      // (its veins, its registry names) were cut off in a whisper (seen live 2026-10-04).
+      const ore = gtOreByItem(command.item);
+      const level = /pickaxe level >= (\d+)/.exec(why)?.[1];
+      if (ore !== null && level !== undefined) {
+        const name = ore.material.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+        return `I cannot mine ${name} ore: it takes a pickaxe of level ${level} or more, and I have none and know no way to make one`;
+      }
+      return `I cannot get ${command.item}: ${why}`;
     }
     case 'tunnel':
       return null;
