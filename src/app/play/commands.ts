@@ -131,6 +131,8 @@ export const IDLE_POLL_MS = 500;
 const IDLE_POLLS = 20;
 /** Idle with nothing to do: play looks for something to do again after this long. */
 export const IDLE_RETRY_MS = 120_000;
+/** A tunnel whose next steps cannot be planned yet (blocks not known) tries again after this. */
+const TUNNEL_RETRY_MS = 3_000;
 /** The task the idle bot stands by under, when System 1 must act (standby). */
 export const STANDBY_TASK_ID = 'owner-standby';
 
@@ -729,10 +731,11 @@ async function tunnelRound(
     slope: command.slope,
   });
   if (plan === null) {
+    // Just after joining or respawning the chunks are still coming: wait a moment between tries.
     run.failures += 1;
-    return run.failures >= MAX_COMMAND_FAILURES
-      ? fail('the blocks around me are not known')
-      : 'next-round';
+    if (run.failures >= MAX_COMMAND_FAILURES) return fail('the blocks around me are not known');
+    await play.sleep(TUNNEL_RETRY_MS);
+    return 'next-round';
   }
   if (!plan.ok) return fail(plan.reason);
   const dug = `${plan.done} of ${command.length} blocks dug`;
