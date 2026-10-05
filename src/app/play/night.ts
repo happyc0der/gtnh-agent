@@ -212,6 +212,13 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
       }
       play.shelterTries += 1;
       const pit = status.kind === 'pit';
+      // What the shelter needs and the inventory lacks (the goal line says "missing").
+      const carried = (await deps.inventory()) ?? {};
+      const missing = Object.fromEntries(
+        Object.entries(status.needs).flatMap(([item, n]) =>
+          n > (carried[item] ?? 0) ? [[item, n - (carried[item] ?? 0)]] : [],
+        ),
+      );
       const result = await blueprintSession(play, {
         taskId: NIGHT_SHELTER_TASK_ID,
         goal: pit
@@ -224,7 +231,7 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
         text: pit
           ? `dig a pit (${status.steps.length} steps)`
           : `place ${status.steps.length} blocks`,
-        missing: status.needs,
+        missing,
         maxCycles: status.steps.length * 2 + 2,
       });
       if (result.stopKind === 'stop-requested') return done(play, result.stopReason);

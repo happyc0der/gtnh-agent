@@ -762,6 +762,45 @@ describe('autonomous play', () => {
     expect(world.calls).toBe(0);
   });
 
+  it('says a shelter misses only what the inventory lacks', async () => {
+    // Seen in the live logs: "missing 1 minecraft:dirt" with 72 dirt carried.
+    const world: World = {
+      inventory: { 'minecraft:dirt': 9 },
+      sessions: [{ stopKind: 'needs-attention' }],
+      calls: 0,
+    };
+    const events: PlayEvent[] = [];
+    await runPlay(
+      {
+        ...deps(open(), world),
+        time: () => Promise.resolve(worldTime(11_000, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit',
+            sheltered: false,
+            steps: [
+              {
+                spec: {
+                  type: 'PLACE_BLOCK' as const,
+                  args: { position: { x: 0, y: 63, z: 0 }, item: 'minecraft:dirt' as const },
+                },
+                text: 'place minecraft:dirt at (0, 63, 0): the roof',
+              },
+            ],
+            needs: { 'minecraft:dirt': 1 },
+            problem: null,
+            walled: false,
+            exit: [],
+          }),
+      },
+      DEFAULT_PLAY_LIMITS,
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(events.filter((e) => e.kind === 'goal').map((e) => describePlayEvent(e))).toEqual([
+      'goal: "shelter for the night"',
+    ]);
+  });
+
   it('never asks the planner for a shelter: open, with no step from code, it goes offline', async () => {
     // Seen live 2026-10-04: a pit with its roof back but a wall open had no step left, and the
     // session's planner dug the pit's walls.
