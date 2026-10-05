@@ -44,6 +44,11 @@ export const REASON_CODES = [
    * player cannot be hurt; a walk away is slower than a spider).
    */
   'UNDER_ATTACK',
+  /**
+   * With UNDER_ATTACK: hurt a moment ago with no creature in view that could have done it (a
+   * ranged mob beyond the scan, an invisible one, a mod's lightning): it waits offline too.
+   */
+  'ATTACKER_UNSEEN',
   'INVENTORY_NEARLY_FULL',
   'NO_DUMP_CONTAINER',
   'NOTHING_DEPOSITABLE',

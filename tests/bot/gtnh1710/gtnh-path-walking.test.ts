@@ -119,6 +119,17 @@ describe('walking over terrain on the pathfinder', { timeout: 30_000 }, () => {
     expect(server.moveSim.corrections).toEqual([]);
   });
 
+  it('a walk that starts beside a fire steps away from it first, every move accepted', async () => {
+    // Seen live 2026-10-05: a fire lit in the morning's staircase beside the agent, and every
+    // retreat was refused ("cannot walk from here: next to minecraft:fire").
+    const fire = new Map([[`-4,${FEET_Y},-8`, BLOCK.fire]]);
+    const { server, client } = await start({ blocks: fire });
+    const r = await perform(client, moveTo(-8.5, FEET_Y, -7.5));
+    expect(r, r.message).toMatchObject({ ok: true, code: 'OK', data: { reached: true } });
+    expect(await positionOf(client)).toEqual({ x: -8.5, y: FEET_Y, z: -7.5 });
+    expect(server.moveSim.corrections).toEqual([]);
+  });
+
   it('falls three blocks down a cliff (the old walker stopped at two), every move accepted, no damage', async () => {
     const { server, client } = await start();
     const r = await perform(client, moveTo(2.5, LOW_FEET_Y, -7.5));

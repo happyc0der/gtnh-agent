@@ -188,7 +188,36 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     ) {
       return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'UNDER_ATTACK']);
     }
+    // Hurt a moment ago with only a hazard in view (a fire lit beside it): whatever hurt it is
+    // out of sight, and it waits offline as well (seen live 2026-10-05, below).
+    if (
+      !dangerCodes.has('HOSTILES_NEARBY') &&
+      !dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY') &&
+      !starving &&
+      hurt !== null &&
+      hurt <= UNDER_ATTACK_MS
+    ) {
+      return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [
+        ...codes,
+        'UNDER_ATTACK',
+        'ATTACKER_UNSEEN',
+      ]);
+    }
     return retreatOrPause(codes, CONFIDENCE.safety);
+  }
+
+  // Hurt a moment ago with nothing in view that could have done it (a ranged mob beyond the
+  // scan, an invisible one, a mod's lightning): an offline player cannot be hurt, so it waits
+  // offline, as when a mob in view attacks (seen live 2026-10-05: in its morning staircase, no
+  // hostile within 16 blocks, 20 health to 15 in one hit, a fire lit beside it, and 16 to 6
+  // sixteen seconds later, while it rested and tried retreats the fire refused). Not at food
+  // 0: starving hurts too, and offline it would never get food.
+  {
+    const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp);
+    const starving = state.player.hunger.known && state.player.hunger.value <= 0;
+    if (!starving && hurt !== null && hurt <= UNDER_ATTACK_MS) {
+      return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, ['UNDER_ATTACK', 'ATTACKER_UNSEEN']);
+    }
   }
 
   // 2. Vitals. (Health/hunger are known here: reliability checked them.)

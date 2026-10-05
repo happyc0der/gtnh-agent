@@ -252,8 +252,11 @@ const MOB_PAUSE_REASONS: ReadonlySet<string> = new Set([
   'TOO_MANY_HOSTILES',
   'ALREADY_AT_SAFE_LOCATION',
   'NO_SAFE_LOCATION',
-  // Hurt a moment ago with a hostile near (System 1's UNDER_ATTACK): offline at once.
+  // Hurt a moment ago with a hostile near (System 1's UNDER_ATTACK): offline at once; or with
+  // none in view (ATTACKER_UNSEEN), a hazard perhaps beside it.
   'UNDER_ATTACK',
+  'ATTACKER_UNSEEN',
+  'HAZARD_NEARBY',
 ]);
 
 /**
@@ -271,7 +274,10 @@ export function mobPause(stopKind: SessionStopKind, last: DecisionResult | null)
   const codes = last.reasonCodes;
   const mob = codes.includes('HOSTILES_NEARBY') || codes.includes('UNCLASSIFIED_ENTITY_NEARBY');
   if (stopKind === 'needs-attention' && last.decision === 'PAUSE_AND_ASK_USER') {
-    return mob && codes.every((c) => MOB_PAUSE_REASONS.has(c)) ? codes.join(', ') : null;
+    const attacked = codes.includes('UNDER_ATTACK');
+    return (mob || attacked) && codes.every((c) => MOB_PAUSE_REASONS.has(c))
+      ? codes.join(', ')
+      : null;
   }
   const answer = last.decision === 'RETREAT_HOME' || last.decision === 'DEFEND';
   const failed = stopKind === 'cycle-failed' || stopKind === 'needs-attention';

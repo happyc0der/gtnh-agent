@@ -1,3 +1,4 @@
+import { BLOCK_CODE } from './block-hazards.ts';
 import { passProblem } from './passable.ts';
 import type { PathStep } from './pathing/execute.ts';
 import { overlappedCells } from './pathing/physics.ts';
@@ -6,28 +7,32 @@ import { standProblem } from './terrain.ts';
 import type { Fence, Vec3, WalkWorld } from './walking.ts';
 
 /**
- * Cobwebs: getting out of one the player stands in. Pure.
+ * Stepping out of a spot no walk starts from: a cobweb the body is in, or a spot beside a
+ * hazard (fire, lava, a cactus...) or in one. Pure.
  *
- * A Special Mobs web spider spins a cobweb on the player it attacks, and mineshafts are full
- * of them. BlockWeb has no collision box; a body inside one is slowed (Entity.setInWeb: the
- * next move goes a quarter of the way across, a twentieth up or down). The walkers never
- * enter one (passable.ts lists no web: it is no plant), so they also refused to start from
- * inside one, and every walk failed while the player stood in it (seen live 2026-10-05: a
- * retreat home was stopped by a web spun into its way, and the agent stood in the web, its
- * walks refused, until it went offline for the night).
+ * The walkers never take the body into a cobweb (passable.ts lists none: it is no plant) or
+ * next to a hazard (standProblem's 3 x 3 columns), so they also refused to start from such a
+ * spot, and every walk failed while the player stood there. Seen live 2026-10-05: a Special
+ * Mobs web spider spun a web into a retreat's way, and the agent stood in it, its walks refused,
+ * until it went offline for the night; the next morning, hurt by something out of sight, it
+ * stood beside a fire that lit in its staircase, every retreat refused ("cannot walk from here:
+ * next to minecraft:fire"), from 20 health to 6.
  *
- * The way out is one short level step onto a side cell the player may stand in. The server
- * takes it: NetHandlerPlayServer.processPlayer moves its player by the step with moveEntity,
- * which the web cuts to a quarter, and flags "moved wrongly" (putting the player back) only
- * when the client's position is more than 0.25 off across; otherwise it puts the player
- * where the client says. A step of WEB_STEP is 0.75 x 0.15 = 0.1125 off at most.
+ * The way out is one short level step onto the nearest cell beside the feet block where the
+ * player may stand (standProblem: a full block under it, its feet and head open, no hazard
+ * near), its sides first, then its corners. On the way the body passes only open cells and
+ * those it started in (a web, the fire it stands in), never into another. The server takes
+ * such a step: NetHandlerPlayServer.processPlayer moves its player by it with moveEntity, which
+ * a web cuts to a quarter (Entity.setInWeb), and puts the player back ("moved wrongly") only
+ * when the client's position is more than 0.25 off across; otherwise it puts the player where
+ * the client says. A step of STEP_OUT_PACE is 0.75 x 0.15 = 0.1125 off at most.
  */
 
 /** A cobweb's registry name. */
 export const COBWEB = 'minecraft:web';
 
-/** How far a step out of a cobweb goes each tick (see the file comment). */
-export const WEB_STEP = 0.15;
+/** How far a step out goes each tick (see the file comment). */
+export const STEP_OUT_PACE = 0.15;
 
 /** The side cells first, then the corners. */
 const AROUND = [
@@ -62,26 +67,56 @@ export function websAt(world: WalkWorld, feet: Vec3): Cell[] {
   return webs;
 }
 
-export type WebExit =
-  | { ok: true; steps: PathStep[]; to: Vec3; webs: Cell[] }
-  | { ok: false; reason: string; webs: Cell[] };
+/**
+ * The hazards (block-hazards.ts: lava, fire, harmful fluids, blocks that hurt to touch) in or
+ * beside the body: in the 3 x 3 columns around each block the feet are over, from under the
+ * feet to above the head, as standProblem looks. Never an unnamed or unloaded block: those
+ * stop a walk, but there is nothing to step away from.
+ */
+export function hazardsAt(world: WalkWorld, feet: Vec3): Array<Cell & { name: string }> {
+  const [x0, x1, , , z0, z1] = overlappedCells(feet.x, feet.y, feet.z);
+  const y = Math.floor(feet.y + 1e-6);
+  const found = new Map<string, Cell & { name: string }>();
+  for (let x = x0 - 1; x <= x1 + 1; x++) {
+    for (let cy = y - 1; cy <= y + 2; cy++) {
+      for (let z = z0 - 1; z <= z1 + 1; z++) {
+        const id = world.blockAt(x, cy, z);
+        if (id === undefined || id === 0) continue;
+        const code = world.hazardCode(id);
+        if (code === BLOCK_CODE.safe || code === BLOCK_CODE.unknown) continue;
+        found.set(`${x},${cy},${z}`, { x, y: cy, z, name: world.blockName(id) ?? `id ${id}` });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
+/** Why the player steps out: the webs it is in, or the hazards beside it. */
+export type StepOutCause =
+  { kind: 'cobweb'; cells: Cell[] } | { kind: 'hazard'; cells: Array<Cell & { name: string }> };
+
+export type StepOut =
+  | { ok: true; cause: StepOutCause; steps: PathStep[]; to: Vec3 }
+  | { ok: false; cause: StepOutCause; reason: string };
 
 /**
- * The way out of the cobwebs the body is in, or null when it is in none: a level, straight
- * step onto the nearest cell beside the feet block (its sides first, then its corners) where
- * the player may stand (standProblem: a full block under it, the feet and head cells open, no
- * hazard about) inside the fence, WEB_STEP a tick, every cell the body overlaps on the way
- * open or one of the webs it started in (never into another web). The player stands on a
- * block top: a web holding it in the air is left to gravity (keepSupported).
+ * The step out of a cobweb the body is in, or away from a hazard beside it (or in it), or null
+ * when there is neither. The feet must be on a block top: a web holding the player in the
+ * air is left to gravity (keepSupported).
  */
-export function webExit(world: WalkWorld, fence: Fence, feet: Vec3): WebExit | null {
+export function stepOut(world: WalkWorld, fence: Fence, feet: Vec3): StepOut | null {
   const webs = websAt(world, feet);
-  if (webs.length === 0) return null;
-  const refuse = (reason: string): WebExit => ({ ok: false, reason, webs });
+  const hazards = webs.length > 0 ? [] : hazardsAt(world, feet);
+  if (webs.length === 0 && hazards.length === 0) return null;
+  const cause: StepOutCause =
+    webs.length > 0 ? { kind: 'cobweb', cells: webs } : { kind: 'hazard', cells: hazards };
+  const refuse = (reason: string): StepOut => ({ ok: false, cause, reason });
   const y = Math.round(feet.y);
   if (Math.abs(feet.y - y) > 1e-6) return refuse('the feet are not on a block top');
+  // The cells the body is in now: passed on the way even when not open (the web, a fire).
+  const [bx0, bx1, by0, by1, bz0, bz1] = overlappedCells(feet.x, feet.y, feet.z);
   const started = (x: number, cy: number, z: number): boolean =>
-    webs.some((w) => w.x === x && w.y === cy && w.z === z);
+    x >= bx0 && x <= bx1 && cy >= by0 && cy <= by1 && z >= bz0 && z <= bz1;
   const fx = Math.floor(feet.x);
   const fz = Math.floor(feet.z);
   const reasons: string[] = [];
@@ -102,7 +137,7 @@ export function webExit(world: WalkWorld, fence: Fence, feet: Vec3): WebExit | n
       reasons.push(`${where}: ${stand}`);
       continue;
     }
-    const n = Math.max(1, Math.ceil(distance / WEB_STEP - 1e-9));
+    const n = Math.max(1, Math.ceil(distance / STEP_OUT_PACE - 1e-9));
     const steps: PathStep[] = [];
     let blocked: string | null = null;
     for (let i = 1; i <= n && blocked === null; i++) {
@@ -114,8 +149,9 @@ export function webExit(world: WalkWorld, fence: Fence, feet: Vec3): WebExit | n
           for (let z = z0; z <= z1 && blocked === null; z++) {
             if (started(x, cy, z)) continue;
             const problem = passProblem(world, x, cy, z);
-            if (problem !== null)
+            if (problem !== null) {
               blocked = `the way to ${where} passes (${x}, ${cy}, ${z}): ${problem}`;
+            }
           }
         }
       }
@@ -125,7 +161,14 @@ export function webExit(world: WalkWorld, fence: Fence, feet: Vec3): WebExit | n
       reasons.push(blocked);
       continue;
     }
-    return { ok: true, steps, to, webs };
+    return { ok: true, cause, steps, to };
   }
   return refuse(`no cell beside it to step onto: ${reasons.slice(0, 3).join('; ')}`);
+}
+
+/** The cause in words, for the log: "the cobweb at (x, y, z)", "the minecraft:fire at ...". */
+export function describeStepOutCause(cause: StepOutCause): string {
+  const at = (c: Cell): string => `(${c.x}, ${c.y}, ${c.z})`;
+  if (cause.kind === 'cobweb') return `the cobweb at ${cause.cells.map(at).join(', ')}`;
+  return cause.cells.map((c) => `the ${c.name} at ${at(c)}`).join(', ');
 }

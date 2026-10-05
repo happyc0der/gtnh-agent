@@ -378,7 +378,13 @@ near and no fight back chosen, System 1 pauses with `UNDER_ATTACK`, a mob pause 
 out offline at once, wherever the bot is: an offline player cannot be hurt, and a walk away is
 slower than a spider (seen live 2026-10-04: a Special Mobs Mother Spider took the bot from 20
 health to 0 while a command waited 2 s to try its walk again and System 1 then set off on a
-38-block retreat on foot). A morning's way out paused so waits offline too. A player that logs
+38-block retreat on foot). Hurt within those 5 s with no creature in view that could have done it
+(a ranged mob beyond the scan, an invisible one, a mod's lightning), with or without a hazard
+beside it, it pauses with `UNDER_ATTACK` and `ATTACKER_UNSEEN` and waits offline the same way
+(seen live 2026-10-05: in its morning staircase, no hostile within 16 blocks, 20 health to 15 in
+one hit with a fire lit beside it, and 16 to 6 sixteen seconds later, while it rested and tried
+retreats the fire refused; halted by hand at 6). Not at food 0: starving hurts too, and offline
+it would never get food. A morning's way out paused so waits offline too. A player that logs
 in dead is respawned before play acts (`connect` waits, bounded, for health above 0): after that
 death, every login found the bot dead at the spot it died, a Random Things soul on the corpse
 counted as an unidentified mob, and it logged off again before its respawn was asked.
@@ -1024,14 +1030,16 @@ player stands on: the one under the centre of its feet, or, on the edge of a nei
 0.3 each way, reaches over it), that neighbour (`standingCell`; seen live: a walk stopped at
 z 9.1 over air, on the edge of the block at z 8, and every walk from there was refused).
 
-A cobweb is never walked into (it is no plant: `passable.ts`), but a player standing in one
-first steps out of it, onto the nearest cell beside it where it may stand, level and straight,
-0.15 a tick (`web.ts`): every walk on the pathfinder does so before it plans, and so does idle
-gravity. A web cuts the server's own move to a quarter (`Entity.setInWeb`), and it resets a
-move only when the client's position is more than 0.25 off across, so 0.11 off is taken (seen
-live 2026-10-05: a web spider spun a web into a retreat's way, and the agent stood in it, every
-walk refused, "cannot walk from here: blocked by minecraft:web", until it went offline for the
-night).
+A cobweb is never walked into (it is no plant: `passable.ts`), nor a cell beside a hazard, but a
+player standing in a cobweb or beside a hazard (in one, even) first steps out, onto the nearest
+cell beside it where it may stand (no hazard near), level and straight, 0.15 a tick, passing only
+open cells and those it stood in (`step-out.ts`): every walk on the pathfinder does so before it
+plans, and so does idle gravity. A web cuts the server's own move to a quarter
+(`Entity.setInWeb`), and it resets a move only when the client's position is more than 0.25 off
+across, so 0.11 off is taken. Seen live 2026-10-05: a web spider spun a web into a retreat's way,
+and the agent stood in it, every walk refused ("cannot walk from here: blocked by
+minecraft:web") until it went offline for the night; the next morning a fire lit beside it in
+its staircase, and every retreat was refused the same way ("next to minecraft:fire").
 
 ### Walking on the pathfinder
 

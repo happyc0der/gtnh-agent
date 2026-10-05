@@ -152,6 +152,39 @@ describe('System1 deterministic router', () => {
       expect(starving.reasonCodes).not.toContain('UNDER_ATTACK');
     });
 
+    it('hurt a moment ago with no attacker in view -> PAUSE (UNDER_ATTACK, ATTACKER_UNSEEN): offline too', () => {
+      // Seen live 2026-10-05: in its morning staircase, no hostile within 16 blocks, 20 health
+      // to 15 in one hit and a fire lit beside it, 16 to 6 sixteen seconds later, while it
+      // rested and tried retreats the fire refused.
+      const hurtAgo =
+        (ms: number) =>
+        (w: MockWorld): void => {
+          w.player.position = { x: 30, y: 64, z: 30 };
+          w.player.lastHurtAt = new Date(Date.parse(makeState().timestamp) - ms).toISOString();
+        };
+      const d = route(hurtAgo(1_000));
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
+      expect(d.reasonCodes).toEqual(['UNDER_ATTACK', 'ATTACKER_UNSEEN']);
+      expect(mobPause('needs-attention', d)).toBe('UNDER_ATTACK, ATTACKER_UNSEEN');
+      // With only a hazard in view (the fire beside it): the same, offline.
+      const fire = route((w) => {
+        hurtAgo(1_000)(w);
+        w.hazards = [{ kind: 'fire', position: { x: 31, y: 64, z: 30 } }];
+      });
+      expect(fire.reasonCodes).toEqual(['HAZARD_NEARBY', 'UNDER_ATTACK', 'ATTACKER_UNSEEN']);
+      expect(mobPause('needs-attention', fire)).toBe(
+        'HAZARD_NEARBY, UNDER_ATTACK, ATTACKER_UNSEEN',
+      );
+      // Hurt longer ago than UNDER_ATTACK_MS: the usual rules (here: the nominal step).
+      expect(route(hurtAgo(UNDER_ATTACK_MS + 1_000)).reasonCodes).not.toContain('UNDER_ATTACK');
+      // At food 0 starving hurts: no offline wait for it, it would never get food.
+      const starving = route((w) => {
+        hurtAgo(1_000)(w);
+        w.player.hunger = 0;
+      });
+      expect(starving.reasonCodes).not.toContain('UNDER_ATTACK');
+    });
+
     it('hostiles nearby while already home -> PAUSE', () => {
       const d = route((w) => void (w.hostiles = [{ x: 4, y: 64, z: 1 }]));
       expect(d.decision).toBe('PAUSE_AND_ASK_USER');

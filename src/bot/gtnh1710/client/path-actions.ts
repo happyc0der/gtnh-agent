@@ -403,9 +403,10 @@ export class PathActions {
       );
     }
     if (this.#core.walking) return failed('not walking: a walk is already in progress', 'REFUSED');
-    // Out of a cobweb first: no path starts inside one (web.ts).
-    const webbed = await this.#core.movement.leaveWeb();
-    if (webbed !== null) return failed(`not walking: ${webbed}`.slice(0, 500), 'REFUSED');
+    // Out of a cobweb, or away from a hazard beside the player, first: no path starts there
+    // (step-out.ts).
+    const stuck = await this.#core.movement.stepOut();
+    if (stuck !== null) return failed(`not walking: ${stuck}`.slice(0, 500), 'REFUSED');
     const world = this.#world.walkWorld();
     const from = this.#world.ownPosition;
     if (world === null || from === null) {
