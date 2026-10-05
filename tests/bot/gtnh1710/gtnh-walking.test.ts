@@ -246,6 +246,30 @@ describe('Gtnh1710Client walking', () => {
     expect(r, r.message).toMatchObject({ ok: true });
   });
 
+  it('an escape goes on when hurt from afar, but stops when hurt with a creature close', async () => {
+    // Seen live 2026-10-04: a Special Mobs Mother Spider bit the bot to death on its retreat;
+    // an escape that stops fails, and play then waits the mob out offline.
+    const retreat: ActionSpec = { type: 'RETURN_TO_SAFE_LOCATION', args: { locationName: 'home' } };
+    const home = { x: -8.5, y: FEET_Y, z: -11.5 };
+    const zombie = { entityId: 301, mobType: 54, x: -1.5, y: FEET_Y, z: -7.5, health: 20 };
+    const near = await start({ combat: { mobs: [zombie] } });
+    const running = perform(near.client, retreat, home);
+    await vi.waitFor(() => expect(near.server.walkSteps().length).toBeGreaterThanOrEqual(5));
+    near.server.combatSim.hurtPlayer(2);
+    const stopped = await running;
+    expect(stopped.ok).toBe(false);
+    expect(stopped.message).toMatch(
+      /health dropped from 20 to 18 with hostile entity minecraft:Zombie [\d.]+ blocks away/,
+    );
+    // No creature near (an arrow from afar, say): it goes on to the safe location.
+    const far = await start();
+    const going = perform(far.client, retreat, home);
+    await vi.waitFor(() => expect(far.server.walkSteps().length).toBeGreaterThanOrEqual(5));
+    far.server.combatSim.hurtPlayer(2);
+    const arrived = await going;
+    expect(arrived, arrived.message).toMatchObject({ ok: true });
+  });
+
   it('stops at once when the server corrects the position, and echoes the correction', async () => {
     const { server, client } = await start();
     const walk = perform(client, moveTo(-8.5, -11.5));

@@ -173,13 +173,16 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
       }
       if (defense.kind === 'flee') codes.push(...defense.reasons);
     }
-    // Hurt a moment ago with a hostile near, and not fighting back: an offline player cannot be
-    // hurt, and a walk away is slower than a spider (seen live 2026-10-04: a Special Mobs Mother
-    // Spider took the bot from 20 health to 0 while it waited to try its walk again and then set
-    // off on a 38-block retreat). It waits offline (play-state.ts mobPause).
+    // Hurt a moment ago with a hostile (or an unidentified creature) near, and not fighting back:
+    // an offline player cannot be hurt, and a walk away is slower than a spider (seen live
+    // 2026-10-04: a Special Mobs Mother Spider took the bot from 20 health to 0 while it waited to
+    // try its walk again and then set off on a 38-block retreat). It waits offline (play-state.ts
+    // mobPause). Not at food 0: starving hurts too, and offline it would never get food.
+    const starving = state.player.hunger.known && state.player.hunger.value <= 0;
     if (
-      dangerCodes.has('HOSTILES_NEARBY') &&
+      (dangerCodes.has('HOSTILES_NEARBY') || dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) &&
       !dangerCodes.has('HAZARD_PROXIMITY') &&
+      !starving &&
       hurt !== null &&
       hurt <= UNDER_ATTACK_MS
     ) {

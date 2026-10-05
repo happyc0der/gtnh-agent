@@ -137,6 +137,19 @@ describe('System1 deterministic router', () => {
         w.hazards = [{ kind: 'lava', position: { x: 31, y: 64, z: 31 } }];
       });
       expect(lava.decision).toBe('RETREAT_HOME');
+      // An unidentified creature is an attacker too (an independent review, 2026-10-04).
+      const unknown = route((w) => {
+        hurtAgo(1_000)(w);
+        w.hostiles = [];
+        w.unclassified = [{ x: 32, y: 64, z: 30 }];
+      });
+      expect(unknown.reasonCodes).toEqual(['UNCLASSIFIED_ENTITY_NEARBY', 'UNDER_ATTACK']);
+      // At food 0 starving hurts too: offline it would never get food, so the retreat.
+      const starving = route((w) => {
+        hurtAgo(1_000)(w);
+        w.player.hunger = 0;
+      });
+      expect(starving.reasonCodes).not.toContain('UNDER_ATTACK');
     });
 
     it('hostiles nearby while already home -> PAUSE', () => {

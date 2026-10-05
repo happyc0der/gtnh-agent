@@ -436,9 +436,10 @@ export class PathActions {
     );
     const guard = {
       placementsAtStart: this.#core.confirmedPositions,
-      // An escape (threats do not stop it) keeps going when hit, too (seen live: a retreat
-      // from a skeleton stopped at its first arrow, and the next walk led back into range).
-      healthAtStart: request.stopForThreats ? this.#world.health : null,
+      // An escape (threats do not stop it) keeps going when hurt from afar (seen live: a retreat
+      // from a skeleton stopped at its first arrow, and the next walk led back into range), but
+      // not with a creature close enough to strike (walkInterruption).
+      healthAtStart: this.#world.health,
       stopForThreats: request.stopForThreats,
     };
     const digArea: DigArea = { fence, maxHeightAboveFence: cfg.digging.maxHeightAboveFence };

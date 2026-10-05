@@ -203,9 +203,10 @@ export class MovementActions {
     );
     const guard = {
       placementsAtStart: this.#core.confirmedPositions,
-      // An escape (threats do not stop it) keeps going when hit, too (seen live: a retreat
-      // from a skeleton stopped at its first arrow, and the next walk led back into range).
-      healthAtStart: options.stopForThreats ? this.#world.health : null,
+      // An escape (threats do not stop it) keeps going when hurt from afar (seen live: a retreat
+      // from a skeleton stopped at its first arrow, and the next walk led back into range), but
+      // not with a creature close enough to strike (walkInterruption).
+      healthAtStart: this.#world.health,
       stopForThreats: options.stopForThreats,
     };
     let at: Vec3 = from;
@@ -312,7 +313,21 @@ export class MovementActions {
       health !== null &&
       health < guard.healthAtStart
     ) {
-      return `health dropped from ${guard.healthAtStart} to ${health}`;
+      if (guard.stopForThreats) return `health dropped from ${guard.healthAtStart} to ${health}`;
+      // An escape (threats do not stop it) goes on when hurt from afar, out of a skeleton's
+      // range, but not with a creature close enough to strike: it fails, and play waits the mob
+      // out offline (seen live 2026-10-04: a Special Mobs Mother Spider bit the bot to death
+      // on its retreat; an independent review found the retreat would have run on for minutes).
+      const striker = this.#world
+        .nearbyEntities(this.#opts.config.movement.threatRadius, this.#opts.clock.now())
+        .find(
+          (e) =>
+            e.kind !== 'object' &&
+            ((e.category === 'hostile' && !e.calm) || e.category === 'unclassified'),
+        );
+      if (striker !== undefined) {
+        return `health dropped from ${guard.healthAtStart} to ${health} with ${striker.category} entity ${striker.name} ${striker.distance.toFixed(1)} blocks away`;
+      }
     }
     if (guard.stopForThreats) {
       const now = this.#opts.clock.now();
