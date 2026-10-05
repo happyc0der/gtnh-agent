@@ -56,6 +56,11 @@ export const PlayerSchema = z.strictObject({
    */
   lastHurtAt: TimestampSchema.nullable().default(null),
   /**
+   * That last loss came at food 0: starving, not a blow (1.7.10 FoodStats hurts every 80 ticks
+   * there). Snapshots stored before it read back as false.
+   */
+  lastHurtStarving: z.boolean().default(false),
+  /**
    * Sealed in: the cells beside the player's feet and head, above its head and below its feet
    * are all known full blocks, so no mob can reach it (its night pit, roofed). Null when not
    * known (or not reported). Snapshots stored before it read back as null.

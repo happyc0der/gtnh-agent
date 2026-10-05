@@ -470,6 +470,8 @@ export class WorldModel {
   #abilityFlags: number | null = null;
   /** When an update last showed the player's health going down. */
   #lastHurtAt: Date | null = null;
+  /** That loss of health came at food 0 (starving). */
+  #lastHurtStarving = false;
   /** The last S03: the day time then, whether it advances, and when it arrived. */
   #time: { dayTicks: number; daylightCycle: boolean; at: Date } | null = null;
   /**
@@ -1965,7 +1967,10 @@ export class WorldModel {
         this.#position = { x: packet.x, feetY: packet.eyeY - PLAYER_EYE_HEIGHT, z: packet.z };
         return;
       case 'update-health':
-        if (this.#health !== null && packet.health < this.#health.health) this.#lastHurtAt = at;
+        if (this.#health !== null && packet.health < this.#health.health) {
+          this.#lastHurtAt = at;
+          this.#lastHurtStarving = packet.food <= 0;
+        }
         this.#health = { health: packet.health, food: packet.food };
         return;
       case 'time-update':
@@ -2106,6 +2111,7 @@ export class WorldModel {
         heldTool: this.#heldTool(),
         weapon: this.#weapon(),
         lastHurtAt: this.#lastHurtAt === null ? null : this.#lastHurtAt.toISOString(),
+        lastHurtStarving: this.#lastHurtStarving,
         // The client's observe() works it out from the blocks (client/observation.ts).
         sealed: null,
       },

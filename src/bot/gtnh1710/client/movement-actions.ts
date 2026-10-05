@@ -429,18 +429,19 @@ export class MovementActions {
     const resting =
       support.kind === 'supported' ? (restingY(world, feet) ?? edgeLanding(world, feet)) : null;
     if (support.kind === 'supported' && resting === null) {
-      this.#floatingNote = null;
       // On the ground in a cobweb (a web spider spun it on the player), or beside a hazard (a
       // fire lit beside it): out of there, as walks do (step-out.ts). Only when awaited (an
       // observation): the idle timer's look would race an action starting meanwhile, which a
       // step holding the walk refuses (an independent review, 2026-10-05).
-      if (opts.stepOut && (websAt(world, feet).length > 0 || hazardsAt(world, feet).length > 0)) {
-        const why = await this.stepOut();
-        if (why !== null && this.#floatingNote !== why) {
-          this.#floatingNote = why;
-          this.#core.log(`at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}): ${why}`);
-        }
+      const stuck =
+        opts.stepOut && (websAt(world, feet).length > 0 || hazardsAt(world, feet).length > 0)
+          ? await this.stepOut()
+          : null;
+      // Said once while it stays so (an independent review, 2026-10-05: once per observation).
+      if (stuck !== null && this.#floatingNote !== stuck) {
+        this.#core.log(`at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}): ${stuck}`);
       }
+      if (opts.stepOut || stuck !== null) this.#floatingNote = stuck;
       return;
     }
     const note = (why: string): void => {

@@ -100,12 +100,13 @@ System 1 chooses the kind of step each cycle, one of the ten decisions
 
 Low health with nothing threatening the player and the food bar high enough to heal
 (`minHungerToHeal`, 8: HungerOverhaul stops natural healing below it) is `REST`: a `WAIT` of
-`restMs` (30 s) where it stands, again until health is back above `minHealth`; with the food
-bar under 18 (vanilla heals only from there, and healing uses food up) and approved food
-carried, it eats first (seen live 2026-10-05: at 1 health and food 14, carrying melon). Too
-hungry to
-heal, it retreats or pauses as before; during the night-shelter task the shelter's steps come
-first (the pit is where resting is safe). Seen live: at 8 health with no food, the retreat
+`restMs` (30 s) where it stands, again until health is back above `minHealth`; hungry anyway
+(below `hungerEatThreshold`, 14) with approved food carried, it eats first: HungerOverhaul heals
+no faster for a fuller bar, and a meal more would only waste food. A meal, like a rest, keeps
+the task's session going (an independent review, 2026-10-05: each one ended the morning's way
+out as a failed try). Too hungry to heal, it eats what it carries, else retreats or pauses as
+before; during the night-shelter task the shelter's steps come first (the pit is where resting
+is safe). Seen live: at 8 health with no food, the retreat
 home was 100 blocks through a forest, and the pause there healed nothing (nothing heals
 offline).
 
@@ -387,9 +388,13 @@ beside it, it pauses with `UNDER_ATTACK` and `ATTACKER_UNSEEN` and waits offline
 (seen live 2026-10-05: in its morning staircase, no hostile within 16 blocks, 20 health to 15 in
 one hit with a fire lit beside it, and 16 to 6 sixteen seconds later, while it rested and tried
 retreats the fire refused; halted by hand at 6). Not at food 0: starving hurts too, and offline
-it would never get food. With health at 6 or below (`CRITICAL_HEALTH`; a zombie or skeleton
-on Hard takes 3 to 5 a blow), a hostile or unidentified creature near is waited out offline at
-once (`CRITICAL_HEALTH`), hurt or not: one blow more may kill, too weak to run or fight. A
+it would never get food, and a loss of health at food 0 is starving, not a blow, even after a
+bite since (`lastHurtStarving`). With health at 6 or below (`CRITICAL_HEALTH`; a zombie or
+skeleton on Hard takes 3 to 5 a blow), a hostile or unidentified creature near is waited out
+offline at once (`CRITICAL_HEALTH`) when it struck a moment ago or is within 5 blocks: one blow
+more may kill, too weak to run or fight; not for one that cannot reach it (in a cave below),
+which would keep the bot offline for good, since nothing heals offline and mobs freeze while
+nobody is on. A
 morning's way out paused so waits offline too. A player that logs
 in dead is respawned before play acts (`connect` waits, bounded, for health above 0): after that
 death, every login found the bot dead at the spot it died, a Random Things soul on the corpse

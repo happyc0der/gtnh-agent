@@ -118,6 +118,7 @@ export class MineflayerClient implements MinecraftClient {
         heldTool: unknown('TODO: held tool mapping not implemented'),
         weapon: unknown('the Mineflayer adapter does not fight'),
         lastHurtAt: null,
+        lastHurtStarving: false,
         sealed: null,
       },
       inventory: unnamed

@@ -254,6 +254,23 @@ describe('world model: what combat sees', () => {
     });
   });
 
+  it("knows when the player's own loss of health came at food 0 (starving, not a blow)", () => {
+    // An independent review, 2026-10-05: one bite after starving, the hurt read as an attacker.
+    const w = joined();
+    const health = (h: number, food: number, t: number): void =>
+      w.apply(
+        { type: 'update-health', health: h, food, saturation: 0 },
+        new Date(at.getTime() + t),
+      );
+    health(20, 0, 0);
+    health(19, 0, 100); // starving
+    expect(w.toGameState(later).player).toMatchObject({ lastHurtStarving: true });
+    health(19, 2, 200); // a bite: the food bar up, no loss
+    expect(w.toGameState(later).player).toMatchObject({ lastHurtStarving: true });
+    health(14, 2, 300); // a blow
+    expect(w.toGameState(later).player).toMatchObject({ lastHurtStarving: false });
+  });
+
   it('follows health, hurt and death; a dying mob no longer counts as a threat', () => {
     const w = joined();
     w.apply(

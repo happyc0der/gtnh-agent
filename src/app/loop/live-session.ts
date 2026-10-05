@@ -39,6 +39,9 @@ const TASK_PROGRESS: ReadonlySet<Decision> = new Set([
   'EXECUTE_KNOWN_SAFE_STEP',
   'WAIT_FOR_MACHINE',
   'REST',
+  // A meal, as a rest, keeps the task's session going (an independent review, 2026-10-05: each
+  // meal ended the morning's way out as a failed try, and a goal's as a session for nothing).
+  'EAT',
 ]);
 
 /** Why a run stopped, for callers that decide what comes next (the play loop). */

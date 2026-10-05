@@ -31,10 +31,10 @@ export const UNDER_ATTACK_MS = 5_000;
  */
 export const CRITICAL_HEALTH = 6;
 /**
- * Below minHealth, a meal comes before the rest while the food bar is under this: vanilla
- * heals only from 18 (FoodStats.onUpdate), and healing uses food up.
+ * At CRITICAL_HEALTH, a creature this near (blocks) is waited out offline though it has not
+ * struck yet: a zombie closes 5 blocks in about 2 s.
  */
-const HEAL_FOOD = 18;
+export const CRITICAL_CLOSE = 5;
 
 const CONFIDENCE = {
   failClosed: 1,
@@ -161,20 +161,31 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     // sunrise, and RETREAT_HOME failed from inside it session after session). Hostiles still
     // stop every other action: play waits for them to go before it digs out (night.ts).
     const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp);
+    // A loss at food 0 was starving, not a blow (a meal since lifts the food bar, not the hurt).
+    const struck = hurt !== null && !state.player.lastHurtStarving;
     facts['sealed'] = state.player.sealed;
     if (!dangerCodes.has('HAZARD_PROXIMITY') && state.player.sealed === true && hurt === null) {
       return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'SHELTERED']);
     }
     // A creature near and too weak to run or fight: one blow more may kill, and a walk away is
     // slower than many mobs. It waits offline (seen live 2026-10-05: down to 1 health, from
-    // something it never saw). Not at food 0: starving hurts too, and offline it would never
-    // get food.
+    // something it never saw), when struck a moment ago or with the creature within
+    // CRITICAL_CLOSE: not for one that cannot reach it (in a cave below), which would keep it
+    // offline for good, since nothing heals offline and mobs freeze while nobody is on (an
+    // independent review, 2026-10-05). Not at food 0: starving hurts too, and offline it would
+    // never get food.
     const starving = state.player.hunger.known && state.player.hunger.value <= 0;
     const weak = state.player.health.known && state.player.health.value <= CRITICAL_HEALTH;
+    const threats = state.nearbyThreats.known ? state.nearbyThreats.value : null;
+    const closest = Math.min(
+      threats?.nearestHostileDistance ?? Infinity,
+      threats?.nearestUnclassifiedDistance ?? Infinity,
+    );
     if (
       (dangerCodes.has('HOSTILES_NEARBY') || dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) &&
       weak &&
-      !starving
+      !starving &&
+      (struck || closest <= CRITICAL_CLOSE)
     ) {
       return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'CRITICAL_HEALTH']);
     }
@@ -205,7 +216,7 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
       (dangerCodes.has('HOSTILES_NEARBY') || dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) &&
       !dangerCodes.has('HAZARD_PROXIMITY') &&
       !starving &&
-      hurt !== null &&
+      struck &&
       hurt <= UNDER_ATTACK_MS
     ) {
       return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'UNDER_ATTACK']);
@@ -216,7 +227,7 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
       !dangerCodes.has('HOSTILES_NEARBY') &&
       !dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY') &&
       !starving &&
-      hurt !== null &&
+      struck &&
       hurt <= UNDER_ATTACK_MS
     ) {
       return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [
@@ -237,7 +248,9 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
   {
     const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp);
     const starving = state.player.hunger.known && state.player.hunger.value <= 0;
-    if (!starving && hurt !== null && hurt <= UNDER_ATTACK_MS) {
+    // A loss at food 0 was starving, though a meal since lifted the food bar (an independent
+    // review, 2026-10-05: one bite after starving, the food trip went offline for an attacker).
+    if (!starving && !state.player.lastHurtStarving && hurt !== null && hurt <= UNDER_ATTACK_MS) {
       return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, ['UNDER_ATTACK', 'ATTACKER_UNSEEN']);
     }
   }
@@ -253,17 +266,24 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     // home was 100 blocks through a forest, and the pause there healed nothing: nothing heals
     // offline). Too hungry to heal: retreat or pause, as before.
     if (hunger < ctx.safety.config.minHungerToHeal) {
-      // Too hungry to heal: on the food trip by day, getting food is the cure for both (seen
-      // live: starving, health fell below minHealth on the way, and a pause would only have
-      // left it too weak to fetch food and too hungry to heal). Otherwise retreat or pause.
+      // Too hungry to heal: food carried is eaten first (an independent review, 2026-10-05:
+      // with bread carried, it walked home and paused there for a person). On the food trip by
+      // day, getting food is the cure for both (seen live: starving, health fell below
+      // minHealth on the way, and a pause would only have left it too weak to fetch food and
+      // too hungry to heal). Otherwise retreat or pause.
+      if (availableApprovedFood(state, ctx) !== null) {
+        return decide('EAT', CONFIDENCE.vitals, ['LOW_HEALTH', 'HUNGRY']);
+      }
       if (!gettingFood(state)) return retreatOrPause(['LOW_HEALTH'], CONFIDENCE.vitals);
       facts['gettingFood'] = true;
     } else if (state.currentTask?.taskId !== NIGHT_SHELTER_TASK_ID) {
       // At dusk the night shelter comes first: the pit is where resting is safe (seen live:
       // it rested in the open before digging in). Its steps run below (rule 6). Before the
-      // rest, a meal while the food bar is under HEAL_FOOD (seen live 2026-10-05: at 1 health
-      // and food 14, carrying melon it could have eaten).
-      const food = hunger < HEAL_FOOD ? availableApprovedFood(state, ctx) : null;
+      // rest, a meal when it is hungry anyway (below hungerEatThreshold): Hunger Overhaul heals
+      // from minHungerToHeal on, no faster for a fuller bar, and healing uses food up; a meal
+      // more would only waste food (and wear out its kind for Spice of Life).
+      const food =
+        hunger < ctx.safety.config.hungerEatThreshold ? availableApprovedFood(state, ctx) : null;
       if (food !== null) return decide('EAT', CONFIDENCE.vitals, ['LOW_HEALTH']);
       return decide('REST', CONFIDENCE.vitals, ['LOW_HEALTH']);
     }

@@ -5,6 +5,7 @@ import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import { NIGHT_SHELTER_TASK_ID } from '../../src/domain/night-shelter.ts';
 import { mobPause } from '../../src/app/play/play-state.ts';
 import {
+  CRITICAL_CLOSE,
   CRITICAL_HEALTH,
   routeDecision,
   UNDER_ATTACK_MS,
@@ -225,37 +226,53 @@ describe('System1 deterministic router', () => {
       expect(d.reasonCodes).toEqual(['LOW_HEALTH']);
     });
 
-    it('low health with room in the food bar and food carried -> EAT first, then REST', () => {
-      // Seen live 2026-10-05: at 1 health and food 14, carrying melon it could have eaten.
-      const hungry = route((w) => {
-        w.player.health = 1;
-        w.player.hunger = 14;
-        w.player.position = { x: 40, y: 64, z: 40 };
-      });
-      expect(hungry.decision).toBe('EAT');
-      expect(hungry.reasonCodes).toEqual(['LOW_HEALTH']);
-      // Food 18 or more (vanilla heals from there): the rest.
-      expect(
+    it('low health and hungry (below hungerEatThreshold) with food carried -> EAT first, then REST', () => {
+      const lowAt = (hunger: number) =>
         route((w) => {
           w.player.health = 1;
-          w.player.hunger = 18;
+          w.player.hunger = hunger;
           w.player.position = { x: 40, y: 64, z: 40 };
-        }).decision,
-      ).toBe('REST');
+        });
+      const hungry = lowAt(12);
+      expect(hungry.decision).toBe('EAT');
+      expect(hungry.reasonCodes).toEqual(['LOW_HEALTH']);
+      // At 14 or more, no meal: Hunger Overhaul heals from 8 on, no faster for a fuller bar
+      // (an independent review, 2026-10-05: meals from 14 to 18 only wasted food).
+      expect(lowAt(14).decision).toBe('REST');
     });
 
     it('a creature near with health at CRITICAL_HEALTH or below -> PAUSE: offline, too weak to run', () => {
-      const weak = (health: number) => (w: MockWorld) => {
-        w.player.health = health;
-        w.player.position = { x: 30, y: 64, z: 30 };
-        w.hostiles = [{ x: 36, y: 64, z: 30 }];
-      };
+      const weak =
+        (health: number, x = 30 + CRITICAL_CLOSE - 1) =>
+        (w: MockWorld): void => {
+          w.player.health = health;
+          w.player.position = { x: 30, y: 64, z: 30 };
+          w.hostiles = [{ x, y: 64, z: 30 }];
+        };
       const d = route(weak(CRITICAL_HEALTH));
       expect(d.decision).toBe('PAUSE_AND_ASK_USER');
       expect(d.reasonCodes).toEqual(['HOSTILES_NEARBY', 'CRITICAL_HEALTH']);
       expect(mobPause('needs-attention', d)).toBe('HOSTILES_NEARBY, CRITICAL_HEALTH');
       // Above it: the retreat, as before.
       expect(route(weak(CRITICAL_HEALTH + 1)).decision).toBe('RETREAT_HOME');
+      // Farther than CRITICAL_CLOSE and no blow yet (a zombie in a cave below, say): no
+      // offline wait, which would last for good (an independent review, 2026-10-05).
+      expect(route(weak(CRITICAL_HEALTH, 38)).decision).toBe('RETREAT_HOME');
+      // Struck a moment ago: offline whatever the distance.
+      const struck = route((w) => {
+        weak(CRITICAL_HEALTH, 38)(w);
+        w.player.lastHurtAt = new Date(Date.parse(makeState().timestamp) - 1_000).toISOString();
+      });
+      expect(struck.reasonCodes).toEqual(['HOSTILES_NEARBY', 'CRITICAL_HEALTH']);
+      // Hurt starving at food 0, not struck: no offline wait for it.
+      const starved = route((w) => {
+        weak(CRITICAL_HEALTH, 38)(w);
+        w.player.hunger = 1;
+        w.player.lastHurtAt = new Date(Date.parse(makeState().timestamp) - 1_000).toISOString();
+        w.player.lastHurtStarving = true;
+      });
+      expect(starved.reasonCodes).not.toContain('CRITICAL_HEALTH');
+      expect(starved.reasonCodes).not.toContain('UNDER_ATTACK');
     });
 
     it('low health while building the night shelter: its steps first (the pit is where to rest)', () => {
@@ -266,12 +283,19 @@ describe('System1 deterministic router', () => {
       expect(d.decision).not.toBe('REST');
     });
 
-    it('low health, too hungry to heal, away from home -> RETREAT_HOME', () => {
-      const d = route((w) => {
-        w.player.health = 5;
-        w.player.hunger = 7;
-        w.player.position = { x: 40, y: 64, z: 40 };
-      });
+    it('low health, too hungry to heal: EAT what it carries, else RETREAT_HOME', () => {
+      const tooHungry = (food: boolean) =>
+        route((w) => {
+          w.player.health = 5;
+          w.player.hunger = 7;
+          w.player.position = { x: 40, y: 64, z: 40 };
+          if (!food) delete w.inventory.items['minecraft:bread'];
+        });
+      // An independent review, 2026-10-05: with bread carried, it walked home and paused there.
+      const eat = tooHungry(true);
+      expect(eat.decision).toBe('EAT');
+      expect(eat.reasonCodes).toEqual(['LOW_HEALTH', 'HUNGRY']);
+      const d = tooHungry(false);
       expect(d.decision).toBe('RETREAT_HOME');
       expect(d.reasonCodes).toEqual(['LOW_HEALTH']);
     });
