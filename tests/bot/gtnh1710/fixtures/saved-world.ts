@@ -4,8 +4,9 @@ import type { WalkWorld } from '../../../../src/bot/gtnh1710/walking.ts';
 
 /**
  * A box of the test server's saved world (region files and level.dat's block names, read
- * offline), kept as a fixture: a palette of "name:meta" and one base-36 palette index per
- * cell, x fastest, then z, then y. Cells outside the box are not loaded.
+ * offline by scripts/world-box.ts), kept as a fixture: a palette of "name:meta" and one
+ * base-36 palette index per cell, x fastest, then z, then y. Cells outside the box are not
+ * loaded.
  */
 interface SavedBox {
   readonly min: { readonly x: number; readonly y: number; readonly z: number };
