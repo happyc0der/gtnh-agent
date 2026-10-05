@@ -84,7 +84,8 @@ export const PLACE_TARGETS: ReadonlySet<string> = new Set([
  * garden either: its onBlockActivated picks the garden up (BlockGarden, javap).
  */
 export const CLICKABLE_SUPPORTS: ReadonlySet<string> = new Set<string>([
-  ...WALKABLE_SURFACES,
+  // Vanilla only: GregTech's ores, which the walker stands on, have a tile entity.
+  ...[...WALKABLE_SURFACES].filter((b) => b.startsWith('minecraft:')),
   // The vanilla ones: the modded leaves on the dig allowlist were checked for digging only,
   // and a garden is no block to click (it would be picked up).
   ...SOLID_DIGGABLE_BLOCKS.filter((b) => b.startsWith('minecraft:')),

@@ -997,7 +997,9 @@ pathfinder ([Pathfinding](#pathfinding)), and `client/path-actions.ts` carries t
    the state is reliable.
 2. The walk is planned on the blocks the server sent. A position is walkable only if every block
    the player's body touches is air or a plant it passes through (below), the block under it is
-   a known full block, and nothing dangerous (or unloaded, or unnamed) touches those blocks. The
+   a known full block (vanilla's checked ones, and GregTech's ores and natural stone: checked
+   with javap 2026-10-05, after an ore in a pit's wall ruled out every pit nearby), and nothing
+   dangerous (or unloaded, or unnamed) touches those blocks. The
    flat walker plans A* inside the fence (no corner cutting), then straight stretches where
    clear, checked exactly (the swept body, not samples), and walks them in 0.2-block steps. The
    pathfinder plans movements and their steps, one per tick at the vanilla pace, which the step

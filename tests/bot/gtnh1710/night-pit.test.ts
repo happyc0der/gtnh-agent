@@ -39,6 +39,7 @@ const ID = {
   sapling: 6,
   tallgrass: 31,
   foliage: 1102,
+  gtOre: 2500,
 } as const;
 const NAMES = new Map<number, string>([
   [ID.foliage, 'BiomesOPlenty:foliage'],
@@ -55,6 +56,7 @@ const NAMES = new Map<number, string>([
   [ID.log, 'minecraft:log'],
   [ID.sandstone, 'minecraft:sandstone'],
   [ID.tallgrass, 'minecraft:tallgrass'],
+  [ID.gtOre, 'gregtech:gt.blockores'],
 ]);
 const k = (x: number, y: number, z: number): string => `${x},${y},${z}`;
 
@@ -344,6 +346,13 @@ describe('the night pit plan', () => {
       },
     };
     expect(reasonOf(planNightPit(land(), FEET, {}, pen))).toMatch(/a pit needs a terrain fence/);
+  });
+
+  it('takes a GregTech ore in its wall as natural ground (seen live 2026-10-05)', () => {
+    // An ore in the wall ruled out every pit nearby, and the bot went offline for the night.
+    const ore = planNightPit(land({ [k(1, 62, 0)]: ID.gtOre }), FEET, {}, OPTS);
+    expect(reasonOf(ore)).toBe('ok');
+    expect(ore.ok && ore.site).toEqual({ x: 0, z: 0, groundY: 63 });
   });
 
   it('never digs in without a way out in the morning (walls of stone it cannot dig)', () => {

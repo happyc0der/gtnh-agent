@@ -51,6 +51,15 @@ export const WALKABLE_SURFACES: ReadonlySet<string> = new Set([
   'minecraft:double_stone_slab',
   'minecraft:double_wooden_slab',
   'minecraft:quartz_block',
+  // GregTech 5.09.51.482's natural stone and ores (javap, 2026-10-05): BlockOres,
+  // BlockOresAbstract, BlockGranites, BlockStones and BlockStonesAbstract extend GTGenericBlock
+  // extends Block, and none overrides the collision box (func_149668_a, func_149743_a,
+  // func_149719_a, func_149676_a) or the contact (func_149670_a): full cubes. Seen live
+  // 2026-10-05: an ore in a pit's wall ruled out every pit nearby, and the bot went offline
+  // for the night.
+  'gregtech:gt.blockores',
+  'gregtech:gt.blockgranites',
+  'gregtech:gt.blockstones',
 ]);
 
 export interface Vec3 {
