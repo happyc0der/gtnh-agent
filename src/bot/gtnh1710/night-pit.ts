@@ -427,8 +427,12 @@ export const PIT_SEARCH_SPOTS = 40;
 
 /**
  * The rest of a pit the agent started at `site`, when the player is in its column below the
- * ground (at least one dig done): the remaining digs down and the roof. Null when the site
- * does not apply (the player is elsewhere): the caller plans a new pit.
+ * ground (at least one dig done): the remaining digs down, the roof, and a block in each cell
+ * beside the body that is open (a way out dug there, that stopped halfway or ran before a night
+ * spent in the same pit: seen live 2026-10-04, the roof put back left the first step of the
+ * morning's staircase open beside the head; with no step left to run, the planner was asked
+ * and dug the pit's walls). Null when the site does not apply (the player is elsewhere): the
+ * caller plans a new pit.
  */
 export function continueNightPit(
   world: WalkWorld,
@@ -469,6 +473,35 @@ export function continueNightPit(
     const placed = roofStep(w, area, dug.at, cell, roof);
     if ('reason' in placed) return refuse(placed.reason);
     steps.push(placed);
+  }
+  const gaps: BlockPos[] = [];
+  for (const [dx, dz] of SIDES) {
+    for (const dy of [0, 1]) {
+      const wall = { x: site.x + dx, y: bottom + dy, z: site.z + dz };
+      const solid = solidAt(w, wall);
+      if (solid === null) return refuse(`the pit's wall at ${fmt(wall)} is not loaded`);
+      if (!solid) gaps.push(wall);
+    }
+  }
+  if (gaps.length > 0) {
+    // Carried, or dug on the way down; the roof takes one of its own kind first.
+    const have = (i: PlaceableItem): number =>
+      (inventory[i] ?? 0) + (i === 'minecraft:dirt' ? dug.dirt : 0) - (roof === i ? 1 : 0);
+    const item = PIT_ROOF_ITEMS.find((i) => have(i) >= gaps.length);
+    if (item === undefined) {
+      return refuse(
+        `${gaps.length} open cell(s) in the pit's walls and too few blocks to close them`,
+      );
+    }
+    for (const gap of gaps) {
+      const placed = checkPlace(w, area, dug.at, gap, item, []);
+      if (!placed.ok) return refuse(`the pit's open wall at ${fmt(gap)}: ${placed.reason}`);
+      w.place(gap, placedBlockOf(item));
+      steps.push({
+        spec: { type: 'PLACE_BLOCK', args: { position: { ...gap }, item } },
+        text: `place ${item} at ${fmt(gap)}: closes the pit's wall`,
+      });
+    }
   }
   return { ok: true, site, roof, steps, exit: [] };
 }

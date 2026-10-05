@@ -200,6 +200,16 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
         const why = status.problem ?? `${play.shelterTries} sessions did not finish it`;
         return done(play, `${nightReason(clock)}; no shelter: ${why}`, clock);
       }
+      // Not sheltered, and code has no step that shelters it: a session would ask the planner,
+      // which must never improvise a shelter (seen live 2026-10-04: asked so in a pit whose
+      // roof was back but whose wall a way out had opened, it dug the pit's own walls).
+      if (status.steps.length === 0) {
+        return done(
+          play,
+          `${nightReason(clock)}; no shelter: it is open, and code has no step that closes it`,
+          clock,
+        );
+      }
       play.shelterTries += 1;
       const pit = status.kind === 'pit';
       const result = await blueprintSession(play, {

@@ -762,6 +762,35 @@ describe('autonomous play', () => {
     expect(world.calls).toBe(0);
   });
 
+  it('never asks the planner for a shelter: open, with no step from code, it goes offline', async () => {
+    // Seen live 2026-10-04: a pit with its roof back but a wall open had no step left, and the
+    // session's planner dug the pit's walls.
+    const world: World = { inventory: { 'minecraft:dirt': 9 }, sessions: [], calls: 0 };
+    const result = await runPlay(
+      {
+        ...deps(open(), world),
+        time: () => Promise.resolve(worldTime(12_400, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit',
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: false,
+            exit: [],
+          }),
+      },
+      DEFAULT_PLAY_LIMITS,
+      noStop,
+    );
+    expect(result.stopReason).toMatch(
+      /no shelter: it is open, and code has no step that closes it$/,
+    );
+    expect(result.night).toMatchObject({ phase: 'evening' });
+    expect(world.calls).toBe(0);
+  });
+
   it('in the morning digs out of the shelter first (code-made steps), then plays on', async () => {
     const repos = open();
     const world: World = { inventory: {}, sessions: [], calls: 0 };

@@ -373,6 +373,45 @@ describe('the night pit plan', () => {
     expect(continueNightPit(land(), FEET, {}, site, OPTS)).toBeNull();
     expect(continueNightPit(oneDug, { x: 5.5, y: 64, z: 0.5 }, {}, site, OPTS)).toBeNull();
   });
+
+  it('closes a wall that a way out opened, for another night in the same pit', () => {
+    // Seen live 2026-10-04: the morning's staircase stopped after its first step; at dusk the
+    // roof went back, the step stayed open beside the head, and with no step left the planner
+    // was asked and dug the pit's walls.
+    const site = { x: 0, z: 0, groundY: 63 };
+    const bottom = { x: 0.5, y: 61, z: 0.5 };
+    const opened = land({
+      [k(0, 62, 0)]: ID.air,
+      [k(0, 61, 0)]: ID.air,
+      [k(1, 63, 0)]: ID.air,
+      [k(1, 62, 0)]: ID.air,
+    });
+    expect(enclosedIn(opened, bottom)).toBe(false);
+    const r = continueNightPit(opened, bottom, { 'minecraft:dirt': 4 }, site, OPTS);
+    if (r === null || !r.ok) throw new Error(r === null ? 'no plan' : r.reason);
+    expect(specs(r.steps)).toEqual([
+      { type: 'PLACE_BLOCK', args: { position: { x: 1, y: 62, z: 0 }, item: 'minecraft:dirt' } },
+    ]);
+    // With the roof open too: the roof, then the wall, from the carried dirt.
+    const roofless = land({
+      [k(0, 63, 0)]: ID.air,
+      [k(0, 62, 0)]: ID.air,
+      [k(0, 61, 0)]: ID.air,
+      [k(1, 63, 0)]: ID.air,
+      [k(1, 62, 0)]: ID.air,
+    });
+    const both = continueNightPit(roofless, bottom, { 'minecraft:dirt': 2 }, site, OPTS);
+    expect(both === null ? null : both.ok ? specs(both.steps) : both.reason).toEqual([
+      { type: 'PLACE_BLOCK', args: { position: { x: 0, y: 63, z: 0 }, item: 'minecraft:dirt' } },
+      { type: 'PLACE_BLOCK', args: { position: { x: 1, y: 62, z: 0 }, item: 'minecraft:dirt' } },
+    ]);
+    // One dirt is the roof's: none is left for the wall, and it says so.
+    expect(
+      reasonOf(
+        continueNightPit(roofless, bottom, { 'minecraft:dirt': 1 }, site, OPTS) ?? { ok: true },
+      ),
+    ).toMatch(/1 open cell\(s\) in the pit's walls and too few blocks to close them/);
+  });
 });
 
 describe('the way out in the morning', () => {
