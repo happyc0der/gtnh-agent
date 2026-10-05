@@ -1,4 +1,4 @@
-import { recentHurtMs } from '../domain/combat.ts';
+import { hostileTactic, recentHurtMs } from '../domain/combat.ts';
 import type { Decision, DecisionResult, FactValue, ReasonCode } from '../domain/decisions.ts';
 import type { GameState } from '../domain/game-state.ts';
 import { gettingFood } from '../domain/food.ts';
@@ -76,6 +76,7 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  *      struck lately, no lava or void near                food it can eat, else PAUSE (SHELTERED: it
  *                                                         stays inside); at food 0 with nothing to
  *                                                         eat, the rules below
+ *      a creeper within the threat radius               -> PAUSE (CREEPER_NEARBY: offline at once)
  *      creatures nearby, too weak to run or fight      -> PAUSE (CRITICAL_HEALTH: offline at once)
  *      hostiles nearby and fighting back is the answer -> DEFEND (only with combat enabled; see
  *                                                         defend.ts: cornered by a quick kill,
@@ -98,6 +99,17 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  *   6. known validated next step                       -> EXECUTE_KNOWN_SAFE_STEP
  *   7. otherwise                                       -> REQUEST_PLANNER
  */
+/** How far the nearest mob known to explode is (a creeper of any kind), or null. */
+function nearestExploder(state: GameState): number | null {
+  if (!state.nearbyEntities.known) return null;
+  let nearest: number | null = null;
+  for (const e of state.nearbyEntities.value.entities) {
+    if (e.category !== 'hostile' || hostileTactic(e.type) !== 'explodes') continue;
+    if (nearest === null || e.distance < nearest) nearest = e.distance;
+  }
+  return nearest;
+}
+
 export function routeDecision(state: GameState, ctx: RouterContext): DecisionResult {
   const facts: Record<string, FactValue> = { stateTimestamp: state.timestamp };
   const decide = (
@@ -187,6 +199,17 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
       if (!starving) {
         return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'SHELTERED']);
       }
+    }
+    // A creeper (any mob known to explode) within the threat radius: offline at once, never a
+    // walk away, which it follows to the end of the walk, and whatever is weak or hungry: an
+    // offline player cannot be blown up, and a creeper with no target stops its fuse (seen live
+    // 2026-10-05, 11:07 EDT: blown up 3 s into a retreat home from 20 health, the nearest of two
+    // hostiles 5.8 blocks away; at 05:27 a Fire Creeper followed a retreat home and exploded).
+    // Sealed in, above, none can see the player to light its fuse.
+    const creeper = nearestExploder(state);
+    if (creeper !== null && creeper <= ctx.safety.config.hostileThreatRadius) {
+      facts['creeperDistance'] = Number(creeper.toFixed(1));
+      return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'CREEPER_NEARBY']);
     }
     // A creature near and too weak to run or fight: one blow more may kill, and a walk away is
     // slower than many mobs. It waits offline (seen live 2026-10-05: down to 1 health, from

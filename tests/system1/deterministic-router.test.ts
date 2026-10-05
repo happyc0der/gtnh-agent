@@ -168,6 +168,48 @@ describe('System1 deterministic router', () => {
       expect(stays.decision).toBe('RETREAT_HOME');
     });
 
+    it('a creeper within the threat radius -> PAUSE (CREEPER_NEARBY): offline at once, never a walk away', () => {
+      // Seen live 2026-10-05, 11:07 EDT: blown up 3 s into a retreat home from 20 health, the
+      // nearest of two hostiles 5.8 blocks away (and at 05:27 a Fire Creeper followed a retreat
+      // home and exploded beside it).
+      const withMob =
+        (type: string, dx: number) =>
+        (w: MockWorld): void => {
+          w.player.position = { x: 30, y: 64, z: 30 };
+          w.mobs = [
+            {
+              id: 7,
+              type,
+              category: 'hostile',
+              position: { x: 30 + dx, y: 64, z: 30 },
+              health: 20,
+            },
+          ];
+        };
+      for (const type of ['minecraft:Creeper', 'SpecialMobs.FireCreeper']) {
+        const d = route(withMob(type, 6));
+        expect(d.decision, type).toBe('PAUSE_AND_ASK_USER');
+        expect(d.reasonCodes, type).toEqual(['HOSTILES_NEARBY', 'CREEPER_NEARBY']);
+        expect(mobPause('needs-attention', d), type).toBe('HOSTILES_NEARBY, CREEPER_NEARBY');
+      }
+      // Low on food or health changes nothing: offline is safe from a creeper either way.
+      const starving = route(
+        (w) => void (withMob('minecraft:Creeper', 6)(w), (w.player.hunger = 0)),
+      );
+      expect(starving.reasonCodes).toContain('CREEPER_NEARBY');
+      // A zombie as near: the retreat, as before.
+      expect(route(withMob('minecraft:Zombie', 6)).decision).toBe('RETREAT_HOME');
+      // A creeper beyond the threat radius: no danger yet.
+      expect(route(withMob('minecraft:Creeper', 12)).reasonCodes).not.toContain('CREEPER_NEARBY');
+      // Sealed in: no creeper sees the player to light its fuse; it stays inside.
+      const sealed = route((w) => {
+        withMob('minecraft:Creeper', 3)(w);
+        w.player.position = { x: 30, y: 61, z: 30 };
+        w.player.sealed = true;
+      });
+      expect(sealed.reasonCodes).toContain('SHELTERED');
+    });
+
     it('hurt a moment ago with a hostile near -> PAUSE (UNDER_ATTACK): it waits offline', () => {
       // Seen live 2026-10-04: a Special Mobs Mother Spider took the bot from 20 health to 0
       // while it waited to try its walk again and then set off on a 38-block retreat.

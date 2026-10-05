@@ -407,6 +407,10 @@ the same (`standbyReason` answers `mob`): seen live 2026-10-04, a zombie followe
 where the pause had it stand still until it was killed. Home from a retreat, it looks again at
 once, not 3 s later (seen live 2026-10-05: a Fire Creeper 4.5 blocks away followed the 8.8-block
 retreat home and exploded about 3 s after the bot arrived, 20 health to 12, and left a crater).
+A creeper (any mob known to explode) within the threat radius sends it offline at once
+(`CREEPER_NEARBY`), never on a walk away that the creeper follows: the same day at 11:07, one blew
+it up from 20 health 3 s into a retreat home. An offline player cannot be blown up, and a creeper
+with no target stops its fuse. Unidentified creatures keep the usual answer (a retreat).
 Sealed in its shelter it stays online. So
 does any session that ends on an answer to a mob that failed (`mobPause`: a retreat that found no
 way home, perhaps fleeing a little instead, or was refused as a repeated failure; a fight back):

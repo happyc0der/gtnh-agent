@@ -11,6 +11,7 @@ import {
   SafetyFirstDecisionProvider,
 } from '../../src/system1/decision-provider.ts';
 import { routeDecision } from '../../src/system1/deterministic-router.ts';
+import { mobPause } from '../../src/app/play/play-state.ts';
 import { MockDecisionProvider } from '../../src/system1/mock-decision-provider.ts';
 import type { RouterContext } from '../../src/system1/state-queries.ts';
 import { makeState, routerCtx } from '../fixtures/index.ts';
@@ -119,16 +120,18 @@ describe('DEFEND: fight back only when retreating is impossible or worse', () =>
     ).toBe('DEFEND');
   });
 
-  it('creepers: back off, never fight (and say so)', () => {
-    expect(
-      route((w) => {
-        w.player.position = AWAY;
-        w.mobs = [creeper(1, near(3, 0))];
-      }),
-    ).toMatchObject({
-      decision: 'RETREAT_HOME',
+  it('creepers: never fight; within the threat radius, offline at once (and say so)', () => {
+    // Not a walk away, which the creeper follows (seen live 2026-10-05: blown up 3 s into a
+    // retreat home): a pause play waits out offline (mobPause).
+    const close = route((w) => {
+      w.player.position = AWAY;
+      w.mobs = [creeper(1, near(3, 0))];
+    });
+    expect(close).toMatchObject({
+      decision: 'PAUSE_AND_ASK_USER',
       reasonCodes: ['HOSTILES_NEARBY', 'CREEPER_NEARBY'],
     });
+    expect(mobPause('needs-attention', close)).toBe('HOSTILES_NEARBY, CREEPER_NEARBY');
     // A zombie in reach, but a creeper 12 blocks off: still no fight.
     expect(
       route((w) => {
