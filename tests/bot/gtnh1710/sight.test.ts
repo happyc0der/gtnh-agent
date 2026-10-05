@@ -56,6 +56,13 @@ describe('lines of sight', () => {
     expect(hiddenFrom(cave(w, 7, 52, 0), { x: 7.5, y: 52, z: 0.5 }, pit)).toBe(true);
   });
 
+  it('down a shaft 12 deep, the player is seen by a mob in view of its mouth', () => {
+    // An independent review (2026-10-04): the eyes higher up the column were looked at only 8
+    // up, all inside the shaft, so a skeleton by its mouth 14 blocks off counted as hidden.
+    const w = new TestWorld().fill({ x: 0, y: 52, z: 0 }, { x: 0, y: 63, z: 0 }, B.air);
+    expect(hiddenFrom(w, { x: 8.5, y: 64, z: 0.5 }, { x: 0.5, y: 52, z: 0.5 })).toBe(false);
+  });
+
   it('fails toward seen: blocks not loaded, or not known to be full cubes, let a line through', () => {
     // Every column of rock between them not loaded.
     const unloaded = cave(new TestWorld(), 7, 57, 0).unload((x) => x >= 1 && x <= 5);

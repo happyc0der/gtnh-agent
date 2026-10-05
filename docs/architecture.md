@@ -1017,8 +1017,8 @@ moment (the inventory, the other players, the boundary) into the pathfinder's op
 - **Parkour** (`allowParkour`, on) only over gaps that falling into would not hurt
   (`parkourOverDeepGaps`, off); **sprinting** (`allowSprint`, off) as below; **water**
   (`allowWater`, off): wading in calm one-deep water and swimming at the top of calm deep water;
-  falls of at most 3 blocks. Walks never dig down
-  (that is the night pit's `DIG_DOWN`).
+  falls of at most 3 blocks (into water at most 5). Walks that may break dig down too (Baritone's
+  downward), only where the night pit's dig-down rules (`checkDigDown`) allow it.
 - A walk that does no work (a retreat, the flee, the walk to a drop: threats do not stop them,
   and a dig or a placement would) breaks and places nothing; only the walk to a dig's drop that
   no free spot reaches breaks its way there, and still places nothing
@@ -1185,14 +1185,14 @@ below and the client's waits:
 | diagonal    | one block diagonally, both corners open (no corner cutting), never breaking                      | 6.55, 5.04 sprinting                                       |
 | ascend      | a jump onto the next block, one higher; may break the room above the start and on the step       | 12 (the jump lands on its 9th tick, + 1, + jump penalty 2) |
 | descend     | off the edge one block down; may break its way                                                   | 9.63 (walk off, 5 ticks of fall, centre)                   |
-| fall        | 2 or 3 blocks onto dry ground (no damage: 4 would deal 1), or into calm one-deep water           | 11.63, 13.63; water: 17.75 from 5, 22.75 from 10           |
+| fall        | 2 or 3 blocks onto dry ground (no damage: 4 would deal 1), or into calm water, at most 5         | 11.63, 13.63; one-deep water: 17.75 from 5                 |
 | parkour     | a running jump over a gap of 1-2 blocks (3 sprinting) to the same level, the arc clear           | 16.78, 18.47 walking; 16.14 sprinting                      |
 | pillar      | jump and place a block in the cell the feet left, land on it; may break the room above           | 33 (with the placement penalty 20)                         |
 | bridge      | place a block in the gap ahead against the side of the block underfoot, walk on                  | 32.63 (with the placement penalty 20)                      |
 | downward    | dig the block underfoot, drop one block (only when the caller enables it)                        | 17 + the dig                                               |
 | wading      | a traverse or diagonal in calm one-deep water (into it, out of it, within it)                    | 10.20, 14.43                                               |
 | swimming    | a traverse or diagonal at the top of calm deep water, afloat (from or into one-deep water too)   | 10.20, 14.43                                               |
-| (ascend)    | out of calm one-deep water onto a bank one higher, the cells 3 above open                        | 20 (about 18 ticks, + jump penalty 2)                      |
+| (ascend)    | out of calm water (one deep, or afloat in deep) onto a bank one higher, the cells 3 above open   | 20 (about 18 ticks, + jump penalty 2)                      |
 | climbUp     | up a ladder one block, the body centred in its column (clear of the ladder's slab)               | 9.50 (1 / 0.1176 a tick, + 1 to start)                     |
 | climbDown   | down a ladder one block                                                                          | 7.67 (1 / 0.15 a tick, + 1)                                |
 | climbOn     | across from a ledge over a ladder's top, then down into it                                       | 12.30                                                      |
@@ -1366,8 +1366,7 @@ test run.
 **Not covered yet:**
 
 - swimming under water (the body always floats at the top: no diving for anything) and water
-  that flows (it pushes): never entered; falls into deep water only from the heights safe for
-  one-deep water;
+  that flows (it pushes): never entered; drops into water of at most 5 blocks;
 - vines (the body never has its feet in one; ladders are climbed since 2026-10-04), slabs,
   stairs, soul sand, ice and other partial or slippery blocks (not surfaces);
 - falling blocks are avoided, not handled (Baritone breaks a falling column again and again);

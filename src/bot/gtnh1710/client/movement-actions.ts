@@ -377,7 +377,12 @@ export class MovementActions {
       // down).
       const level = Math.floor(feet.y + 1e-9);
       if (feet.y - level > 1e-6) await this.#slideDown(world, feet, level);
-      this.#floatingNote = null;
+      // Held there with the head under water (a login there): say so, it would drown.
+      const why = eyesInWater(world, feet) ? 'on a ladder under water' : null;
+      if (why !== null && this.#floatingNote !== why) {
+        this.#core.log(`at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}): ${why}`);
+      }
+      this.#floatingNote = why;
       return;
     }
     // Under calm water, or over it with nothing else underfoot (a stop, a correction, a login

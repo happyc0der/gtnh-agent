@@ -580,6 +580,9 @@ export class PathActions {
           holding = slot;
         }
         let airborne: boolean = carried;
+        // A swim's segment, or the centring of a walk that starts afloat (an independent review,
+        // 2026-10-04: it ended "airborne", and the next step went unchecked).
+        const swimming = seg.movement === null || seg.movement.swim;
         // A step counted as on the ground with the body past an edge, over no block: the next
         // tick falls (1.7.10 moves along y before x and z, so the step off an edge still lands
         // on it). Seen live 2026-10-04: a hostile stopped a walk there, and the bot hung in the
@@ -642,7 +645,7 @@ export class PathActions {
               seg.steps,
               i,
               policy.water,
-              seg.movement?.swim === true,
+              swimming,
             );
             if (why !== null) return stopped(`the way ahead is not clear: ${why}`);
             // Sprinting only while the food bar stays above 10 (HungerOverhaul: it costs food).
@@ -676,7 +679,7 @@ export class PathActions {
           // Afloat in the top block of the water a walk may stop too (a walk from there starts
           // afloat); under it (a dive) or above the water it may not (an independent review,
           // 2026-10-04: stopped on a lake's floor at the bottom of a dive, the player drowned).
-          const afloat = seg.movement?.swim === true && !step.onGround && this.#afloatAt(step.pos);
+          const afloat = swimming && !step.onGround && this.#afloatAt(step.pos);
           airborne = !step.onGround && !held && !afloat;
           overEdge =
             step.onGround && seg.steps[i + 1]?.onGround === false && !this.#overBlock(step.pos);

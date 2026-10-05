@@ -28,8 +28,13 @@ const PLAYER_POINTS = [0.2, 0.9, PLAYER_EYES] as const;
  * only to 1/32 of a block (and only after it moved 4/32 on an axis).
  */
 const BLOCK_MARGIN = 0.2;
-/** How far above the feet the player's way out or up is looked at (eyesAbove). */
-const MAX_EXIT_RISE = 8;
+/**
+ * How far above the feet the player's way out or up is looked at (eyesAbove): as far as the
+ * entity scan reaches, so the mouth of a shaft the player is down is never missed (an
+ * independent review, 2026-10-04: at the bottom of one 12 deep, skeletons by its mouth counted
+ * as hidden).
+ */
+const MAX_EXIT_RISE = 16;
 /** The most block cells a segment may cross to be walked (longer ones: null). */
 const MAX_LINE_CELLS = 256;
 
@@ -119,9 +124,10 @@ export function lineBlocked(world: WalkWorld, a: Vec3, b: Vec3): boolean {
 }
 
 /**
- * The player's eyes at every level above its feet, at most MAX_EXIT_RISE higher, where its
- * body would fit in its column (no full block in its two cells): where it comes out of a pit
- * (dug up, or on the roof of a sealed one) or climbs to.
+ * The player's eyes at every level above its feet, up its column, where its body would fit (no
+ * full block in its two cells): the way it comes out of a pit or a shaft (dug up, or onto a
+ * sealed pit's roof). Up to the first level where the head is out of any hole (no full block
+ * in the 8 cells around it), MAX_EXIT_RISE higher at most: on open ground, just the next level.
  */
 export function eyesAbove(world: WalkWorld, feet: Vec3): Vec3[] {
   const x = Math.floor(feet.x);
@@ -131,6 +137,13 @@ export function eyesAbove(world: WalkWorld, feet: Vec3): Vec3[] {
   for (let y = y0 + 1; y <= y0 + MAX_EXIT_RISE; y++) {
     if (fullBlock(world, x, y, z) || fullBlock(world, x, y + 1, z)) continue;
     out.push({ x: x + 0.5, y: y + PLAYER_EYES, z: z + 0.5 });
+    let clear = true;
+    for (let dx = -1; dx <= 1 && clear; dx++) {
+      for (let dz = -1; dz <= 1 && clear; dz++) {
+        if ((dx !== 0 || dz !== 0) && fullBlock(world, x + dx, y + 1, z + dz)) clear = false;
+      }
+    }
+    if (clear) break;
   }
   return out;
 }
