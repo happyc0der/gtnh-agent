@@ -60,6 +60,12 @@ interface Sim {
    * (the position); otherwise neither.
    */
   rich?: boolean;
+  /**
+   * With `rich`: after a known step, System 1's retreat to where this returns (null: none),
+   * given the position and the retreats so far; it ends the session, as a reflex does.
+   */
+  retreat?: (at: Position, retreats: number) => Position | null;
+  retreats?: number;
   time: WorldTime | null;
   food: FoodStatus | null;
   clock: { t: number };
@@ -253,6 +259,29 @@ function fakeSession(repos: Repositories, sim: Sim): PlayDeps['session'] {
       hooks.onCycle(result as unknown as CycleResult, cycles.length);
       sim.cycles += 1;
       sim.afterCycle?.(sim.cycles);
+      const back =
+        sim.rich === true ? (sim.retreat?.(sim.position, sim.retreats ?? 0) ?? null) : null;
+      if (back !== null) {
+        sim.retreats = (sim.retreats ?? 0) + 1;
+        sim.position = { ...back };
+        sim.steps.push(`RETREAT ${back.x} ${back.z}`);
+        const s = 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> succeeded';
+        cycles.push({ cycleId: `c${sim.cycles}`, summary: s });
+        const retreat = {
+          summary: s,
+          status: 'succeeded',
+          decision: { decision: 'RETREAT_HOME', reasonCodes: ['HOSTILES_NEARBY'] },
+          outcome: {
+            execution: { ok: true, message: 'retreated' },
+            stateAfter: {
+              player: { position: { known: true, value: { ...sim.position } } },
+              time: { known: false },
+            },
+          },
+        };
+        hooks.onCycle(retreat as unknown as CycleResult, cycles.length);
+        return end('non-task-decision', `stopped after a non-task decision: ${s}`);
+      }
     }
   };
 }
@@ -863,6 +892,39 @@ describe("owners' commands in play", () => {
     // A, B, A, B, A: the third time at A ends it, with no retries.
     expect(sim.steps).toHaveLength(5);
     expect(sim.sleeps).toBe(0);
+  });
+
+  it('a retreat that sends the bot back over its way is no going back and forth', async () => {
+    // An independent review, 2026-10-04: two retreats home from a mob near the first stop, and
+    // the third arrival there failed the trip; a retreat along the trail (to the stop before)
+    // the same. Walks of 10 blocks along x, as a long path is cut at a MOVE_TO's reach.
+    const segment = (sim: Sim) => (): TravelStep => {
+      const to = { x: Math.min(40, Math.floor(sim.position.x / 10) * 10 + 10.5), y: 64, z: 0.5 };
+      if (Math.abs(to.x - sim.position.x) < 1.5) return { kind: 'arrived', distance: 0 };
+      return {
+        kind: 'step',
+        spec: { type: 'MOVE_TO', args: { target: to, tolerance: 1 } },
+        text: `walk to ${to.x} ${to.z}`,
+        distance: 40 - sim.position.x,
+      };
+    };
+    const home = { x: 0.5, y: 64, z: 0.5 };
+    const trip = async (retreat: NonNullable<Sim['retreat']>): Promise<Sim> => {
+      const sim = newSim({ heard: [whisper('!goto 40 64 0')], rich: true, retreat });
+      await runPlay(
+        deps(open(), sim, { commands: { ...commandDeps(sim), step: segment(sim) } }),
+        { ...LIMITS, maxSessions: 12, session: { ...LIMITS.session, maxCycles: 20 } },
+        noStop,
+      );
+      return sim;
+    };
+    const homeTwice = await trip((at, n) => (at.x === 10.5 && n < 2 ? home : null));
+    expect(said(homeTwice).at(-1)).toBe('Done: at 40 64 0');
+    expect(homeTwice.steps.filter((s) => s === 'MOVE_TO 10.5 0.5')).toHaveLength(3);
+    const trailTwice = await trip((at, n) =>
+      at.x === 20.5 && n < 2 ? { ...home, x: 10.5 } : null,
+    );
+    expect(said(trailTwice).at(-1)).toBe('Done: at 40 64 0');
   });
 
   it('plain words that start like a command but do not fit it go to the translator', async () => {

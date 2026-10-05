@@ -264,10 +264,19 @@ export function planTravelStep(input: TravelInput): TravelStep {
   });
   const beyondReach = (end: { x: number; y: number; z: number }): boolean =>
     Math.hypot(end.x + 0.5 - feet.x, end.y - feet.y, end.z + 0.5 - feet.z) > input.moveReach;
-  // EXPLORE heads across (any height): for a target more below or above than across from the
-  // player, walks nearer instead (seen live 2026-10-04: water 19 blocks below and 4 across; each
-  // walk down took it across, the EXPLORE back up toward the column, and so on until dusk).
-  const canExploreThere = input.movement.canExplore && across > EXPLORE_BEYOND && across > dy;
+  // EXPLORE heads across (any height): toward a target more below or above than across from the
+  // player, in a column the play area holds, it walks nearer instead (seen live 2026-10-04:
+  // water 19 blocks below and 4 across; each walk down took it across, the EXPLORE back up
+  // toward the column, and so on until dusk). A column beyond the play area is explored toward,
+  // however high or low (an independent review, 2026-10-04: a tower's top 39 across and 46 up
+  // was refused, or pillared toward in the open field).
+  const columnInArea =
+    block.x >= fence.min.x &&
+    block.x <= fence.max.x &&
+    block.z >= fence.min.z &&
+    block.z <= fence.max.z;
+  const canExploreThere =
+    input.movement.canExplore && across > EXPLORE_BEYOND && (across > dy || !columnInArea);
 
   let moves: Movement[] = [...found.movements];
   if (target.kind === 'near') {
@@ -324,6 +333,9 @@ export function planTravelStep(input: TravelInput): TravelStep {
   // Else as near as a walk gets (the fixed fence, or a target just out of reach).
   const part = nearer();
   if (part !== null) return walk(part, `nearer to (${fmt(goalPoint)})`);
+  // No walk gets nearer: an EXPLORE across may still find a way round (a command that then goes
+  // back and forth fails: command-travel.ts MAX_VISITS).
+  if (input.movement.canExplore && across > EXPLORE_BEYOND) return explore();
   return refused(
     `no walk gets nearer to (${fmt(goalPoint)}) from here (a wall, water, a cliff, or the edge of ` +
       `where I may walk${found.status === 'none' ? `: ${found.reason}` : ''})`.slice(0, 400),

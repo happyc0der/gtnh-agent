@@ -249,6 +249,109 @@ describe('a target below', () => {
   }, 30_000); // two searches of up to 40,000 nodes each, on a machine the whole suite loads
 });
 
+describe('a target above', () => {
+  // A tower at (40, 0): a pole with a spiral staircase round it, one block up a step, from the
+  // ground (feet at 64) to a top step with its feet at 110 (46 up).
+  const RING = [
+    [-1, -1],
+    [0, -1],
+    [1, -1],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+    [-1, 1],
+    [-1, 0],
+  ] as const;
+  const stairs = new Set<string>();
+  for (let i = 1; i <= 46; i++) {
+    const [dx, dz] = RING[i % 8] as readonly [number, number];
+    stairs.add(`${40 + dx},${63 + i},${dz}`);
+  }
+  const [tx, tz] = RING[46 % 8] as readonly [number, number];
+  const top = { x: 40 + tx + 0.5, y: 110, z: tz + 0.5 };
+  const ground = flat();
+  const tower: WalkWorld = {
+    blockAt: (x, y, z) =>
+      stairs.has(`${x},${y},${z}`) || (x === 40 && z === 0 && y >= 63 && y <= 109)
+        ? ID.stone
+        : ground.blockAt(x, y, z),
+    blockName: (id) => NAMES.get(id),
+    hazardCode: () => BLOCK_CODE.safe,
+  };
+  /** The play area of mode 'follow' around the feet: 64 columns a side, 32 levels. */
+  const fenceAt = (f: { x: number; y: number; z: number }) => {
+    const [x, y, z] = [Math.floor(f.x), Math.floor(f.y), Math.floor(f.z)];
+    return { min: { x: x - 31, y: y - 16, z: z - 31 }, max: { x: x + 32, y: y + 16, z: z + 32 } };
+  };
+  const areaAt = (f: { x: number; y: number; z: number }): PlayArea => ({
+    fence: fenceAt(f),
+    problem: null,
+  });
+
+  it('explores across toward a column beyond the play area, however high it is', () => {
+    // An independent review, 2026-10-04: walking nearer (the rule for a target more above or
+    // below than across, here 39 across and 46 up) found no way, or pillared up in the open.
+    const from = { x: 0.5, y: 64, z: 0.5 };
+    const step = planTravelStep(
+      input({
+        world: tower,
+        area: areaAt(from),
+        feet: from,
+        target: { kind: 'point', point: top },
+        searchMs: 5_000,
+      }),
+    );
+    expect(step).toMatchObject({ kind: 'step', spec: { type: 'EXPLORE' } });
+    // With blocks to pillar with: still across first, not a pillar up in the open field.
+    const pillars = walkPolicy({
+      world: tower,
+      boundary: null,
+      players: [],
+      fence: fenceAt(from),
+      settings: {
+        allowBreak: true,
+        allowPlace: true,
+        allowParkour: false,
+        parkourOverDeepGaps: false,
+        allowSprint: false,
+        allowWater: false,
+        allowDoors: false,
+        allowClimb: false,
+        throwawayReserve: 4,
+      },
+      breaking: true,
+      placing: true,
+      digHeight: 4,
+      digTicks: (b) => (b === 'minecraft:stone' ? { problem: 'no pickaxe' } : { ticks: 15 }),
+      throwaway: { block: 'minecraft:cobblestone', count: 64 },
+      sprint: false,
+    }).options;
+    const withBlocks = planTravelStep(
+      input({
+        world: tower,
+        area: areaAt(from),
+        feet: from,
+        path: pillars,
+        target: { kind: 'point', point: top },
+        searchMs: 5_000,
+      }),
+    );
+    expect(withBlocks).toMatchObject({ kind: 'step', spec: { type: 'EXPLORE' } });
+    // At the tower's foot, the stairs are climbed.
+    const foot = { x: top.x, y: 64, z: top.z };
+    const climb = planTravelStep(
+      input({
+        world: tower,
+        area: areaAt(foot),
+        feet: foot,
+        target: { kind: 'point', point: top },
+        searchMs: 5_000,
+      }),
+    );
+    expect(climb).toMatchObject({ kind: 'step', spec: { type: 'MOVE_TO' } });
+  }, 30_000);
+});
+
 describe('the surface (Baritone #surface)', () => {
   const base: Omit<TravelInput, 'target'> = {
     world: flat(),

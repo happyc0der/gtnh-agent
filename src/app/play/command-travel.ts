@@ -282,8 +282,12 @@ export async function travelRound(
       // come waits by its player; a reflex such as a retreat is no step of its own, and a step a
       // mob stopped is told and tried again: mobInTheWay).
       const at = after?.player.position.known === true ? after.player.position.value : null;
-      const stepped =
-        r.decision?.decision === 'EXECUTE_KNOWN_SAFE_STEP' && stepFailureOf(r) === null;
+      // A reflex that moves the bot (a retreat, a fight) sends it back over its way: the steps
+      // after it ending where steps ended before is no going back and forth (an independent
+      // review, 2026-10-04: two retreats home from a mob near the first stop failed the trip).
+      const reflex = r.decision?.decision;
+      if (reflex === 'RETREAT_HOME' || reflex === 'DEFEND') run.visits.clear();
+      const stepped = reflex === 'EXECUTE_KNOWN_SAFE_STEP' && stepFailureOf(r) === null;
       if (next.kind === 'step' && stepped && at !== null && !follow && command.verb !== 'come') {
         const key = `${Math.floor(at.x)}, ${Math.floor(at.y + 1e-6)}, ${Math.floor(at.z)}`;
         const times = (run.visits.get(key) ?? 0) + 1;
