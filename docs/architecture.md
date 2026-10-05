@@ -356,15 +356,22 @@ copy of the world, up to 6 searches (seen live 2026-10-04: 5 blocks under the gr
 head and below its feet are all known full blocks, so no door, fluid or thin block lets a mob
 through. Then System 1 does not retreat or fight while hostiles (or unidentified entities) are
 near, since a walk cannot leave the pit and no blow lands through its walls: it decides
-`PAUSE_AND_ASK_USER` with `SHELTERED`, unless the player was hurt a moment ago or lava is near
-(then the usual rules decide). The hostiles still stop every other action. In the morning, play
+`PAUSE_AND_ASK_USER` with `SHELTERED`, unless the player was struck a moment ago or lava is near
+(then the usual rules decide). Hungry with food carried, it eats in there (`EAT` with
+`SHELTERED` and `HUNGRY`): the safety policy allows a meal with creatures near only sealed in
+(an independent review, 2026-10-05: starving in its sealed pit with zombies about, every meal was
+refused). A loss of health at food 0 is starving, no blow; at food 0 with nothing to eat, though,
+it does not stay, since in there starving hurts on (on Hard, to death): the usual rules decide,
+a retreat that cannot leave the pit and then the offline wait, where nothing starves. The
+hostiles still stop every other action. In the morning, play
 waits inside while they are near (the sun burns zombies and skeletons), looking again every
 5 s, answering commands as at night and saying so in `!status`; it digs out once they are gone,
 and the wait spends none of the exit's tries (seen live 2026-10-04: zombies about the pit at
 sunrise, the retreat home failed from inside it session after session, and the exit gave up).
 After 5 minutes of it (`MOB_SHELTER_MAX_MS`: a mob in a cave beside the pit, or a creeper, may
-stay all day) play waits offline instead, as for a mob near home; hurt a moment ago, the player
-counts as not sheltered, and the usual rules decide.
+stay all day) play waits offline instead, as for a mob near home; hurt a moment ago (starving
+too), the player counts as not sheltered, and a session's System 1 decides: a meal, or the usual
+rules.
 
 **A mob near home.** When System 1 pauses only because a mob is near (`HOSTILES_NEARBY` or
 `UNCLASSIFIED_ENTITY_NEARBY`) and the agent is already home or has no home, play does not hand

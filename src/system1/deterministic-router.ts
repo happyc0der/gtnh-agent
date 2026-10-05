@@ -155,7 +155,7 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     if (dangerCodes.has('HAZARD_PROXIMITY')) codes.push('HAZARD_NEARBY');
     if (dangerCodes.has('HOSTILES_NEARBY')) codes.push('HOSTILES_NEARBY');
     if (dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) codes.push('UNCLASSIFIED_ENTITY_NEARBY');
-    // Sealed in (full blocks beside, above and below it: its roofed night pit) and not hurt
+    // Sealed in (full blocks beside, above and below it: its roofed night pit) and not struck
     // lately: no mob can reach the player, and no retreat or fight could leave or strike
     // through the walls. It stays inside (seen live 2026-10-04: zombies about the night pit at
     // sunrise, and RETREAT_HOME failed from inside it session after session). Hostiles still
@@ -164,8 +164,22 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     // A loss at food 0 was starving, not a blow (a meal since lifts the food bar, not the hurt).
     const struck = hurt !== null && !state.player.lastHurtStarving;
     facts['sealed'] = state.player.sealed;
-    if (!dangerCodes.has('HAZARD_PROXIMITY') && state.player.sealed === true && hurt === null) {
-      return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'SHELTERED']);
+    const starving = state.player.hunger.known && state.player.hunger.value <= 0;
+    // Starving is no creature reaching it, and a meal is safe in there: hungry with food
+    // carried, it eats (an independent review, 2026-10-05: starving in the sealed pit with
+    // zombies about, every meal was refused). At food 0 with nothing to eat it does not stay:
+    // in there starving hurts on (on Hard, to death). The rules below decide, as before: a
+    // retreat, which cannot leave the pit, and then play's offline wait, where nothing starves.
+    if (!dangerCodes.has('HAZARD_PROXIMITY') && state.player.sealed === true && !struck) {
+      const hungry =
+        state.player.hunger.known &&
+        state.player.hunger.value < ctx.safety.config.hungerEatThreshold;
+      if (hungry && availableApprovedFood(state, ctx) !== null) {
+        return decide('EAT', CONFIDENCE.vitals, [...codes, 'SHELTERED', 'HUNGRY']);
+      }
+      if (!starving) {
+        return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'SHELTERED']);
+      }
     }
     // A creature near and too weak to run or fight: one blow more may kill, and a walk away is
     // slower than many mobs. It waits offline (seen live 2026-10-05: down to 1 health, from
@@ -174,7 +188,6 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     // offline for good, since nothing heals offline and mobs freeze while nobody is on (an
     // independent review, 2026-10-05). Not at food 0: starving hurts too, and offline it would
     // never get food.
-    const starving = state.player.hunger.known && state.player.hunger.value <= 0;
     const weak = state.player.health.known && state.player.health.value <= CRITICAL_HEALTH;
     const threats = state.nearbyThreats.known ? state.nearbyThreats.value : null;
     const closest = Math.min(

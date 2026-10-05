@@ -119,6 +119,55 @@ describe('System1 deterministic router', () => {
       expect(lava.reasonCodes).not.toContain('SHELTERED');
     });
 
+    it('sealed in with hostiles near and hungry, food carried -> EAT (SHELTERED, HUNGRY)', () => {
+      // An independent review, 2026-10-05: starving in its sealed pit with zombies about, every
+      // meal was refused, and a starving hurt counted as a blow. A meal is safe in there.
+      const sealedIn =
+        (food: number) =>
+        (w: MockWorld): void => {
+          w.player.position = { x: 30, y: 61, z: 30 };
+          w.player.sealed = true;
+          w.hostiles = [{ x: 31, y: 64, z: 30 }];
+          w.player.hunger = food;
+        };
+      const d = route(sealedIn(10));
+      expect(d.decision).toBe('EAT');
+      expect(d.reasonCodes).toEqual(['HOSTILES_NEARBY', 'SHELTERED', 'HUNGRY']);
+      // Fed (hungerEatThreshold): the pause, as before.
+      expect(route(sealedIn(14)).reasonCodes).toEqual(['HOSTILES_NEARBY', 'SHELTERED']);
+      // Hurt by starving at food 0, no blow: it eats in there all the same.
+      const hurtAgo = (w: MockWorld): void => {
+        w.player.lastHurtAt = new Date(Date.parse(makeState().timestamp) - 1_000).toISOString();
+      };
+      const starving = (w: MockWorld): void => {
+        sealedIn(0)(w);
+        hurtAgo(w);
+        w.player.lastHurtStarving = true;
+      };
+      expect(route(starving).reasonCodes).toEqual(['HOSTILES_NEARBY', 'SHELTERED', 'HUNGRY']);
+      // Fed since (the starving hurt is still recent): the pause, not a retreat.
+      expect(route((w) => void (starving(w), (w.player.hunger = 14))).reasonCodes).toEqual([
+        'HOSTILES_NEARBY',
+        'SHELTERED',
+      ]);
+      // Struck: something reaches it after all, and no meal in there.
+      const struck = route((w) => void (sealedIn(10)(w), hurtAgo(w)));
+      expect(struck.reasonCodes).not.toContain('SHELTERED');
+      // Hungry with nothing to eat (or eating off), not starving: the pause.
+      const noFood = (w: MockWorld): void => void delete w.inventory.items['minecraft:bread'];
+      expect(route((w) => void (sealedIn(10)(w), noFood(w))).reasonCodes).toEqual([
+        'HOSTILES_NEARBY',
+        'SHELTERED',
+      ]);
+      const off = { ...routerCtx(), eatingEnabled: false };
+      expect(route(sealedIn(10), off).reasonCodes).toEqual(['HOSTILES_NEARBY', 'SHELTERED']);
+      // At food 0 with nothing to eat it does not stay: in there starving hurts on (on Hard, to
+      // death). The usual rules decide, as before (a retreat, then play's offline wait).
+      const stays = route((w) => void (starving(w), noFood(w)));
+      expect(stays.reasonCodes).not.toContain('SHELTERED');
+      expect(stays.decision).toBe('RETREAT_HOME');
+    });
+
     it('hurt a moment ago with a hostile near -> PAUSE (UNDER_ATTACK): it waits offline', () => {
       // Seen live 2026-10-04: a Special Mobs Mother Spider took the bot from 20 health to 0
       // while it waited to try its walk again and then set off on a 38-block retreat.

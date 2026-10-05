@@ -210,7 +210,11 @@ export function liveShelter(
       const mobs = assessDangers(state, safety).filter(
         (v) => v.code === 'HOSTILES_NEARBY' || v.code === 'UNCLASSIFIED_ENTITY_NEARBY',
       );
-      // Hurt a moment ago, sealed or not, something reaches the player: not sheltered.
+      // Hurt a moment ago, sealed or not: something reaches the player, or it starves. Not
+      // sheltered either way, so it does not just wait in there: a session's System 1 eats
+      // (sealed in, a meal is safe), or with nothing to eat play goes offline, where nothing
+      // starves (on Hard, starving kills). Starving counts here on purpose (an independent
+      // review, 2026-10-05, asked).
       const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp) !== null;
       const stuck: ShelterStatus = {
         ...base,

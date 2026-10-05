@@ -224,6 +224,34 @@ describe('rule 3: health and hunger thresholds', () => {
     ).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
   });
 
+  it('allows eating with creatures near only while sealed in (no mob reaches it there)', () => {
+    // An independent review, 2026-10-05: starving in its sealed pit with zombies about, every
+    // meal was refused.
+    const eat: ActionSpec = { type: 'EAT_FOOD', args: { item: 'minecraft:bread' } };
+    const near = (sealed: boolean | null, mutate: (w: MockWorld) => void = () => undefined) =>
+      makeState((w) => {
+        w.player.hunger = 0;
+        w.player.health = 4;
+        w.player.sealed = sealed;
+        w.hostiles = [{ x: 2, y: 64, z: 1 }];
+        w.unclassified = [{ x: 1, y: 64, z: 3 }];
+        mutate(w);
+      });
+    expect(codes(eat, near(true))).toEqual([]);
+    // Not sealed in (or not known to be): no meal with creatures about, as before.
+    expect(codes(eat, near(false))).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+    expect(codes(eat, near(null))).toEqual(['ACTION_NOT_ALLOWED_IN_DANGER']);
+    // Lava near too: no meal, sealed or not.
+    const lava = near(true, (w) => {
+      w.hazards = [{ kind: 'lava', position: { x: 1, y: 64, z: 2 } }];
+    });
+    expect(codes(eat, lava)).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+    // Only the meal: no other work in there with creatures about.
+    expect(
+      codes({ type: 'INSPECT_MACHINE', args: { machineId: 'machine.macerator.1' } }, near(true)),
+    ).toContain('ACTION_NOT_ALLOWED_IN_DANGER');
+  });
+
   describe('starving with no food: the food task may get food (and nothing else)', () => {
     // Food 2 with nothing to eat (seen live), on the play loop's food task, by day. A grass
     // garden is listed next to the player (it stands at (1, 64, 1)).

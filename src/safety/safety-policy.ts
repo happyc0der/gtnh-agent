@@ -569,6 +569,7 @@ function dangerGate(
   type: ActionType,
   dangers: SafetyViolation[],
   getsFood = false,
+  sealed = false,
 ): SafetyViolation[] {
   if (dangers.length === 0) return [];
   const codes = new Set(dangers.map((d) => d.code));
@@ -577,12 +578,24 @@ function dangerGate(
   // Fighting back is how the agent survives a hostile it cannot retreat from; any other
   // danger (lava, an unidentified entity, low health or food) forbids it.
   const onlyHostiles = [...codes].every((c) => c === 'HOSTILES_NEARBY');
+  // Sealed in its shelter (GameState player.sealed: full blocks all round), creatures outside
+  // cannot reach it: a meal there is safe (an independent review, 2026-10-05: starving in its
+  // sealed pit with zombies about, it could not eat at all, and on Hard starving kills).
+  const sealedMeal =
+    sealed &&
+    [...codes].every(
+      (c) =>
+        c === 'HOSTILES_NEARBY' ||
+        c === 'UNCLASSIFIED_ENTITY_NEARBY' ||
+        c === 'LOW_HEALTH' ||
+        c === 'LOW_HUNGER',
+    );
 
   let permitted = false;
   if (!outsideWorkArea) {
     permitted =
       type === 'RETURN_TO_SAFE_LOCATION' ||
-      (type === 'EAT_FOOD' && onlyVitals) ||
+      (type === 'EAT_FOOD' && (onlyVitals || sealedMeal)) ||
       // Resting is how health comes back when nothing else is wrong (REST).
       (type === 'WAIT' && onlyVitals) ||
       (type === 'ATTACK_ENTITY' && onlyHostiles) ||
@@ -822,7 +835,14 @@ export function evaluateAction(
   const reliability = assessStateReliability(state, ctx);
   if (reliability.length > 0) return result([...violations, ...reliability]);
 
-  violations.push(...dangerGate(action.type, assessDangers(state, ctx), getsFood(action, state)));
+  violations.push(
+    ...dangerGate(
+      action.type,
+      assessDangers(state, ctx),
+      getsFood(action, state),
+      state.player.sealed === true,
+    ),
+  );
   violations.push(...evaluateStaticSpec(spec, ctx));
   violations.push(...dynamicChecks(action, state, ctx));
 
