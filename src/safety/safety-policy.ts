@@ -11,7 +11,7 @@ import {
   calmSpiderBlocker,
   HURT_DANGER_MS,
   hostileTactic,
-  recentHurtMs,
+  recentBlowMs,
 } from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import { FOOD_TASK_ID, gettingFood } from '../domain/food.ts';
@@ -263,7 +263,7 @@ function entityInconsistencies(state: GameState): string[] {
   if (entities.some((e) => e.distance > scanRadius)) {
     problems.push('nearbyEntities lists an entity beyond its scan radius');
   }
-  const hurt = recentHurtMs(state.player.lastHurtAt, state.timestamp);
+  const hurt = recentBlowMs(state.player, state.timestamp);
   for (const e of entities) {
     const why = e.calm ? calmSpiderBlocker(e, hurt) : null;
     if (why !== null) problems.push(`nearbyEntities marks ${e.type} #${e.id} calm, but ${why}`);
@@ -546,7 +546,7 @@ function rangedHostileInView(state: GameState): { type: string; distance: number
 
 /** How long ago (ms) the player was last hurt, when within HURT_DANGER_MS of the observation. */
 function hurtLately(state: GameState): number | null {
-  return recentHurtMs(state.player.lastHurtAt, state.timestamp);
+  return recentBlowMs(state.player, state.timestamp);
 }
 
 /**

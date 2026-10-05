@@ -3,7 +3,7 @@ import {
   BARE_HAND,
   calmSpiderBlocker,
   LIGHT_SHY_SPIDERS,
-  recentHurtMs,
+  recentBlowMs,
   SPIDER_CALM_LIGHT,
   SPIDER_TARGET_RANGE,
 } from '../../domain/combat.ts';
@@ -1487,8 +1487,11 @@ export class WorldModel {
   #isCalm(e: TrackedEntity, distance: number, now: Date): boolean {
     const shy = this.#lightShy(e);
     if (shy === undefined || e.mayTarget != null || (e.hurtCount ?? 0) > 0) return false;
-    const hurt = recentHurtMs(
-      this.#lastHurtAt === null ? null : this.#lastHurtAt.toISOString(),
+    const hurt = recentBlowMs(
+      {
+        lastHurtAt: this.#lastHurtAt === null ? null : this.#lastHurtAt.toISOString(),
+        lastHurtStarving: this.#lastHurtStarving,
+      },
       this.#lastPacketAt ?? now,
     );
     const seen = {

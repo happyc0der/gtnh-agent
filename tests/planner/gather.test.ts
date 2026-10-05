@@ -228,7 +228,8 @@ describe('GATHER chooses each action in code, from the observation', () => {
     ).toMatchObject({
       kind: 'act',
       spec: { type: 'EXPLORE', args: { toward: { x: 1.5, z: -46.5 } } },
-      skip: [{ x: 5, y: 64, z: 5 }],
+      skip: [],
+      pass: [{ x: 5, y: 64, z: 5 }],
     });
     // Remembered places come first; an EXPLORE the policy refuses ends the step, saying why.
     const far = { x: 28, y: 104, z: 107, distance: 106 };
@@ -268,17 +269,26 @@ describe('GATHER chooses each action in code, from the observation', () => {
     ).toMatchObject({
       kind: 'act',
       spec: { type: 'EXPLORE', args: { toward: { x: 28.5, z: 107.5 }, maxDistance: 96 } },
-      skip: [{ x: 5, y: 64, z: 5 }],
+      skip: [],
+      pass: [{ x: 5, y: 64, z: 5 }],
     });
-    // A place near one passed over already is that place again (a chunk's example block moves
-    // as the chunk is seen again): the next one (seen live 2026-10-05: "get me 4 logs" went back
-    // and forth between the same places for 15 minutes).
-    const passed = { ...progress, skipped: [{ x: -48, y: 70, z: 3 }] };
+    // A place in the chunk of one passed over already is that place again (a chunk's example
+    // block moves as the chunk is seen again): the next one (seen live 2026-10-05: "get me 4
+    // logs" went back and forth between the same places for 15 minutes).
+    const passed = { ...progress, passed: [{ x: -61, y: 70, z: 14 }] };
     expect(
       chooseGatherAction(gather(), passed, state, { ...opts(), remembered: [near, far] }),
     ).toMatchObject({
       kind: 'act',
       spec: { type: 'EXPLORE', args: { toward: { x: 28.5, z: 107.5 } } },
+    });
+    // A block skipped near a place (a failed dig) hides no place (an independent review).
+    const dugNear = { ...progress, skipped: [{ x: -48, y: 70, z: 3 }] };
+    expect(
+      chooseGatherAction(gather(), dugNear, state, { ...opts(), remembered: [near, far] }),
+    ).toMatchObject({
+      kind: 'act',
+      spec: { type: 'EXPLORE', args: { toward: { x: -49.5, z: 0.5 } } },
     });
     // An EXPLORE the policy would refuse: the step ends, saying why.
     const refused = opts((spec) => (spec.type === 'EXPLORE' ? 'it is night' : null));

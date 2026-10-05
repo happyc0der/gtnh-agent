@@ -1258,5 +1258,14 @@ describe('dangers from creatures beyond the threat radius', () => {
         safetyCtx(),
       ),
     ).toEqual([]);
+    // Hurt starving at food 0, a bite since: no blow, so no attack either (an independent
+    // review, 2026-10-05: the food trip went offline for it, a zombie 15 blocks off).
+    const starved = makeState((w) => {
+      w.mobs = [mob('minecraft:Zombie', 15)];
+      w.player.hunger = 1;
+      w.player.lastHurtAt = new Date(Date.parse(T0) - 2_000).toISOString();
+      w.player.lastHurtStarving = true;
+    });
+    expect(assessDangers(starved, safetyCtx()).map((v) => v.code)).toEqual(['LOW_HUNGER']);
   });
 });

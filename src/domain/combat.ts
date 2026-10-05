@@ -209,6 +209,19 @@ export const HURT_DANGER_MS = 15_000;
  * How long ago (ms) the player was last hurt, when that was at most HURT_DANGER_MS before
  * `at` (the observation's time), else null.
  */
+/**
+ * How long ago (ms) the player was last struck, when within HURT_DANGER_MS of `at`: a loss of
+ * health at food 0 (GameState player.lastHurtStarving) was starving, no blow, and does not count
+ * (an independent review, 2026-10-05: one bite after starving, a hostile anywhere in the scan
+ * made it an attack).
+ */
+export function recentBlowMs(
+  player: { lastHurtAt: string | null; lastHurtStarving?: boolean },
+  at: string | Date,
+): number | null {
+  return player.lastHurtStarving === true ? null : recentHurtMs(player.lastHurtAt, at);
+}
+
 export function recentHurtMs(lastHurtAt: string | null, at: string | Date): number | null {
   if (lastHurtAt === null) return null;
   const ago = (typeof at === 'string' ? Date.parse(at) : at.getTime()) - Date.parse(lastHurtAt);

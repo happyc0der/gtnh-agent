@@ -13,8 +13,8 @@ import { runSingleCycle, type AgentDeps, type CycleResult } from './agent-loop.t
  *
  *  - the task is finished (or there is none);
  *  - a cycle that did not succeed, or that asks for attention;
- *  - a cycle whose decision was not plain task progress (a safety retreat, eating, upkeep or
- *    a pause), so a human sees why the agent turned aside;
+ *  - a cycle whose decision was not plain task progress (a safety retreat, upkeep or a
+ *    pause), so a human sees why the agent turned aside (a meal or a rest goes on with it);
  *  - the cycle or time limit, the stop file / Ctrl+C (checked before every cycle), or a
  *    lost connection (a cycle error).
  */

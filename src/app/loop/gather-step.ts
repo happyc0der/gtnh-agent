@@ -176,6 +176,7 @@ export function gatherTurn(
   const p = {
     ...started,
     skipped: withSkipped(started.skipped, choice.skip),
+    passed: withSkipped(started.passed, choice.pass ?? []),
     skippedEntities: withSkippedEntities(started.skippedEntities, choice.skipEntities),
   };
   const gathered = gatheredSoFar(p, state);

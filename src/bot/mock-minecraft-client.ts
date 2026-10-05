@@ -17,7 +17,7 @@ import {
   calmSpiderBlocker,
   MAX_BURST_MS,
   MAX_SWINGS_PER_BURST,
-  recentHurtMs,
+  recentBlowMs,
   strikeReach,
   SWING_INTERVAL_TICKS,
   type EntityCategory,
@@ -569,7 +569,13 @@ export class MockMinecraftClient implements MinecraftClient {
   #nearbyEntities(timestamp: string): NearbyEntity[] {
     const w = this.world;
     const pos = w.player.position;
-    const hurt = recentHurtMs(w.player.lastHurtAt ?? null, timestamp);
+    const hurt = recentBlowMs(
+      {
+        lastHurtAt: w.player.lastHurtAt ?? null,
+        lastHurtStarving: w.player.lastHurtStarving ?? false,
+      },
+      timestamp,
+    );
     const listed: Array<Omit<NearbyEntity, 'distance' | 'calm'> & { calmLight: boolean }> = [
       ...(w.mobs ?? []).map((m) => ({
         id: m.id,

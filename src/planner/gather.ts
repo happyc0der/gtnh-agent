@@ -163,6 +163,12 @@ export const GatherProgressSchema = z.strictObject({
    * walk to its stand spot did not bring it within reach.
    */
   skipped: z.array(BlockPositionSchema).max(MAX_SKIPPED),
+  /**
+   * Remembered places the step passed over (it stood there, none in view): every place in
+   * their chunks is passed over too, since a chunk's example block moves as it is seen again.
+   * Never a skipped block (a failed dig is no place: an independent review, 2026-10-05).
+   */
+  passed: z.array(BlockPositionSchema).max(MAX_SKIPPED).default([]),
   /** Animals (entity ids) the step does not try again, for the same reasons. */
   skippedEntities: z.array(EntityNumberSchema).max(MAX_SKIPPED).default([]),
   /**
@@ -292,6 +298,7 @@ export function startGather(
     dug: 0,
     reported: 0,
     skipped: [],
+    passed: [],
     skippedEntities: [],
     last: null,
   };
@@ -438,7 +445,7 @@ const besideColumn = (feet: Position, p: BlockPosition): boolean =>
 
 /**
  * The next action, or how the step ends; `skip`: blocks (and `skipEntities`: animals) to
- * remember not to try again. `entity` is the animal the action is for (null for a block);
+ * remember not to try again; `pass`: remembered places passed over (GatherProgress.passed). `entity` is the animal the action is for (null for a block);
  * `travel`: an EXPLORE toward a remembered place (`target`).
  */
 export type GatherChoice =
@@ -451,8 +458,16 @@ export type GatherChoice =
       travel?: boolean;
       skip: BlockPosition[];
       skipEntities: number[];
+      pass?: BlockPosition[];
     }
-  | { kind: 'end'; end: GatherEnd; why: string; skip: BlockPosition[]; skipEntities: number[] };
+  | {
+      kind: 'end';
+      end: GatherEnd;
+      why: string;
+      skip: BlockPosition[];
+      skipEntities: number[];
+      pass?: BlockPosition[];
+    };
 
 /**
  * Chooses a GATHER step's next action from a fresh observation:
@@ -628,20 +643,18 @@ export function chooseGatherAction(
   // Baritone's mine process goes on to blocks it can get to. A block refused for another
   // reason (no tool that harvests it, a hazard) ends the step: the next plan sees why.
   let travelRefusal: string | null = null;
+  const pass: BlockPosition[] = [];
   if (nearestRefusal === null) {
-    // A place near one passed over already is the same place: a chunk's example block moves
-    // as the chunk is seen again.
-    const passedOver = [...progress.skipped, ...skip];
+    // A place in the chunk of one passed over already is that place again: a chunk's example
+    // block moves as the chunk is seen again (seen live 2026-10-05: "get me 4 logs" went back
+    // and forth between the same places for 15 minutes).
+    const passedChunks = new Set(progress.passed.map(chunkKey));
     for (const place of opts.remembered ?? []) {
       const target = { x: place.x, y: place.y, z: place.z };
-      if (
-        skipped.has(key(target)) ||
-        passedOver.some((s) => Math.hypot(s.x - place.x, s.z - place.z) <= REMEMBERED_NEAR)
-      ) {
-        continue;
-      }
+      if (skipped.has(key(target)) || passedChunks.has(chunkKey(place))) continue;
       if (Math.hypot(place.x + 0.5 - feet.x, place.z + 0.5 - feet.z) <= REMEMBERED_NEAR) {
-        skip.push(target); // there already, and none of it in view: gone (dug, or fell)
+        pass.push(target); // there already, and none of it in view: gone (dug, or fell)
+        passedChunks.add(chunkKey(place));
         continue;
       }
       const explore: ActionSpec = {
@@ -665,6 +678,7 @@ export function chooseGatherAction(
           travel: true,
           skip,
           skipEntities: [],
+          ...(pass.length === 0 ? {} : { pass }),
         };
       }
       travelRefusal ??= `the one remembered at ${formatPosition(target)}: ${why}`;
@@ -695,6 +709,7 @@ export function chooseGatherAction(
           travel: true,
           skip,
           skipEntities: [],
+          ...(pass.length === 0 ? {} : { pass }),
         };
       }
       travelRefusal = `exploring on toward (${w.x}, ${w.z}): ${why}`;
@@ -715,8 +730,12 @@ export function chooseGatherAction(
             (travelRefusal === null ? '' : ` (${travelRefusal})`),
     skip,
     skipEntities: [],
+    ...(pass.length === 0 ? {} : { pass }),
   };
 }
+
+/** A position's chunk (16 x 16 columns), as a key. */
+const chunkKey = (p: { x: number; z: number }): string => `${p.x >> 4},${p.z >> 4}`;
 
 /**
  * A GATHER of a farm animal's drops: the nearest listed animal of that kind that may be

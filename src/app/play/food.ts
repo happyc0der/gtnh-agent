@@ -162,8 +162,8 @@ export function finishFoodTask(repos: Repositories, why: string): void {
 
 /**
  * Hungry with nothing to eat, by day: food first, as the shelter comes first at dusk
- * (night.ts). A trip goes on, session after session (eating ends one: it is no task step),
- * until about a day of food is carried; then the quest goes on where it stopped. With no trip
+ * (night.ts). A trip goes on, session after session (a meal does not end one: live-session.ts
+ * TASK_PROGRESS), until about a day of food is carried; then the quest goes on where it stopped. With no trip
  * to begin or go on: null (a trip that has its food ends here first).
  */
 export async function foodRound(play: PlayState): Promise<RoundEnd> {
