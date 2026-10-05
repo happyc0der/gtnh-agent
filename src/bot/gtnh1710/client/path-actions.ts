@@ -1081,7 +1081,8 @@ export function goalDistance(goal: Goal, from: Vec3): number {
       return Math.min(...goal.goals.map((g) => goalDistance(g, from)));
     case 'out': {
       const inColumn = Math.floor(from.x) === goal.x && Math.floor(from.z) === goal.z;
-      return Math.max(inColumn ? 1 : 0, goal.minY - from.y);
+      const across = Math.hypot(from.x - (goal.x + 0.5), from.z - (goal.z + 0.5));
+      return Math.max(inColumn ? 1 : 0, goal.minY - from.y, goal.distance - across);
     }
     case 'away': {
       let need = 0;

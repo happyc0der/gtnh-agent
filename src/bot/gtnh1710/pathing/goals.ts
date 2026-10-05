@@ -49,8 +49,17 @@ export type Goal =
       readonly from: ReadonlyArray<{ readonly x: number; readonly z: number }>;
       readonly distance: number;
     }
-  /** Out of a hole: the feet in any column but (x, z), no lower than `minY`. */
-  | { readonly kind: 'out'; readonly x: number; readonly z: number; readonly minY: number };
+  /**
+   * Out of a hole: the feet in any column but (x, z), no lower than `minY`, and at least
+   * `distance` across from the column's centre (0: any other column).
+   */
+  | {
+      readonly kind: 'out';
+      readonly x: number;
+      readonly z: number;
+      readonly minY: number;
+      readonly distance: number;
+    };
 
 export const goalBlock = (x: number, y: number, z: number): Goal => ({ kind: 'block', x, y, z });
 export const goalXZ = (x: number, z: number): Goal => ({ kind: 'xz', x, z });
@@ -75,7 +84,13 @@ export const goalAway = (
   from: ReadonlyArray<{ readonly x: number; readonly z: number }>,
   distance: number,
 ): Goal => ({ kind: 'away', from, distance });
-export const goalOut = (x: number, z: number, minY: number): Goal => ({ kind: 'out', x, z, minY });
+export const goalOut = (x: number, z: number, minY: number, distance = 0): Goal => ({
+  kind: 'out',
+  x,
+  z,
+  minY,
+  distance,
+});
 
 /** A goal ready for a search: its test and its heuristic, for feet blocks. */
 export interface CompiledGoal {
@@ -162,16 +177,22 @@ export function compileGoal(goal: Goal, rates: HeuristicRates): CompiledGoal {
         },
       };
     }
-    case 'out':
+    case 'out': {
+      /** Centre to centre, across. */
+      const across = (x: number, z: number): number => Math.hypot(x - goal.x, z - goal.z);
       return {
-        isGoal: (x, y, z) => y >= goal.minY && (x !== goal.x || z !== goal.z),
-        // A block across to leave the column, and the levels up to minY: each a lower bound.
+        isGoal: (x, y, z) =>
+          y >= goal.minY && (x !== goal.x || z !== goal.z) && across(x, z) >= goal.distance - 1e-9,
+        // A block across to leave the column, the rest of the distance, and the levels up to
+        // minY: each a lower bound.
         heuristic: (x, y, z) =>
           Math.max(
             x === goal.x && z === goal.z ? rates.across : 0,
+            rates.across * Math.max(0, goal.distance - across(x, z)),
             vertical(rates, Math.max(0, goal.minY - y)),
           ),
       };
+    }
     case 'away': {
       const d = goal.distance;
       return {
@@ -203,7 +224,11 @@ export function describeGoal(goal: Goal): string {
     case 'any':
       return goal.goals.map(describeGoal).join(' or ');
     case 'out':
-      return `out of the column (${goal.x}, ${goal.z}), feet at y>=${goal.minY}`;
+      return (
+        `out of the column (${goal.x}, ${goal.z})` +
+        (goal.distance > 0 ? `, ${goal.distance} blocks across from it` : '') +
+        `, feet at y>=${goal.minY}`
+      );
     case 'away':
       return `${Math.round(goal.distance * 10) / 10} blocks away from ${goal.from.length} point(s)`;
   }

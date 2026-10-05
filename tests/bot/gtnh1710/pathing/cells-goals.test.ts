@@ -9,6 +9,7 @@ import {
   goalBlock,
   goalGetToBlock,
   goalNear,
+  goalOut,
   goalXZ,
   goalY,
   type Goal,
@@ -117,6 +118,20 @@ describe('goals', () => {
     expect(next.isGoal(2, 64, 0)).toBe(false);
     const any = compileGoal(goalAny(goalBlock(5, 64, 5), goalXZ(-5, -5)), rates);
     expect(any.isGoal(5, 64, 5) && any.isGoal(-5, 0, -5) && !any.isGoal(0, 64, 0)).toBe(true);
+    // Out of a hole: any other column at minY or above; with a distance, that far across.
+    const out = compileGoal(goalOut(0, 0, 64), rates);
+    expect([out.isGoal(1, 64, 0), out.isGoal(0, 70, 0), out.isGoal(1, 63, 0)]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    const clear = compileGoal(goalOut(0, 0, 64, 3), rates);
+    expect([clear.isGoal(2, 64, 2), clear.isGoal(3, 64, 0), clear.isGoal(2, 64, 1)]).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    expect(clear.heuristic(1, 64, 0)).toBeCloseTo(rates.across * 2, 9);
     const away = compileGoal(goalAway([{ x: 0, z: 0 }], 8), rates);
     expect(away.isGoal(8, 64, 0)).toBe(true);
     expect(away.isGoal(6, 64, 0)).toBe(false);

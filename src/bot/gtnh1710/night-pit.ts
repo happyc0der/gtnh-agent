@@ -726,13 +726,20 @@ const CLIMB_MAX_NODES = 20_000;
 const CLIMB_MAX_MS = 300;
 /** Searches a climb out may take: the first, and one from each place a cut path stops. */
 const CLIMB_MAX_SEARCHES = 6;
+/**
+ * How far across from the hole's column a climb out ends, at least: clear of it, on ground a
+ * walk can leave (seen live 2026-10-04: a climb that ended in the next column was still in a
+ * hole an earlier pit had left, and the retreats that came back to it could go nowhere).
+ */
+export const CLIMB_OUT_DISTANCE = 3;
 
 /**
  * The way out of the night pit when no wall or staircase can be dug (planShelterExit; seen
  * live 2026-10-03: cobblestone on three sides and no pickaxe, bamboo on the fourth): the
  * pathfinder, with MOVE_TO's own walk policy (`options`: what a walk may break, and the
- * throwaway blocks it may pillar with), to any feet block out of the pit's column no lower
- * than its ground layer (the ground beside a pit may lie a block lower: seen live), as
+ * throwaway blocks it may pillar with), to any feet block CLIMB_OUT_DISTANCE or more across
+ * from the pit's column, no lower than its ground layer (the ground beside a pit may lie a
+ * block lower: seen live), as
  * Baritone climbs out of a hole: through the roof, a pillar up, a step out. A path the search
  * found to the goal but had to cut (a later movement no longer holds once earlier ones changed
  * blocks) goes on from where the cut leaves the player, on the world as it leaves it, as the
@@ -747,7 +754,7 @@ export function planClimbOut(
   site: PitSite,
   options: PathOptions,
 ): ExitPlan {
-  const goal = goalOut(site.x, site.z, site.groundY);
+  const goal = goalOut(site.x, site.z, site.groundY, CLIMB_OUT_DISTANCE);
   const w = new PlannedWorld(world);
   let from = feet;
   let breaks = 0;

@@ -624,14 +624,15 @@ describe('the way out in the morning', () => {
       /^climb out to \(-?\d+, 64, -?\d+\) \(breaking 1 block\(s\), placing 2\)$/,
     );
     // Seen live: the ground north of the pit lies a block lower (its top at the pit's
-    // second level), so one block up the pillar and a step north is out.
+    // second level), so one block up the pillar and a step north is out of the pit; the climb
+    // goes on across the ground, clear of the hole (CLIMB_OUT_DISTANCE).
     const lower = pit({ ...walls, [k(0, 63, -1)]: ID.air, [k(0, 62, -1)]: ID.grass });
     const low = planClimbOut(lower, AREA.fence, BOTTOM, SITE, options(lower));
     if (!low.ok) throw new Error(low.reason);
     expect(specs(low.steps)).toEqual([
-      { type: 'MOVE_TO', args: { target: { x: 0.5, y: 63, z: -0.5 }, tolerance: 0.5 } },
+      { type: 'MOVE_TO', args: { target: { x: 0.5, y: 64, z: -2.5 }, tolerance: 0.5 } },
     ]);
-    expect(low.steps[0]?.text).toBe('climb out to (0, 63, -1) (breaking 1 block(s), placing 1)');
+    expect(low.steps[0]?.text).toBe('climb out to (0, 64, -3) (breaking 1 block(s), placing 1)');
     // Too few blocks to pillar with: no climb.
     expect(reasonOf(planClimbOut(walled, AREA.fence, BOTTOM, SITE, options(walled, 1)))).toMatch(
       /^no climb out of the pit: /,
@@ -668,8 +669,10 @@ describe('the way out in the morning', () => {
     const target = specs(r.steps)[0];
     expect(target?.type).toBe('MOVE_TO');
     const to = target?.type === 'MOVE_TO' ? target.args.target : null;
-    expect(to !== null && to.y >= 74 && (Math.floor(to.x) !== -24 || Math.floor(to.z) !== 42)).toBe(
-      true,
-    );
+    // On the ground, clear of the hole: the climb that ended in the next column, in the hole an
+    // earlier pit had left, sent the day's retreats back into it.
+    expect(to).not.toBeNull();
+    expect(to?.y).toBeGreaterThanOrEqual(74);
+    expect(Math.hypot((to?.x ?? 0) + 23.5, (to?.z ?? 0) - 42.5)).toBeGreaterThanOrEqual(3);
   });
 });
