@@ -84,6 +84,8 @@ export interface ShelterStatus {
    * else null or absent.
    */
   hostiles?: string | null;
+  /** In the morning: the player is sealed in (GameState player.sealed), hurt lately or not. */
+  sealed?: boolean;
 }
 
 /** Why the shelter shelters no more (ShelterStatus problem): hurt inside it a moment ago. */

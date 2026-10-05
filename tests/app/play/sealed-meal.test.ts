@@ -7,6 +7,7 @@ import { standbyReason } from '../../../src/app/play/live-play.ts';
 import { DEFAULT_PLAY_LIMITS, runPlay, type PlayDeps } from '../../../src/app/play/play.ts';
 import type { MockWorld } from '../../../src/bot/mock-minecraft-client.ts';
 import type { DecisionResult } from '../../../src/domain/decisions.ts';
+import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
 import { worldTime, type GameState } from '../../../src/domain/game-state.ts';
 import type { ShelterStep } from '../../../src/domain/night-shelter.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
@@ -16,9 +17,10 @@ import {
   OWNER_PAUSED_KEY,
 } from '../../../src/persistence/memory-repository.ts';
 import { createRepositories, type Repositories } from '../../../src/persistence/repositories.ts';
+import { routeAndChangesForPlanner } from '../../../src/planner/planner-provider.ts';
 import { routeDecision } from '../../../src/system1/deterministic-router.ts';
 import { manualClock, systemClock } from '../../../src/util/clock.ts';
-import { makeState, makeWorld, routerCtx, testConfig } from '../../fixtures/index.ts';
+import { makeState, makeWorld, routerCtx, safetyCtx, testConfig } from '../../fixtures/index.ts';
 
 // An independent review, 2026-10-05: sealed in its pit at food 0 with hostiles near, System 1
 // eats when food is carried; but a meal that cannot be had (refused as a repeated failure in a
@@ -232,5 +234,22 @@ describe('food in a stack with NBT data: the client never eats it', () => {
         repos,
       )?.carried,
     ).toBeGreaterThan(0);
+  });
+
+  it("the food trip's planner counts it as none too", () => {
+    // An independent review, 2026-10-05: play started a food trip (nothing carried it eats),
+    // and the trip's planner was told enough food was carried already.
+    const state = makeState((w) => {
+      w.player.hunger = 3;
+      w.inventory.items = { 'minecraft:bread': 10 };
+      w.inventory.nbt = { 'minecraft:bread': 10 };
+      w.task = { taskId: FOOD_TASK_ID, goal: 'Get food', subgoal: '0/10', status: 'active' };
+    });
+    const { route } = routeAndChangesForPlanner(state, undefined, {
+      safety: safetyCtx(),
+      recentMeals: [],
+      combatEnabled: false,
+    });
+    expect(route?.stock[0]?.have).toBe(0);
   });
 });

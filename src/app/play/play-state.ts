@@ -46,6 +46,11 @@ export interface PlayState {
   exitGaveUpAt: number | null;
   /** Morning looks at last night's shelter in a row that could not tell (night.ts). */
   morningUnknown: number;
+  /**
+   * When play began this morning's wait in its shelter for hostiles (night.ts waitOutMobs, or a
+   * way out paused or refused for them), until it is out: MOB_SHELTER_MAX_MS counts from it.
+   */
+  mobWaitSince: number | null;
   /** A note for the next goal's journal (e.g. how to leave the night shelter). */
   wakeNote: string | null;
   /** The last session saw chunks near that world memory had not seen near before. */
@@ -167,6 +172,7 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     exitTries: 0,
     exitGaveUpAt: null,
     morningUnknown: 0,
+    mobWaitSince: null,
     wakeNote: null,
     explored: false,
     last: null,
@@ -269,7 +275,7 @@ const MOB_PAUSE_REASONS: ReadonlySet<string> = new Set([
  * last decision: PAUSE_AND_ASK_USER with HOSTILES_NEARBY or UNCLASSIFIED_ENTITY_NEARBY, and
  * nothing but the home codes besides), or on an answer to a mob that failed (a retreat that
  * found no way home, perhaps fleeing a little instead, or refused as a repeated failure; a
- * fight back), else null. Mobs move on or burn in daylight, and an offline player cannot be
+ * fight back; a meal sealed in with creatures near), else null. Mobs move on or burn in daylight, and an offline player cannot be
  * hurt: such a session is waited out offline, not handed to a person, as the idle standby's
  * failed retreat is (seen live 2026-10-04: after its retreats in a ravine of mobs failed, a
  * trip gave up, the bot stood there idle and was killed).

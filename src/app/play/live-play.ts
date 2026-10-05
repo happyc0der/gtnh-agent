@@ -224,6 +224,7 @@ export function liveShelter(
       const stuck: ShelterStatus = {
         ...base,
         walled: true,
+        sealed: state.player.sealed === true,
         sheltered: state.player.sealed === true && !hurt,
         hostiles:
           mobs.length === 0 ? null : `${mobs.map((v) => v.message).join('; ')}${whoIsNear(state)}`,

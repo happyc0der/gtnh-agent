@@ -398,11 +398,26 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
       // may disagree, and each round would run another session at once (an independent review,
       // 2026-10-05). Not after a meal in there that failed: that is waited out offline (mobPause,
       // below), never tried again and again while starving hurts (a later review, 2026-10-05).
+      // At most MOB_SHELTER_MAX_MS of it, then offline, as waitOutMobs (a mob at the edge of the
+      // threat radius would have it look again and again: a later review, 2026-10-05); meanwhile
+      // commands are heard, as in the shelter at night.
       const last = play.lastDecision;
       const shelteredPause =
         last?.decision === 'PAUSE_AND_ASK_USER' && last.reasonCodes.includes('SHELTERED');
-      if (shelteredPause || (status.sheltered && mobRefused)) {
+      if (shelteredPause || (status.sealed === true && mobRefused)) {
         play.exitTries -= 1;
+        play.mobWaitSince ??= play.now();
+        if (play.now() - play.mobWaitSince >= MOB_SHELTER_MAX_MS) {
+          const minutes = Math.round(MOB_SHELTER_MAX_MS / 60_000);
+          return {
+            ...done(
+              play,
+              `hostiles stayed near the sealed shelter for ${minutes} min: waiting offline for them to leave`,
+            ),
+            mobNearby: 'HOSTILES_NEARBY, SHELTERED',
+          };
+        }
+        await play.whileSheltered();
         await play.sleep(MOB_SHELTER_POLL_MS);
         return 'next-round';
       }
@@ -437,17 +452,34 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
   }
   play.exitTries = 0;
   play.exitGaveUpAt = null;
+  play.mobWaitSince = null;
   return null;
 }
 
-/** The safety rules refused the cycle's action because a creature is near (dangerGate). */
+/** Dangers a wait in the sealed shelter outlasts: creatures go, and the vitals keep. */
+const WAITABLE_DANGERS: ReadonlySet<string> = new Set([
+  'HOSTILES_NEARBY',
+  'UNCLASSIFIED_ENTITY_NEARBY',
+  'LOW_HEALTH',
+  'LOW_HUNGER',
+]);
+
+/**
+ * The safety rules refused the cycle's action only because a creature is near (dangerGate),
+ * with low vitals at most besides: not lava, the boundary or a repeated failure.
+ */
 function refusedForMobs(r: CycleResult): boolean {
   if (r.outcome?.status !== 'rejected') return false;
-  return r.outcome.validation.violations.some(
-    (v) =>
-      v.code === 'ACTION_NOT_ALLOWED_IN_DANGER' &&
-      /\b(HOSTILES_NEARBY|UNCLASSIFIED_ENTITY_NEARBY)\b/.test(String(v.details?.['dangers'] ?? '')),
-  );
+  const { violations, preconditionFailures } = r.outcome.validation;
+  if (violations.length === 0 || preconditionFailures.length > 0) return false;
+  return violations.every((v) => {
+    if (v.code !== 'ACTION_NOT_ALLOWED_IN_DANGER') return false;
+    const dangers = String(v.details?.['dangers'] ?? '').split(',');
+    return (
+      dangers.every((d) => WAITABLE_DANGERS.has(d)) &&
+      dangers.some((d) => d === 'HOSTILES_NEARBY' || d === 'UNCLASSIFIED_ENTITY_NEARBY')
+    );
+  });
 }
 
 /** How often play looks again while it waits in its shelter for hostiles to go. */
@@ -475,8 +507,9 @@ export const MOB_SHELTER_MAX_MS = 5 * 60_000;
  * play ends to wait offline (the caller waits a while and plays on), as for a mob near home.
  */
 async function waitOutMobs(play: PlayState, mobs: string): Promise<RoundEnd> {
-  const since =
-    play.sheltered !== null && 'mobs' in play.sheltered ? play.sheltered.since : play.now();
+  // From the first wait this morning, not this one: a mob at the edge of the threat radius
+  // ends and starts it again and again.
+  const since = (play.mobWaitSince ??= play.now());
   if (play.sheltered === null || !('mobs' in play.sheltered)) {
     play.emit({
       kind: 'night',

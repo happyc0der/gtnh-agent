@@ -1,7 +1,7 @@
 import type { Action } from '../domain/actions.ts';
 import { ENGAGE_RADIUS } from '../domain/combat.ts';
 import type { Position } from '../domain/common.ts';
-import type { GameState } from '../domain/game-state.ts';
+import { usableItems, type GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock, formatPosition } from '../domain/geometry.ts';
 import {
   craftingRecipe,
@@ -89,7 +89,9 @@ export function checkPreconditions(
 
     case 'EAT_FOOD':
       requireInventory();
-      if (have(action.args.item) < 1) failures.push(`no ${action.args.item} in inventory`);
+      // A stack with NBT data is never eaten (the client skips it).
+      if (inventory === null || (usableItems(inventory)[action.args.item] ?? 0) < 1)
+        failures.push(`no ${action.args.item} in inventory`);
       if (state.player.hunger.known && state.player.hunger.value >= 20)
         failures.push('player is not hungry');
       break;

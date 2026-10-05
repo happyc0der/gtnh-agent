@@ -399,16 +399,21 @@ function leave(play: PlayState, round: PlayResult): PlayResult {
     }
   }
   const result = play.deps.listen === true ? (stopOrLimit(play) ?? round) : round;
-  if (result.night !== null || result.mobNearby !== null) {
-    const running = play.deps.repos.commands.running();
-    if (running !== null && play.deps.commands !== undefined) {
-      play.deps.commands.reply(
-        running.sender,
-        result.night !== null
-          ? nightReply(result.stopReason)
-          : 'A mob is near: I go offline a moment for it to leave',
-      );
-    }
+  if ((result.night !== null || result.mobNearby !== null) && play.deps.commands !== undefined) {
+    const { repos } = play.deps;
+    // The running command's sender, and those whose commands wait (one heard just before: an
+    // independent review, 2026-10-05: home from a retreat, it went offline for a mob at once,
+    // and a !goto whispered meanwhile went unanswered), each once.
+    const senders = new Set(
+      [repos.commands.running(), ...repos.commands.queued()].flatMap((c) =>
+        c === null ? [] : [c.sender],
+      ),
+    );
+    const text =
+      result.night !== null
+        ? nightReply(result.stopReason)
+        : 'A mob is near: I go offline a moment for it to leave';
+    for (const sender of senders) play.deps.commands.reply(sender, text);
   }
   return result;
 }

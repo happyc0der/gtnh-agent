@@ -205,4 +205,52 @@ describe('replies when one command replaces another', () => {
     expect(sim.replies).toContain(`${OWNER2}: OK: going to -20 64 0 (instead of: go to 20 64 0)`);
     expect(repos.commands.get(1)).toMatchObject({ status: 'cancelled' });
   });
+
+  it('another owner\'s !come is named as theirs, not as "come to you"', async () => {
+    // An independent review, 2026-10-05: the replaced owner read "asked me to come to you".
+    const repos = open();
+    const sim: Sim = {
+      position: { x: 0.5, y: 64, z: 0.5 },
+      heard: [whisper('!goto 20 64 0', OWNER), whisper('!come', OWNER2)],
+      replies: [],
+      time: null,
+      clock: { t: 0 },
+      sleeps: 0,
+    };
+    await runPlay(deps(repos, sim), LIMITS, { stopRequested: () => null });
+    expect(sim.replies.filter((x) => x.startsWith(`${OWNER}:`))).toEqual([
+      `${OWNER}: Stopped: ${OWNER2} asked me to come to ${OWNER2} instead`,
+    ]);
+    // By night, the new command's note names the old one as its sender's.
+    const night = open();
+    const r = night.commands.add({
+      source: 'chat',
+      sender: OWNER,
+      rawText: '!come',
+      command: { verb: 'come' },
+    });
+    night.commands.start(r.id, 'OK: coming to you');
+    const dark: Sim = {
+      position: { x: 0.5, y: 64, z: 0.5 },
+      heard: [whisper('!goto -20 64 0', OWNER2)],
+      replies: [],
+      time: worldTime(18_000, true),
+      clock: { t: 0 },
+      sleeps: 0,
+    };
+    dark.onSleep = () => {
+      dark.time = worldTime(1_000, true);
+    };
+    await runPlay(
+      deps(night, dark, {
+        time: () => Promise.resolve(dark.time),
+        shelter: () => Promise.resolve(sheltered),
+      }),
+      LIMITS,
+      { stopRequested: () => null },
+    );
+    expect(dark.replies[0]).toBe(
+      `${OWNER2}: It is night: I stay in my shelter until morning (in about 5 min), then I go to -20 64 0 (instead of: come to ${OWNER})`,
+    );
+  });
 });

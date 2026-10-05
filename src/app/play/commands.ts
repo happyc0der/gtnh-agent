@@ -18,6 +18,7 @@ import {
   OWNER_PAUSED_KEY,
   QUESTS_OFF_KEY,
 } from '../../persistence/memory-repository.ts';
+import type { DecisionResult } from '../../domain/decisions.ts';
 import type { OwnerCommandRecord } from '../../persistence/owner-command-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import { checkWithinBoundary } from '../../safety/coordinate-boundaries.ts';
@@ -188,9 +189,12 @@ async function handleQueued(
   if (mode === 'night') {
     // It will replace the running one in the morning, and says so now (an independent review,
     // 2026-10-05: the last word of the night promised the old command).
-    const running = repos.commands.running();
-    const old =
-      running?.command != null && isActionCommand(running.command) ? running.command : null;
+    const old = [repos.commands.running(), ...repos.commands.queued().filter((q) => q.id < cmd.id)]
+      .filter(
+        (c): c is OwnerCommandRecord =>
+          c !== null && c.id !== cmd.id && c.command !== null && isActionCommand(c.command),
+      )
+      .map((c) => describeFor(c, cmd.sender));
     sayOnce(play, cmd, nightKey(play), nightNote(play, command, old));
     return;
   }
@@ -207,13 +211,9 @@ async function handleQueued(
   play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: ack });
 }
 
-const nightNote = (
-  play: PlayState,
-  c: OwnerCommand,
-  instead: OwnerCommand | null = null,
-): string => {
+const nightNote = (play: PlayState, c: OwnerCommand, instead: readonly string[] = []): string => {
   const shelter = play.sheltered;
-  const then = `then I ${describeCommand(c)}${instead === null ? '' : ` (instead of: ${describeCommand(instead)})`}`;
+  const then = `then I ${describeCommand(c)}${instead.length === 0 ? '' : ` (instead of: ${instead.join('; ')})`}`;
   if (shelter !== null && 'mobs' in shelter) {
     return `Hostiles are near my shelter: I stay inside until they go, ${then}`;
   }
@@ -249,6 +249,10 @@ export async function commandsAtNight(play: PlayState): Promise<void> {
   }
 }
 
+/** `c` described to `reader`: "come to you" is "come to Keshav" to another owner. */
+const describeFor = (c: OwnerCommandRecord, reader: string): string =>
+  describeCommand(c.command as OwnerCommand, c.sender === reader ? undefined : c.sender);
+
 /**
  * Cancels the running action command and the queued ones before `cmd`; what they were. Another
  * owner whose command it was is told (an independent review, 2026-10-05: with two owners, the
@@ -269,13 +273,12 @@ function replaceOthers(play: PlayState, cmd: OwnerCommandRecord, command: OwnerC
     play.commandRuns.delete(c.id);
     endCommandTask(repos, c.id, 'cancelled');
     if (c.sender !== cmd.sender) {
-      (play.deps.commands as CommandDeps).reply(
-        c.sender,
-        `Stopped: ${cmd.sender} asked me to ${describeCommand(command)} instead`,
-      );
+      const text = `Stopped: ${cmd.sender} asked me to ${describeCommand(command, cmd.sender)} instead`;
+      (play.deps.commands as CommandDeps).reply(c.sender, text);
+      play.emit({ kind: 'command', id: c.id, sender: c.sender, message: text });
     }
   }
-  return others.map((c) => describeCommand(c.command as OwnerCommand));
+  return others.map((c) => describeFor(c, cmd.sender));
 }
 
 /** A queued action command newer than `cmd` passes its check now (it would replace `cmd`). */
@@ -757,6 +760,8 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
   }
   const reflex = call.text;
   play.emit({ kind: 'idle', message: `standing by: ${reflex}` });
+  // This session's decisions only (a session of no cycle leaves none).
+  play.lastDecision = null;
   const result = await blueprintSession(play, {
     taskId: STANDBY_TASK_ID,
     goal: 'Stand by for owner commands: System 1 acts first (a retreat, a fight, a meal, a rest)',
@@ -773,7 +778,9 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
   // after any session, not tried again every few seconds (seen live 2026-10-04: 37 refused
   // retreats in a row, from a pit the morning had opened). A retreat that failed ends the
   // session 'cycle-failed'; one refused as a repeated failure, or a pause, 'needs-attention'.
-  const reasons = mobPause(result.stopKind, play.lastDecision);
+  // Set by the session's cycles (TypeScript keeps the null from before it).
+  const last = play.lastDecision as DecisionResult | null;
+  const reasons = mobPause(result.stopKind, last);
   if (reasons !== null) {
     play.emit({
       kind: 'idle',
@@ -785,7 +792,7 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
   // Home from a retreat: a look at once, so a mob that followed it there sends it offline now,
   // not at the next look 3 s on (seen live 2026-10-05: a Fire Creeper 4.5 blocks away followed
   // the 8.8-block retreat and exploded about 3 s after the bot arrived: 20 health to 12).
-  if (play.lastDecision?.decision === 'RETREAT_HOME') {
+  if (last?.decision === 'RETREAT_HOME' && play.hooks.stopRequested() === null) {
     const again = (await play.deps.commands?.standby?.()) ?? null;
     if (again?.kind === 'mob') {
       play.emit({ kind: 'idle', message: `a mob followed it (${again.reasons}): waiting offline` });

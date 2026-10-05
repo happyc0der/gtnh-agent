@@ -333,9 +333,12 @@ nothing and looks again 5 s later, up to 4 times in a row (`UNKNOWN_LOOKS`), rat
 command or the day's goal from inside the pit; so does a clock not known yet, since it may be
 night still (the same review: an unknown clock read as day, and the morning could dig out by
 night). A
-step of the way out refused because a creature came back in range while System 1 decided
-spends no try either: play waits inside for it, as when the morning began so (seen live
-2026-10-05: a Fire Creeper at the edge of the threat radius). A pit cut
+step of the way out refused only because a creature came back in range while System 1
+decided (low vitals at most besides) spends no try either, when the player is sealed in (hurt
+lately or not): play waits inside for it, as when the morning began so (seen live 2026-10-05: a
+Fire Creeper at the edge of the threat radius). All such waiting in a morning, however often
+the creatures come and go, ends offline after 5 minutes (`MOB_SHELTER_MAX_MS`, from the first:
+`mobWaitSince`; a later review the same day), and hears commands meanwhile. A pit cut
 short because the day came meanwhile (a time jump: someone slept, and the dig down is refused
 by day) goes on to the morning's way out, never offline in daylight. In the morning, walled in, code plans the way out with
 the same rules (`planShelterExit`): from the pit, the roof and a staircase (two digs for each
@@ -375,7 +378,8 @@ near, since a walk cannot leave the pit and no blow lands through its walls: it 
 `SHELTERED` and `HUNGRY`: the morning's way out, an idle standby): the safety policy allows a
 meal with creatures near only sealed in (an independent review, 2026-10-05: starving in its
 sealed pit with zombies about, every meal was refused). Food in a stack with NBT data is no food
-for this (the client never uses such a stack: GameState `inventory.nbt`, `usableItems`), and a
+(the client never uses such a stack: GameState `inventory.nbt`, `usableItems`; System 1, the
+food trip, its planner and EAT_FOOD's precondition all count it so), and a
 meal in there that fails is waited out offline (`mobPause`), never tried again and again (a
 later review the same day: a meal that kept failing kept the bot online, starving). A loss of
 health at food 0 is starving, no blow; at food 0 with nothing to eat, though, it does not stay,
@@ -572,10 +576,12 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   it will replace ("then I go to ... (instead of: ...)"), and the running command's note is not
   said after it. An action command with a newer one waiting that can start too is left to it:
   one "OK ... (instead of: ...)"; another owner whose command it replaces is told ("Stopped: ...
-  asked me to ... instead"). A stop
+  asked me to ... instead"), and another owner's command is named as theirs ("come to Keshav",
+  not "come to you"). A stop
   cancels the commands sent before it, never one sent after it ("!stop" then "!come" comes). Before play goes offline (a night with no
   shelter, a mob near), what the owners said is stored first, since the heard lines live only in
-  that connection, so a stop whispered just then is taken when play comes back. The operator's
+  that connection, so a stop whispered just then is taken when play comes back; and each owner
+  whose command runs or waits is told why it goes ("A mob is near: I go offline a moment ..."). The operator's
   stop (`cli halt`, the stop file, Ctrl+C) ends the owners' commands with play, and their senders
   are told ("my operator stopped play"); a lost connection or a limit does not, and a restart
   resumes them. A halt while the bot waits offline (a night, a mob, a reconnect) ends them too, in

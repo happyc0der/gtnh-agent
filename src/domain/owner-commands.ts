@@ -651,7 +651,7 @@ export function resolveItemName(raw: string): string | null {
 const coord = (v: number): string => (Number.isInteger(v) ? String(v) : v.toFixed(1));
 
 /** What a command asks for, in a few words (acknowledgements, status, the task's goal). */
-export function describeCommand(c: OwnerCommand): string {
+export function describeCommand(c: OwnerCommand, sender?: string): string {
   switch (c.verb) {
     case 'stop':
       return 'stop';
@@ -664,9 +664,9 @@ export function describeCommand(c: OwnerCommand): string {
     case 'help':
       return 'list the commands';
     case 'come':
-      return 'come to you';
+      return `come to ${sender ?? 'you'}`;
     case 'follow':
-      return c.player === null ? 'follow you' : `follow ${c.player}`;
+      return `follow ${c.player ?? sender ?? 'you'}`;
     case 'goto':
       return `go to ${coord(c.x)} ${c.y === null ? '' : `${coord(c.y)} `}${coord(c.z)}`;
     case 'goto-waypoint':

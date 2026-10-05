@@ -19,7 +19,7 @@ import {
   GARDEN_DROPS,
 } from '../domain/food.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
-import type { GameState } from '../domain/game-state.ts';
+import { usableItems, type GameState } from '../domain/game-state.ts';
 import { distance, eyeDistanceToBlock } from '../domain/geometry.ts';
 import {
   craftingRecipe,
@@ -568,7 +568,8 @@ function foodRouteForPlanner(
   const approved = new Set(config.approvedFoods);
   const isProtectedFood = (item: string): boolean =>
     food !== undefined && isProtected(item, food.safety.protectedItems);
-  const items = state.inventory.known ? state.inventory.value.items : {};
+  // Food in a stack with NBT data is none: the client never eats such a stack.
+  const items = state.inventory.known ? usableItems(state.inventory.value) : {};
   const have = carriedFoodPoints(
     items,
     config.approvedFoods,

@@ -688,7 +688,7 @@ describe("owners' commands in play", () => {
       'Failed: 300 64 0 is outside my safety boundary (x -256..256, z -256..256)',
       // The owner's whereabouts are not checked by night (they may change by the morning), and
       // a command replaces another only as it starts (an independent review, 2026-10-05).
-      'It is night: I stay in my shelter until morning (in about 5 min), then I go to 20 64 0',
+      'It is night: I stay in my shelter until morning (in about 5 min), then I go to 20 64 0 (instead of: come to you)',
       'OK: going to 20 64 0 (instead of: come to you)',
       'Done: at 20 64 0',
     ]);

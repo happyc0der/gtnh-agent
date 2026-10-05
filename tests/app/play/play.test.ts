@@ -1390,10 +1390,13 @@ describe('autonomous play', () => {
           now: () => 0,
           inventory: () => Promise.resolve({}),
           time: () => Promise.resolve(worldTime(1_000, true)),
+          // Sealed in, though hurt lately (starving, say) when `sheltered` is false: the
+          // refusal is waited out inside all the same (a later review, 2026-10-05).
           shelter: () =>
             Promise.resolve({
               kind: 'pit' as const,
-              sheltered: sealed,
+              sheltered: false,
+              sealed,
               steps: [],
               needs: {},
               problem: null,
@@ -1457,8 +1460,95 @@ describe('autonomous play', () => {
     const inside = await run(true);
     expect(inside.exits).toBe(6);
     expect(inside.sleeps).toEqual(Array(6).fill(MOB_SHELTER_POLL_MS));
-    // Already open (a dig done): the usual end of the session.
+    // Not sealed in (a dig done, the pit open): the usual end of the session.
     expect((await run(false)).exits).toBe(1);
+  });
+
+  it('waiting inside for creatures that come and go ends offline after MOB_SHELTER_MAX_MS', async () => {
+    // An independent review, 2026-10-05: a mob at the edge of the threat radius had the
+    // morning look again every 5 s for good, past the 5-minute wait; and a refusal with lava
+    // near too is no creature's to wait out.
+    const refused = (dangers: string): CycleResult =>
+      ({
+        summary: 'EXECUTE_KNOWN_SAFE_STEP -> DIG_BLOCK -> rejected',
+        status: 'rejected',
+        decision: {
+          decision: 'EXECUTE_KNOWN_SAFE_STEP',
+          confidence: 0.95,
+          reasonCodes: ['KNOWN_SAFE_STEP'],
+          factsUsed: {},
+          requiresHumanConfirmation: false,
+          provider: 'test',
+        },
+        outcome: {
+          status: 'rejected',
+          validation: {
+            ok: false,
+            violations: [
+              {
+                code: 'ACTION_NOT_ALLOWED_IN_DANGER',
+                severity: 'block',
+                message: `DIG_BLOCK is not allowed while: ${dangers}`,
+                details: { actionType: 'DIG_BLOCK', dangers },
+              },
+            ],
+            preconditionFailures: [],
+            requiresUserPause: false,
+          },
+        },
+      }) as unknown as CycleResult;
+    const run = async (dangers: string) => {
+      const repos = open();
+      nightSpent(repos);
+      const clock = { t: 0 };
+      let exits = 0;
+      const result = await runPlay(
+        {
+          repos,
+          now: () => clock.t,
+          inventory: () => Promise.resolve({}),
+          time: () => Promise.resolve(worldTime(1_000, true)),
+          shelter: () =>
+            Promise.resolve({
+              kind: 'pit' as const,
+              sheltered: true,
+              sealed: true,
+              steps: [],
+              needs: {},
+              problem: null,
+              walled: true,
+              exit: EXIT,
+              hostiles: null,
+            }),
+          session: (_limits, hooks) => {
+            exits += 1;
+            clock.t += 7_000; // System 1's look
+            hooks.onCycle(refused(dangers), 1);
+            return Promise.resolve({
+              cycles: [{ cycleId: 'c', summary: 'rejected' }],
+              stopReason: 'stopped after: EXECUTE_KNOWN_SAFE_STEP -> DIG_BLOCK -> rejected',
+              stopKind: 'needs-attention',
+              taskId: 'leave-shelter',
+              taskStatus: 'active',
+              elapsedMs: 1,
+            });
+          },
+          sleep: (ms) => {
+            clock.t += ms;
+            return Promise.resolve();
+          },
+        },
+        DEFAULT_PLAY_LIMITS,
+        { stopRequested: () => (exits >= 100 ? 'test over' : null) },
+      );
+      return { result, exits, t: clock.t };
+    };
+    const mobs = await run('HOSTILES_NEARBY,LOW_HUNGER');
+    expect(mobs.result.mobNearby).toBe('HOSTILES_NEARBY, SHELTERED');
+    expect(mobs.t).toBeGreaterThanOrEqual(MOB_SHELTER_MAX_MS);
+    expect(mobs.exits).toBeLessThan(40);
+    // Lava near too: the usual end of the session.
+    expect((await run('HAZARD_PROXIMITY,HOSTILES_NEARBY')).exits).toBe(1);
   });
 
   it('the clock not known yet (just after a login): no way out is dug, it looks again', async () => {

@@ -72,15 +72,16 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  * Priority:
  *   0. unreliable state (unknown/stale/inconsistent)  -> PAUSE_AND_ASK_USER
  *   1. outside work area                               -> PAUSE_AND_ASK_USER
- *      creatures nearby, the player sealed in and not  -> EAT (SHELTERED, HUNGRY) when hungry with
- *      struck lately                                      food it can eat, else PAUSE (SHELTERED: it
+ *      creatures nearby, the player sealed in, not     -> EAT (SHELTERED, HUNGRY) when hungry with
+ *      struck lately, no lava or void near                food it can eat, else PAUSE (SHELTERED: it
  *                                                         stays inside); at food 0 with nothing to
  *                                                         eat, the rules below
  *      creatures nearby, too weak to run or fight      -> PAUSE (CRITICAL_HEALTH: offline at once)
  *      hostiles nearby and fighting back is the answer -> DEFEND (only with combat enabled; see
  *                                                         defend.ts: cornered by a quick kill,
  *                                                         or nowhere to retreat to)
- *      struck lately, a creature or a hazard near      -> PAUSE (UNDER_ATTACK: offline at once)
+ *      struck lately, a creature near, no hazard       -> PAUSE (UNDER_ATTACK: offline at once)
+ *      struck lately, only a hazard in view            -> PAUSE (UNDER_ATTACK, ATTACKER_UNSEEN)
  *      lava/void/hostiles nearby                       -> RETREAT_HOME (or PAUSE if already home / no home)
  *      struck lately, nothing in view                  -> PAUSE (UNDER_ATTACK, ATTACKER_UNSEEN)
  *   2. low health                                      -> REST (food enough to heal), else RETREAT_HOME (or PAUSE)

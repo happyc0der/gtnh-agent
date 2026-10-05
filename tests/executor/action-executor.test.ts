@@ -203,6 +203,18 @@ describe('preconditions', () => {
     ).toContain('player is not hungry');
   });
 
+  it('EAT_FOOD needs a stack without NBT data: the client never eats one with it', () => {
+    // An independent review, 2026-10-05.
+    const bread = { type: 'EAT_FOOD', args: { item: 'minecraft:bread' } } as const;
+    const nbt = (n: number) => (w: MockWorld) => {
+      w.player.hunger = 10;
+      w.inventory.items['minecraft:bread'] = 3;
+      w.inventory.nbt = { 'minecraft:bread': n };
+    };
+    expect(pre(bread, nbt(3)).failures).toContain('no minecraft:bread in inventory');
+    expect(pre(bread, nbt(2)).ok).toBe(true);
+  });
+
   it('EXPLORE needs the position, and a point target at least 2 blocks away', () => {
     expect(pre({ type: 'EXPLORE', args: { toward: 'east', maxDistance: 16 } }).ok).toBe(true);
     expect(
