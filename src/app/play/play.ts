@@ -30,7 +30,15 @@ import {
   type SessionStopKind,
 } from '../loop/live-session.ts';
 import { scoutingRound, type Scouting } from './scouting.ts';
-import { commandRound, commandsAtNight, idleFor, idleRound, type CommandDeps } from './commands.ts';
+import {
+  cancelActions,
+  commandRound,
+  commandsAtNight,
+  idleFor,
+  idleRound,
+  intake,
+  type CommandDeps,
+} from './commands.ts';
 import { foodRound, type FoodStatus } from './food.ts';
 import { morningRound, nightRound } from './night.ts';
 import { goalRound } from './goal-round.ts';
@@ -265,6 +273,11 @@ export interface PlayResult {
 export interface PlayHooks {
   /** A reason to stop (stop file, Ctrl+C), checked before every session and cycle. */
   stopRequested: () => string | null;
+  /**
+   * The operator stopped play (Ctrl+C, the stop file of `cli halt`), not a lost connection or a
+   * limit: the owners' commands end with it. Absent: never.
+   */
+  operatorStopped?: () => boolean;
   onEvent?: (event: PlayEvent) => void;
 }
 
@@ -368,6 +381,23 @@ async function endsPlay(play: PlayState, round: PlayResult): Promise<boolean> {
  * told when the agent goes offline (the night with no shelter, a mob near home).
  */
 function leave(play: PlayState, round: PlayResult): PlayResult {
+  // What the owners said lately is stored before the client goes: the heard lines live only in
+  // this connection (an independent review, 2026-10-04: a !stop whispered just before an
+  // offline wait was lost, and the trip it stopped went on after).
+  intake(play);
+  // The operator stopped play (the stop file, cli halt, Ctrl+C): the owners' commands end with
+  // it, rather than come back unannounced at the next play, perhaps days later.
+  const operator = play.hooks.operatorStopped?.() === true ? play.hooks.stopRequested() : null;
+  if (operator !== null) {
+    // The whisper names no local path (the stop file's); the log says which stop it was.
+    const stopped = cancelActions(play, 'Stopped: my operator stopped play', { tell: true });
+    if (stopped.length > 0) {
+      play.emit({
+        kind: 'idle',
+        message: `play was stopped (${operator}): the owners' commands end with it (${stopped.join('; ')})`,
+      });
+    }
+  }
   const result = play.deps.listen === true ? (stopOrLimit(play) ?? round) : round;
   if (result.night !== null || result.mobNearby !== null) {
     const running = play.deps.repos.commands.running();

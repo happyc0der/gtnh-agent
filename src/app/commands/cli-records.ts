@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { gtOreByName } from '../../goals/ore-names.ts';
-import { describeCommand, isStructured, parseOwnerCommand } from '../../domain/owner-commands.ts';
+import {
+  describeCommand,
+  isStopText,
+  isStructured,
+  parseOwnerCommand,
+} from '../../domain/owner-commands.ts';
 import { TaskStatusSchema } from '../../domain/tasks.ts';
 import { NOT_UNDERSTOOD } from '../play/commands.ts';
 import { openDatabase } from '../../persistence/database.ts';
@@ -95,7 +100,10 @@ export function commandCommand(cli: Cli): number {
     process.stderr.write('no owner is configured (MC_OWNERS): owner commands are off\n');
     return 1;
   }
-  const parsed = parseOwnerCommand(text, { ore: gtOreByName });
+  // A stop in plain words is a stop, as in chat (isStopText): live play interrupts for it.
+  const parsed: ReturnType<typeof parseOwnerCommand> = isStopText(text)
+    ? { ok: true, command: { verb: 'stop' } }
+    : parseOwnerCommand(text, { ore: gtOreByName });
   // A `!` command that does not parse is refused with its usage; plain words go to the
   // translator ("come back home" starts like !come but is natural language), as in play.
   if (!parsed.ok && isStructured(text)) {

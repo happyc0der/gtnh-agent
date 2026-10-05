@@ -508,7 +508,11 @@ export async function runLivePlay(
               ...(listen ? { listen } : {}),
             },
             input.limits,
-            { stopRequested, onEvent: input.onEvent },
+            {
+              stopRequested,
+              operatorStopped: () => interrupted || existsSync(stopFile),
+              onEvent: input.onEvent,
+            },
           );
           return { ...result, info: client.info() };
         } finally {

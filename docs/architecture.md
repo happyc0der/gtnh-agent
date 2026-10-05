@@ -475,8 +475,11 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   recipient). `commandTextOf` (`src/domain/owner-commands.ts`) then keeps only an owner's line
   (exact, case-sensitive, never the bot itself) that is a whisper, or public chat starting with
   `!`, `#` or the bot's name. The client queues those (`takeOwnerMessages`); the world model still
-  keeps only its last raw lines, for diagnostics. A stop in the command form stops the action in
-  progress at once (below).
+  keeps only its last raw lines, for diagnostics. A stop stops the action in progress at once
+  (below): the command form, or any message whose first word (after "please", "no", "hey"...) is
+  stop, halt, cancel, abort or freeze ("stop that", "no, stop!", "!stop following me";
+  `isStopText`). Intake stores such a message as `!stop` (from `cli command` too), never left to
+  the model or refused for its usage: a stop never does harm, and a missed one may.
 - **The commands** (`src/domain/owner-commands.ts`): a fixed Zod schema (stop, pause, resume,
   status, help, come, follow, goto a point or a waypoint, home, explore, tunnel, get, mine,
   sethome, quests on/off, waypoint save/delete/list). `parseOwnerCommand` parses the command form deterministically
@@ -495,6 +498,14 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   morning rounds: it hears
   the commands that came (chat and the database), answers the instant ones (stop, pause, status,
   waypoints...) and starts the newest action command, cancelling any other: one runs at a time.
+  A command that cannot even start (out of sight, outside the boundary, no such waypoint) fails
+  at once, by night too, and replaces nothing; a stop cancels the commands sent before it, never
+  one sent after it ("!stop" then "!come" comes). Before play goes offline (a night with no
+  shelter, a mob near), what the owners said is stored first, since the heard lines live only in
+  that connection, so a stop whispered just then is taken when play comes back. The operator's
+  stop (`cli halt`, the stop file, Ctrl+C) ends the owners' commands with play, and their senders
+  are told ("my operator stopped play"); a lost connection or a limit does not, and a restart
+  resumes them.
   Owners' commands come before food trips, scouting and quests: every such session checks
   `commandWaiting` before each cycle (in its `stopRequested`), so a new command ends it at its
   next cycle and play goes on with it afterwards. The night shelter and a food trip on a nearly

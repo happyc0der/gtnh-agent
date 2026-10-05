@@ -610,6 +610,135 @@ describe("owners' commands in play", () => {
     expect(said(sim)).toEqual(['OK: stopped. I wait for !resume or a new command']);
   });
 
+  it('a stop ends the commands before it, never one sent after it; "stop that" is a stop', async () => {
+    // An independent review, 2026-10-04: "!stop" then "!come" in one breath cancelled both,
+    // and plain words that began with stop were left to the model.
+    const repos = open();
+    const sim = newSim({ owner: { x: 5.5, y: 64, z: 0.5 }, heard: [whisper('!follow')] });
+    sim.afterCycle = (n) => {
+      if (n === 1) sim.heard.push(whisper('stop that'), whisper('!come'));
+    };
+    await runPlay(deps(repos, sim), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: following you',
+      'OK: stopped (follow you). I wait for !resume or a new command',
+      'OK: coming to you',
+      'Done: here, 1 block from you',
+    ]);
+    expect(repos.commands.get(1)).toMatchObject({
+      status: 'cancelled',
+      reply: 'Stopped by DankAxon',
+    });
+    expect(repos.commands.get(2)?.command).toEqual({ verb: 'stop' });
+    expect(repos.commands.get(3)?.status).toBe('done');
+  });
+
+  it('a command that cannot start fails at once and replaces nothing: the one running goes on', async () => {
+    // An independent review, 2026-10-04: a !come out of sight failed and still cancelled the
+    // !get it came after.
+    const repos = open();
+    const sim = newSim({ owner: { x: 5.5, y: 64, z: 0.5 }, heard: [whisper('!follow')] });
+    sim.afterCycle = (n) => {
+      if (n === 1) sim.heard.push(whisper('!goto 300 64 0'));
+      if (n === 3) sim.owner = null;
+    };
+    await runPlay(deps(repos, sim), LIMITS, noStop);
+    expect(said(sim)).toEqual([
+      'OK: following you',
+      'Failed: 300 64 0 is outside my safety boundary (x -256..256, z -256..256)',
+      'Failed: I cannot see you from here',
+    ]);
+    // The follow ended when the owner was lost from view, not replaced by the failed goto.
+    expect(repos.commands.get(1)?.status).toBe('failed');
+  });
+
+  it('at night a command that cannot start fails at once; one that replaces another says so', async () => {
+    const repos = open();
+    const sim = newSim({
+      heard: [whisper('!come'), whisper('!goto 300 64 0'), whisper('!goto 20 64 0')],
+      time: worldTime(18_000, true),
+    });
+    sim.onSleep = () => {
+      sim.time = worldTime(1_000, true); // the night passes in the shelter
+    };
+    const sheltered = {
+      kind: 'pit' as const,
+      sheltered: true,
+      steps: [],
+      needs: {},
+      problem: null,
+      walled: false,
+      exit: [],
+    };
+    await runPlay(
+      deps(repos, sim, {
+        time: () => Promise.resolve(sim.time),
+        shelter: () => Promise.resolve(sheltered),
+      }),
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual([
+      'It is night: I stay in my shelter until morning (in about 5 min), then I come to you',
+      'Failed: 300 64 0 is outside my safety boundary (x -256..256, z -256..256)',
+      'It is night: I stay in my shelter until morning (in about 5 min), then I go to 20 64 0 (instead of: come to you)',
+      'OK: going to 20 64 0',
+      'Done: at 20 64 0',
+    ]);
+    expect(repos.commands.get(1)).toMatchObject({
+      status: 'cancelled',
+      reply: 'Replaced by command #3',
+    });
+  });
+
+  it('what the owners said just before play goes offline is stored, and taken after it', async () => {
+    // An independent review, 2026-10-04: heard lines live only in the connection, so a stop
+    // whispered just before an offline wait was lost.
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!pause')] });
+    const base = deps(repos, sim, { listen: true });
+    const result = await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          standby: () => {
+            sim.heard.push(whisper('stop that'));
+            return Promise.resolve({ kind: 'mob', reasons: 'HOSTILES_NEARBY' });
+          },
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY');
+    expect(sim.heard).toEqual([]);
+    expect(repos.commands.get(2)).toMatchObject({ status: 'queued', command: { verb: 'stop' } });
+    // The next play (a new connection: nothing heard yet) takes it.
+    const after = newSim();
+    await runPlay(deps(repos, after), LIMITS, noStop);
+    expect(said(after)).toEqual(['OK: stopped. I wait for !resume or a new command']);
+  });
+
+  it("the operator's stop (cli halt, Ctrl+C) ends the owners' commands; a restart does not", async () => {
+    // An independent review, 2026-10-04: a command of a halted play came back unannounced at
+    // the next play, perhaps days later.
+    for (const operator of [true, false]) {
+      const repos = open();
+      const sim = newSim({ owner: { x: 5.5, y: 64, z: 0.5 }, heard: [whisper('!follow')] });
+      let stop: string | null = null;
+      sim.afterCycle = (n) => {
+        if (n === 2) stop = 'the stop file data/STOP exists';
+      };
+      await runPlay(deps(repos, sim), LIMITS, {
+        stopRequested: () => stop,
+        operatorStopped: () => operator && stop !== null,
+      });
+      expect(repos.commands.get(1)?.status).toBe(operator ? 'cancelled' : 'running');
+      expect(said(sim).includes('Stopped: my operator stopped play')).toBe(operator);
+    }
+  });
+
   it('quests off is kept until quests on', async () => {
     const repos = open();
     const sim = newSim({ heard: [whisper('!quests off')], gain: { 'minecraft:dirt': 5 } });
@@ -935,10 +1064,11 @@ describe("owners' commands in play", () => {
       asked.push(text);
       return Promise.resolve({ ok: true, command: { verb: 'status' }, latencyMs: 5 });
     };
-    const sim = newSim({ heard: [whisper('come back home'), whisper('!stop that')] });
+    // ("!stop that" is a stop, never a typo: isStopText.)
+    const sim = newSim({ heard: [whisper('come back home'), whisper('!pause now')] });
     await runPlay(deps(repos, sim, { translate }), LIMITS, noStop);
     expect(asked).toEqual(['come back home']);
-    expect(said(sim)[0]).toBe('usage: !stop (it takes no arguments)');
+    expect(said(sim)[0]).toBe('usage: !pause (it takes no arguments)');
     expect(repos.commands.get(1)?.command).toEqual({ verb: 'status' });
   });
 

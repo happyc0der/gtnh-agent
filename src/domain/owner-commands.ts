@@ -704,8 +704,27 @@ export function describeCommand(c: OwnerCommand): string {
   }
 }
 
-/** True when the text is a stop in the structured form (the client stops the action at once). */
+/** Words that, first in an owner's message, mean stop whatever follows ("stop that!"). */
+const STOP_WORDS: ReadonlySet<string> = new Set(['stop', 'halt', 'cancel', 'abort', 'freeze']);
+
+/** Words that may come before a stop word and change nothing ("no, stop!", "hey stop it"). */
+const STOP_LEAD: ReadonlySet<string> = new Set(['hey', 'oi', 'ok', 'okay', 'no', 'just', 'now']);
+
+/**
+ * True when the text is a stop: a message whose first word (after a `!` or `#`, "please" or
+ * "no") is a stop word: "!stop", "stop that", "STOP IT NOW", "no, stop!", "!stop following".
+ * The client stops the action at once, and intake stores it as a !stop, never left to a model
+ * or refused for its usage (an independent review, 2026-10-04: such words neither interrupted
+ * nor were sure to be read as a stop). A stop never does harm; a missed one may.
+ */
 export function isStopText(text: string): boolean {
   const parsed = parseOwnerCommand(text);
-  return parsed.ok && parsed.command.verb === 'stop';
+  if (parsed.ok) return parsed.command.verb === 'stop';
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w !== '' && !FILLER.has(w));
+  const first = words.find((w) => !STOP_LEAD.has(w));
+  return first !== undefined && STOP_WORDS.has(first);
 }

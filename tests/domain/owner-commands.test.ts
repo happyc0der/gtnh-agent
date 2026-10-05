@@ -315,7 +315,21 @@ describe('the structured form', () => {
     expect(isStructured('come')).toBe(false);
     expect(isStopText('!stop')).toBe(true);
     expect(isStopText('stop now')).toBe(true);
-    expect(isStopText('stop the music')).toBe(false);
+    // Said to the bot (a whisper, or addressed by name), any message that begins with a stop
+    // word stops it: a stop never harms, and one left to a model may be missed (an independent
+    // review, 2026-10-04: "stop that" and "STOP IT NOW" did not interrupt).
+    expect(isStopText('stop that')).toBe(true);
+    expect(isStopText('STOP IT NOW!')).toBe(true);
+    expect(isStopText('please stop')).toBe(true);
+    expect(isStopText('cancel that')).toBe(true);
+    expect(isStopText('no, stop!')).toBe(true);
+    expect(isStopText('hey stop it')).toBe(true);
+    expect(isStopText('!stop following me')).toBe(true); // a stop, never refused for its usage
+    expect(isStopText('#halt now please')).toBe(true);
+    expect(isStopText("don't stop")).toBe(false);
+    expect(isStopText('no')).toBe(false);
+    expect(isStopText('can you stop')).toBe(false); // the translator's to read
+    expect(isStopText('!get 1 stop sign')).toBe(false);
     expect(isStopText('!status')).toBe(false);
     expect(isActionCommand(parsed('!come'))).toBe(true);
     expect(isActionCommand(parsed('!get 1 dirt'))).toBe(true);

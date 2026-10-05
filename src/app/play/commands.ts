@@ -4,6 +4,7 @@ import {
   describeCommand,
   HELP_TEXT,
   isActionCommand,
+  isStopText,
   isStructured,
   isTravelCommand,
   parseOwnerCommand,
@@ -96,11 +97,14 @@ export const STANDBY_TASK_ID = 'owner-standby';
  * structured form. The structured form is code's alone, so a typo in it (or natural language
  * without a translator) is answered at once, never sent to a model.
  */
-function intake(play: PlayState): void {
+export function intake(play: PlayState): void {
   const commands = play.deps.commands;
   if (commands === undefined) return;
   for (const heard of commands.take()) {
-    const parsed = parseOwnerCommand(heard.text, { ore: gtOreByName });
+    // A stop in plain words is a stop, never left to a model (isStopText).
+    const parsed: ReturnType<typeof parseOwnerCommand> = isStopText(heard.text)
+      ? { ok: true, command: { verb: 'stop' } }
+      : parseOwnerCommand(heard.text, { ore: gtOreByName });
     const record = play.deps.repos.commands.add({
       source: 'chat',
       sender: heard.sender,
@@ -130,7 +134,11 @@ function intake(play: PlayState): void {
 export async function takeCommands(play: PlayState, mode: 'day' | 'night'): Promise<void> {
   if (play.deps.commands === undefined) return;
   intake(play);
-  for (const cmd of play.deps.repos.commands.queued()) await handleQueued(play, cmd, mode);
+  for (const cmd of play.deps.repos.commands.queued()) {
+    // One before it may have ended it (a stop cancels the commands before it).
+    if (play.deps.repos.commands.get(cmd.id)?.status !== 'queued') continue;
+    await handleQueued(play, cmd, mode);
+  }
 }
 
 async function handleQueued(
@@ -164,20 +172,22 @@ async function handleQueued(
     instant(play, cmd, command);
     return;
   }
-  // One action command at a time: the newest replaces the others.
-  const replaced = replaceOthers(play, cmd.id);
-  if (mode === 'night') {
-    sayOnce(play, cmd, nightKey(play), nightNote(play, command));
-    return;
-  }
+  // A command that cannot even start fails at once, by night too (not promised for the
+  // morning), and replaces nothing (an independent review, 2026-10-04: a !come out of sight
+  // failed and still cancelled the !get it came after).
   const problem = checkAction(play, cmd, command);
   if (problem !== null) {
     finish(play, cmd, 'failed', `Failed: ${problem}`);
     return;
   }
-  const ack =
-    `OK: ${acknowledge(play, cmd, command)}` +
-    (replaced.length === 0 ? '' : ` (instead of: ${replaced.join('; ')})`);
+  // One action command at a time: the newest replaces the others, and says so.
+  const replaced = replaceOthers(play, cmd.id);
+  const instead = replaced.length === 0 ? '' : ` (instead of: ${replaced.join('; ')})`;
+  if (mode === 'night') {
+    sayOnce(play, cmd, nightKey(play), `${nightNote(play, command)}${instead}`);
+    return;
+  }
+  const ack = `OK: ${acknowledge(play, cmd, command)}${instead}`;
   repos.commands.start(cmd.id, ack);
   commands.reply(cmd.sender, ack);
   play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: ack });
@@ -375,13 +385,26 @@ function acknowledge(play: PlayState, cmd: OwnerCommandRecord, c: ActionCommand)
 // Instant commands
 // ---------------------------------------------------------------------------
 
-/** Cancels every action command (running or queued); what they were. */
-function cancelActions(play: PlayState, why: string): string[] {
+/**
+ * Cancels the action commands (running, or queued before command `before`: never the ones sent
+ * after the stop, an independent review, 2026-10-04); what they were. With `tell`, each sender
+ * hears `why` (a stop command answers for itself).
+ */
+export function cancelActions(
+  play: PlayState,
+  why: string,
+  opts: { before?: number; tell?: boolean } = {},
+): string[] {
   const { repos } = play.deps;
-  const actions = [repos.commands.running(), ...repos.commands.queued()].filter(
+  const before = opts.before ?? Number.POSITIVE_INFINITY;
+  const actions = [
+    repos.commands.running(),
+    ...repos.commands.queued().filter((q) => q.id < before),
+  ].filter(
     (c): c is OwnerCommandRecord => c !== null && c.command !== null && isActionCommand(c.command),
   );
   for (const c of actions) {
+    if (opts.tell === true) play.deps.commands?.reply(c.sender, why);
     repos.commands.finish(c.id, 'cancelled', why);
     play.commandRuns.delete(c.id);
     endCommandTask(repos, c.id, 'cancelled');
@@ -396,7 +419,7 @@ function instant(play: PlayState, cmd: OwnerCommandRecord, c: InstantCommand): v
     case 'stop': {
       // The client stopped the action in progress already (a stop in chat), or a stop from
       // the command line did (live-play.ts): what is left is the command, and play's own goals.
-      const stopped = cancelActions(play, `Stopped by ${cmd.sender}`);
+      const stopped = cancelActions(play, `Stopped by ${cmd.sender}`, { before: cmd.id });
       repos.memory.setValue(OWNER_PAUSED_KEY, `${cmd.sender} said stop`);
       finish(
         play,

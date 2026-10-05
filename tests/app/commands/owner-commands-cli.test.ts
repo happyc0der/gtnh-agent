@@ -106,6 +106,15 @@ describe('cli command / commands', () => {
     expect(commandCommand(cli(['command', 'come', 'back', 'home']).cli)).toBe(1);
     expect(err.join('')).toMatch(/usage: !come \(it takes no arguments\)/);
   });
+
+  it('a stop in plain words is queued as a stop, with no model (live play interrupts for it)', () => {
+    const queued = cli(['command', 'stop that']);
+    expect(commandCommand(queued.cli)).toBe(0);
+    expect(queued.printed[0]).toMatchObject({ text: 'stop that', command: 'stop' });
+    const db = openDatabase(join(dir, 'agent.sqlite'));
+    expect(createRepositories(db, systemClock).commands.get(1)?.command).toEqual({ verb: 'stop' });
+    db.close();
+  });
 });
 
 describe('cli play --listen: staying reachable', () => {
