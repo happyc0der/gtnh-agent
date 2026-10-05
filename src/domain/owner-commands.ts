@@ -99,6 +99,13 @@ const AMOUNT_WORDS: ReadonlySet<string> = new Set(
     'couple several many more lots all'
   ).split(' '),
 );
+/** Words no item's name holds ("a stack of logs", "wood for the house"): no name is made of them. */
+const NOT_IN_NAMES: ReadonlySet<string> = new Set(
+  (
+    'of for to the my me your his her our their any some a an from out with in on at by into ' +
+    'onto please stack stacks bunch lot lots pile load loads enough again'
+  ).split(' '),
+);
 /** Words that, before an item with no count, mean one: "get a furnace". */
 const ONE: ReadonlySet<string> = new Set(['a', 'an', 'one']);
 /** Words before a block's name that mean nothing to it: "the chest", "the nearest tree". */
@@ -614,14 +621,16 @@ function goalCommand(
   // which only the caller's names know.
   // Only in the `!` form: plain words that do not parse go to the translator, which reads
   // "get a stack of logs" better than "minecraft:stack_of_logs" (a later review, 2026-10-05).
-  // Two plain words, as item names in words are ("wooden pickaxe", "crafting table"): never
-  // "a bunch of planks" (minecraft:bunch_of_planks).
+  // Two to four plain words, as item names in words are ("wooden pickaxe", "dark oak stairs",
+  // "flint and steel"), never with a word no item's name has ("a bunch of planks", "logs for
+  // the house": review 24, 2026-10-05).
   const joined =
     !structured ||
-    words.length !== 2 ||
+    words.length < 2 ||
+    words.length > 4 ||
     !words.every((w) => /^[a-z]+$/i.test(w)) ||
     /\sores?$/i.test(text) ||
-    words.some((w) => AMOUNT_WORDS.has(w.toLowerCase()))
+    words.some((w) => AMOUNT_WORDS.has(w.toLowerCase()) || NOT_IN_NAMES.has(w.toLowerCase()))
       ? null
       : resolveItemName(words.join('_'));
   const name = ore === null ? (resolveItemName(text) ?? joined) : ore.item;

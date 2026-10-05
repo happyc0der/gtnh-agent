@@ -390,7 +390,7 @@ async function leave(play: PlayState, round: PlayResult): Promise<PlayResult> {
   const operator = play.hooks.operatorStopped?.() === true ? play.hooks.stopRequested() : null;
   if (operator !== null) {
     // The whisper names no local path (the stop file's); the log says which stop it was.
-    const stopped = cancelActions(play, 'Stopped: my operator stopped play', { tell: true });
+    const stopped = endOwnerCommands(play);
     if (stopped.length > 0) {
       play.emit({
         kind: 'idle',
@@ -423,9 +423,32 @@ async function leave(play: PlayState, round: PlayResult): Promise<PlayResult> {
     intake(play);
     // The operator stopped play: what came meanwhile ends with it too, never to run unannounced
     // at the next play (a later review, 2026-10-05).
-    if (operator !== null) cancelActions(play, 'Stopped: my operator stopped play', { tell: true });
+    if (operator !== null) {
+      const more = endOwnerCommands(play);
+      if (more.length > 0) {
+        play.emit({
+          kind: 'idle',
+          message: `play was stopped (${operator}): so are the commands heard as it went (${more.join('; ')})`,
+        });
+      }
+    }
   }
   return result;
+}
+
+/**
+ * The operator stopped play: the owners' commands end with it, every one still waiting too (a
+ * stop or a pause left queued would pause the next play: review 24, 2026-10-05). What they were.
+ */
+function endOwnerCommands(play: PlayState): string[] {
+  const why = 'Stopped: my operator stopped play';
+  const stopped = cancelActions(play, why, { tell: true });
+  const { repos } = play.deps;
+  for (const q of repos.commands.queued()) {
+    repos.commands.finish(q.id, 'cancelled', why);
+    stopped.push(q.rawText);
+  }
+  return stopped;
 }
 
 /**

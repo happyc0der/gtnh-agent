@@ -20,7 +20,6 @@ import {
 } from '../../persistence/memory-repository.ts';
 import type { DecisionResult } from '../../domain/decisions.ts';
 import { FOOD_TASK_ID } from '../../domain/food.ts';
-import { LEAVE_SHELTER_TASK_ID, NIGHT_SHELTER_TASK_ID } from '../../domain/night-shelter.ts';
 import type { OwnerCommandRecord } from '../../persistence/owner-command-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import { checkWithinBoundary } from '../../safety/coordinate-boundaries.ts';
@@ -91,15 +90,6 @@ const IDLE_POLLS = 6;
 export const IDLE_RETRY_MS = 120_000;
 /** The task the idle bot stands by under, when System 1 must act (standby). */
 export const STANDBY_TASK_ID = 'owner-standby';
-/**
- * Tasks of play's own rounds that run while it has nothing else to do (the night's shelter, the
- * way out, a food trip): !status names them, not the idle reason (a later review, 2026-10-05).
- */
-const BUSY_TASKS: ReadonlySet<string> = new Set([
-  NIGHT_SHELTER_TASK_ID,
-  LEAVE_SHELTER_TASK_ID,
-  FOOD_TASK_ID,
-]);
 
 // ---------------------------------------------------------------------------
 // Hearing commands
@@ -690,17 +680,27 @@ function statusText(play: PlayState): string {
   const doing =
     running?.command != null
       ? `doing: ${describeCommand(running.command)}${sheltered === null ? '' : `, but first ${sheltered}`}`
-      : off !== null
-        ? off
-        : sheltered !== null
-          ? sheltered
-          : task !== null &&
-              task.status === 'active' &&
-              (play.idle === null || BUSY_TASKS.has(task.id))
+      : // Between the sessions of its shelter's work (after a stop, which pauses play): that
+        // work goes on all the same (review 24, 2026-10-05).
+        play.makingShelter
+        ? 'making my shelter for the night'
+        : play.leavingShelter
+          ? 'digging out of my shelter'
+          : // A food trip goes on paused or with quests off (a food bar nearly empty), unless
+            // play gave up on it for now (play.idle).
+            task?.id === FOOD_TASK_ID && task.status === 'active' && play.idle === null
             ? `working on: ${clip(task.goal, 80)}`
-            : play.idle !== null
-              ? `idle (${clip(play.idle.reason, 100)})`
-              : 'idle';
+            : off !== null
+              ? off
+              : sheltered !== null
+                ? sheltered
+                : // Play gave up for now (play.idle), its task left active: idle, and why. The
+                  // night's, the morning's and a food trip's rounds clear it as they work.
+                  play.idle !== null
+                  ? `idle (${clip(play.idle.reason, 100)})`
+                  : task !== null && task.status === 'active'
+                    ? `working on: ${clip(task.goal, 80)}`
+                    : 'idle';
   const items = Object.entries(view.inventory ?? {})
     .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1))
     .slice(0, 4)

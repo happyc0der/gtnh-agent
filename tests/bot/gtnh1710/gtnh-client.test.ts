@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
@@ -114,6 +117,50 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     });
     expect(info.handshakeStep).toBe('DONE');
     expect(server.handshakeHosts[1]).toBe('127.0.0.1\0FML\0');
+  });
+
+  it('marks an action the stop file (cli halt) stopped as interrupted: no failure of it counts', async () => {
+    // Review 24, 2026-10-05: only an owner's stop and Ctrl+C were marked; a dig cli halt cut
+    // counted toward its repeated failure.
+    const dir = mkdtempSync(join(tmpdir(), 'gtnh-stopfile-'));
+    try {
+      const stopFile = join(dir, 'STOP');
+      const movement = { ...defaultConfig().minecraft.movement, enabled: true, stopFile };
+      const { client } = await start({}, { movement });
+      await client.connect();
+      writeFileSync(stopFile, 'halt');
+      const action = createAction(
+        {
+          spec: { type: 'MOVE_TO', args: { target: { x: -2.5, y: 106, z: -7.5 }, tolerance: 0.5 } },
+          reason: 'test',
+          origin: 'test',
+          taskId: null,
+        },
+        { newId: sequentialIds(), now: () => new Date() },
+      );
+      const result = await client.perform(mintValidatedAction(action, null, new Date()));
+      expect(result.ok).toBe(false);
+      expect(result.data['interrupted']).toBe(true);
+      // Without the stop file, a refusal is no interruption.
+      rmSync(stopFile);
+      const far = createAction(
+        {
+          spec: {
+            type: 'MOVE_TO',
+            args: { target: { x: 900.5, y: 106, z: -7.5 }, tolerance: 0.5 },
+          },
+          reason: 'test',
+          origin: 'test',
+          taskId: null,
+        },
+        { newId: sequentialIds(), now: () => new Date() },
+      );
+      const refused = await client.perform(mintValidatedAction(far, null, new Date()));
+      expect(refused.ok).toBe(false);
+      expect(refused.data['interrupted']).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('tells the items in stacks with NBT data apart: the client never uses those', async () => {

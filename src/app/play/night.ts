@@ -255,6 +255,7 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
         );
       }
       play.shelterTries += 1;
+      play.idle = null; // !status names this work (review 24, 2026-10-05)
       inShelter(play);
       const pit = status.kind === 'pit';
       let interrupted = false;
@@ -287,10 +288,13 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
       // the shelter is done (an independent review, 2026-10-05).
       if (interrupted) {
         play.shelterTries -= 1;
-        play.makingShelter = true;
-        await play.whileSheltered().finally(() => {
-          play.makingShelter = false;
-        });
+        // Not when the operator stopped play: its commands end with it (review 24, 2026-10-05).
+        if (hooks.stopRequested() === null) {
+          play.makingShelter = true;
+          await play.whileSheltered().finally(() => {
+            play.makingShelter = false;
+          });
+        }
       }
       if (result.stopKind === 'stop-requested') return done(play, result.stopReason);
       if (result.stopKind === 'needs-attention') {
@@ -393,6 +397,7 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         play.exitGaveUpAt = null;
       }
       play.exitTries += 1;
+      play.idle = null; // !status names this work (review 24, 2026-10-05)
       const lastStep = status.exit.at(-1)?.spec;
       const out = lastStep?.type === 'MOVE_TO' ? lastStep.args.target : undefined;
       let mobRefused = false;
@@ -420,10 +425,12 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
       // that move it wait until it is out (an independent review, 2026-10-05).
       if (interrupted) {
         play.exitTries -= 1;
-        play.leavingShelter = true;
-        await play.whileSheltered().finally(() => {
-          play.leavingShelter = false;
-        });
+        if (play.hooks.stopRequested() === null) {
+          play.leavingShelter = true;
+          await play.whileSheltered().finally(() => {
+            play.leavingShelter = false;
+          });
+        }
       }
       // A hostile came near while the player is still sealed in (System 1's SHELTERED pause), or
       // came back in range while System 1 decided and the safety rules refused the step (seen
@@ -452,6 +459,11 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
             mobNearby: 'HOSTILES_NEARBY, SHELTERED',
           };
         }
+        // A wait for mobs, as waitOutMobs: its notes say so, not "It is night" (review 24, 2026-10-05).
+        play.sheltered = {
+          mobs: status.hostiles ?? 'a creature came near',
+          since: play.mobWaitSince,
+        };
         await play.whileSheltered();
         await play.sleep(MOB_SHELTER_POLL_MS);
         return 'next-round';

@@ -585,7 +585,8 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   Play sends the last replies itself (`flush`, a line a second) and then stores what the owners
   said meanwhile, since the closing connection would lose it (an independent review,
   2026-10-05: a stop whispered while the bot logged off was heard by nobody); after an operator
-  stop, that ends with play too. The operator's
+  stop, every command still waiting ends with play, a stop or a pause too, which would otherwise
+  pause the next play (review 24, the same day). The operator's
   stop (`cli halt`, the stop file, Ctrl+C) ends the owners' commands with play, and their senders
   are told ("my operator stopped play"); a lost connection or a limit does not, and a restart
   resumes them. A halt while the bot waits offline (a night, a mob, a reconnect) ends them too, in

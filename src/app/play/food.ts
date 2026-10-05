@@ -196,6 +196,7 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
         message: `food ${fed.hunger}/20 and nothing to eat: getting food first`,
       });
     }
+    play.idle = null; // !status names this work (review 24, 2026-10-05)
     const adopted = adoptFoodTask(deps.repos, fed);
     emit({
       kind: 'goal',
@@ -208,6 +209,7 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
     // The trip got somewhere: more food carried, or a fuller food bar (System 1 eats what is
     // gathered while hungry, so the food carried can stay at 0 as the bar fills).
     let progressed = false;
+    let interrupted = false;
     let enough = false;
     let foodDark: WorldTime | null = null;
     const session = play.sessions + 1;
@@ -221,6 +223,7 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
             : ((urgent ? null : (preempted ??= commandWaiting(play))) ?? hooks.stopRequested()),
       onCycle: (r, index) => {
         play.lastDecision = r.decision ?? null;
+        interrupted ||= r.outcome?.execution?.data?.['interrupted'] === true;
         emit(cycleEvent(deps.repos, session, r, index));
         const after = r.outcome?.stateAfter;
         if (after === undefined || after === null) return;
@@ -241,9 +244,10 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
     play.sessions = session;
     play.lastStop = result.stopReason;
     const sawMore = seenBefore !== null && (deps.scouting?.chunksSeen() ?? 0) > seenBefore;
-    // A session a new command or dusk cut short counts neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
+    // Progress always counts; a session with none that a new command, a stop or dusk cut short
+    // counts no failure (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
     if (progressed || sawMore) play.foodStuck = 0;
-    else if (preempted === null && foodDark === null) play.foodStuck += 1;
+    else if (preempted === null && foodDark === null && !interrupted) play.foodStuck += 1;
     emit({
       kind: 'session-end',
       session,

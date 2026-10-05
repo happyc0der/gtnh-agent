@@ -306,8 +306,9 @@ function stuckOn(play: PlayState, current: RoundGoal): PlayResult | null {
   const missingNow = total(current.missing);
   const { last } = play;
   if (last !== null && last.questId === current.id) {
-    // Seeing new ground is progress too: exploring for a block not seen yet gathers none. A
-    // session a new command, dusk or hunger cut short counts neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
+    // Seeing new ground is progress too: exploring for a block not seen yet gathers none.
+    // Progress always counts; a session with none that a new command, dusk or hunger cut short
+    // counts no failure (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
     if (missingNow < last.missing || play.explored) last.stuck = 0;
     else if (last.cutShort !== true) last.stuck += 1;
     last.cutShort = false;

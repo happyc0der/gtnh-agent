@@ -184,8 +184,8 @@ export async function tunnelRound(
     return fail(`${problem} (${dug})`);
   }
   const gained = run.tunnelDone === null || plan.done > run.tunnelDone;
-  // A session a hostile stopped (mobInTheWay), or a new command, dusk or hunger cut short
-  // (digSession), counts neither way.
+  // Cells gained always count; a session with none that a hostile stopped (mobInTheWay), or a
+  // new command, dusk or hunger cut short (digSession), counts no failure.
   if (gained) run.stuck = 0;
   else if (run.mobStops === 0 && !run.interrupted) run.stuck += 1;
   run.interrupted = false;
@@ -312,8 +312,8 @@ async function digSession(
     },
   });
   play.lastStop = result.stopReason;
-  // Cut short by a new command (any whisper), dusk or a food bar nearly empty: it counts
-  // neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
+  // Cut short by a new command (any whisper), dusk or a food bar nearly empty: with no cell
+  // gained, no failure (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
   if (preempted !== null || dark !== null || hungry !== null) run.interrupted = true;
   if (dark !== null) {
     sayOnce(
