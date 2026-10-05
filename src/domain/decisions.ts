@@ -39,6 +39,11 @@ export const REASON_CODES = [
   'NO_SAFE_LOCATION',
   /** Sealed in its shelter (full blocks all around, a roof): no mob can reach it, so it stays. */
   'SHELTERED',
+  /**
+   * Hurt a moment ago with a hostile near, and not fighting back: it waits offline (an offline
+   * player cannot be hurt; a walk away is slower than a spider).
+   */
+  'UNDER_ATTACK',
   'INVENTORY_NEARLY_FULL',
   'NO_DUMP_CONTAINER',
   'NOTHING_DEPOSITABLE',

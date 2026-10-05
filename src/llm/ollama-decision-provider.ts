@@ -146,6 +146,7 @@ Example: {"stateProblems":false,"outOfBounds":false,"danger":false,"lowHealth":f
 /** Reason codes a model may give: all but the ones only code gives. */
 const MODEL_REASON_CODES = ReasonCodeSchema.exclude([
   'SHELTERED',
+  'UNDER_ATTACK',
   'SAFETY_OVERRIDE',
   'PROVIDER_OUTPUT_INVALID',
   'MOCK_DECISION',

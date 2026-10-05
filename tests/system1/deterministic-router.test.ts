@@ -3,7 +3,8 @@ import type { MockWorld } from '../../src/bot/mock-minecraft-client.ts';
 import { DecisionResultSchema } from '../../src/domain/decisions.ts';
 import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import { NIGHT_SHELTER_TASK_ID } from '../../src/domain/night-shelter.ts';
-import { routeDecision } from '../../src/system1/deterministic-router.ts';
+import { mobPause } from '../../src/app/play/play-state.ts';
+import { routeDecision, UNDER_ATTACK_MS } from '../../src/system1/deterministic-router.ts';
 import { makeState, routerCtx, testConfig } from '../fixtures/index.ts';
 
 const route = (mutate: (w: MockWorld) => void = () => undefined, ctx = routerCtx()) =>
@@ -111,6 +112,31 @@ describe('System1 deterministic router', () => {
         w.hazards = [{ kind: 'lava', position: { x: 31, y: 61, z: 30 } }];
       });
       expect(lava.reasonCodes).not.toContain('SHELTERED');
+    });
+
+    it('hurt a moment ago with a hostile near -> PAUSE (UNDER_ATTACK): it waits offline', () => {
+      // Seen live 2026-10-04: a Special Mobs Mother Spider took the bot from 20 health to 0
+      // while it waited to try its walk again and then set off on a 38-block retreat.
+      const hurtAgo =
+        (ms: number) =>
+        (w: MockWorld): void => {
+          w.player.position = { x: 30, y: 64, z: 30 };
+          w.hostiles = [{ x: 32, y: 64, z: 30 }];
+          w.player.lastHurtAt = new Date(Date.parse(makeState().timestamp) - ms).toISOString();
+        };
+      const d = route(hurtAgo(1_000));
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
+      expect(d.reasonCodes).toEqual(['HOSTILES_NEARBY', 'UNDER_ATTACK']);
+      // A pause play waits out offline, as for a mob near home.
+      expect(mobPause('needs-attention', d)).toBe('HOSTILES_NEARBY, UNDER_ATTACK');
+      // Hurt longer ago than UNDER_ATTACK_MS: the retreat, as before.
+      expect(route(hurtAgo(UNDER_ATTACK_MS + 1_000)).decision).toBe('RETREAT_HOME');
+      // Lava near too: the retreat from it, not a pause.
+      const lava = route((w) => {
+        hurtAgo(1_000)(w);
+        w.hazards = [{ kind: 'lava', position: { x: 31, y: 64, z: 31 } }];
+      });
+      expect(lava.decision).toBe('RETREAT_HOME');
     });
 
     it('hostiles nearby while already home -> PAUSE', () => {

@@ -23,6 +23,9 @@ export const DETERMINISTIC_ROUTER_NAME = 'deterministic-router';
  * Fixed confidence per rule. The router is deterministic, so "confidence" expresses
  * how sure the rule is that its decision is appropriate, not a probability estimate.
  */
+/** Hurt this recently (ms) with a hostile near is being attacked (UNDER_ATTACK). */
+export const UNDER_ATTACK_MS = 5_000;
+
 const CONFIDENCE = {
   failClosed: 1,
   safety: 0.95,
@@ -46,6 +49,7 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
   'CREEPER_NEARBY',
   'TOO_MANY_HOSTILES',
   'SHELTERED',
+  'UNDER_ATTACK',
   'LOW_HEALTH',
   'HUNGRY',
   'NO_APPROVED_FOOD',
@@ -168,6 +172,18 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
         return decide('DEFEND', CONFIDENCE.safety, [...why]);
       }
       if (defense.kind === 'flee') codes.push(...defense.reasons);
+    }
+    // Hurt a moment ago with a hostile near, and not fighting back: an offline player cannot be
+    // hurt, and a walk away is slower than a spider (seen live 2026-10-04: a Special Mobs Mother
+    // Spider took the bot from 20 health to 0 while it waited to try its walk again and then set
+    // off on a 38-block retreat). It waits offline (play-state.ts mobPause).
+    if (
+      dangerCodes.has('HOSTILES_NEARBY') &&
+      !dangerCodes.has('HAZARD_PROXIMITY') &&
+      hurt !== null &&
+      hurt <= UNDER_ATTACK_MS
+    ) {
+      return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'UNDER_ATTACK']);
     }
     return retreatOrPause(codes, CONFIDENCE.safety);
   }

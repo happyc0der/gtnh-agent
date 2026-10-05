@@ -247,6 +247,8 @@ const MOB_PAUSE_REASONS: ReadonlySet<string> = new Set([
   'TOO_MANY_HOSTILES',
   'ALREADY_AT_SAFE_LOCATION',
   'NO_SAFE_LOCATION',
+  // Hurt a moment ago with a hostile near (System 1's UNDER_ATTACK): offline at once.
+  'UNDER_ATTACK',
 ]);
 
 /**
