@@ -867,7 +867,11 @@ anew: no code was taken from Baritone (LGPL-3.0).
   (`wanderTarget`), as Baritone's mine process goes on to blocks it can get to. A block refused
   for another reason (no tool that harvests it, a hazard) ends the step instead: the next plan
   sees why. Seen live 2026-10-04: "!get 1 wooden pickaxe" got one log of three, the rest up the
-  trees, and stopped. Animals wander, and world memory keeps no animals: a hunt has no such
+  trees, and stopped. It goes on through the 8 nearest places (`GATHER_PLACES`, not the
+  planner's two per kind), passing over any within 12 blocks of one already passed over (a
+  chunk's example block moves as the chunk is seen again): seen live 2026-10-05, with only the
+  nearest place (where it stood) and a much richer one 47 blocks off, "get me 4 logs" went back
+  and forth between far places for 15 minutes past a trunk 16 blocks away. Animals wander, and world memory keeps no animals: a hunt has no such
   trip. World memory's ore places stand for the ores `DIG_BLOCK` digs (GT ores, emerald ore).
 - **One drop of a block.** `{"block":"gregtech:gt.blockores","item":"gregtech:gt.metaitem.03@5032","count":16}`
   counts only that drop (16 raw iron ore) and digs only blocks that can drop it. Every GT ore

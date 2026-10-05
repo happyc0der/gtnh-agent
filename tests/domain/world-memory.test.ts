@@ -151,6 +151,36 @@ describe('world memory', () => {
     expect(summary.directions.east).toEqual({ seen: 72, room: 248 });
   });
 
+  it('gives a GATHER more places per resource on request, the nearest first', () => {
+    const chunks = [
+      chunk(0, 0, { log: 5 }), // around the player
+      chunk(0, 3, { log: 4 }), // 48 blocks south
+      chunk(3, 0, { log: 6 }), // 48 blocks east
+      chunk(-6, 0, { log: 90 }), // far west, much richer
+      chunk(0, 9, { log: 3 }), // far south
+    ];
+    const at = (n: number) =>
+      summarizeExploration({
+        chunks,
+        from: { x: 8, y: 64, z: 8 },
+        boundary: BOX,
+        now: new Date(T0),
+        placesPerKind: n,
+      }).places.map((p) => [p.x, p.z]);
+    // The planner's two: the nearest and the much richer one.
+    expect(at(2)).toEqual([
+      [3, 5],
+      [-93, 5],
+    ]);
+    // Four: the nearest ones, in order, with the richer one where its distance puts it.
+    expect(at(4)).toEqual([
+      [3, 5],
+      [51, 5],
+      [3, 53],
+      [-93, 5],
+    ]);
+  });
+
   it('is empty, but complete, before anything was seen', () => {
     const summary = summarizeExploration({
       chunks: [],

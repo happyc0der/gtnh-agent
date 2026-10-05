@@ -105,6 +105,14 @@ type Consulted =
     };
 
 /**
+ * Places a GATHER with none of its block in view goes on to, the nearest first: more than the
+ * planner's two per kind (seen live 2026-10-05 in a soak: the nearest place was
+ * where the bot stood, so the step had only a much richer one 47 blocks off, and "get me 4
+ * logs" crossed between two far places for 15 minutes past a trunk 16 blocks away).
+ */
+export const GATHER_PLACES = 8;
+
+/**
  * Where world memory remembers a GATHER step's block, for a step with none of it in view
  * (gather.ts GatherOptions.remembered). None for an animal: animals wander, and world memory
  * keeps places of blocks only.
@@ -119,7 +127,7 @@ function rememberedFor(
   return rememberedPlacesOf(
     gather.args.block,
     state,
-    explorationFor(deps.config, deps.repos, state, now),
+    explorationFor(deps.config, deps.repos, state, now, GATHER_PLACES),
   );
 }
 

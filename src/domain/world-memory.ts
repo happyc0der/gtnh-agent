@@ -248,8 +248,13 @@ export const KnownPlaceSchema = z.strictObject({
 });
 export type KnownPlace = z.infer<typeof KnownPlaceSchema>;
 
-/** At most this many places per resource (the nearest, and a much richer one). */
+/** Places per resource for the planner (the nearest, and a much richer one). */
 const PLACES_PER_KIND = 2;
+/**
+ * The most places per resource a summary may hold: a GATHER asks for more (the nearest ones,
+ * one after another: GATHER_PLACES in src/app/loop/plan-steps.ts).
+ */
+export const MAX_PLACES_PER_KIND = 8;
 const MAX_BIOMES = 8;
 
 export const ExplorationSummarySchema = z.strictObject({
@@ -264,7 +269,7 @@ export const ExplorationSummarySchema = z.strictObject({
     z.strictObject({ seen: z.int().min(0), room: z.int().min(0) }),
   ),
   /** Per resource, the nearest seen place with enough of it (and a much richer one). */
-  places: z.array(KnownPlaceSchema).max(PLACE_KINDS.length * PLACES_PER_KIND),
+  places: z.array(KnownPlaceSchema).max(PLACE_KINDS.length * MAX_PLACES_PER_KIND),
   /** Biomes seen, nearest first. */
   biomes: z
     .array(
@@ -304,8 +309,14 @@ export function summarizeExploration(input: {
   from: Position;
   boundary: Box;
   now: Date;
+  /**
+   * Places per resource (default PLACES_PER_KIND, at most MAX_PLACES_PER_KIND): beyond the
+   * nearest and a much richer one, the next nearest.
+   */
+  placesPerKind?: number;
 }): ExplorationSummary {
   const { chunks, from, boundary, now } = input;
+  const perKind = Math.min(MAX_PLACES_PER_KIND, input.placesPerKind ?? PLACES_PER_KIND);
   const flat = (p: { x: number; z: number }): number => Math.hypot(p.x - from.x, p.z - from.z);
   const minutesAgo = (c: SeenChunk): number =>
     Math.max(0, Number(((now.getTime() - Date.parse(c.seenAt)) / 60_000).toFixed(1)));
@@ -327,7 +338,14 @@ export function summarizeExploration(input: {
     if (richest !== undefined && richest !== nearest && richest.count >= 2 * nearest.count) {
       picked.push(richest);
     }
-    for (const p of picked.slice(0, PLACES_PER_KIND)) {
+    if (perKind > PLACES_PER_KIND) {
+      for (const c of candidates) {
+        if (picked.length >= perKind) break;
+        if (!picked.includes(c)) picked.push(c);
+      }
+      picked.sort((a, b) => a.distance - b.distance);
+    }
+    for (const p of picked.slice(0, perKind)) {
       places.push({
         resource,
         x: p.at.x,

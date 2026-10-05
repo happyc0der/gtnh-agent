@@ -629,9 +629,17 @@ export function chooseGatherAction(
   // reason (no tool that harvests it, a hazard) ends the step: the next plan sees why.
   let travelRefusal: string | null = null;
   if (nearestRefusal === null) {
+    // A place near one passed over already is the same place: a chunk's example block moves
+    // as the chunk is seen again.
+    const passedOver = [...progress.skipped, ...skip];
     for (const place of opts.remembered ?? []) {
       const target = { x: place.x, y: place.y, z: place.z };
-      if (skipped.has(key(target))) continue;
+      if (
+        skipped.has(key(target)) ||
+        passedOver.some((s) => Math.hypot(s.x - place.x, s.z - place.z) <= REMEMBERED_NEAR)
+      ) {
+        continue;
+      }
       if (Math.hypot(place.x + 0.5 - feet.x, place.z + 0.5 - feet.z) <= REMEMBERED_NEAR) {
         skip.push(target); // there already, and none of it in view: gone (dug, or fell)
         continue;

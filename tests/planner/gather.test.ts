@@ -270,6 +270,16 @@ describe('GATHER chooses each action in code, from the observation', () => {
       spec: { type: 'EXPLORE', args: { toward: { x: 28.5, z: 107.5 }, maxDistance: 96 } },
       skip: [{ x: 5, y: 64, z: 5 }],
     });
+    // A place near one passed over already is that place again (a chunk's example block moves
+    // as the chunk is seen again): the next one (seen live 2026-10-05: "get me 4 logs" went back
+    // and forth between the same places for 15 minutes).
+    const passed = { ...progress, skipped: [{ x: -48, y: 70, z: 3 }] };
+    expect(
+      chooseGatherAction(gather(), passed, state, { ...opts(), remembered: [near, far] }),
+    ).toMatchObject({
+      kind: 'act',
+      spec: { type: 'EXPLORE', args: { toward: { x: 28.5, z: 107.5 } } },
+    });
     // An EXPLORE the policy would refuse: the step ends, saying why.
     const refused = opts((spec) => (spec.type === 'EXPLORE' ? 'it is night' : null));
     expect(

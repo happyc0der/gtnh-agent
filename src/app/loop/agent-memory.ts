@@ -230,6 +230,8 @@ export function explorationFor(
   repos: Repositories,
   state: GameState,
   now: Date,
+  /** Places per resource (summarizeExploration's placesPerKind). */
+  placesPerKind?: number,
 ): ExplorationSummary | undefined {
   const m = config.minecraft.movement;
   if (!m.enabled || m.mode !== 'follow') return undefined;
@@ -240,6 +242,7 @@ export function explorationFor(
     from: position.value,
     boundary: config.safety.boundary,
     now,
+    ...(placesPerKind === undefined ? {} : { placesPerKind }),
   });
   // Places an EXPLORE from around here could not get closer to are no use from here.
   return withoutDeadEnds(summary, readDeadEnds(repos.memory), position.value);
