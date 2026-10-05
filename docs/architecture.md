@@ -294,7 +294,12 @@ it and runs it, step by step, as known safe steps (see
   hazard or unloaded block near), natural walls (the 3 x 3 columns around plain full blocks
   down to y-3, sand and gravel only on solid ground), the roof's placement, and a way out for
   the morning. The pit's spot is kept in agent memory (`night_pit`), so a pit interrupted
-  half-way is finished, not started again.
+  half-way is finished, not started again; finishing it also closes, with a carried block, each
+  cell beside the body that is open (a way out dug there that stopped halfway: seen live
+  2026-10-04, the roof went back, the first step of the staircase stayed open beside the head).
+  A shelter that is open with no step from code ends play for the night (offline until
+  sunrise): a session would ask the planner, and the planner never improvises a shelter (the
+  same night, asked so, it dug the pit's own walls).
 - **The raised box** (second choice, `src/goals/shelter.ts`): four walls at feet level and four
   at head level around the player, then the roof. From inside it no wall's top face looks at
   the eyes, and nothing touches the roof cell, so the box works only where something solid
@@ -317,7 +322,10 @@ bot had dug down to stone, play ended every round before the command round and s
 CPU with `!surface` waiting). With no wall or staircase it may dig, the way out is a climb on
 MOVE_TO's own path rules (`planClimbOut`): through the roof and up a pillar, from the night pit
 or from a shaft the bot dug down by walking (`shaftSite`: its column, and the rim a side column
-offers within 16 blocks up).
+offers within 16 blocks up). A path the search found but cut (a later movement no longer holds
+once earlier ones changed blocks) goes on from where the cut leaves the player, on a what-if
+copy of the world, up to 6 searches (seen live 2026-10-04: 5 blocks under the ground, "cut after
+3 movement(s)" kept the agent in; its test runs on that terrain, saved from the world).
 
 **Sealed in with mobs near.** The live observation reports whether the player is sealed in
 (`player.sealed`, `sealedIn` in `night-pit.ts`): the cells beside its feet and head, above its

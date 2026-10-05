@@ -752,7 +752,9 @@ on the test server.
   executed and verified by the executor; the planner is not asked. Code picks the player's
   column or one next to it, and refuses a spot unless the 3 x 3 columns around are natural
   ground down to y-3 (sand and gravel only on solid ground), every dig down passes the client's
-  checks, the roof can be placed, and a way out exists for the morning.
+  checks, the roof can be placed, and a way out exists for the morning. A pit it goes back to
+  gets its open walls closed too, and when code has no step that shelters it, play goes offline
+  until sunrise: the planner never improvises a shelter.
 - **Otherwise** a raised box where something already touches its roof cell (a cliff, a tree
   trunk), and with neither, play goes offline until sunrise, as before.
 - Settings: digging, placing and walking enabled, with a fence that has a height range (the
