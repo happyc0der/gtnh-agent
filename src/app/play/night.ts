@@ -314,7 +314,15 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
     const status = await deps.shelter('morning');
     // Not known this time (the inventory, a chunk): nothing decided, and the tries and their
     // wait stand (an independent review, 2026-10-05: one such look gave three more at once).
-    if (status === null) return null;
+    // It looks again a moment later, rather than run a command or the day's goal from inside
+    // the pit (a later review, 2026-10-05), up to MORNING_UNKNOWN_LOOKS times in a row.
+    if (status === null) {
+      if (play.morningUnknown >= MORNING_UNKNOWN_LOOKS) return null;
+      play.morningUnknown += 1;
+      await play.sleep(MOB_SHELTER_POLL_MS);
+      return 'next-round';
+    }
+    play.morningUnknown = 0;
     const mobs = status?.walled === true && status.sheltered ? (status.hostiles ?? null) : null;
     if (mobs !== null) return waitOutMobs(play, mobs);
     if (play.sheltered !== null && 'mobs' in play.sheltered) {
@@ -415,6 +423,11 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
 
 /** How often play looks again while it waits in its shelter for hostiles to go. */
 export const MOB_SHELTER_POLL_MS = 5_000;
+/**
+ * Morning looks at last night's shelter in a row that could not tell (a chunk, the inventory
+ * not known yet: just after a login) before play goes on to the other rounds: a minute.
+ */
+export const MORNING_UNKNOWN_LOOKS = 12;
 /**
  * How long play waits in its shelter for hostiles to go before it waits offline instead, as
  * for a mob near home (play.ts MOB_WAIT_MS): a mob that cannot reach the player and does not

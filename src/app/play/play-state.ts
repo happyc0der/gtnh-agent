@@ -44,6 +44,8 @@ export interface PlayState {
    */
   exitTries: number;
   exitGaveUpAt: number | null;
+  /** Morning looks at last night's shelter in a row that could not tell (night.ts). */
+  morningUnknown: number;
   /** A note for the next goal's journal (e.g. how to leave the night shelter). */
   wakeNote: string | null;
   /** The last session saw chunks near that world memory had not seen near before. */
@@ -164,6 +166,7 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     shelterTries: 0,
     exitTries: 0,
     exitGaveUpAt: null,
+    morningUnknown: 0,
     wakeNote: null,
     explored: false,
     last: null,

@@ -7,7 +7,7 @@ import {
 } from '../../goals/quest-goals.ts';
 import { craftableFrom } from '../../domain/recipes.ts';
 import type { GameState, WorldTime } from '../../domain/game-state.ts';
-import type { ShelterStatus } from '../../goals/shelter.ts';
+import { HURT_IN_SHELTER, STARVING_IN_SHELTER, type ShelterStatus } from '../../goals/shelter.ts';
 import type { TunnelPlan } from '../../bot/gtnh1710/tunnel.ts';
 import type { BlockPosition } from '../../domain/common.ts';
 import type { TunnelDirection, TunnelSlope } from '../../domain/owner-commands.ts';
@@ -405,12 +405,26 @@ function leave(play: PlayState, round: PlayResult): PlayResult {
       play.deps.commands.reply(
         running.sender,
         result.night !== null
-          ? 'It is getting dark and I have no shelter here: I go offline until sunrise'
+          ? nightReply(result.stopReason)
           : 'A mob is near: I go offline a moment for it to leave',
       );
     }
   }
   return result;
+}
+
+/**
+ * What an owner whose command is running is told as play goes offline for the night: why
+ * (an independent review, 2026-10-05: hurt inside its shelter, it said it had none).
+ */
+function nightReply(stopReason: string): string {
+  if (stopReason.includes(STARVING_IN_SHELTER)) {
+    return 'I am starving in my shelter: I go offline until sunrise';
+  }
+  if (stopReason.includes(HURT_IN_SHELTER)) {
+    return 'Something hurt me in my shelter: I go offline until sunrise';
+  }
+  return 'It is getting dark and I have no shelter here: I go offline until sunrise';
 }
 
 /** Before every round: the stop file / Ctrl+C, and the time and session limits. */

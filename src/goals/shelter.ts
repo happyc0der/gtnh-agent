@@ -86,6 +86,11 @@ export interface ShelterStatus {
   hostiles?: string | null;
 }
 
+/** Why the shelter shelters no more (ShelterStatus problem): hurt inside it a moment ago. */
+export const HURT_IN_SHELTER = 'something hurt the player inside its shelter a moment ago';
+/** The same, when that hurt was starving (food 0). */
+export const STARVING_IN_SHELTER = 'the player is starving inside its shelter';
+
 /**
  * The cells of the box around feet block (fx, fy, fz), in building order: four feet walls,
  * four head walls, then the roof.

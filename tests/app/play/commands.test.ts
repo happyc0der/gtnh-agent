@@ -26,6 +26,7 @@ import type { Position } from '../../../src/domain/common.ts';
 import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
 import { worldTime, type WorldTime } from '../../../src/domain/game-state.ts';
 import type { HeardCommand, OwnerCommand } from '../../../src/domain/owner-commands.ts';
+import { HURT_IN_SHELTER, STARVING_IN_SHELTER } from '../../../src/goals/shelter.ts';
 import type { CommandTranslation } from '../../../src/llm/ollama-command-provider.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
 import {
@@ -695,6 +696,49 @@ describe("owners' commands in play", () => {
       status: 'cancelled',
       reply: 'Replaced by command #3',
     });
+  });
+
+  it('going offline for the night, the owner hears why: hurt or starving in its shelter, or none', async () => {
+    // An independent review, 2026-10-05: hurt inside its shelter, it said it had no shelter.
+    const tells = async (problem: string): Promise<string[]> => {
+      const repos = open();
+      const sim = newSim({ time: worldTime(18_000, true) });
+      const cmd = repos.commands.add({
+        source: 'chat',
+        sender: OWNER,
+        rawText: '!come',
+        command: { verb: 'come' },
+      });
+      repos.commands.start(cmd.id, 'OK: coming to you');
+      const status = {
+        kind: 'pit' as const,
+        sheltered: false,
+        steps: [],
+        needs: {},
+        problem,
+        walled: true,
+        exit: [],
+      };
+      const result = await runPlay(
+        deps(repos, sim, {
+          time: () => Promise.resolve(sim.time),
+          shelter: () => Promise.resolve(status),
+        }),
+        LIMITS,
+        noStop,
+      );
+      expect(result.night).not.toBeNull();
+      return said(sim);
+    };
+    expect(await tells(HURT_IN_SHELTER)).toEqual([
+      'Something hurt me in my shelter: I go offline until sunrise',
+    ]);
+    expect(await tells(STARVING_IN_SHELTER)).toEqual([
+      'I am starving in my shelter: I go offline until sunrise',
+    ]);
+    expect(await tells('no pit (no ground); no box (no blocks)')).toEqual([
+      'It is getting dark and I have no shelter here: I go offline until sunrise',
+    ]);
   });
 
   it('a !come at night waits for the morning, wherever the owner is meanwhile', async () => {

@@ -316,12 +316,17 @@ Enclosed, the agent waits for sunrise, and looks at the shelter again every 5 s 
 roof that went (an Enderman takes dirt), a wall a blast opened, or a hurt a moment ago inside
 it (a zombie breaks a door on Hard, or the player starves) means it no longer shelters, and the
 next round closes it again (the rest of the pit) or, failing that, leaves for the night (an
-independent review, 2026-10-05: the wait never looked again). A night of it is recorded in agent
+independent review, 2026-10-05: the wait never looked again). An owner whose command is running
+hears why ("Something hurt me in my shelter", "I am starving in my shelter"), not that there is
+no shelter. A night of it is recorded in agent
 memory (`night_shelter`), and only such a shelter is dug out of in the morning: a shaft a walk
 dug by day is no shelter to leave (the same review: at noon at the bottom of a `!goto`'s shaft,
 play ran "leave the shelter", undoing the command). Each night gives the morning its tries
 again, and a way out given up is tried again 5 minutes later the same day (`EXIT_RETRY_MS`; the
-same review: three that failed one morning had left none for every morning after). A pit cut
+same review: three that failed one morning had left none for every morning after). A morning
+look that cannot tell (a chunk or the inventory not known yet, just after a login) decides
+nothing and looks again 5 s later, up to 12 times in a row (`MORNING_UNKNOWN_LOOKS`), rather
+than run a command or the day's goal from inside the pit. A pit cut
 short because the day came meanwhile (a time jump: someone slept, and the dig down is refused
 by day) goes on to the morning's way out, never offline in daylight. In the morning, walled in, code plans the way out with
 the same rules (`planShelterExit`): from the pit, the roof and a staircase (two digs for each

@@ -13,6 +13,7 @@ import {
   EXIT_RETRY_MS,
   MOB_SHELTER_MAX_MS,
   MOB_SHELTER_POLL_MS,
+  MORNING_UNKNOWN_LOOKS,
   nightSoon,
   untilSunrise,
   SHELTER_LEAD_MINUTES,
@@ -1322,6 +1323,57 @@ describe('autonomous play', () => {
     );
     expect(unknown).toBe(true);
     expect(exits).toBe(3);
+  });
+
+  it('a morning look that cannot tell looks again a moment later: no session from inside the pit', async () => {
+    // An independent review, 2026-10-05: play went on to the command and goal rounds at once,
+    // whose sessions then ran from inside the pit.
+    const run = async (unknownLooks: number): Promise<string[]> => {
+      const repos = open();
+      nightSpent(repos);
+      const seen: string[] = [];
+      let looks = 0;
+      await runPlay(
+        {
+          repos,
+          now: () => 0,
+          inventory: () => Promise.resolve({}),
+          time: () => Promise.resolve(worldTime(1_000, true)),
+          shelter: () => {
+            looks += 1;
+            return Promise.resolve(
+              looks <= unknownLooks
+                ? null
+                : {
+                    kind: 'pit' as const,
+                    sheltered: false,
+                    steps: [],
+                    needs: {},
+                    problem: null,
+                    walled: true,
+                    exit: EXIT,
+                  },
+            );
+          },
+          session: (_limits, hooks) => {
+            seen.push(`session ${String(repos.memory.getValue(CURRENT_TASK_KEY))}`);
+            return failedSession(repos, hooks);
+          },
+          sleep: (ms) => {
+            seen.push(`sleep ${ms}`);
+            return Promise.resolve();
+          },
+        },
+        DEFAULT_PLAY_LIMITS,
+        { stopRequested: () => (seen.some((s) => s.startsWith('session')) ? 'test over' : null) },
+      );
+      return seen;
+    };
+    const poll = `sleep ${MOB_SHELTER_POLL_MS}`;
+    expect(await run(2)).toEqual([poll, poll, 'session leave-shelter']);
+    // Not known for MORNING_UNKNOWN_LOOKS looks in a row: play goes on to the other rounds
+    // (here: with no quest and no --listen, play ends), never polling for good.
+    expect(await run(1_000)).toEqual(Array(MORNING_UNKNOWN_LOOKS).fill(poll));
   });
 
   it('out of the shelter, a way out that stopped short is closed: no "working on" it all day', async () => {

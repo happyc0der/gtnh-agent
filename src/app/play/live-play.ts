@@ -48,7 +48,12 @@ import { foodStatusOf } from './food.ts';
 import { runSession } from '../loop/live-session.ts';
 import { withLiveClient } from '../commands/live-commands.ts';
 import { passProblem } from '../../bot/gtnh1710/passable.ts';
-import { shelterStatus, type ShelterStatus } from '../../goals/shelter.ts';
+import {
+  HURT_IN_SHELTER,
+  shelterStatus,
+  STARVING_IN_SHELTER,
+  type ShelterStatus,
+} from '../../goals/shelter.ts';
 import {
   runPlay,
   type FreeGoal,
@@ -249,7 +254,10 @@ export function liveShelter(
       // Hard, a hole a blast made, starving): it shelters no more, and play leaves (an
       // independent review, 2026-10-05: the night's wait never looked again).
       if (recentHurtMs(state.player.lastHurtAt, state.timestamp) !== null) {
-        return { ...base, problem: 'something hurt the player inside its shelter a moment ago' };
+        return {
+          ...base,
+          problem: state.player.lastHurtStarving ? STARVING_IN_SHELTER : HURT_IN_SHELTER,
+        };
       }
       return { ...base, sheltered: true };
     }
