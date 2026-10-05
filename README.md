@@ -212,7 +212,8 @@ that for 8 hours in its own window (start the server first).
 **How it fits into play.** Commands come before food trips and quests: a new one ends the session
 running at its next cycle, and the quest goes on after it (unless paused). One command that takes
 time (travel, a tunnel, a get or mine) runs at a time: a new one replaces the one running or
-waiting, as in Baritone, and the old one is answered "Replaced by command #N". The night shelter and a
+waiting, as in Baritone, and says so ("OK: going to 20 64 0 (instead of: come to you)"); another
+owner whose command it replaces is told ("Stopped: ... asked me to ... instead"). The night shelter and a
 nearly empty food bar (below `minHunger`, 6, with nothing to eat) keep priority: travel and
 gathering wait for them, and it says so ("It is night: I stay in my shelter until morning, then I
 come to you"), while `!status` and the like are answered meanwhile. Nothing a command asks for

@@ -19,10 +19,6 @@ import {
 
 export const DETERMINISTIC_ROUTER_NAME = 'deterministic-router';
 
-/**
- * Fixed confidence per rule. The router is deterministic, so "confidence" expresses
- * how sure the rule is that its decision is appropriate, not a probability estimate.
- */
 /** Hurt this recently (ms) with a hostile near is being attacked (UNDER_ATTACK). */
 export const UNDER_ATTACK_MS = 5_000;
 /**
@@ -36,6 +32,10 @@ export const CRITICAL_HEALTH = 6;
  */
 export const CRITICAL_CLOSE = 5;
 
+/**
+ * Fixed confidence per rule. The router is deterministic, so "confidence" expresses
+ * how sure the rule is that its decision is appropriate, not a probability estimate.
+ */
 const CONFIDENCE = {
   failClosed: 1,
   safety: 0.95,
@@ -72,11 +72,17 @@ export const SAFETY_REASON_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>(
  * Priority:
  *   0. unreliable state (unknown/stale/inconsistent)  -> PAUSE_AND_ASK_USER
  *   1. outside work area                               -> PAUSE_AND_ASK_USER
- *      hostiles nearby, the player sealed in            -> PAUSE (SHELTERED: it stays inside)
+ *      creatures nearby, the player sealed in and not  -> EAT (SHELTERED, HUNGRY) when hungry with
+ *      struck lately                                      food it can eat, else PAUSE (SHELTERED: it
+ *                                                         stays inside); at food 0 with nothing to
+ *                                                         eat, the rules below
+ *      creatures nearby, too weak to run or fight      -> PAUSE (CRITICAL_HEALTH: offline at once)
  *      hostiles nearby and fighting back is the answer -> DEFEND (only with combat enabled; see
  *                                                         defend.ts: cornered by a quick kill,
  *                                                         or nowhere to retreat to)
+ *      struck lately, a creature or a hazard near      -> PAUSE (UNDER_ATTACK: offline at once)
  *      lava/void/hostiles nearby                       -> RETREAT_HOME (or PAUSE if already home / no home)
+ *      struck lately, nothing in view                  -> PAUSE (UNDER_ATTACK, ATTACKER_UNSEEN)
  *   2. low health                                      -> REST (food enough to heal), else RETREAT_HOME (or PAUSE)
  *      hungry                                          -> EAT (or RETREAT_HOME/PAUSE with no approved food
  *                                                         below minHunger, except while the food task

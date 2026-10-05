@@ -1,7 +1,12 @@
 import type { RoutingConfig } from '../config/env.ts';
 import type { Position } from '../domain/common.ts';
 import { bestMeal } from '../domain/food.ts';
-import type { GameState, Generator, StorageContainer } from '../domain/game-state.ts';
+import {
+  usableItems,
+  type GameState,
+  type Generator,
+  type StorageContainer,
+} from '../domain/game-state.ts';
 import { distance } from '../domain/geometry.ts';
 import type { NamedLocation } from '../domain/safety.ts';
 import { isProtected } from '../safety/protected-items.ts';
@@ -64,6 +69,11 @@ export function inventoryItems(state: GameState): Record<string, number> {
   return state.inventory.known ? state.inventory.value.items : {};
 }
 
+/** What a meal may be of: the inventory less stacks with NBT data, which eat skips. */
+function edibleItems(state: GameState): Record<string, number> {
+  return state.inventory.known ? usableItems(state.inventory.value) : {};
+}
+
 export function homeLocation(ctx: RouterContext): NamedLocation | null {
   const home = ctx.safety.locations.get(ctx.routing.homeLocationName);
   return home !== undefined && home.kind === 'safe' ? home : null;
@@ -99,7 +109,7 @@ export function inventoryFillFraction(state: GameState): number | null {
 export function availableApprovedFood(state: GameState, ctx: RouterContext): string | null {
   if (ctx.eatingEnabled === false) return null;
   return (
-    bestMeal(inventoryItems(state), ctx.safety.config.approvedFoods, ctx.recentMeals ?? [], (f) =>
+    bestMeal(edibleItems(state), ctx.safety.config.approvedFoods, ctx.recentMeals ?? [], (f) =>
       isProtected(f, ctx.safety.protectedItems),
     )?.item ?? null
   );

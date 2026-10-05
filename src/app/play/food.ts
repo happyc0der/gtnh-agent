@@ -5,7 +5,7 @@ import {
   FOOD_TRIP_POINTS,
   MEAL_HISTORY_LENGTH,
 } from '../../domain/food.ts';
-import type { GameState, WorldTime } from '../../domain/game-state.ts';
+import { usableItems, type GameState, type WorldTime } from '../../domain/game-state.ts';
 import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import { isProtected, mergeProtectedItems } from '../../safety/protected-items.ts';
@@ -77,7 +77,7 @@ export function foodStatusOf(
   return {
     hunger: state.player.hunger.value,
     carried: carriedFoodPoints(
-      state.inventory.value.items,
+      usableItems(state.inventory.value),
       config.safety.approvedFoods,
       repos.actions.recentMeals(MEAL_HISTORY_LENGTH),
       (item) => isProtected(item, protectedItems),

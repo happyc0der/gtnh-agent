@@ -284,7 +284,13 @@ export function mobPause(stopKind: SessionStopKind, last: DecisionResult | null)
       ? codes.join(', ')
       : null;
   }
-  const answer = last.decision === 'RETREAT_HOME' || last.decision === 'DEFEND';
+  // A meal sealed in with creatures near (System 1's EAT with SHELTERED) that failed or was
+  // refused waits offline too, not again and again while starving hurts it (an independent
+  // review, 2026-10-05: a meal that kept failing kept it online, starving, in its pit).
+  const answer =
+    last.decision === 'RETREAT_HOME' ||
+    last.decision === 'DEFEND' ||
+    (last.decision === 'EAT' && codes.includes('SHELTERED'));
   const failed = stopKind === 'cycle-failed' || stopKind === 'needs-attention';
   const mobs = mob || codes.includes('CREEPER_NEARBY') || codes.includes('TOO_MANY_HOSTILES');
   return answer && failed && mobs ? codes.join(', ') : null;

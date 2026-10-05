@@ -2107,6 +2107,65 @@ describe("owners' commands in play", () => {
     expect(result.mobNearby).toBe('HOSTILES_NEARBY');
   });
 
+  it('idle, home from a retreat it looks again at once: a mob that followed sends it offline', async () => {
+    // Seen live 2026-10-05: a Fire Creeper 4.5 blocks away followed the 8.8-block retreat home
+    // and exploded about 3 s after the bot arrived, before the next look (20 health to 12).
+    const sim = newSim({ heard: [whisper('!pause')] });
+    const base = deps(open(), sim, { listen: true });
+    const seen: string[] = [];
+    let looks = 0;
+    sim.onSleep = () => void seen.push('sleep');
+    const result = await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          standby: () => {
+            looks += 1;
+            seen.push(`look ${looks}`);
+            return Promise.resolve(
+              looks === 1
+                ? { kind: 'reflex', text: 'RETREAT_HOME [HOSTILES_NEARBY]' }
+                : { kind: 'mob', reasons: 'HOSTILES_NEARBY, ALREADY_AT_SAFE_LOCATION' },
+            );
+          },
+        },
+        session: (_limits, hooks) => {
+          seen.push('retreat');
+          hooks.onCycle(
+            {
+              summary: 'RETREAT_HOME -> RETURN_TO_SAFE_LOCATION -> succeeded',
+              status: 'succeeded',
+              decision: {
+                decision: 'RETREAT_HOME',
+                confidence: 0.95,
+                reasonCodes: ['HOSTILES_NEARBY'],
+                factsUsed: {},
+                requiresHumanConfirmation: false,
+                provider: 'test',
+              },
+              outcome: null,
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'retreated' }],
+            stopReason: 'stopped after a non-task decision: RETREAT_HOME',
+            stopKind: 'non-task-decision',
+            taskId: 'owner-standby',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY, ALREADY_AT_SAFE_LOCATION');
+    // The look right after the retreat, with no wait between.
+    expect(seen[seen.indexOf('retreat') + 1]).toBe('look 2');
+  });
+
   it('idle, a retreat refused as a repeated failure (a pause) is waited out offline too', async () => {
     const sim = newSim({ heard: [whisper('!pause')] });
     const base = deps(open(), sim, { listen: true });

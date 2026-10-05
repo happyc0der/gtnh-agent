@@ -436,22 +436,54 @@ export function planNightPit(
   }
   // Nowhere here or next to it: a few steps away, as a person walks off a bush to open
   // ground. Seen live: by a tree, the pit's wall would have been leaves, a box on open ground
-  // cannot be roofed from inside, and the agent went offline for the night. The nearest
-  // spots the walker reaches, within PIT_SEARCH_WALK blocks, at most PIT_SEARCH_SPOTS of them.
+  // cannot be roofed from inside, and the agent went offline for the night. The spots the
+  // walker reaches within PIT_SEARCH_WALK blocks, nearest first: each column's own blocks are
+  // looked at first (cheap), and at most PIT_SEARCH_SPOTS that pass are planned in full (the
+  // walks there and out). An independent review, 2026-10-05: the 80 nearest cells, whatever
+  // their blocks, reached only about 5 blocks' walk on open ground.
+  const walk = Math.min(PIT_SEARCH_WALK, opts.maxPathLength);
   const tried = new Set([`${fx},${fy},${fz}`, ...spots.map((p) => `${p.x},${p.y},${p.z}`)]);
-  const reach = reachableFeet(world, fence, feet, Math.min(PIT_SEARCH_WALK, opts.maxPathLength));
+  const reach = reachableFeet(world, fence, feet, walk);
   const farther = [...reach.values()]
     .filter((f) => !tried.has(`${f.x},${f.y},${f.z}`))
-    .sort((a, b) => a.length - b.length || a.x - b.x || a.z - b.z)
-    .slice(0, PIT_SEARCH_SPOTS);
+    .sort((a, b) => a.length - b.length || a.x - b.x || a.z - b.z);
+  let planned = 0;
   for (const f of farther) {
-    const next = pitAt(world, feet, { x: f.x, y: f.y, z: f.z }, inventory, opts, needFree);
+    const spot = { x: f.x, y: f.y, z: f.z };
+    if (pitColumnProblem(world, spot, inventory, opts) !== null) continue;
+    if (planned >= PIT_SEARCH_SPOTS) {
+      return {
+        ok: false,
+        reason: `no spot for a pit among the ${PIT_SEARCH_SPOTS} nearest that might take one, within ${f.length.toFixed(0)} blocks' walk (here: ${own.reason})`,
+      };
+    }
+    planned += 1;
+    const next = pitAt(world, feet, spot, inventory, opts, needFree);
     if (next.ok) return next;
   }
   return {
     ok: false,
-    reason: `no spot for a pit within ${PIT_SEARCH_WALK} blocks' walk (here: ${own.reason})`,
+    reason: `no spot for a pit within ${walk} blocks' walk (here: ${own.reason})`,
   };
+}
+
+/**
+ * Why the column at `spot` (the player's feet there) cannot take a pit by its own blocks (its
+ * walls, the digs down, a block for the roof), else null: cheap, with no walk planned.
+ */
+function pitColumnProblem(
+  world: WalkWorld,
+  spot: BlockPos,
+  inventory: Readonly<Record<string, number>>,
+  opts: PitOptions,
+): string | null {
+  const walls = wallProblem(world, spot.x, spot.y - 1, spot.z);
+  if (walls !== null) return walls;
+  const w = new PlannedWorld(world);
+  const centre = centreOf(spot.x, spot.y, spot.z);
+  const dug = digsDown(w, opts.area, centre, spot.y - NIGHT_PIT_DEPTH, []);
+  if ('reason' in dug) return dug.reason;
+  return roofItemFor(inventory, dug.dirt) === null ? 'no block for the roof' : null;
 }
 
 /**
@@ -461,7 +493,10 @@ export function planNightPit(
  * there.
  */
 export const PIT_SEARCH_WALK = 24;
-/** Spots beyond the neighbours it looks at, nearest first (each plans a walk and the pit). */
+/**
+ * Spots beyond the neighbours it plans in full, nearest first, of those whose own blocks could
+ * take a pit (each plans the walk there and the way out).
+ */
 export const PIT_SEARCH_SPOTS = 80;
 
 /**

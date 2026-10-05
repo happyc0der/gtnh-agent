@@ -2668,11 +2668,17 @@ export class WorldModel {
     return w.slice(STORAGE_FIRST, STORAGE_LAST + 1);
   }
 
-  #inventory(): Known<{ items: Record<string, number>; usedSlots: number; capacitySlots: number }> {
+  #inventory(): Known<{
+    items: Record<string, number>;
+    nbt?: Record<string, number>;
+    usedSlots: number;
+    capacitySlots: number;
+  }> {
     if (this.#inventoryProblem !== null) return unknown(this.#inventoryProblem);
     const slots = this.#playerSlots();
     if (typeof slots === 'string') return unknown(slots);
     const items: Record<string, number> = {};
+    const nbt: Record<string, number> = {};
     let usedSlots = 0;
     for (let i = 0; i < slots.length; i++) {
       const slot = STORAGE_FIRST + i;
@@ -2682,8 +2688,14 @@ export class WorldModel {
       const naming = nameItemStack(this.#registry, stack.id, stack.damage);
       if (!naming.ok) return unknown(naming.reason);
       items[naming.name] = (items[naming.name] ?? 0) + stack.count;
+      if (stack.hasNbt) nbt[naming.name] = (nbt[naming.name] ?? 0) + stack.count;
       usedSlots += 1;
     }
-    return known({ items, usedSlots, capacitySlots: STORAGE_LAST - STORAGE_FIRST + 1 });
+    return known({
+      items,
+      ...(Object.keys(nbt).length > 0 ? { nbt } : {}),
+      usedSlots,
+      capacitySlots: STORAGE_LAST - STORAGE_FIRST + 1,
+    });
   }
 }

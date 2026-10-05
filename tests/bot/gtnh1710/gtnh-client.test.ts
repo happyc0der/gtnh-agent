@@ -116,6 +116,29 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     expect(server.handshakeHosts[1]).toBe('127.0.0.1\0FML\0');
   });
 
+  it('tells the items in stacks with NBT data apart: the client never uses those', async () => {
+    // An independent review, 2026-10-05: a meal of such a stack failed every time (eat skips
+    // it), and System 1 chose it again and again.
+    const { client } = await start({
+      inventory: [
+        { slot: 9, id: 297, count: 6, damage: 0, nbt: true },
+        { slot: 20, id: 297, count: 4, damage: 0 },
+      ],
+    });
+    await client.connect();
+    const state = await client.observe();
+    expect(GameStateSchema.safeParse(state).success).toBe(true);
+    expect(state.inventory).toEqual({
+      known: true,
+      value: {
+        items: { 'minecraft:bread': 10 },
+        nbt: { 'minecraft:bread': 6 },
+        usedSlots: 2,
+        capacitySlots: 36,
+      },
+    });
+  });
+
   it('sends nothing but keep-alives, handshake messages, idle ticks and exact position echoes', async () => {
     const { server, client } = await start();
     await client.connect();

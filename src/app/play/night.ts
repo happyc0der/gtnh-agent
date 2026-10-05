@@ -311,13 +311,17 @@ export const EXIT_RETRY_MS = 5 * 60_000;
 export async function morningRound(play: PlayState): Promise<RoundEnd> {
   const { deps, limits } = play;
   if (deps.shelter !== undefined && deps.repos.memory.getValue(NIGHT_SHELTER_KEY) !== null) {
-    const status = await deps.shelter('morning');
-    // Not known this time (the inventory, a chunk): nothing decided, and the tries and their
-    // wait stand (an independent review, 2026-10-05: one such look gave three more at once).
+    // The clock not known yet (just after a login): it may be night still, and the way out
+    // waits for it as for a look that cannot tell (an independent review, 2026-10-05: an
+    // unknown clock read as day, and the morning round could dig out by night).
+    const clockUnknown = deps.time !== undefined && (await deps.time()) === null;
+    const status = clockUnknown ? null : await deps.shelter('morning');
+    // Not known this time (the clock, the inventory, a chunk): nothing decided, and the tries and
+    // their wait stand (an independent review, 2026-10-05: one such look gave three more at once).
     // It looks again a moment later, rather than run a command or the day's goal from inside
-    // the pit (a later review, 2026-10-05), up to MORNING_UNKNOWN_LOOKS times in a row.
+    // the pit (a later review, 2026-10-05), up to UNKNOWN_LOOKS times in a row.
     if (status === null) {
-      if (play.morningUnknown >= MORNING_UNKNOWN_LOOKS) return null;
+      if (play.morningUnknown >= UNKNOWN_LOOKS) return null;
       play.morningUnknown += 1;
       await play.sleep(MOB_SHELTER_POLL_MS);
       return 'next-round';
@@ -327,9 +331,13 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
     if (mobs !== null) return waitOutMobs(play, mobs);
     if (play.sheltered !== null && 'mobs' in play.sheltered) {
       play.sheltered = null;
+      // Hurt (or starving) in there, the wait ends with the hostiles still near.
       play.emit({
         kind: 'night',
-        message: 'morning: no hostile near any more: leaving the shelter',
+        message:
+          status.hostiles == null
+            ? 'morning: no hostile near any more: leaving the shelter'
+            : `morning: the shelter shelters no more, hostiles near (${status.hostiles}): System 1 decides`,
       });
     }
     // Walled in with no way out code can plan (a shaft deeper than a staircase out, seen live
@@ -364,8 +372,9 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         play.exitGaveUpAt = null;
       }
       play.exitTries += 1;
-      const last = status.exit.at(-1)?.spec;
-      const out = last?.type === 'MOVE_TO' ? last.args.target : undefined;
+      const lastStep = status.exit.at(-1)?.spec;
+      const out = lastStep?.type === 'MOVE_TO' ? lastStep.args.target : undefined;
+      let mobRefused = false;
       const digs = status.exit.filter((s) => s.spec.type === 'DIG_BLOCK').length;
       const result = await blueprintSession(play, {
         taskId: LEAVE_SHELTER_TASK_ID,
@@ -377,12 +386,22 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         text: digs === 0 ? 'climb out' : `dig ${digs} blocks`,
         missing: {},
         maxCycles: status.exit.length * 2 + 2,
+        onCycle: (r) => {
+          mobRefused = refusedForMobs(r);
+        },
       });
-      // A hostile came near while the player is still sealed in (System 1's SHELTERED pause):
-      // the next round waits inside for it to go (waitOutMobs), as a morning that began so. A
-      // moment first: the shelter's look at the mobs and System 1's may disagree, and each round
-      // would run another session at once (an independent review, 2026-10-05).
-      if (play.lastDecision?.reasonCodes.includes('SHELTERED') === true) {
+      // A hostile came near while the player is still sealed in (System 1's SHELTERED pause), or
+      // came back in range while System 1 decided and the safety rules refused the step (seen
+      // live 2026-10-05: a Fire Creeper at the edge of the threat radius; the refused dig spent
+      // a try, and play idled): the next round waits inside for it to go (waitOutMobs), as a
+      // morning that began so. A moment first: the shelter's look at the mobs and System 1's
+      // may disagree, and each round would run another session at once (an independent review,
+      // 2026-10-05). Not after a meal in there that failed: that is waited out offline (mobPause,
+      // below), never tried again and again while starving hurts (a later review, 2026-10-05).
+      const last = play.lastDecision;
+      const shelteredPause =
+        last?.decision === 'PAUSE_AND_ASK_USER' && last.reasonCodes.includes('SHELTERED');
+      if (shelteredPause || (status.sheltered && mobRefused)) {
         play.exitTries -= 1;
         await play.sleep(MOB_SHELTER_POLL_MS);
         return 'next-round';
@@ -421,13 +440,24 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
   return null;
 }
 
+/** The safety rules refused the cycle's action because a creature is near (dangerGate). */
+function refusedForMobs(r: CycleResult): boolean {
+  if (r.outcome?.status !== 'rejected') return false;
+  return r.outcome.validation.violations.some(
+    (v) =>
+      v.code === 'ACTION_NOT_ALLOWED_IN_DANGER' &&
+      /\b(HOSTILES_NEARBY|UNCLASSIFIED_ENTITY_NEARBY)\b/.test(String(v.details?.['dangers'] ?? '')),
+  );
+}
+
 /** How often play looks again while it waits in its shelter for hostiles to go. */
 export const MOB_SHELTER_POLL_MS = 5_000;
 /**
- * Morning looks at last night's shelter in a row that could not tell (a chunk, the inventory
- * not known yet: just after a login) before play goes on to the other rounds: a minute.
+ * Morning looks at last night's shelter in a row that could not tell (the clock, a chunk or
+ * the inventory not known yet, just after a login) before play goes on to the other rounds:
+ * 20 s, with no command heard and System 1 not asked meanwhile.
  */
-export const MORNING_UNKNOWN_LOOKS = 12;
+export const UNKNOWN_LOOKS = 4;
 /**
  * How long play waits in its shelter for hostiles to go before it waits offline instead, as
  * for a mob near home (play.ts MOB_WAIT_MS): a mob that cannot reach the player and does not

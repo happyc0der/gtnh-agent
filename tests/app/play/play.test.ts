@@ -13,7 +13,7 @@ import {
   EXIT_RETRY_MS,
   MOB_SHELTER_MAX_MS,
   MOB_SHELTER_POLL_MS,
-  MORNING_UNKNOWN_LOOKS,
+  UNKNOWN_LOOKS,
   nightSoon,
   untilSunrise,
   SHELTER_LEAD_MINUTES,
@@ -1371,9 +1371,133 @@ describe('autonomous play', () => {
     };
     const poll = `sleep ${MOB_SHELTER_POLL_MS}`;
     expect(await run(2)).toEqual([poll, poll, 'session leave-shelter']);
-    // Not known for MORNING_UNKNOWN_LOOKS looks in a row: play goes on to the other rounds
+    // Not known for UNKNOWN_LOOKS looks in a row: play goes on to the other rounds
     // (here: with no quest and no --listen, play ends), never polling for good.
-    expect(await run(1_000)).toEqual(Array(MORNING_UNKNOWN_LOOKS).fill(poll));
+    expect(await run(1_000)).toEqual(Array(UNKNOWN_LOOKS).fill(poll));
+  });
+
+  it('a step of the way out refused for a creature that came near meanwhile spends no try', async () => {
+    // Seen live 2026-10-05: a Fire Creeper at the edge of the threat radius came back in range
+    // while System 1 decided; the refused dig spent one of the morning's tries, and play idled.
+    const run = async (sealed: boolean) => {
+      const repos = open();
+      nightSpent(repos);
+      let exits = 0;
+      const sleeps: number[] = [];
+      await runPlay(
+        {
+          repos,
+          now: () => 0,
+          inventory: () => Promise.resolve({}),
+          time: () => Promise.resolve(worldTime(1_000, true)),
+          shelter: () =>
+            Promise.resolve({
+              kind: 'pit' as const,
+              sheltered: sealed,
+              steps: [],
+              needs: {},
+              problem: null,
+              walled: true,
+              exit: EXIT,
+              hostiles: null,
+            }),
+          session: (_limits, hooks) => {
+            exits += 1;
+            hooks.onCycle(
+              {
+                summary: 'EXECUTE_KNOWN_SAFE_STEP -> DIG_BLOCK -> rejected',
+                status: 'rejected',
+                decision: {
+                  decision: 'EXECUTE_KNOWN_SAFE_STEP',
+                  confidence: 0.95,
+                  reasonCodes: ['KNOWN_SAFE_STEP'],
+                  factsUsed: {},
+                  requiresHumanConfirmation: false,
+                  provider: 'test',
+                },
+                outcome: {
+                  status: 'rejected',
+                  validation: {
+                    ok: false,
+                    violations: [
+                      {
+                        code: 'ACTION_NOT_ALLOWED_IN_DANGER',
+                        severity: 'block',
+                        message: 'DIG_BLOCK is not allowed while: HOSTILES_NEARBY',
+                        details: { actionType: 'DIG_BLOCK', dangers: 'HOSTILES_NEARBY' },
+                      },
+                    ],
+                    preconditionFailures: [],
+                    requiresUserPause: false,
+                  },
+                },
+              } as unknown as CycleResult,
+              1,
+            );
+            return Promise.resolve({
+              cycles: [{ cycleId: 'c', summary: 'rejected' }],
+              stopReason: 'stopped after: EXECUTE_KNOWN_SAFE_STEP -> DIG_BLOCK -> rejected',
+              stopKind: 'needs-attention',
+              taskId: 'leave-shelter',
+              taskStatus: 'active',
+              elapsedMs: 1,
+            });
+          },
+          sleep: (ms) => {
+            sleeps.push(ms);
+            return Promise.resolve();
+          },
+        },
+        DEFAULT_PLAY_LIMITS,
+        { stopRequested: () => (exits >= 6 ? 'test over' : null) },
+      );
+      return { exits, sleeps };
+    };
+    // Sealed in: refused six times (more than its three tries), a moment's wait after each.
+    const inside = await run(true);
+    expect(inside.exits).toBe(6);
+    expect(inside.sleeps).toEqual(Array(6).fill(MOB_SHELTER_POLL_MS));
+    // Already open (a dig done): the usual end of the session.
+    expect((await run(false)).exits).toBe(1);
+  });
+
+  it('the clock not known yet (just after a login): no way out is dug, it looks again', async () => {
+    // An independent review, 2026-10-05: an unknown clock read as day, and the morning round
+    // could dig out by night.
+    const run = async (unknown: number) => {
+      const repos = open();
+      nightSpent(repos);
+      const seen: string[] = [];
+      let looks = 0;
+      await runPlay(
+        {
+          repos,
+          now: () => 0,
+          inventory: () => Promise.resolve({}),
+          time: () => {
+            looks += 1;
+            return Promise.resolve(looks <= unknown ? null : worldTime(18_000, true));
+          },
+          shelter: (purpose) => {
+            seen.push(`shelter ${purpose ?? 'night'}`);
+            return Promise.resolve(null);
+          },
+          session: (_limits, hooks) => failedSession(repos, hooks),
+          sleep: (ms) => {
+            seen.push(`sleep ${ms}`);
+            return Promise.resolve();
+          },
+        },
+        DEFAULT_PLAY_LIMITS,
+        { stopRequested: () => (seen.some((s) => s.startsWith('shelter')) ? 'test over' : null) },
+      );
+      return seen;
+    };
+    const poll = `sleep ${MOB_SHELTER_POLL_MS}`;
+    // Known by the next round (each round reads it twice): the night, as it is.
+    expect(await run(2)).toEqual([poll, 'shelter night']);
+    // Never known: after UNKNOWN_LOOKS, play goes on to the other rounds, with no way out dug.
+    expect(await run(1_000)).toEqual(Array<string>(UNKNOWN_LOOKS).fill(poll));
   });
 
   it('out of the shelter, a way out that stopped short is closed: no "working on" it all day', async () => {

@@ -293,7 +293,11 @@ it and runs it, step by step, as known safe steps (see
   dug through) against the natural ground beside it, whose inner faces look at the eyes
   (y-1.38). The roof is dirt or a log, which the agent digs again in the morning (the digs
   themselves give dirt). Code picks the spot (the player's column, one next to it the walker
-  reaches, else one up to 24 blocks' walk away: `PIT_SEARCH_WALK`) and checks before digging, with the live client's own rules on a what-if copy
+  reaches, else one up to 24 blocks' walk away: `PIT_SEARCH_WALK`; every column within that walk
+  is looked at by its own blocks first, and the nearest 80 that might take a pit are planned in
+  full, `PIT_SEARCH_SPOTS`: an independent review, 2026-10-05, found the 80 nearest cells, whatever
+  their blocks, reached only about 5 blocks' walk on open ground) and checks before digging, with
+  the live client's own rules on a what-if copy
   of the world (`src/bot/gtnh1710/night-pit.ts`): every dig down (exactly one block, no fluid,
   hazard or unloaded block near), natural walls (the 3 x 3 columns around plain full blocks
   down to y-3, sand and gravel only on solid ground), the roof's placement, and a way out for
@@ -325,8 +329,13 @@ play ran "leave the shelter", undoing the command). Each night gives the morning
 again, and a way out given up is tried again 5 minutes later the same day (`EXIT_RETRY_MS`; the
 same review: three that failed one morning had left none for every morning after). A morning
 look that cannot tell (a chunk or the inventory not known yet, just after a login) decides
-nothing and looks again 5 s later, up to 12 times in a row (`MORNING_UNKNOWN_LOOKS`), rather
-than run a command or the day's goal from inside the pit. A pit cut
+nothing and looks again 5 s later, up to 4 times in a row (`UNKNOWN_LOOKS`), rather than run a
+command or the day's goal from inside the pit; so does a clock not known yet, since it may be
+night still (the same review: an unknown clock read as day, and the morning could dig out by
+night). A
+step of the way out refused because a creature came back in range while System 1 decided
+spends no try either: play waits inside for it, as when the morning began so (seen live
+2026-10-05: a Fire Creeper at the edge of the threat radius). A pit cut
 short because the day came meanwhile (a time jump: someone slept, and the dig down is refused
 by day) goes on to the morning's way out, never offline in daylight. In the morning, walled in, code plans the way out with
 the same rules (`planShelterExit`): from the pit, the roof and a staircase (two digs for each
@@ -362,13 +371,18 @@ head and below its feet are all known full blocks, so no door, fluid or thin blo
 through. Then System 1 does not retreat or fight while hostiles (or unidentified entities) are
 near, since a walk cannot leave the pit and no blow lands through its walls: it decides
 `PAUSE_AND_ASK_USER` with `SHELTERED`, unless the player was struck a moment ago or lava is near
-(then the usual rules decide). Hungry with food carried, it eats in there (`EAT` with
-`SHELTERED` and `HUNGRY`): the safety policy allows a meal with creatures near only sealed in
-(an independent review, 2026-10-05: starving in its sealed pit with zombies about, every meal was
-refused). A loss of health at food 0 is starving, no blow; at food 0 with nothing to eat, though,
-it does not stay, since in there starving hurts on (on Hard, to death): the usual rules decide,
-a retreat that cannot leave the pit and then the offline wait, where nothing starves. The
-hostiles still stop every other action. In the morning, play
+(then the usual rules decide). Hungry with food carried, a session in there eats (`EAT` with
+`SHELTERED` and `HUNGRY`: the morning's way out, an idle standby): the safety policy allows a
+meal with creatures near only sealed in (an independent review, 2026-10-05: starving in its
+sealed pit with zombies about, every meal was refused). Food in a stack with NBT data is no food
+for this (the client never uses such a stack: GameState `inventory.nbt`, `usableItems`), and a
+meal in there that fails is waited out offline (`mobPause`), never tried again and again (a
+later review the same day: a meal that kept failing kept the bot online, starving). A loss of
+health at food 0 is starving, no blow; at food 0 with nothing to eat, though, it does not stay,
+since in there starving hurts on (on Hard, to death): the usual rules decide, a retreat that
+cannot leave the pit and then the offline wait, where nothing starves. By night, waiting in its
+shelter, nothing eats: starving hurts, the shelter shelters no more, and play goes offline until
+sunrise ("I am starving in my shelter"). The hostiles still stop every other action. In the morning, play
 waits inside while they are near (the sun burns zombies and skeletons), looking again every
 5 s, answering commands as at night and saying so in `!status`; it digs out once they are gone,
 and the wait spends none of the exit's tries (seen live 2026-10-04: zombies about the pit at
@@ -386,7 +400,10 @@ row (`MOB_WAIT_MS`, `MAX_MOB_WAITS` in `src/app/play/play.ts`); with `--listen` 
 5 minutes at a time (`MOB_LONG_WAIT_MS`) instead of quitting. Every new session re-checks the
 state from scratch, so a mob that is still there pauses it again. An idle bot standing by does
 the same (`standbyReason` answers `mob`): seen live 2026-10-04, a zombie followed the bot home,
-where the pause had it stand still until it was killed. Sealed in its shelter it stays online. So
+where the pause had it stand still until it was killed. Home from a retreat, it looks again at
+once, not 3 s later (seen live 2026-10-05: a Fire Creeper 4.5 blocks away followed the 8.8-block
+retreat home and exploded about 3 s after the bot arrived, 20 health to 12, and left a crater).
+Sealed in its shelter it stays online. So
 does any session that ends on an answer to a mob that failed (`mobPause`: a retreat that found no
 way home, perhaps fleeing a little instead, or was refused as a repeated failure; a fight back):
 an owner's command waiting is told ("A mob is near: I go offline a moment for it to leave") and
@@ -551,8 +568,11 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   at once, by night too, and replaces nothing; by night only what cannot change by the morning
   is checked (not whether the owner is in view), and a command waiting for the morning replaces
   the running one only when it starts (an independent review, 2026-10-05: a !come at night
-  failed when its owner stepped away, after it had replaced the !get). An action command with a
-  newer one waiting that can start too is left to it: one "OK ... (instead of: ...)". A stop
+  failed when its owner stepped away, after it had replaced the !get). Its night note says what
+  it will replace ("then I go to ... (instead of: ...)"), and the running command's note is not
+  said after it. An action command with a newer one waiting that can start too is left to it:
+  one "OK ... (instead of: ...)"; another owner whose command it replaces is told ("Stopped: ...
+  asked me to ... instead"). A stop
   cancels the commands sent before it, never one sent after it ("!stop" then "!come" comes). Before play goes offline (a night with no
   shelter, a mob near), what the owners said is stored first, since the heard lines live only in
   that connection, so a stop whispered just then is taken when play comes back. The operator's

@@ -175,17 +175,23 @@ async function handleQueued(
   }
   // A command that cannot even start fails at once, by night too (not promised for the
   // morning), and replaces nothing (an independent review, 2026-10-04: a !come out of sight
-  // failed and still cancelled the !get it came after). By night only what cannot change by
-  // the morning is checked (the owner may step out of view and back), and the command waits,
-  // replacing the running one only when it starts (an independent review, 2026-10-05: a !come
-  // at night failed when its owner stepped away, after it had replaced the !get).
+  // failed and still cancelled the !get it came after). By night the owner's whereabouts are not
+  // checked (they may step out of view and back by the morning; a block, a direction or the
+  // surface is still looked for from the shelter), and the command waits, replacing the running
+  // one only when it starts (an independent review, 2026-10-05: a !come at night failed when
+  // its owner stepped away, after it had replaced the !get).
   const problem = checkAction(play, cmd, command, mode);
   if (problem !== null) {
     finish(play, cmd, 'failed', `Failed: ${problem}`);
     return;
   }
   if (mode === 'night') {
-    sayOnce(play, cmd, nightKey(play), nightNote(play, command));
+    // It will replace the running one in the morning, and says so now (an independent review,
+    // 2026-10-05: the last word of the night promised the old command).
+    const running = repos.commands.running();
+    const old =
+      running?.command != null && isActionCommand(running.command) ? running.command : null;
+    sayOnce(play, cmd, nightKey(play), nightNote(play, command, old));
     return;
   }
   // With a newer action command waiting that can start too, this one waits for it: the newer
@@ -193,7 +199,7 @@ async function handleQueued(
   // "instead of" it a moment later (two commands waited out the night, say).
   if (newerStarts(play, cmd)) return;
   // One action command at a time: the newest replaces the others, and says so.
-  const replaced = replaceOthers(play, cmd.id);
+  const replaced = replaceOthers(play, cmd, command);
   const instead = replaced.length === 0 ? '' : ` (instead of: ${replaced.join('; ')})`;
   const ack = `OK: ${acknowledge(play, cmd, command)}${instead}`;
   repos.commands.start(cmd.id, ack);
@@ -201,15 +207,20 @@ async function handleQueued(
   play.emit({ kind: 'command', id: cmd.id, sender: cmd.sender, message: ack });
 }
 
-const nightNote = (play: PlayState, c: OwnerCommand): string => {
+const nightNote = (
+  play: PlayState,
+  c: OwnerCommand,
+  instead: OwnerCommand | null = null,
+): string => {
   const shelter = play.sheltered;
+  const then = `then I ${describeCommand(c)}${instead === null ? '' : ` (instead of: ${describeCommand(instead)})`}`;
   if (shelter !== null && 'mobs' in shelter) {
-    return `Hostiles are near my shelter: I stay inside until they go, then I ${describeCommand(c)}`;
+    return `Hostiles are near my shelter: I stay inside until they go, ${then}`;
   }
   const minutes =
     shelter === null ? null : Math.max(1, Math.round((shelter.until - play.now()) / 60_000));
   const when = minutes === null ? 'morning' : `morning (in about ${minutes} min)`;
-  return `It is night: I stay in my shelter until ${when}, then I ${describeCommand(c)}`;
+  return `It is night: I stay in my shelter until ${when}, ${then}`;
 };
 
 /** The say-once key of nightNote: its words change when the morning's wait is for mobs. */
@@ -223,15 +234,29 @@ const nightKey = (play: PlayState): string =>
 export async function commandsAtNight(play: PlayState): Promise<void> {
   if (play.deps.commands === undefined) return;
   await takeCommands(play, 'night');
-  const running = play.deps.repos.commands.running();
-  if (running?.command != null && isActionCommand(running.command)) {
+  const { repos } = play.deps;
+  const running = repos.commands.running();
+  // Not with a newer action command waiting: that one replaces it in the morning, and its own
+  // note said so (an independent review, 2026-10-05).
+  const newer = repos.commands
+    .queued()
+    .some(
+      (q) =>
+        running !== null && q.id > running.id && q.command !== null && isActionCommand(q.command),
+    );
+  if (running?.command != null && isActionCommand(running.command) && !newer) {
     sayOnce(play, running, nightKey(play), nightNote(play, running.command));
   }
 }
 
-/** Cancels the running action command and the queued ones before `newId`; what they were. */
-function replaceOthers(play: PlayState, newId: number): string[] {
+/**
+ * Cancels the running action command and the queued ones before `cmd`; what they were. Another
+ * owner whose command it was is told (an independent review, 2026-10-05: with two owners, the
+ * older one's command ended without a word).
+ */
+function replaceOthers(play: PlayState, cmd: OwnerCommandRecord, command: OwnerCommand): string[] {
   const { repos } = play.deps;
+  const newId = cmd.id;
   const others = [
     repos.commands.running(),
     ...repos.commands.queued().filter((q) => q.id < newId),
@@ -243,6 +268,12 @@ function replaceOthers(play: PlayState, newId: number): string[] {
     repos.commands.finish(c.id, 'cancelled', `Replaced by command #${newId}`);
     play.commandRuns.delete(c.id);
     endCommandTask(repos, c.id, 'cancelled');
+    if (c.sender !== cmd.sender) {
+      (play.deps.commands as CommandDeps).reply(
+        c.sender,
+        `Stopped: ${cmd.sender} asked me to ${describeCommand(command)} instead`,
+      );
+    }
   }
   return others.map((c) => describeCommand(c.command as OwnerCommand));
 }
@@ -749,5 +780,16 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
       message: `a mob is near and no retreat works (${reasons}): waiting offline`,
     });
     play.mobAlarm = reasons;
+    return;
+  }
+  // Home from a retreat: a look at once, so a mob that followed it there sends it offline now,
+  // not at the next look 3 s on (seen live 2026-10-05: a Fire Creeper 4.5 blocks away followed
+  // the 8.8-block retreat and exploded about 3 s after the bot arrived: 20 health to 12).
+  if (play.lastDecision?.decision === 'RETREAT_HOME') {
+    const again = (await play.deps.commands?.standby?.()) ?? null;
+    if (again?.kind === 'mob') {
+      play.emit({ kind: 'idle', message: `a mob followed it (${again.reasons}): waiting offline` });
+      play.mobAlarm = again.reasons;
+    }
   }
 }

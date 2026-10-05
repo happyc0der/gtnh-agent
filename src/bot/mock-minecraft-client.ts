@@ -277,7 +277,12 @@ export interface MockWorld {
     /** Sealed in (no mob can reach it: GameState player.sealed); absent: not known. */
     sealed?: boolean | null;
   };
-  inventory: { items: Record<string, number>; capacitySlots: number };
+  inventory: {
+    items: Record<string, number>;
+    capacitySlots: number;
+    /** Of `items`, those in stacks with NBT data (GameState inventory nbt); absent: none. */
+    nbt?: Record<string, number>;
+  };
   /**
    * NBT data of tools in the inventory, by item name: a Tinkers' Construct tool's stats
    * (InfiTool), which the mock reads as the live client does; its wear goes up there. The
@@ -468,6 +473,7 @@ export class MockMinecraftClient implements MinecraftClient {
         ? unknown('mock: inventory hidden')
         : known({
             items: nonZero(w.inventory.items),
+            ...(w.inventory.nbt === undefined ? {} : { nbt: nonZero(w.inventory.nbt) }),
             usedSlots: usedSlots(w.inventory.items),
             capacitySlots: w.inventory.capacitySlots,
           }),

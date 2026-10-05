@@ -70,10 +70,31 @@ export const PlayerSchema = z.strictObject({
 
 export const InventorySchema = z.strictObject({
   items: ItemCountsSchema,
+  /**
+   * Of `items`, those in stacks that carry NBT data: the client never moves or uses such a
+   * stack (a meal skips it: an independent review, 2026-10-05). Absent: none, or an adapter
+   * that does not tell.
+   */
+  nbt: ItemCountsSchema.optional(),
   usedSlots: z.int().min(0).max(256),
   capacitySlots: z.int().min(1).max(256),
 });
 export type Inventory = z.infer<typeof InventorySchema>;
+
+/**
+ * The items the player can use as they are: the inventory's less those in stacks with NBT
+ * data, which the client never moves or uses (a meal of them would fail every time).
+ */
+export function usableItems(inventory: Inventory): Record<string, number> {
+  const { items, nbt } = inventory;
+  if (nbt === undefined) return items;
+  const out: Record<string, number> = {};
+  for (const [item, n] of Object.entries(items)) {
+    const left = n - (nbt[item] ?? 0);
+    if (left > 0) out[item] = left;
+  }
+  return out;
+}
 
 /**
  * A block or column to keep away from. `lava` covers lava and other burning liquids/blocks
