@@ -202,7 +202,12 @@ export function liveShelter(
           mobs.length === 0 ? null : `${mobs.map((v) => v.message).join('; ')}${whoIsNear(state)}`,
       };
       if (opts === null) return { ...stuck, problem: 'there is no fence to dig or walk in' };
-      const exit = planShelterExit(world, feet, opts);
+      const exit = planShelterExit(
+        world,
+        feet,
+        opts,
+        inPit && site !== null ? site.groundY : undefined,
+      );
       if (exit.ok) return { ...stuck, exit: exit.steps };
       // No wall or staircase it may dig: out of the pit as Baritone leaves a hole, through
       // the roof and up a pillar, on MOVE_TO's own path rules; out of a shaft it dug down too

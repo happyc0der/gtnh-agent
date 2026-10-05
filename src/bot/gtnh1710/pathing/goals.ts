@@ -205,6 +205,6 @@ export function describeGoal(goal: Goal): string {
     case 'out':
       return `out of the column (${goal.x}, ${goal.z}), feet at y>=${goal.minY}`;
     case 'away':
-      return `${goal.distance} blocks away from ${goal.from.length} point(s)`;
+      return `${Math.round(goal.distance * 10) / 10} blocks away from ${goal.from.length} point(s)`;
   }
 }

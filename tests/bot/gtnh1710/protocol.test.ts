@@ -29,6 +29,7 @@ import {
   Reader,
 } from '../../../src/bot/gtnh1710/wire.ts';
 import { dimensionName, WorldModel } from '../../../src/bot/gtnh1710/world-model.ts';
+import { hostileTactic } from '../../../src/domain/combat.ts';
 import { chunkBulkFrame, flatWorld, neidColumn } from './fixtures/chunk-fixtures.ts';
 
 /** Decode one frame the way the client does on a GTNH (ModularUI + NEID) server. */
@@ -297,6 +298,12 @@ describe('entity packets', () => {
       category: 'hostile',
     });
     expect(classifyModded('TConstruct', 0, '1.13.57-GTNH').category).toBe('unclassified');
+    // Seen live 2026-10-04: "HardcoreEnderExpansion#51" by the night pit: HEE's Enderman,
+    // which is never struck.
+    const enderman = classifyModded('HardcoreEnderExpansion', 51, '1.12.16-GTNH');
+    expect(enderman).toEqual({ name: 'HardcoreEnderExpansion.Enderman', category: 'hostile' });
+    expect(hostileTactic(enderman.name)).toBe('avoid');
+    expect(classifyModded('HardcoreEnderExpansion', 51, '1.12.17').category).toBe('unclassified');
   });
 
   it('decodes the player abilities: invulnerable while the spawn protection lasts', () => {

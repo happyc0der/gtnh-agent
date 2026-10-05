@@ -54,6 +54,8 @@ const VANILLA_TACTICS: ReadonlyMap<string, HostileTactic> = new Map<string, Host
   ['minecraft:PrimedTnt', 'explodes'],
   ['minecraft:PigZombie', 'avoid'],
   ['minecraft:Enderman', 'avoid'],
+  // Hardcore Ender Expansion's Enderman, which spawns in the vanilla one's place.
+  ['HardcoreEnderExpansion.Enderman', 'avoid'],
   ['minecraft:Silverfish', 'avoid'],
   ['minecraft:Ghast', 'avoid'],
   ['minecraft:LavaSlime', 'avoid'],

@@ -3,6 +3,7 @@ import { CELL, CellCache, changedWorld } from '../../../../src/bot/gtnh1710/path
 import { heuristicRates } from '../../../../src/bot/gtnh1710/pathing/costs.ts';
 import {
   compileGoal,
+  describeGoal,
   goalAny,
   goalAway,
   goalBlock,
@@ -120,6 +121,10 @@ describe('goals', () => {
     expect(away.isGoal(8, 64, 0)).toBe(true);
     expect(away.isGoal(6, 64, 0)).toBe(false);
     expect(away.heuristic(0, 64, 0)).toBeCloseTo(rates.across * (8 - Math.SQRT1_2), 9);
+    // In words, to a tenth of a block (seen live: "12.325250118572388 blocks away").
+    expect(describeGoal(goalAway([{ x: 0, z: 0 }], 12.325250118572388))).toBe(
+      '12.3 blocks away from 1 point(s)',
+    );
   });
 
   it('heuristics never overestimate the cost of a found path, and drop no faster than a move costs', () => {

@@ -483,6 +483,27 @@ describe('the way out in the morning', () => {
     expect(planShelterExit(all, BOTTOM, noPickaxe).ok).toBe(false);
   });
 
+  it('ends the way out at the ground layer, not on a step an earlier way out dug', () => {
+    // Seen live 2026-10-04: a restart stopped the way out after the roof and the first step
+    // east. The next plan took that step for open ground and walked out onto it, two blocks
+    // under the ground, walled on three sides: no retreat could leave it.
+    const halfway = pit({ [k(0, 63, 0)]: ID.air, [k(1, 63, 0)]: ID.air, [k(1, 62, 0)]: ID.air });
+    const r = planShelterExit(halfway, BOTTOM, OPTS, SITE.groundY);
+    if (!r.ok) throw new Error(r.reason);
+    // On up the same staircase: one dig (the second step), then out onto the ground.
+    expect(specs(r.steps)).toEqual([
+      { type: 'DIG_BLOCK', args: { position: { x: 2, y: 63, z: 0 } } },
+      { type: 'MOVE_TO', args: { target: { x: 3.5, y: 64, z: 0.5 }, tolerance: 0.5 } },
+    ]);
+    // A cave beside the pit's floor is no way out either: not on the level, not up a step.
+    const cave = pit({ [k(2, 61, 0)]: ID.air, [k(2, 62, 0)]: ID.air, [k(1, 63, 0)]: ID.air });
+    const c = planShelterExit(cave, BOTTOM, OPTS, SITE.groundY);
+    if (!c.ok) throw new Error(c.reason);
+    const end = specs(c.steps).at(-1);
+    expect(end?.type).toBe('MOVE_TO');
+    expect(end?.type === 'MOVE_TO' && end.args.target.y).toBeGreaterThanOrEqual(SITE.groundY);
+  });
+
   it('says why when there is no way out (stone all around)', () => {
     const stone = land(
       { [k(0, 62, 0)]: ID.air, [k(0, 61, 0)]: ID.air, [k(0, 63, 0)]: ID.dirt },

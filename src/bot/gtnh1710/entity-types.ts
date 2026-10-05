@@ -313,6 +313,20 @@ export const MODDED_ENTITY_TABLE: readonly ModdedEntityEntry[] = [
     fromCode: 'TinkerWorld: registerModEntity(KingBlueSlime.class, "KingSlime", 14, ...)',
     modVersion: '1.13.57-GTNH',
   },
+  // Read in the mod's code (javap, HardcoreEnderExpansion-1.12.16-GTNH.jar): EntityList puts
+  // its own Enderman in place of the vanilla one (replaceVanillaEntity(..., 58)) and registers
+  // it as number 51. Seen live 2026-10-04: "HardcoreEnderExpansion#51" 8 blocks from the agent
+  // by its night pit, unidentified. An Enderman attacks whoever looks at it, and teleports.
+  {
+    modId: 'HardcoreEnderExpansion',
+    typeId: 51,
+    name: 'HardcoreEnderExpansion.Enderman',
+    category: 'hostile',
+    votes: 0,
+    total: 0,
+    fromCode: 'EntityList: registerEntity(EntityMobEnderman.class, "Enderman", 51, 256)',
+    modVersion: '1.12.16-GTNH',
+  },
 ];
 
 const TABLE_BY_KEY: ReadonlyMap<string, ModdedEntityEntry> = new Map(

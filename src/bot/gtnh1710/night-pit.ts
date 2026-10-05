@@ -353,7 +353,7 @@ function pitAt(
   if ('reason' in placed) return refuse(placed.reason);
   steps.push(placed);
   // The agent never digs itself in without a way out for the morning.
-  const exit = planShelterExit(w, dug.at, opts);
+  const exit = planShelterExit(w, dug.at, opts, groundY);
   if (!exit.ok) return refuse(`no way out in the morning: ${exit.reason}`);
   return {
     ok: true,
@@ -488,13 +488,24 @@ export function continueNightPit(
  * Every dig passes checkDig from where the player stands (and nothing beside it may fall),
  * the steps it stands on are left solid, and the walk out passes the walker's planner, all
  * on the planned world. Each step runs later as an ordinary action, validated again.
+ *
+ * `minY` is the lowest feet level out of the shelter (the pit's ground layer, as for
+ * planClimbOut); by default the feet's own (the box stands on the ground). Open cells below
+ * it are no way out: a cave, or the staircase of a way out that stopped halfway (seen live
+ * 2026-10-04: a restart stopped one after its first step; the next morning's plan walked out
+ * onto that step, two blocks under the ground, where no retreat could leave).
  */
-export function planShelterExit(world: WalkWorld, feet: Vec3, opts: PitOptions): ExitPlan {
+export function planShelterExit(
+  world: WalkWorld,
+  feet: Vec3,
+  opts: PitOptions,
+  minY = Math.floor(feet.y + EPS),
+): ExitPlan {
   const found: Array<{ steps: ShelterStep[]; digs: number }> = [];
   const reasons: string[] = [];
   for (const [dx, dz] of SIDES) {
     for (const plan of [levelExit, stairExit]) {
-      const r = plan(world, feet, dx, dz, opts);
+      const r = plan(world, feet, dx, dz, opts, minY);
       if (r.ok) found.push(r);
       else reasons.push(r.reason);
     }
@@ -567,10 +578,12 @@ function levelExit(
   dx: number,
   dz: number,
   opts: PitOptions,
+  minY: number,
 ): ExitPlan {
   const x = Math.floor(feet.x);
   const y = Math.floor(feet.y + EPS);
   const z = Math.floor(feet.z);
+  if (y < minY) return { ok: false, reason: `no level way out: the feet are below y=${minY}` };
   const out = { x: x + 2 * dx, y, z: z + 2 * dz };
   // Open ground beyond the wall, as the world is now: not another hole in the ground.
   if (!open(world, out) || !open(world, { ...out, y: y + 1 })) {
@@ -596,6 +609,7 @@ function stairExit(
   dx: number,
   dz: number,
   opts: PitOptions,
+  minY: number,
 ): ExitPlan {
   const w = new PlannedWorld(world);
   const steps: ShelterStep[] = [];
@@ -624,8 +638,10 @@ function stairExit(
     }
     const body = { x: next.x, y: ny, z: next.z };
     const head = { x: next.x, y: ny + 1, z: next.z };
-    // Open ground already there (as the world is now): the way out ends on it.
-    if (open(world, body) && open(world, head)) {
+    // Open ground already there (as the world is now), out of the shelter: the way out ends
+    // on it. Open cells below minY (a cave, or a step an earlier way out dug) are no way out:
+    // the staircase goes on through them.
+    if (ny >= minY && open(world, body) && open(world, head)) {
       const walk = walkOut(w, feet, body, opts);
       if (typeof walk === 'string') return { ok: false, reason: walk };
       return { ok: true, steps: [...steps, walk], digs: steps.length };
