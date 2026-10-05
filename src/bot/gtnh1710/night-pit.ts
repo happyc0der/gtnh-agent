@@ -19,7 +19,13 @@ import { passProblem } from './passable.ts';
 import { goalBlock, goalOut } from './pathing/goals.ts';
 import { planPath, type PathOptions } from './pathing/search.ts';
 import { checkPlace } from './placing.ts';
-import { planTerrainWalk, reachableFeet, standProblem, TERRAIN_SURFACES } from './terrain.ts';
+import {
+  planTerrainWalk,
+  reachableFeet,
+  standProblem,
+  TERRAIN_SURFACES,
+  walksAway,
+} from './terrain.ts';
 import { WALKABLE_SURFACES, type Fence, type Vec3, type WalkWorld } from './walking.ts';
 
 /**
@@ -74,8 +80,27 @@ export type PitPlan =
     }
   | { ok: false; reason: string };
 
+/**
+ * A way out: its steps, how many blocks it digs, and whether a walk that breaks nothing can
+ * leave where it ends (`free`: OUT_FREE_DISTANCE).
+ */
 export type ExitPlan =
-  { ok: true; steps: ShelterStep[]; digs: number } | { ok: false; reason: string };
+  { ok: true; steps: ShelterStep[]; digs: number; free: boolean } | { ok: false; reason: string };
+
+/** One side's way out, with the world as it leaves it and the feet block it ends on. */
+type ExitTry =
+  | { ok: true; steps: ShelterStep[]; digs: number; world: WalkWorld; end: BlockPos }
+  | { ok: false; reason: string };
+
+/**
+ * How far across a walk that breaks and places nothing must get from where a way out ends,
+ * within OUT_FREE_WALK blocks of walking, for the player to be out rather than in another hole
+ * (an independent review, 2026-10-05: a pit dug in an old staircase's notch had its way out end
+ * two blocks under the ground, on the first step of another old staircase whose next step's
+ * floor it had dug, where such a walk reached four cells: no retreat or flee could leave).
+ */
+export const OUT_FREE_DISTANCE = 8;
+export const OUT_FREE_WALK = 24;
 
 /** The most steps up a way out digs before it must reach open ground. */
 export const MAX_EXIT_STEPS = 4;
@@ -325,6 +350,7 @@ function pitAt(
   spot: BlockPos,
   inventory: Readonly<Record<string, number>>,
   opts: PitOptions,
+  needFree: boolean,
 ): PitPlan {
   const refuse = (reason: string): PitPlan => ({ ok: false, reason });
   const { area } = opts;
@@ -355,6 +381,12 @@ function pitAt(
   // The agent never digs itself in without a way out for the morning.
   const exit = planShelterExit(w, dug.at, opts, groundY);
   if (!exit.ok) return refuse(`no way out in the morning: ${exit.reason}`);
+  // Out where a walk that breaks nothing can leave, as it can from where the player stands.
+  if (needFree && !exit.free) {
+    return refuse(
+      `its way out in the morning would end in a hole: a walk that breaks nothing gets no ${OUT_FREE_DISTANCE} blocks away from there`,
+    );
+  }
   return {
     ok: true,
     site: { x: spot.x, z: spot.z, groundY },
@@ -386,7 +418,9 @@ export function planNightPit(
   const fx = Math.floor(feet.x);
   const fy = Math.round(feet.y);
   const fz = Math.floor(feet.z);
-  const own = pitAt(world, feet, { x: fx, y: fy, z: fz }, inventory, opts);
+  // A way out must leave the player as free as it is now (OUT_FREE_DISTANCE).
+  const needFree = walksAway(world, fence, feet, OUT_FREE_DISTANCE, OUT_FREE_WALK);
+  const own = pitAt(world, feet, { x: fx, y: fy, z: fz }, inventory, opts, needFree);
   if (own.ok) return own;
   const spots: BlockPos[] = [];
   for (const [dx, dz] of AROUND) {
@@ -397,7 +431,7 @@ export function planNightPit(
     Math.hypot(s.x + 0.5 - feet.x, s.y - feet.y, s.z + 0.5 - feet.z);
   spots.sort((a, b) => distance(a) - distance(b) || a.x - b.x || a.z - b.z);
   for (const spot of spots) {
-    const next = pitAt(world, feet, spot, inventory, opts);
+    const next = pitAt(world, feet, spot, inventory, opts, needFree);
     if (next.ok) return next;
   }
   // Nowhere here or next to it: a few steps away, as a person walks off a bush to open
@@ -411,7 +445,7 @@ export function planNightPit(
     .sort((a, b) => a.length - b.length || a.x - b.x || a.z - b.z)
     .slice(0, PIT_SEARCH_SPOTS);
   for (const f of farther) {
-    const next = pitAt(world, feet, { x: f.x, y: f.y, z: f.z }, inventory, opts);
+    const next = pitAt(world, feet, { x: f.x, y: f.y, z: f.z }, inventory, opts, needFree);
     if (next.ok) return next;
   }
   return {
@@ -534,7 +568,7 @@ export function planShelterExit(
   opts: PitOptions,
   minY = Math.floor(feet.y + EPS),
 ): ExitPlan {
-  const found: Array<{ steps: ShelterStep[]; digs: number }> = [];
+  const found: Array<Extract<ExitTry, { ok: true }>> = [];
   const reasons: string[] = [];
   for (const [dx, dz] of SIDES) {
     for (const plan of [levelExit, stairExit]) {
@@ -547,8 +581,19 @@ export function planShelterExit(
     return { ok: false, reason: reasons.slice(0, 2).join('; ') || 'no side to dig out of' };
   }
   found.sort((a, b) => a.digs - b.digs);
-  const best = found[0] as { steps: ShelterStep[]; digs: number };
-  return { ok: true, steps: best.steps, digs: best.digs };
+  // The fewest digs that end where a walk that breaks nothing can leave; else the fewest.
+  const free = found.find((f) =>
+    walksAway(
+      f.world,
+      opts.area.fence,
+      centreOf(f.end.x, f.end.y, f.end.z),
+      OUT_FREE_DISTANCE,
+      OUT_FREE_WALK,
+    ),
+  );
+  const best = free ?? found[0];
+  if (best === undefined) return { ok: false, reason: 'no side to dig out of' };
+  return { ok: true, steps: best.steps, digs: best.digs, free: free !== undefined };
 }
 
 /** A dig of the way out, if the cell is not open already: checked, then done on `w`. */
@@ -612,7 +657,7 @@ function levelExit(
   dz: number,
   opts: PitOptions,
   minY: number,
-): ExitPlan {
+): ExitTry {
   const x = Math.floor(feet.x);
   const y = Math.floor(feet.y + EPS);
   const z = Math.floor(feet.z);
@@ -633,7 +678,7 @@ function levelExit(
   }
   const walk = walkOut(w, feet, out, opts);
   if (typeof walk === 'string') return { ok: false, reason: walk };
-  return { ok: true, steps: [...steps, walk], digs: steps.length };
+  return { ok: true, steps: [...steps, walk], digs: steps.length, world: w, end: out };
 }
 
 function stairExit(
@@ -643,7 +688,7 @@ function stairExit(
   dz: number,
   opts: PitOptions,
   minY: number,
-): ExitPlan {
+): ExitTry {
   const w = new PlannedWorld(world);
   const steps: ShelterStep[] = [];
   let col = { x: Math.floor(feet.x), z: Math.floor(feet.z) };
@@ -677,7 +722,7 @@ function stairExit(
     if (ny >= minY && open(world, body) && open(world, head)) {
       const walk = walkOut(w, feet, body, opts);
       if (typeof walk === 'string') return { ok: false, reason: walk };
-      return { ok: true, steps: [...steps, walk], digs: steps.length };
+      return { ok: true, steps: [...steps, walk], digs: steps.length, world: w, end: body };
     }
     for (const [cell, label] of [
       [head, `step ${step}, upper block`],
@@ -796,7 +841,11 @@ export function planClimbOut(
       spec: { type: 'MOVE_TO', args: { target: centreOf(end.x, end.y, end.z), tolerance: 0.5 } },
       text: `climb ${cut ? 'up' : 'out'} to ${fmt(end)} (breaking ${breaks} block(s), placing ${places})`,
     });
-    if (!cut) return { ok: true, digs, steps };
+    if (!cut) {
+      const out = centreOf(end.x, end.y, end.z);
+      const free = walksAway(w, fence, out, OUT_FREE_DISTANCE, OUT_FREE_WALK);
+      return { ok: true, digs, steps, free };
+    }
     from = centreOf(end.x, end.y, end.z);
   }
   return fail(`the path was still cut after ${CLIMB_MAX_SEARCHES} searches`);

@@ -222,7 +222,15 @@ export function liveShelter(
         ? { ...stuck, exit: climb.steps }
         : { ...stuck, problem: `${exit.reason}; ${climb.reason}` };
     }
-    if (enclosedIn(world, feet) === true) return { ...base, sheltered: true };
+    if (enclosedIn(world, feet) === true) {
+      // Hurt a moment ago in there: something reaches the player (a door a zombie broke on
+      // Hard, a hole a blast made, starving): it shelters no more, and play leaves (an
+      // independent review, 2026-10-05: the night's wait never looked again).
+      if (recentHurtMs(state.player.lastHurtAt, state.timestamp) !== null) {
+        return { ...base, problem: 'something hurt the player inside its shelter a moment ago' };
+      }
+      return { ...base, sheltered: true };
+    }
     if (opts === null) return { ...base, problem: 'there is no fence to dig or build in' };
     const going = site === null ? null : continueNightPit(world, feet, inventory, site, opts);
     const pit = going ?? planNightPit(world, feet, inventory, opts);

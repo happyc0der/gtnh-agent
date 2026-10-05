@@ -4,6 +4,8 @@ import { checkDigDown, underFeetOf, type DigArea } from '../../../src/bot/gtnh17
 import {
   continueNightPit,
   enclosedIn,
+  OUT_FREE_DISTANCE,
+  OUT_FREE_WALK,
   planClimbOut,
   planNightPit,
   planShelterExit,
@@ -16,6 +18,7 @@ import {
 } from '../../../src/bot/gtnh1710/night-pit.ts';
 import { goalBlock } from '../../../src/bot/gtnh1710/pathing/goals.ts';
 import { planPath, type PathOptions } from '../../../src/bot/gtnh1710/pathing/search.ts';
+import { walksAway } from '../../../src/bot/gtnh1710/terrain.ts';
 import type { Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 import type { ShelterStep } from '../../../src/domain/night-shelter.ts';
 import { savedWorld } from './fixtures/saved-world.ts';
@@ -543,6 +546,59 @@ describe('the way out in the morning', () => {
     const end = specs(c.steps).at(-1);
     expect(end?.type).toBe('MOVE_TO');
     expect(end?.type === 'MOVE_TO' && end.args.target.y).toBeGreaterThanOrEqual(SITE.groundY);
+  });
+
+  it('ends no way out in a hole a walk cannot leave: a pit amid old pits and their staircases', () => {
+    // An independent review, 2026-10-05: near six finished pits, the surface spots failed the
+    // wall check, a spot in an old staircase's notch passed, and its way out ended two blocks
+    // under the ground on another old staircase, whose next step's floor it had dug: a walk
+    // that breaks nothing reached four cells there.
+    const over: Record<string, number> = {};
+    const oldPit = (x: number, z: number, dx: number, dz: number): void => {
+      for (let y = 61; y <= 63; y++) over[k(x, y, z)] = ID.air;
+      over[k(x + dx, 62, z + dz)] = ID.air;
+      over[k(x + dx, 63, z + dz)] = ID.air;
+      over[k(x + 2 * dx, 63, z + 2 * dz)] = ID.air;
+    };
+    for (const [x, z, dx, dz] of [
+      [2, 1, 0, -1],
+      [-1, -1, 0, 1],
+      [-1, 4, 0, -1],
+      [-5, -3, -1, 0],
+      [4, -3, 0, -1],
+      [3, -6, 0, 1],
+    ] as const) {
+      oldPit(x, z, dx, dz);
+    }
+    // Dirt down to y=50 under the grass, as the review's world (the old staircases dig dirt).
+    const base = land(over);
+    const world: WalkWorld = {
+      ...base,
+      blockAt: (x, y, z) =>
+        over[k(x, y, z)] ?? (y >= 50 && y < 63 ? ID.dirt : base.blockAt(x, y, z)),
+    };
+    const plan = planNightPit(world, FEET, {}, OPTS);
+    if (!plan.ok) throw new Error(plan.reason);
+    // The night, dug and roofed; the morning's way out as play plans it (minY: the ground layer).
+    const night = new PlannedWorld(world);
+    for (const s of plan.steps) {
+      if (s.spec.type === 'DIG_DOWN') night.dig(s.spec.args.position);
+      if (s.spec.type === 'PLACE_BLOCK') night.place(s.spec.args.position, 'minecraft:dirt');
+    }
+    const bottom = { x: plan.site.x + 0.5, y: plan.site.groundY - 2, z: plan.site.z + 0.5 };
+    const exit = planShelterExit(night, bottom, OPTS, plan.site.groundY);
+    if (!exit.ok) throw new Error(exit.reason);
+    expect(exit.free).toBe(true);
+    const after = new PlannedWorld(night);
+    for (const s of exit.steps) if (s.spec.type === 'DIG_BLOCK') after.dig(s.spec.args.position);
+    const last = exit.steps.at(-1)?.spec;
+    if (last?.type !== 'MOVE_TO') throw new Error('the way out ends in no walk');
+    expect(walksAway(after, AREA.fence, last.args.target, OUT_FREE_DISTANCE, OUT_FREE_WALK)).toBe(
+      true,
+    );
+    // The same notch, its way out no longer onto the first step of the next old staircase.
+    expect(plan.site).toEqual({ x: -1, z: 1, groundY: 62 });
+    expect(last.args.target).not.toEqual({ x: -0.5, y: 62, z: 3.5 });
   });
 
   it('says why when there is no way out (stone all around)', () => {

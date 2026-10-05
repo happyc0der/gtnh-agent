@@ -557,6 +557,44 @@ export function reachableFeet(
   return reached;
 }
 
+/**
+ * Whether a walk from `from` that breaks and places nothing gets `distance` blocks across from
+ * its start block (straight, centre to centre) within `maxLength` blocks of walking: the
+ * player is not boxed in a hole, so a retreat or a flee can leave. The walker's own moves
+ * (terrainEdges), stopping at the first such block.
+ */
+export function walksAway(
+  world: WalkWorld,
+  fence: Fence,
+  from: Vec3,
+  distance: number,
+  maxLength: number,
+): boolean {
+  if (Math.abs(from.y - Math.round(from.y)) > EPS) return false;
+  const start: Node = standingCell(world, from);
+  if (!inFence(fence, start.x, start.y, start.z)) return false;
+  if (standProblem(world, start.x, start.y, start.z) !== null) return false;
+  const edges = terrainEdges(world, fence);
+  const best = new Map<string, number>([[key(start), 0]]);
+  const heap = new NodeHeap();
+  heap.push(0, start);
+  while (heap.size > 0) {
+    const { key: length, node: n } = heap.pop();
+    if (length > (best.get(key(n)) ?? Infinity)) continue;
+    if (Math.hypot(n.x - start.x, n.z - start.z) >= distance - EPS) return true;
+    for (const e of edges(n)) {
+      const l = length + e.length;
+      if (l > maxLength + EPS) continue;
+      const ek = key(e.to);
+      if (l < (best.get(ek) ?? Infinity)) {
+        best.set(ek, l);
+        heap.push(l, e.to);
+      }
+    }
+  }
+  return false;
+}
+
 /** Minimal binary min-heap of nodes by key. */
 class NodeHeap {
   readonly #items: Array<{ key: number; node: Node }> = [];

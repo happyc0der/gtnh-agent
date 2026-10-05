@@ -5,7 +5,7 @@ import {
   NIGHT_SHELTER_TASK_ID,
   type ShelterStep,
 } from '../../domain/night-shelter.ts';
-import { CURRENT_TASK_KEY } from '../../persistence/memory-repository.ts';
+import { CURRENT_TASK_KEY, NIGHT_SHELTER_KEY } from '../../persistence/memory-repository.ts';
 import { setKnownSteps } from '../loop/known-steps.ts';
 import type { CycleResult } from '../loop/agent-loop.ts';
 import type { SessionResult } from '../loop/live-session.ts';
@@ -47,8 +47,11 @@ export const nightSoon = (t: WorldTime): boolean =>
 /**
  * Inside the shelter: waits until it is day again, checking the stop file / Ctrl+C and the
  * time limit every few seconds, and meanwhile hearing and answering owners' commands
- * (`between`: travel and goals wait for the morning). Returns why play must stop, or null at
- * sunrise.
+ * (`between`: travel and goals wait for the morning) and looking at the shelter again
+ * (`check`: why it no longer shelters the player, or null). Returns null at sunrise, why play
+ * must stop, or why the shelter no longer shelters (an independent review, 2026-10-05: the
+ * wait never looked again, so a roof an Enderman took, a wall a blast opened, or a mob that
+ * broke a door went unseen until the morning).
  */
 async function waitForMorning(
   deps: PlayDeps,
@@ -57,19 +60,29 @@ async function waitForMorning(
   started: number,
   now: () => number,
   between: () => Promise<void>,
-): Promise<string | null> {
+  check: () => Promise<string | null>,
+): Promise<null | { stop: string } | { open: string }> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   for (;;) {
     const stop = hooks.stopRequested();
-    if (stop !== null) return stop;
+    if (stop !== null) return { stop };
     if (now() - started >= limits.maxMinutes * 60_000) {
-      return `reached the limit of ${limits.maxMinutes} minutes`;
+      return { stop: `reached the limit of ${limits.maxMinutes} minutes` };
     }
     const t = (await deps.time?.()) ?? null;
-    if (t === null) return 'the clock is unknown, so the morning cannot be awaited';
+    if (t === null) return { stop: 'the clock is unknown, so the morning cannot be awaited' };
     if (t.phase === 'day' && !nightSoon(t)) return null;
     await between();
+    const open = await check();
+    if (open !== null) return { open };
     await sleep(5000);
+  }
+}
+
+/** Marks that the agent spends the night in a shelter: the morning digs it out (morningRound). */
+function inShelter(play: PlayState): void {
+  if (play.deps.repos.memory.getValue(NIGHT_SHELTER_KEY) === null) {
+    play.deps.repos.memory.setValue(NIGHT_SHELTER_KEY, new Date(play.now()).toISOString());
   }
 }
 
@@ -171,29 +184,45 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
   const { deps, limits, hooks, emit, started, now } = play;
   const clock = (await deps.time?.()) ?? null;
   if (clock !== null && nightSoon(clock)) {
+    // A new night: the next morning's way out has all its tries again (an independent review,
+    // 2026-10-05: three that failed one morning left none for any morning after).
+    play.exitTries = 0;
+    play.exitGaveUpAt = null;
     if (deps.shelter === undefined) {
       if (isDark(clock)) return done(play, nightReason(clock), clock);
     } else {
-      const status = await deps.shelter('night');
+      const shelter = deps.shelter;
+      const status = await shelter('night');
       if (status === null)
         return done(play, `${nightReason(clock)}: the shelter cannot be checked`, clock);
       if (status.sheltered) {
+        inShelter(play);
         emit({
           kind: 'night',
           message: `sheltered: waiting for the morning (${untilSunrise(clock)} min)`,
         });
         play.sheltered = { until: now() + untilSunrise(clock) * 60_000 };
-        const stop = await waitForMorning(
+        const end = await waitForMorning(
           deps,
           hooks,
           limits,
           started,
           now,
           play.whileSheltered,
+          async () => {
+            const again = await shelter('night');
+            if (again === null || again.sheltered) return null;
+            return again.problem ?? 'its walls or roof are open';
+          },
         ).finally(() => {
           play.sheltered = null;
         });
-        if (stop !== null) return done(play, stop);
+        if (end !== null && 'stop' in end) return done(play, end.stop);
+        if (end !== null) {
+          // Closed again (the rest of the pit) at the next round, or offline if it cannot be.
+          emit({ kind: 'night', message: `the shelter no longer shelters: ${end.open}` });
+          return 'next-round';
+        }
         emit({ kind: 'night', message: 'morning: leaving the shelter' });
         play.wakeNote =
           status.kind === 'pit'
@@ -218,6 +247,7 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
         );
       }
       play.shelterTries += 1;
+      inShelter(play);
       const pit = status.kind === 'pit';
       // What the shelter needs and the inventory lacks (the goal line says "missing").
       const carried = (await deps.inventory()) ?? {};
@@ -245,8 +275,12 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
       if (result.stopKind === 'needs-attention') {
         // A shelter step that stopped for a person (a refusal, a pause) means no shelter
         // tonight: leave before the dark (cli play waits offline until sunrise). The night
-        // task is made active again at the next dusk.
-        return done(play, `${nightReason(clock)}; no shelter: ${result.stopReason}`, clock);
+        // task is made active again at the next dusk. Unless the night is over meanwhile (a
+        // time jump: someone slept, and the dig down is refused by day): the morning digs out
+        // of what was dug (an independent review, 2026-10-05: offline 11 min by daylight).
+        const after = (await deps.time?.()) ?? clock;
+        if (!nightSoon(after)) return 'next-round';
+        return done(play, `${nightReason(after)}; no shelter: ${result.stopReason}`, after);
       }
       return 'next-round';
     }
@@ -256,15 +290,21 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
   return null;
 }
 
+/** How long after the morning's way out gave up it is tried again (a mob may have gone). */
+export const EXIT_RETRY_MS = 5 * 60_000;
+
 /**
  * Morning in last night's shelter (walls all around, roofed or not): dig out first, as a
  * person does. Code plans the way out (the pit: the roof, then a staircase; the box: one
- * wall, head level first) and runs it as known safe steps. Not walled in: null, and this
- * morning's tries are over.
+ * wall, head level first) and runs it as known safe steps. Only a shelter the night was spent
+ * in (NIGHT_SHELTER_KEY, set at dusk): a shaft or hole a walk dug by day is no shelter to leave
+ * (an independent review, 2026-10-05: at the bottom of a !goto's shaft, play ran "leave the
+ * shelter" at noon, undoing the command). Not walled in (out of it): null, the shelter is
+ * done with, and this morning's tries are over.
  */
 export async function morningRound(play: PlayState): Promise<RoundEnd> {
   const { deps, limits } = play;
-  if (deps.shelter !== undefined) {
+  if (deps.shelter !== undefined && deps.repos.memory.getValue(NIGHT_SHELTER_KEY) !== null) {
     const status = await deps.shelter('morning');
     const mobs = status?.walled === true && status.sheltered ? (status.hostiles ?? null) : null;
     if (mobs !== null) return waitOutMobs(play, mobs);
@@ -293,11 +333,18 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
     }
     if (status !== null && status.walled && status.exit.length > 0) {
       if (play.exitTries >= limits.maxStuckSessions) {
-        if (commanded) return null;
-        return done(
-          play,
-          `the player could not dig out of its shelter in ${play.exitTries} sessions`,
-        );
+        // Given up for now: tried again EXIT_RETRY_MS later (the mob or whatever stopped it may
+        // be gone), and with all its tries every morning (nightRound).
+        play.exitGaveUpAt ??= play.now();
+        if (play.now() - play.exitGaveUpAt < EXIT_RETRY_MS) {
+          if (commanded) return null;
+          return done(
+            play,
+            `the player could not dig out of its shelter in ${play.exitTries} sessions`,
+          );
+        }
+        play.exitTries = 0;
+        play.exitGaveUpAt = null;
       }
       play.exitTries += 1;
       const last = status.exit.at(-1)?.spec;
@@ -315,9 +362,12 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         maxCycles: status.exit.length * 2 + 2,
       });
       // A hostile came near while the player is still sealed in (System 1's SHELTERED pause):
-      // the next round waits inside for it to go (waitOutMobs), as a morning that began so.
+      // the next round waits inside for it to go (waitOutMobs), as a morning that began so. A
+      // moment first: the shelter's look at the mobs and System 1's may disagree, and each round
+      // would run another session at once (an independent review, 2026-10-05).
       if (play.lastDecision?.reasonCodes.includes('SHELTERED') === true) {
         play.exitTries -= 1;
+        await play.sleep(MOB_SHELTER_POLL_MS);
         return 'next-round';
       }
       // Hurt with a mob near, or a mob near with nowhere to retreat to, half dug out: offline,
@@ -327,16 +377,22 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
       if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
         return done(play, result.stopReason);
       }
-      // The next goal's planner learns that the walls are open: walks and EXPLORE that
-      // failed from inside them say nothing about now.
-      play.wakeNote =
-        `morning: the player dug out of its night shelter` +
-        (out === undefined ? '' : ` to (${out.x}, ${out.y}, ${out.z})`) +
-        ': walking and EXPLORE work again; failures from inside its walls no longer apply';
+      // Out: the next goal's planner learns that the walls are open, since walks and EXPLORE
+      // that failed from inside them say nothing about now. A way out that stopped short says
+      // nothing yet: the next round plans the rest of it.
+      if (result.taskStatus === 'completed') {
+        play.wakeNote =
+          `morning: the player dug out of its night shelter` +
+          (out === undefined ? '' : ` to (${out.x}, ${out.y}, ${out.z})`) +
+          ': walking and EXPLORE work again; failures from inside its walls no longer apply';
+      }
       return 'next-round';
     }
+    // Out of it: tonight's shelter is done with.
+    if (status !== null && !status.walled) deps.repos.memory.setValue(NIGHT_SHELTER_KEY, null);
   }
   play.exitTries = 0;
+  play.exitGaveUpAt = null;
   return null;
 }
 

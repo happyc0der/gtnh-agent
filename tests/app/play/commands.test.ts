@@ -28,7 +28,11 @@ import { worldTime, type WorldTime } from '../../../src/domain/game-state.ts';
 import type { HeardCommand, OwnerCommand } from '../../../src/domain/owner-commands.ts';
 import type { CommandTranslation } from '../../../src/llm/ollama-command-provider.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
-import { CURRENT_TASK_KEY, QUESTS_OFF_KEY } from '../../../src/persistence/memory-repository.ts';
+import {
+  CURRENT_TASK_KEY,
+  NIGHT_SHELTER_KEY,
+  QUESTS_OFF_KEY,
+} from '../../../src/persistence/memory-repository.ts';
 import { createRepositories, type Repositories } from '../../../src/persistence/repositories.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 
@@ -1353,6 +1357,7 @@ describe("owners' commands in play", () => {
 
   it('in the morning, sealed in with hostiles near: commands are answered, travel waits for them to go', async () => {
     const repos = open();
+    repos.memory.setValue(NIGHT_SHELTER_KEY, '2026-10-05T04:00:00.000Z'); // a night spent in it
     const sim = newSim({ heard: [whisper('!come'), whisper('!status')] });
     let walled = true;
     sim.onSleep = () => {
@@ -1389,6 +1394,7 @@ describe("owners' commands in play", () => {
     // Seen live 2026-10-04: at the bottom of a shaft it dug, play ended every round before
     // the command round, a busy loop at 100% CPU, and "!surface" waited forever.
     const repos = open();
+    repos.memory.setValue(NIGHT_SHELTER_KEY, '2026-10-05T04:00:00.000Z'); // a night spent in it
     const sim = newSim({ heard: [whisper('!come')] });
     await runPlay(
       deps(repos, sim, {

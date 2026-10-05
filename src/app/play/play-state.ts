@@ -38,8 +38,12 @@ export interface PlayState {
   lastStop: string;
   /** Shelter sessions tonight (reset in daylight). */
   shelterTries: number;
-  /** Sessions this morning trying to dig out of last night's shelter. */
+  /**
+   * Sessions this morning trying to dig out of last night's shelter (each night starts them
+   * anew), and when the last of them gave up (they are tried again EXIT_RETRY_MS after).
+   */
   exitTries: number;
+  exitGaveUpAt: number | null;
   /** A note for the next goal's journal (e.g. how to leave the night shelter). */
   wakeNote: string | null;
   /** The last session saw chunks near that world memory had not seen near before. */
@@ -159,6 +163,7 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     lastStop: '',
     shelterTries: 0,
     exitTries: 0,
+    exitGaveUpAt: null,
     wakeNote: null,
     explored: false,
     last: null,

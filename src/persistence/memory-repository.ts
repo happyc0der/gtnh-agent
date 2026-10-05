@@ -21,6 +21,12 @@ export const TASK_STEPS_PREFIX = 'task_steps:';
 /** agent_state key: where the night pit the agent started is (src/app/play/live-play.ts). */
 export const NIGHT_PIT_KEY = 'night_pit';
 /**
+ * agent_state key: the agent spent the night in a shelter (since when), set at dusk and
+ * cleared once it is out in the morning: only then does the morning dig it out
+ * (src/app/play/night.ts), never out of a shaft a walk dug by day.
+ */
+export const NIGHT_SHELTER_KEY = 'night_shelter';
+/**
  * agent_state key: an owner paused autonomous play (`pause`, `stop`), and why; cleared by
  * `resume` and when `cli play` starts (src/app/play/commands.ts).
  */

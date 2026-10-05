@@ -10,12 +10,14 @@ import {
 } from '../../../src/app/play/play.ts';
 import { describePlayEvent } from '../../../src/app/play/narration.ts';
 import {
+  EXIT_RETRY_MS,
   MOB_SHELTER_MAX_MS,
   MOB_SHELTER_POLL_MS,
   nightSoon,
   untilSunrise,
   SHELTER_LEAD_MINUTES,
 } from '../../../src/app/play/night.ts';
+import { IDLE_POLL_MS } from '../../../src/app/play/commands.ts';
 import { mobPause } from '../../../src/app/play/play-state.ts';
 import type { DecisionResult } from '../../../src/domain/decisions.ts';
 import { FOOD_TASK_ID } from '../../../src/domain/food.ts';
@@ -29,7 +31,7 @@ import { worldTime, type GameState } from '../../../src/domain/game-state.ts';
 import type { QuestBook } from '../../../src/domain/quest-book.ts';
 import { TASK, type Quest, type QuestBookStep } from '../../../src/goals/quest-goals.ts';
 import { IN_MEMORY, openDatabase } from '../../../src/persistence/database.ts';
-import { CURRENT_TASK_KEY } from '../../../src/persistence/memory-repository.ts';
+import { CURRENT_TASK_KEY, NIGHT_SHELTER_KEY } from '../../../src/persistence/memory-repository.ts';
 import { createRepositories, type Repositories } from '../../../src/persistence/repositories.ts';
 import { systemClock } from '../../../src/util/clock.ts';
 import { makeState } from '../../fixtures/index.ts';
@@ -240,6 +242,49 @@ function deps(repos: Repositories, world: World, clock = { t: 0 }): PlayDeps {
 
 const open = () => createRepositories(openDatabase(IN_MEMORY), systemClock);
 const noStop = { stopRequested: () => null };
+/** A way out of the pit: the roof, then a walk out. */
+const EXIT: ShelterStep[] = [
+  {
+    spec: { type: 'DIG_BLOCK', args: { position: { x: 0, y: 63, z: 0 } } },
+    text: 'dig the minecraft:dirt at (0, 63, 0) (the roof)',
+  },
+  {
+    spec: { type: 'MOVE_TO', args: { target: { x: 3.5, y: 64, z: 0.5 }, tolerance: 0.5 } },
+    text: 'walk out to (3, 64, 0)',
+  },
+];
+/** A session whose first step fails (a dig refused, a walk stopped): the task goes on. */
+function failedSession(
+  repos: Repositories,
+  hooks: Parameters<PlayDeps['session']>[1],
+): Promise<SessionResult> {
+  const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
+  hooks.onCycle(
+    {
+      summary: 'EXECUTE_KNOWN_SAFE_STEP -> DIG_BLOCK -> failed',
+      decision: {
+        decision: 'EXECUTE_KNOWN_SAFE_STEP',
+        confidence: 0.8,
+        reasonCodes: ['KNOWN_SAFE_STEP'],
+        factsUsed: {},
+        requiresHumanConfirmation: false,
+        provider: 'deterministic-router',
+      },
+    } as unknown as CycleResult,
+    1,
+  );
+  return Promise.resolve({
+    cycles: [{ cycleId: 'c', summary: 'failed' }],
+    stopReason: 'stopped after: EXECUTE_KNOWN_SAFE_STEP -> DIG_BLOCK -> failed',
+    stopKind: 'cycle-failed',
+    taskId,
+    taskStatus: 'active',
+    elapsedMs: 1,
+  });
+}
+/** The night was spent in a shelter (nightRound records it): the morning digs out of it. */
+const nightSpent = (repos: Repositories): void =>
+  repos.memory.setValue(NIGHT_SHELTER_KEY, '2026-10-05T04:00:00.000Z');
 
 describe('autonomous play', () => {
   it('works through the quests in order, by the server records, and stops when nothing doable is left', async () => {
@@ -649,7 +694,10 @@ describe('autonomous play', () => {
       'night: sheltered: waiting for the morning (10.8 min)',
       'night: morning: leaving the shelter',
     ]);
-    expect(purposes.slice(0, 3)).toEqual(['night', 'night', 'morning']);
+    // Dusk's look, the look that finds it sheltered, the wait's own look, then the morning's.
+    expect(purposes.slice(0, 4)).toEqual(['night', 'night', 'night', 'morning']);
+    // Out in the morning: tonight's shelter is done with.
+    expect(repos.memory.getValue(NIGHT_SHELTER_KEY)).toBeNull();
     // The night's steps are cleared in the morning; the next goal's journal says what happened.
     expect(nextKnownStep(repos, 'night-shelter')).toBeNull();
     expect(repos.memory.journal('quest-2').at(-1)?.text).toMatch(
@@ -832,6 +880,7 @@ describe('autonomous play', () => {
 
   it('in the morning digs out of the shelter first (code-made steps), then plays on', async () => {
     const repos = open();
+    nightSpent(repos);
     const world: World = { inventory: {}, sessions: [], calls: 0 };
     let walled = true;
     const exit: ShelterStep[] = [
@@ -868,6 +917,11 @@ describe('autonomous play', () => {
             ]);
             expect(nextKnownStep(repos, 'leave-shelter')?.spec).toEqual(exit[0]?.spec);
             walled = false;
+            // Its last step verified, the way out's task is complete (known-steps.ts).
+            repos.tasks.setStatus('leave-shelter', 'completed');
+            return base
+              .session(limits, hooks)
+              .then((r) => ({ ...r, taskStatus: 'completed' as const }));
           }
           return base.session(limits, hooks);
         },
@@ -882,6 +936,7 @@ describe('autonomous play', () => {
     expect(repos.memory.journal('quest-2').at(-1)?.text).toBe(
       'morning: the player dug out of its night shelter to (3.5, 64, 0.5): walking and EXPLORE work again; failures from inside its walls no longer apply',
     );
+    expect(repos.memory.getValue(NIGHT_SHELTER_KEY)).toBeNull();
   });
 
   it('a goal session paused for a mob in the cycle that sees dusk waits the mob out first', async () => {
@@ -946,6 +1001,7 @@ describe('autonomous play', () => {
   it('in the morning, a mob pause while digging out waits offline (UNDER_ATTACK)', async () => {
     // Hurt with a mob near, half dug out: offline at once, as any session's mob pause is.
     const repos = open();
+    nightSpent(repos);
     const world: World = { inventory: {}, sessions: [], calls: 0 };
     const base = deps(repos, world);
     const exit: ShelterStep[] = [
@@ -995,6 +1051,7 @@ describe('autonomous play', () => {
 
   it('in the morning waits sealed in its shelter while hostiles are near, then digs out', async () => {
     const repos = open();
+    nightSpent(repos);
     const world: World = { inventory: {}, sessions: [], calls: 0 };
     let walled = true;
     let looks = 0;
@@ -1055,6 +1112,7 @@ describe('autonomous play', () => {
   it('waits offline once hostiles have stayed near the sealed shelter for MOB_SHELTER_MAX_MS', async () => {
     // A mob in a cave beside the pit, or a creeper, may stay all day (seen live 2026-10-04).
     const repos = open();
+    nightSpent(repos);
     const clock = { t: 0 };
     const world: World = { inventory: {}, sessions: [], calls: 0 };
     const base = deps(repos, world, clock);
@@ -1093,9 +1151,11 @@ describe('autonomous play', () => {
   });
 
   it('stops and says so when walled in with no way out', async () => {
+    const repos = open();
+    nightSpent(repos);
     const result = await runPlay(
       {
-        ...deps(open(), { inventory: {}, sessions: [], calls: 0 }),
+        ...deps(repos, { inventory: {}, sessions: [], calls: 0 }),
         time: () => Promise.resolve(worldTime(1_000, true)),
         shelter: () =>
           Promise.resolve({
@@ -1114,6 +1174,274 @@ describe('autonomous play', () => {
     expect(result.stopReason).toMatch(
       /^the player is walled in, and code found no way out: step 1, upper block/,
     );
+  });
+
+  it('each night gives the next morning all its tries to dig out again', async () => {
+    // An independent review, 2026-10-05: three exit sessions that failed one morning left none
+    // for any morning after, for the whole run (with --listen, play idles in the pit).
+    const repos = open();
+    nightSpent(repos);
+    let phase: 'day1' | 'night' | 'day2' = 'day1';
+    const exits = { day1: 0, night: 0, day2: 0 };
+    let polls = 0;
+    const status = (purpose: 'night' | 'morning'): ShelterStatus =>
+      purpose === 'night'
+        ? {
+            kind: 'pit',
+            sheltered: true,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: true,
+            exit: [],
+          }
+        : {
+            kind: 'pit',
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: true,
+            exit: EXIT,
+          };
+    const result = await runPlay(
+      {
+        repos,
+        now: () => 0, // EXIT_RETRY_MS never passes: only the night gives tries back
+        listen: true,
+        inventory: () => Promise.resolve({}),
+        time: () => Promise.resolve(worldTime(phase === 'night' ? 15_000 : 1_000, true)),
+        shelter: (purpose = 'night') => Promise.resolve(status(purpose)),
+        session: (_limits, hooks) => {
+          const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
+          if (taskId === 'leave-shelter') exits[phase] += 1;
+          return failedSession(repos, hooks);
+        },
+        // Idle in the pit after day 1's tries (IDLE_POLL_MS polls): the night comes. Waiting for
+        // the morning in the pit (5 s polls): the morning comes.
+        sleep: (ms) => {
+          polls += 1;
+          if (phase === 'day1' && exits.day1 >= 3 && ms === IDLE_POLL_MS) phase = 'night';
+          else if (phase === 'night' && ms === 5_000) phase = 'day2';
+          return Promise.resolve();
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      // (A bound, so that a morning with no try left fails the test instead of idling forever.)
+      { stopRequested: () => (exits.day2 >= 1 ? 'test over' : polls > 200 ? 'no try' : null) },
+    );
+    expect(exits).toEqual({ day1: 3, night: 0, day2: 1 });
+    expect(result.stopReason).toBe('test over');
+  });
+
+  it('a way out given up is tried again EXIT_RETRY_MS later the same day', async () => {
+    const repos = open();
+    nightSpent(repos);
+    const clock = { t: 0 };
+    let exits = 0;
+    const result = await runPlay(
+      {
+        repos,
+        now: () => clock.t,
+        listen: true,
+        inventory: () => Promise.resolve({}),
+        time: () => Promise.resolve(worldTime(1_000, true)),
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit' as const,
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: true,
+            exit: EXIT,
+          }),
+        session: (_limits, hooks) => {
+          if (repos.memory.getValue(CURRENT_TASK_KEY) === 'leave-shelter') exits += 1;
+          clock.t += 1_000;
+          return failedSession(repos, hooks);
+        },
+        sleep: (ms) => {
+          clock.t += ms;
+          return Promise.resolve();
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      {
+        stopRequested: () =>
+          exits >= 4 ? 'test over' : clock.t > 3 * EXIT_RETRY_MS ? 'no try again' : null,
+      },
+    );
+    expect(result.stopReason).toBe('test over');
+    expect(exits).toBe(4); // three, then one more once EXIT_RETRY_MS had passed
+    expect(clock.t).toBeGreaterThanOrEqual(EXIT_RETRY_MS);
+  });
+
+  it('a shaft a walk dug by day is no shelter to leave: no way out without a night in it', async () => {
+    // An independent review, 2026-10-05: at the bottom of a !goto's shaft at noon, play ran
+    // "leave the shelter", undoing the command.
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const purposes: string[] = [];
+    const events: PlayEvent[] = [];
+    await runPlay(
+      {
+        ...deps(repos, world),
+        time: () => Promise.resolve(worldTime(6_000, true)), // noon
+        shelter: (purpose) => {
+          purposes.push(purpose ?? 'night');
+          return Promise.resolve({
+            kind: 'box',
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: true,
+            exit: EXIT,
+          });
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 1 },
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(purposes).toEqual([]);
+    expect(events.filter((e) => e.kind === 'goal').map((e) => describePlayEvent(e))).toEqual([
+      'goal: "Q2" - missing 100 minecraft:sand (new task)',
+    ]);
+  });
+
+  it('the night wait looks at the shelter again: a roof that went is put back', async () => {
+    // An independent review, 2026-10-05: the wait never looked again, so a roof an Enderman
+    // took or a wall a blast opened went unseen until the morning.
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const base = deps(repos, world);
+    let tick = 15_000; // night
+    let roofed = true;
+    let sleeps = 0;
+    const roof: ShelterStep = {
+      spec: {
+        type: 'PLACE_BLOCK',
+        args: { position: { x: 0, y: 63, z: 0 }, item: 'minecraft:dirt' },
+      },
+      text: 'place minecraft:dirt at (0, 63, 0): the roof, against the ground beside it',
+    };
+    const events: PlayEvent[] = [];
+    const tasks: string[] = [];
+    await runPlay(
+      {
+        ...base,
+        time: () => Promise.resolve(worldTime(tick, true)),
+        shelter: (purpose) =>
+          Promise.resolve(
+            purpose === 'morning'
+              ? {
+                  kind: 'pit',
+                  sheltered: false,
+                  steps: [],
+                  needs: {},
+                  problem: null,
+                  walled: false,
+                  exit: [],
+                }
+              : {
+                  kind: 'pit',
+                  sheltered: roofed,
+                  steps: roofed ? [] : [roof],
+                  needs: roofed ? {} : { 'minecraft:dirt': 1 },
+                  problem: null,
+                  walled: true,
+                  exit: [],
+                },
+          ),
+        sleep: () => {
+          sleeps += 1;
+          if (sleeps === 1) roofed = false; // an Enderman took the roof
+          if (sleeps === 3) tick = 1_000; // the morning
+          return Promise.resolve();
+        },
+        session: (limits, hooks) => {
+          const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
+          tasks.push(taskId ?? 'none');
+          if (taskId === 'night-shelter') roofed = true;
+          return base.session(limits, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
+      { ...noStop, onEvent: (e) => events.push(e) },
+    );
+    expect(events.filter((e) => e.kind === 'night').map((e) => describePlayEvent(e))).toEqual([
+      'night: sheltered: waiting for the morning (7.5 min)',
+      'night: the shelter no longer shelters: its walls or roof are open',
+      'night: sheltered: waiting for the morning (7.5 min)',
+      'night: morning: leaving the shelter',
+    ]);
+    expect(tasks[0]).toBe('night-shelter');
+  });
+
+  it('a pit cut short by a time jump (day came meanwhile) goes on to the morning, not offline', async () => {
+    // An independent review, 2026-10-05: someone slept; DIG_DOWN, refused by day, stopped the
+    // pit for a person, and play went offline for 11 minutes in daylight with the dusk's clock.
+    const repos = open();
+    let tick = 11_500; // shelter time
+    let walled = true;
+    const pitStep: ShelterStep = {
+      spec: { type: 'DIG_DOWN', args: { position: { x: 0, y: 63, z: 0 } } },
+      text: 'dig down: the minecraft:grass under the feet at (0, 63, 0)',
+    };
+    const tasks: string[] = [];
+    const result = await runPlay(
+      {
+        repos,
+        now: () => 0,
+        inventory: () => Promise.resolve({}),
+        time: () => Promise.resolve(worldTime(tick, true)),
+        sleep: () => Promise.resolve(),
+        shelter: (purpose) =>
+          Promise.resolve(
+            purpose === 'morning'
+              ? {
+                  kind: 'pit',
+                  sheltered: false,
+                  steps: [],
+                  needs: {},
+                  problem: null,
+                  walled,
+                  exit: walled ? EXIT : [],
+                }
+              : {
+                  kind: 'pit',
+                  sheltered: false,
+                  steps: [pitStep],
+                  needs: {},
+                  problem: null,
+                  walled: false,
+                  exit: [],
+                },
+          ),
+        session: (_limits, hooks): Promise<SessionResult> => {
+          const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
+          tasks.push(taskId ?? 'none');
+          if (taskId === 'night-shelter') {
+            tick = 1_000; // a time jump: the morning
+            return Promise.resolve({
+              cycles: [{ cycleId: 'c1', summary: 'DIG_DOWN -> rejected [NIGHT_PIT_ONLY]' }],
+              stopReason: 'needs attention after: DIG_DOWN -> rejected [NIGHT_PIT_ONLY]',
+              stopKind: 'needs-attention',
+              taskId,
+              taskStatus: 'paused',
+              elapsedMs: 1,
+            });
+          }
+          if (taskId === 'leave-shelter') walled = false;
+          return failedSession(repos, hooks);
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 3 },
+      noStop,
+    );
+    expect(result.night).toBeNull();
+    expect(tasks.slice(0, 2)).toEqual(['night-shelter', 'leave-shelter']);
   });
 
   it('scouts once first when it can explore and little is seen, then plays the quests', async () => {

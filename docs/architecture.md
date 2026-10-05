@@ -308,13 +308,29 @@ it and runs it, step by step, as known safe steps (see
 - **Neither** (stone underfoot, water near, no roof block...): play stops before dark with the
   reasons, and `cli play` waits offline until sunrise.
 
-Enclosed, the agent waits for sunrise. In the morning, walled in, code plans the way out with
+Enclosed, the agent waits for sunrise, and looks at the shelter again every 5 s meanwhile: a
+roof that went (an Enderman takes dirt), a wall a blast opened, or a hurt a moment ago inside
+it (a zombie breaks a door on Hard, or the player starves) means it no longer shelters, and the
+next round closes it again (the rest of the pit) or, failing that, leaves for the night (an
+independent review, 2026-10-05: the wait never looked again). A night of it is recorded in agent
+memory (`night_shelter`), and only such a shelter is dug out of in the morning: a shaft a walk
+dug by day is no shelter to leave (the same review: at noon at the bottom of a `!goto`'s shaft,
+play ran "leave the shelter", undoing the command). Each night gives the morning its tries
+again, and a way out given up is tried again 5 minutes later the same day (`EXIT_RETRY_MS`; the
+same review: three that failed one morning had left none for every morning after). A pit cut
+short because the day came meanwhile (a time jump: someone slept, and the dig down is refused
+by day) goes on to the morning's way out, never offline in daylight. In the morning, walled in, code plans the way out with
 the same rules (`planShelterExit`): from the pit, the roof and a staircase (two digs for each
 step up, the upper block first), then a walk onto open ground at the pit's ground layer or
 above (open cells below it, a cave or the staircase of a way out that stopped halfway, are no way
 out: seen live 2026-10-04, a restart stopped one after its first step and the next morning's
 plan walked out onto that step, two blocks under the ground, where no retreat could leave); from
-the box, one wall (head level first) and a walk out. Play runs it as known steps before the day's goal, and the goal's
+the box, one wall (head level first) and a walk out. Of the ways out, the one with the fewest
+digs whose end a walk that breaks nothing can leave (8 blocks across within 24 blocks of
+walking: `OUT_FREE_DISTANCE`, `walksAway`) wins, and a pit whose way out would end in such a
+hole is refused while the player stands where it can leave (an independent review, 2026-10-05:
+a pit dug in an old staircase's notch had its way out end two blocks under the ground on
+another old staircase, whose next step's floor it had dug: a walk reached four cells there). Play runs it as known steps before the day's goal, and the goal's
 journal says the walls are open again. Walled in with no way out, play stops and says why,
 unless an owner's command is running or queued: that goes first, since it may be the way out
 (`!surface` and `!home` pillar and dig; seen live 2026-10-04 at the bottom of an 8-deep shaft the
@@ -1007,6 +1023,15 @@ the landing. A walk starts from the block the
 player stands on: the one under the centre of its feet, or, on the edge of a neighbour (its box,
 0.3 each way, reaches over it), that neighbour (`standingCell`; seen live: a walk stopped at
 z 9.1 over air, on the edge of the block at z 8, and every walk from there was refused).
+
+A cobweb is never walked into (it is no plant: `passable.ts`), but a player standing in one
+first steps out of it, onto the nearest cell beside it where it may stand, level and straight,
+0.15 a tick (`web.ts`): every walk on the pathfinder does so before it plans, and so does idle
+gravity. A web cuts the server's own move to a quarter (`Entity.setInWeb`), and it resets a
+move only when the client's position is more than 0.25 off across, so 0.11 off is taken (seen
+live 2026-10-05: a web spider spun a web into a retreat's way, and the agent stood in it, every
+walk refused, "cannot walk from here: blocked by minecraft:web", until it went offline for the
+night).
 
 ### Walking on the pathfinder
 
