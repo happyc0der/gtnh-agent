@@ -13,7 +13,7 @@ and down or up through the ground on a walk), climbs ladders, wades and swims (w
 `MC_PATH_ALLOW_WATER`), shelters for the night, eats, crafts, and submits quests and claims
 their rewards. Combat is off, so a hostile in its way is waited out: it says
 so and tries again, and a follow keeps on as long as its owner is in sight. It has played Age 0 up to
-"Fluffy and Red", which needs wool from sheep, and combat is off. The benchmark is the 92 quests
+"Fluffy and Red", which needs wool from sheep. The benchmark is the 92 quests
 of the "Tier 0 - Stone Age" chapter, plus the 14 it needs from other chapters, counted only as
 the server records them.
 
