@@ -686,9 +686,13 @@ function statusText(play: PlayState): string {
         ? 'making my shelter for the night'
         : play.leavingShelter
           ? 'digging out of my shelter'
-          : // A food trip goes on paused or with quests off (a food bar nearly empty), unless
-            // play gave up on it for now (play.idle).
-            task?.id === FOOD_TASK_ID && task.status === 'active' && play.idle === null
+          : // A food trip, unless play gave up on it for now (play.idle); with play paused or
+            // quests off only one on a food bar nearly empty goes on (review 25, 2026-10-05).
+            task?.id === FOOD_TASK_ID &&
+              task.status === 'active' &&
+              play.idle === null &&
+              sheltered === null &&
+              (off === null || play.foodUrgent)
             ? `working on: ${clip(task.goal, 80)}`
             : off !== null
               ? off

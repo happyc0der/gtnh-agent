@@ -182,6 +182,7 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
     const food = deps.food as NonNullable<PlayDeps['food']>;
     // A food trip on a nearly empty food bar keeps priority; any other gives way to a command.
     const urgent = starving(fed);
+    play.foodUrgent = urgent;
     let preempted: string | null = null;
     if (play.foodStuck >= limits.maxStuckSessions) {
       return done(
@@ -269,5 +270,6 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
     if (!CONTINUE_AFTER.has(result.stopKind)) return done(play, result.stopReason);
     return 'next-round'; // the next round ends the trip, or goes on with it
   }
+  play.foodUrgent = false;
   return null;
 }

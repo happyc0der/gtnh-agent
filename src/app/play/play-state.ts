@@ -105,7 +105,9 @@ export interface PlayState {
    * In the shelter, waiting: for the morning (until when, on play.now's clock), or in the
    * morning for the hostiles near it to go (what they are); else null.
    */
-  sheltered: { until: number } | { mobs: string; since: number } | null;
+  sheltered: { until: number } | { mobs: string; since: number; quiet?: true } | null;
+  /** The food trip under way is on a food bar nearly empty: it goes on paused too (food.ts). */
+  foodUrgent: boolean;
 }
 
 /** How an owner's running command is going (commands.ts). */
@@ -207,6 +209,7 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     whileSheltered: () => Promise.resolve(),
     mobAlarm: null,
     sheltered: null,
+    foodUrgent: false,
   };
 }
 

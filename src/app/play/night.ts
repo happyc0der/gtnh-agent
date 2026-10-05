@@ -355,15 +355,20 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
     const mobs = status?.walled === true && status.sheltered ? (status.hostiles ?? null) : null;
     if (mobs !== null) return waitOutMobs(play, mobs);
     if (play.sheltered !== null && 'mobs' in play.sheltered) {
+      // A wait for a refused step says nothing as it ends: the next session may well pause
+      // again, each 5 s (review 25, 2026-10-05: 43 such lines in one wait).
+      const quiet = play.sheltered.quiet === true;
       play.sheltered = null;
       // Hurt (or starving) in there, the wait ends with the hostiles still near.
-      play.emit({
-        kind: 'night',
-        message:
-          status.hostiles == null
-            ? 'morning: no hostile near any more: leaving the shelter'
-            : `morning: the shelter shelters no more, hostiles near (${status.hostiles}): System 1 decides`,
-      });
+      if (!quiet) {
+        play.emit({
+          kind: 'night',
+          message:
+            status.hostiles == null
+              ? 'morning: no hostile near any more: leaving the shelter'
+              : `morning: the shelter shelters no more, hostiles near (${status.hostiles}): System 1 decides`,
+        });
+      }
     }
     // Walled in with no way out code can plan (a shaft deeper than a staircase out, seen live
     // 2026-10-04 after digging down to stone), or no way out that worked: an owner's command
@@ -463,6 +468,7 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         play.sheltered = {
           mobs: status.hostiles ?? 'a creature came near',
           since: play.mobWaitSince,
+          quiet: true,
         };
         await play.whileSheltered();
         await play.sleep(MOB_SHELTER_POLL_MS);

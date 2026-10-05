@@ -10,7 +10,11 @@ import type { GameState, WorldTime } from '../../domain/game-state.ts';
 import { HURT_IN_SHELTER, STARVING_IN_SHELTER, type ShelterStatus } from '../../goals/shelter.ts';
 import type { TunnelPlan } from '../../bot/gtnh1710/tunnel.ts';
 import type { BlockPosition } from '../../domain/common.ts';
-import type { TunnelDirection, TunnelSlope } from '../../domain/owner-commands.ts';
+import {
+  isActionCommand,
+  type TunnelDirection,
+  type TunnelSlope,
+} from '../../domain/owner-commands.ts';
 
 /** An owner's tunnel: where it starts (a feet block), which way, how many blocks, how steep. */
 export interface TunnelRequest {
@@ -442,11 +446,22 @@ async function leave(play: PlayState, round: PlayResult): Promise<PlayResult> {
  */
 function endOwnerCommands(play: PlayState): string[] {
   const why = 'Stopped: my operator stopped play';
-  const stopped = cancelActions(play, why, { tell: true });
   const { repos } = play.deps;
+  // cancelActions tells the senders of action commands; the rest are told here, once each
+  // (review 25, 2026-10-05: an owner's own !stop at the operator's stop went unanswered).
+  const told = new Set(
+    [repos.commands.running(), ...repos.commands.queued()].flatMap((c) =>
+      c !== null && c.command !== null && isActionCommand(c.command) ? [c.sender] : [],
+    ),
+  );
+  const stopped = cancelActions(play, why, { tell: true });
   for (const q of repos.commands.queued()) {
     repos.commands.finish(q.id, 'cancelled', why);
     stopped.push(q.rawText);
+    if (!told.has(q.sender)) {
+      told.add(q.sender);
+      play.deps.commands?.reply(q.sender, why);
+    }
   }
   return stopped;
 }
