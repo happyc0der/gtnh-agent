@@ -639,14 +639,7 @@ export class PathActions {
             // This step, and when it leaves the ground every step to the next place a walk may
             // stop (a landing, a ladder holding the feet, afloat in the top of the water): no
             // pause on the way.
-            const why = this.#flightProblem(
-              fence,
-              at,
-              seg.steps,
-              i,
-              policy.water,
-              swimming,
-            );
+            const why = this.#flightProblem(fence, at, seg.steps, i, policy.water, swimming);
             if (why !== null) return stopped(`the way ahead is not clear: ${why}`);
             // Sprinting only while the food bar stays above 10 (HungerOverhaul: it costs food).
             const food = this.#world.food;
