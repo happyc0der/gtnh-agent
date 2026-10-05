@@ -257,6 +257,8 @@ const MOB_PAUSE_REASONS: ReadonlySet<string> = new Set([
   'UNDER_ATTACK',
   'ATTACKER_UNSEEN',
   'HAZARD_NEARBY',
+  // A mob near with the player too weak to run or fight (CRITICAL_HEALTH): offline at once.
+  'CRITICAL_HEALTH',
 ]);
 
 /**

@@ -49,6 +49,11 @@ export const REASON_CODES = [
    * ranged mob beyond the scan, an invisible one, a mod's lightning): it waits offline too.
    */
   'ATTACKER_UNSEEN',
+  /**
+   * A hostile (or an unidentified creature) near with health at CRITICAL_HEALTH or below: one
+   * blow more may kill, too weak to run or fight. It waits offline.
+   */
+  'CRITICAL_HEALTH',
   'INVENTORY_NEARLY_FULL',
   'NO_DUMP_CONTAINER',
   'NOTHING_DEPOSITABLE',

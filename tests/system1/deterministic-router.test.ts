@@ -4,7 +4,11 @@ import { DecisionResultSchema } from '../../src/domain/decisions.ts';
 import { FOOD_TASK_ID } from '../../src/domain/food.ts';
 import { NIGHT_SHELTER_TASK_ID } from '../../src/domain/night-shelter.ts';
 import { mobPause } from '../../src/app/play/play-state.ts';
-import { routeDecision, UNDER_ATTACK_MS } from '../../src/system1/deterministic-router.ts';
+import {
+  CRITICAL_HEALTH,
+  routeDecision,
+  UNDER_ATTACK_MS,
+} from '../../src/system1/deterministic-router.ts';
 import { makeState, routerCtx, testConfig } from '../fixtures/index.ts';
 
 const route = (mutate: (w: MockWorld) => void = () => undefined, ctx = routerCtx()) =>
@@ -219,6 +223,39 @@ describe('System1 deterministic router', () => {
       });
       expect(d.decision).toBe('REST');
       expect(d.reasonCodes).toEqual(['LOW_HEALTH']);
+    });
+
+    it('low health with room in the food bar and food carried -> EAT first, then REST', () => {
+      // Seen live 2026-10-05: at 1 health and food 14, carrying melon it could have eaten.
+      const hungry = route((w) => {
+        w.player.health = 1;
+        w.player.hunger = 14;
+        w.player.position = { x: 40, y: 64, z: 40 };
+      });
+      expect(hungry.decision).toBe('EAT');
+      expect(hungry.reasonCodes).toEqual(['LOW_HEALTH']);
+      // Food 18 or more (vanilla heals from there): the rest.
+      expect(
+        route((w) => {
+          w.player.health = 1;
+          w.player.hunger = 18;
+          w.player.position = { x: 40, y: 64, z: 40 };
+        }).decision,
+      ).toBe('REST');
+    });
+
+    it('a creature near with health at CRITICAL_HEALTH or below -> PAUSE: offline, too weak to run', () => {
+      const weak = (health: number) => (w: MockWorld) => {
+        w.player.health = health;
+        w.player.position = { x: 30, y: 64, z: 30 };
+        w.hostiles = [{ x: 36, y: 64, z: 30 }];
+      };
+      const d = route(weak(CRITICAL_HEALTH));
+      expect(d.decision).toBe('PAUSE_AND_ASK_USER');
+      expect(d.reasonCodes).toEqual(['HOSTILES_NEARBY', 'CRITICAL_HEALTH']);
+      expect(mobPause('needs-attention', d)).toBe('HOSTILES_NEARBY, CRITICAL_HEALTH');
+      // Above it: the retreat, as before.
+      expect(route(weak(CRITICAL_HEALTH + 1)).decision).toBe('RETREAT_HOME');
     });
 
     it('low health while building the night shelter: its steps first (the pit is where to rest)', () => {

@@ -25,6 +25,16 @@ export const DETERMINISTIC_ROUTER_NAME = 'deterministic-router';
  */
 /** Hurt this recently (ms) with a hostile near is being attacked (UNDER_ATTACK). */
 export const UNDER_ATTACK_MS = 5_000;
+/**
+ * Health (half-hearts) at or below which a hostile near is waited out offline at once
+ * (CRITICAL_HEALTH): a zombie or a skeleton on Hard takes 3 to 5 a blow.
+ */
+export const CRITICAL_HEALTH = 6;
+/**
+ * Below minHealth, a meal comes before the rest while the food bar is under this: vanilla
+ * heals only from 18 (FoodStats.onUpdate), and healing uses food up.
+ */
+const HEAL_FOOD = 18;
 
 const CONFIDENCE = {
   failClosed: 1,
@@ -155,6 +165,19 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     if (!dangerCodes.has('HAZARD_PROXIMITY') && state.player.sealed === true && hurt === null) {
       return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'SHELTERED']);
     }
+    // A creature near and too weak to run or fight: one blow more may kill, and a walk away is
+    // slower than many mobs. It waits offline (seen live 2026-10-05: down to 1 health, from
+    // something it never saw). Not at food 0: starving hurts too, and offline it would never
+    // get food.
+    const starving = state.player.hunger.known && state.player.hunger.value <= 0;
+    const weak = state.player.health.known && state.player.health.value <= CRITICAL_HEALTH;
+    if (
+      (dangerCodes.has('HOSTILES_NEARBY') || dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) &&
+      weak &&
+      !starving
+    ) {
+      return decide('PAUSE_AND_ASK_USER', CONFIDENCE.safety, [...codes, 'CRITICAL_HEALTH']);
+    }
     // Fighting back is considered only when hostiles are the sole danger: never near lava or
     // void, never with an unidentified entity near, never with low health or food.
     if ([...dangerCodes].every((c) => c === 'HOSTILES_NEARBY')) {
@@ -178,7 +201,6 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
     // 2026-10-04: a Special Mobs Mother Spider took the bot from 20 health to 0 while it waited to
     // try its walk again and then set off on a 38-block retreat). It waits offline (play-state.ts
     // mobPause). Not at food 0: starving hurts too, and offline it would never get food.
-    const starving = state.player.hunger.known && state.player.hunger.value <= 0;
     if (
       (dangerCodes.has('HOSTILES_NEARBY') || dangerCodes.has('UNCLASSIFIED_ENTITY_NEARBY')) &&
       !dangerCodes.has('HAZARD_PROXIMITY') &&
@@ -238,7 +260,11 @@ export function routeDecision(state: GameState, ctx: RouterContext): DecisionRes
       facts['gettingFood'] = true;
     } else if (state.currentTask?.taskId !== NIGHT_SHELTER_TASK_ID) {
       // At dusk the night shelter comes first: the pit is where resting is safe (seen live:
-      // it rested in the open before digging in). Its steps run below (rule 6).
+      // it rested in the open before digging in). Its steps run below (rule 6). Before the
+      // rest, a meal while the food bar is under HEAL_FOOD (seen live 2026-10-05: at 1 health
+      // and food 14, carrying melon it could have eaten).
+      const food = hunger < HEAL_FOOD ? availableApprovedFood(state, ctx) : null;
+      if (food !== null) return decide('EAT', CONFIDENCE.vitals, ['LOW_HEALTH']);
       return decide('REST', CONFIDENCE.vitals, ['LOW_HEALTH']);
     }
   }
