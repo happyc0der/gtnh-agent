@@ -363,7 +363,7 @@ export class MovementActions {
     this.#idleTimer = setInterval(() => {
       this.#core.send(outbound.playerIdle(ON_GROUND));
       this.#idleTicks += 1;
-      if (this.#idleTicks % SUPPORT_CHECK_TICKS === 0) void this.keepSupported();
+      if (this.#idleTicks % SUPPORT_CHECK_TICKS === 0) void this.keepSupported({ stepOut: false });
     }, IDLE_TICK_MS);
   }
 
@@ -376,7 +376,7 @@ export class MovementActions {
    * of at most MAX_SAFE_FALL blocks (no damage) onto a spot with no hazard next to it;
    * otherwise it logs why and stays (a kick is harmless, a bad fall is not).
    */
-  async keepSupported(): Promise<void> {
+  async keepSupported(opts: { stepOut: boolean } = { stepOut: true }): Promise<void> {
     if (this.#core.phase !== 'play' || this.#core.walking || this.#core.exploring) return;
     if (this.#core.digging || this.#core.placing || this.#core.fighting || this.#core.questBookBusy)
       return;
@@ -422,17 +422,6 @@ export class MovementActions {
       }
       return;
     }
-    // Standing in a cobweb (a web spider spun it on the player), or beside a hazard (a fire lit
-    // beside it): out of there first, as walks do (step-out.ts).
-    const onTop = Math.abs(feet.y - Math.round(feet.y)) < 1e-6;
-    if (onTop && (websAt(world, feet).length > 0 || hazardsAt(world, feet).length > 0)) {
-      const why = await this.stepOut();
-      if (why !== null && this.#floatingNote !== why) {
-        this.#floatingNote = why;
-        this.#core.log(`at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}): ${why}`);
-      }
-      return;
-    }
     const support = checkSupport(world, feet);
     if (support.kind === 'unknown') return;
     // Held up for the server, the feet may still hang a little above the ground, or just past
@@ -441,6 +430,17 @@ export class MovementActions {
       support.kind === 'supported' ? (restingY(world, feet) ?? edgeLanding(world, feet)) : null;
     if (support.kind === 'supported' && resting === null) {
       this.#floatingNote = null;
+      // On the ground in a cobweb (a web spider spun it on the player), or beside a hazard (a
+      // fire lit beside it): out of there, as walks do (step-out.ts). Only when awaited (an
+      // observation): the idle timer's look would race an action starting meanwhile, which a
+      // step holding the walk refuses (an independent review, 2026-10-05).
+      if (opts.stepOut && (websAt(world, feet).length > 0 || hazardsAt(world, feet).length > 0)) {
+        const why = await this.stepOut();
+        if (why !== null && this.#floatingNote !== why) {
+          this.#floatingNote = why;
+          this.#core.log(`at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}): ${why}`);
+        }
+      }
       return;
     }
     const note = (why: string): void => {

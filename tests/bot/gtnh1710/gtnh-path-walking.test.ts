@@ -119,6 +119,39 @@ describe('walking over terrain on the pathfinder', { timeout: 30_000 }, () => {
     expect(server.moveSim.corrections).toEqual([]);
   });
 
+  it('a cobweb holding the player above a hole: it falls first, then an observation steps out', async () => {
+    // An independent review, 2026-10-05: the step out came before gravity, refused itself
+    // (no floor), and the player hung in the web for good.
+    const blocks = new Map<string, number>([[`-5,${FEET_Y},-8`, BLOCK.web]]);
+    for (let x = -6; x <= -4; x++) {
+      for (let z = -9; z <= -7; z++) {
+        blocks.set(`${x},${FEET_Y - 1},${z}`, BLOCK.air);
+        blocks.set(`${x},${FEET_Y - 2},${z}`, BLOCK.grass);
+      }
+    }
+    const { client } = await start({ blocks });
+    // Idle gravity: down into the hole (its head still in the web), never a level step.
+    await vi.waitFor(() => expect(client.world.ownPosition?.y).toBe(FEET_Y - 1), {
+      timeout: 5_000,
+    });
+    expect(client.world.ownPosition).toMatchObject({ x: -4.5, z: -7.5 });
+    await new Promise((r) => setTimeout(r, 300)); // the fall's last tick
+    // An observation steps out of the web, onto a side inside the hole.
+    await client.observe();
+    const at = client.world.ownPosition;
+    expect(at?.y).toBe(FEET_Y - 1);
+    expect(Math.hypot((at?.x ?? 0) + 4.5, (at?.z ?? 0) + 7.5)).toBeCloseTo(1, 6);
+  });
+
+  it('idle ticks never step out of a cobweb: an action starting then is not refused', async () => {
+    // An independent review, 2026-10-05: the idle timer's step out held the walk, and a dig
+    // started meanwhile was refused ("the player is walking").
+    const web = new Map([[`-5,${FEET_Y},-8`, BLOCK.web]]);
+    const { client } = await start({ blocks: web });
+    await new Promise((r) => setTimeout(r, 1_500)); // three idle support checks
+    expect(client.world.ownPosition).toEqual({ x: -4.5, y: FEET_Y, z: -7.5 });
+  });
+
   it('a walk that starts beside a fire steps away from it first, every move accepted', async () => {
     // Seen live 2026-10-05: a fire lit in the morning's staircase beside the agent, and every
     // retreat was refused ("cannot walk from here: next to minecraft:fire").

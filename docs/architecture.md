@@ -1039,10 +1039,11 @@ z 9.1 over air, on the edge of the block at z 8, and every walk from there was r
 A cobweb is never walked into (it is no plant: `passable.ts`), nor a cell beside a hazard, but a
 player standing in a cobweb or beside a hazard (in one, even) first steps out, onto the nearest
 cell beside it where it may stand (no hazard near), level and straight, 0.15 a tick, passing only
-open cells and those it stood in (`step-out.ts`): every walk on the pathfinder does so before it
-plans, and so does idle gravity. A web cuts the server's own move to a quarter
-(`Entity.setInWeb`), and it resets a move only when the client's position is more than 0.25 off
-across, so 0.11 off is taken. Seen live 2026-10-05: a web spider spun a web into a retreat's way,
+open cells and those it stood in, with a floor under it (`step-out.ts`; held in the air by a
+web, it falls first): every walk on the pathfinder does so before it plans, and so does an
+observation (never the idle timer, whose step would race an action starting meanwhile). A web
+cuts the server's own move to a quarter (`Entity.setInWeb`), and it resets a move only when the
+client's position is more than 0.25 off across, so 0.11 off is taken. Seen live 2026-10-05: a web spider spun a web into a retreat's way,
 and the agent stood in it, every walk refused ("cannot walk from here: blocked by
 minecraft:web") until it went offline for the night; the next morning a fire lit beside it in
 its staircase, and every retreat was refused the same way ("next to minecraft:fire").

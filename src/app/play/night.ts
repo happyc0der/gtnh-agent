@@ -306,6 +306,9 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
   const { deps, limits } = play;
   if (deps.shelter !== undefined && deps.repos.memory.getValue(NIGHT_SHELTER_KEY) !== null) {
     const status = await deps.shelter('morning');
+    // Not known this time (the inventory, a chunk): nothing decided, and the tries and their
+    // wait stand (an independent review, 2026-10-05: one such look gave three more at once).
+    if (status === null) return null;
     const mobs = status?.walled === true && status.sheltered ? (status.hostiles ?? null) : null;
     if (mobs !== null) return waitOutMobs(play, mobs);
     if (play.sheltered !== null && 'mobs' in play.sheltered) {

@@ -3,7 +3,7 @@ import { passProblem } from './passable.ts';
 import type { PathStep } from './pathing/execute.ts';
 import { overlappedCells } from './pathing/physics.ts';
 import { fenceHolds } from './play-area.ts';
-import { standProblem } from './terrain.ts';
+import { standProblem, TERRAIN_SURFACES } from './terrain.ts';
 import type { Fence, Vec3, WalkWorld } from './walking.ts';
 
 /**
@@ -113,6 +113,18 @@ export function stepOut(world: WalkWorld, fence: Fence, feet: Vec3): StepOut | n
   const refuse = (reason: string): StepOut => ({ ok: false, cause, reason });
   const y = Math.round(feet.y);
   if (Math.abs(feet.y - y) > 1e-6) return refuse('the feet are not on a block top');
+  // A floor under the body: a web holding the player above a hole is left to gravity first
+  // (an independent review, 2026-10-05: a level step from there kept it hanging for good).
+  const [fx0, fx1, , , fz0, fz1] = overlappedCells(feet.x, feet.y, feet.z);
+  let floor = false;
+  for (let x = fx0; x <= fx1 && !floor; x++) {
+    for (let z = fz0; z <= fz1 && !floor; z++) {
+      const id = world.blockAt(x, y - 1, z);
+      const name = id === undefined || id === 0 ? undefined : world.blockName(id);
+      floor = name !== undefined && TERRAIN_SURFACES.has(name);
+    }
+  }
+  if (!floor) return refuse('no floor under the feet: gravity first');
   // The cells the body is in now: passed on the way even when not open (the web, a fire).
   const [bx0, bx1, by0, by1, bz0, bz1] = overlappedCells(feet.x, feet.y, feet.z);
   const started = (x: number, cy: number, z: number): boolean =>

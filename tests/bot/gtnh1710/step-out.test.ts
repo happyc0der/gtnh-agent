@@ -112,6 +112,15 @@ describe('stepping out of a cobweb (step-out.ts)', () => {
     expect(none?.ok === false && none.reason).toMatch(/^no cell beside it to step onto: /);
   });
 
+  it('takes no step from a web over a hole: gravity first (an independent review)', () => {
+    const world = land({ [k(-28, 93, 10)]: ID.web, [k(-28, 92, 10)]: ID.air });
+    expect(stepOut(world, FENCE, { x: -27.5, y: 93, z: 10.5 })).toEqual({
+      ok: false,
+      cause: { kind: 'cobweb', cells: [{ x: -28, y: 93, z: 10 }] },
+      reason: 'no floor under the feet: gravity first',
+    });
+  });
+
   it('leaves a web holding the player in the air to gravity', () => {
     const world = land({ [k(-28, 95, 10)]: ID.web });
     const exit = stepOut(world, FENCE, { x: -27.5, y: 95.3, z: 10.5 });

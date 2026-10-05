@@ -1277,6 +1277,53 @@ describe('autonomous play', () => {
     expect(clock.t).toBeGreaterThanOrEqual(EXIT_RETRY_MS);
   });
 
+  it('one morning look that cannot tell gives no tries back before EXIT_RETRY_MS', async () => {
+    // An independent review, 2026-10-05: a look with the inventory or a chunk unknown reset
+    // the tries, and three more ran at once.
+    const repos = open();
+    nightSpent(repos);
+    const clock = { t: 0 };
+    let exits = 0;
+    let unknown = false;
+    await runPlay(
+      {
+        repos,
+        now: () => clock.t,
+        listen: true,
+        inventory: () => Promise.resolve({}),
+        time: () => Promise.resolve(worldTime(1_000, true)),
+        shelter: () => {
+          if (exits === 3 && !unknown) {
+            unknown = true;
+            return Promise.resolve(null);
+          }
+          return Promise.resolve({
+            kind: 'pit' as const,
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: true,
+            exit: EXIT,
+          });
+        },
+        session: (_limits, hooks) => {
+          if (repos.memory.getValue(CURRENT_TASK_KEY) === 'leave-shelter') exits += 1;
+          clock.t += 1_000;
+          return failedSession(repos, hooks);
+        },
+        sleep: (ms) => {
+          clock.t += ms;
+          return Promise.resolve();
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      { stopRequested: () => (clock.t > EXIT_RETRY_MS / 2 || exits >= 6 ? 'test over' : null) },
+    );
+    expect(unknown).toBe(true);
+    expect(exits).toBe(3);
+  });
+
   it('a shaft a walk dug by day is no shelter to leave: no way out without a night in it', async () => {
     // An independent review, 2026-10-05: at the bottom of a !goto's shaft at noon, play ran
     // "leave the shelter", undoing the command.

@@ -389,7 +389,8 @@ export class PathActions {
   /**
    * Walks to `request.goal` on the pathfinder (see the file comment). OK when it walked its
    * whole plan (`data.reached`: at the goal; else a partial path's end); FAILED when something
-   * stopped it on the way; REFUSED when it could not start (nothing was sent).
+   * stopped it on the way; REFUSED when it could not start (nothing was sent, but perhaps the
+   * step out of a cobweb or away from a hazard that comes first: step-out.ts).
    */
   async walk(request: PathWalk): Promise<ClientActionResult> {
     const m = this.#opts.config.movement;
