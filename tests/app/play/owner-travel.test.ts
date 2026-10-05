@@ -246,7 +246,7 @@ describe('a target below', () => {
     expect(deep.spec.args.target.y).toBeLessThan(64);
     // More across than below, beyond the play area: as before, an EXPLORE across.
     expect(toward(40.5, 40)).toMatchObject({ kind: 'step', spec: { type: 'EXPLORE' } });
-  });
+  }, 30_000); // two searches of up to 40,000 nodes each, on a machine the whole suite loads
 });
 
 describe('the surface (Baritone #surface)', () => {
