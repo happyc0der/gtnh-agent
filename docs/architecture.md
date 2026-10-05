@@ -497,8 +497,13 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   [Walking on the pathfinder](#walking-on-the-pathfinder)): goalNear the player for come and
   follow, the point's block (or its column) for goto. The step is a MOVE_TO to where the path
   ends (never within a block of the player, and within the hazard scan a MOVE_TO needs), or an
-  EXPLORE toward a point the play area does not reach (play area mode `follow`), and the
-  command's task holds it as its one known step. System 1 still decides first (a mob, low
+  EXPLORE toward a point the play area does not reach (play area mode `follow`) when it lies
+  more across than below or above (EXPLORE heads across, at any height; a target far below is
+  walked nearer, and the play area, 32 levels around the feet, follows the bot down: seen live
+  2026-10-04, `!goto water` to a cave 19 blocks down swung between the two until dusk), and the
+  command's task holds it as its one known step. A command whose successful steps end in the
+  same feet cell three times (`MAX_VISITS`) is going back and forth: it fails at once, saying
+  where (not come or follow, which wait by their player). System 1 still decides first (a mob, low
   health, a meal), the executor validates, executes and verifies the step, and after every
   cycle the next one is planned from what the client now knows (`onCycle`), so a moving owner is
   followed: a walk toward the player, or a 1 s WAIT near it. Follow walks about a second of its
