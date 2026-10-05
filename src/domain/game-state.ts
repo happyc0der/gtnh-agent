@@ -186,6 +186,11 @@ export type EnvironmentHazards = z.infer<typeof EnvironmentHazardsSchema>;
 
 /** Largest `nearbyBlocks.resources` list, shared fairly between kinds of block. */
 export const MAX_REPORTED_RESOURCES = 64;
+/**
+ * Largest `nearbyBlocks.inReach` list. Dig reach is a sphere of 4.5 blocks around the eyes, which
+ * holds a few hundred cells; the exposed ones are fewer.
+ */
+export const MAX_REPORTED_IN_REACH = 256;
 /** Largest `nearbyBlocks.removed` list. */
 export const MAX_REPORTED_REMOVED = 16;
 /** Largest `nearbyBlocks.placeable` list (the nearest cells within reach). */
@@ -280,6 +285,16 @@ export const NearbyBlocksSchema = z.strictObject({
   /** Diggable blocks within `scanRadius` (see above), nearest first. */
   resources: z.array(ResourceBlockSchema).max(MAX_REPORTED_RESOURCES),
   /**
+   * The diggable blocks within dig reach of the eyes (the client's MAX_DIG_REACH) that
+   * `resources` leaves out, nearest to the eyes first. `resources` is the view for planning (its
+   * share between kinds keeps far kinds in view); a dig from where the player stands may take any
+   * block of either list, as code's own plans do (a night pit's way out, the next step of a
+   * staircase). Seen live 2026-10-04: a way out's dig 2.7 blocks from the eyes was cut from a
+   * list of 64 full of the pit's walls and refused, and the agent stayed in its pit. Empty in
+   * snapshots stored before it existed.
+   */
+  inReach: z.array(ResourceBlockSchema).max(MAX_REPORTED_IN_REACH).default([]),
+  /**
    * Positions near the player (within the scan's full radius, even when `scanRadius` shrank)
    * where the observer saw a diggable block turn into air and that are still air, most
    * recent first. BLOCK_REMOVED is verified against this.
@@ -311,6 +326,16 @@ export const NearbyBlocksSchema = z.strictObject({
   underFeet: UnderFeetSchema.nullable().optional(),
 });
 export type NearbyBlocks = z.infer<typeof NearbyBlocksSchema>;
+
+/** The diggable block the observation lists at `p`: in `resources`, else in `inReach`. */
+export function listedBlockAt(
+  blocks: NearbyBlocks,
+  p: { readonly x: number; readonly y: number; readonly z: number },
+): ResourceBlock | undefined {
+  const at = (r: ResourceBlock): boolean =>
+    r.position.x === p.x && r.position.y === p.y && r.position.z === p.z;
+  return blocks.resources.find(at) ?? blocks.inReach.find(at);
+}
 
 export const GENERATOR_STATUSES = ['running', 'idle', 'out_of_fuel', 'unknown', 'error'] as const;
 export const GeneratorSchema = z.strictObject({

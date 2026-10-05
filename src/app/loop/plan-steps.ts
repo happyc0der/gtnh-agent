@@ -6,7 +6,7 @@ import {
   type ActionSpec,
 } from '../../domain/actions.ts';
 import type { BlockPosition } from '../../domain/common.ts';
-import type { GameState } from '../../domain/game-state.ts';
+import { listedBlockAt, type GameState } from '../../domain/game-state.ts';
 import { MEAL_HISTORY_LENGTH } from '../../domain/food.ts';
 import { eyeDistanceToBlock } from '../../domain/geometry.ts';
 import { wanderTarget } from '../../domain/world-memory.ts';
@@ -527,7 +527,7 @@ function digsForNothing(plan: Plan, state: GameState): ReturnType<typeof refused
   if (needs === undefined || Object.keys(needs).length === 0 || !state.nearbyBlocks.known) {
     return null;
   }
-  const listed = state.nearbyBlocks.value.resources;
+  const blocks = state.nearbyBlocks.value;
   if (!plan.steps.some((s) => s.action.type === 'DIG_BLOCK')) return null;
   // What the route gathers for the requirements: its raw materials and the blocks it digs.
   const route = goalRouteOf(state);
@@ -539,9 +539,7 @@ function digsForNothing(plan: Plan, state: GameState): ReturnType<typeof refused
   for (const s of plan.steps) {
     if (s.action.type !== 'DIG_BLOCK') continue;
     const at = s.action.args.position;
-    const block = listed.find(
-      (r) => r.position.x === at.x && r.position.y === at.y && r.position.z === at.z,
-    )?.block;
+    const block = listedBlockAt(blocks, at)?.block;
     if (block === undefined) continue; // not listed: the executor refuses it as NOT_DIGGABLE
     if (routeBlocks.has(block) || DIG_YIELDS[block].some((y) => wanted.has(y.item))) continue;
     useless.push(`(${at.x}, ${at.y}, ${at.z}) is ${block}`);

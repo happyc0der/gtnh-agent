@@ -103,7 +103,7 @@ with a carried pickaxe that harvests it, one of `minecraft:stone`, `cobblestone`
 `mossy_cobblestone`, `sandstone`, `netherrack`, `hardened_clay`, `stained_hardened_clay`,
 `emerald_ore`, `gregtech:gt.blockgranites`, `gt.blockstones` or `gt.blockores`
 (`src/domain/blocks.ts`); nothing else. The block must be listed in the observation's
-`nearbyBlocks.resources`. Only allowlisted blocks at or above the player's feet level are
+`nearbyBlocks.resources` or `nearbyBlocks.inReach` (the rest within dig reach of the eyes). Only allowlisted blocks at or above the player's feet level are
 listed there, so the ground it stands on is never a target. Its drop is reported
 (`dropCollected`), not required: leaves usually drop nothing, and a drop that lands out of
 pickup range stays where it fell.

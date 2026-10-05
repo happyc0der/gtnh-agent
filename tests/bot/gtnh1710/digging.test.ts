@@ -7,6 +7,7 @@ import {
   checkWalkBreak,
   DIG_NEIGHBOURS,
   faceTowards,
+  MAX_DIG_REACH,
   standSpotFor,
   WALK_BREAKABLE_BLOCKS,
   walkBreaks,
@@ -902,6 +903,37 @@ describe('resource scan', () => {
         expect(d, k(x, 107, z)).toBeGreaterThanOrEqual(farthestListed);
       }
     }
+  });
+
+  it('lists every block within dig reach that the list leaves out (inReach), nearest to the eyes first', () => {
+    // Seen live 2026-10-04: a night pit's way out dug a block 2.7 blocks from the eyes; a list
+    // of 64 full of the pit's walls had left it out, and the dig was refused (NOT_DIGGABLE).
+    const blocks: Record<string, number> = {};
+    for (let x = -6; x <= 6; x++) for (let z = -6; z <= 6; z++) blocks[k(x, 107, z)] = BLOCK.dirt;
+    blocks[k(9, 108, 9)] = BLOCK.log;
+    const scan = scanResources(storeOf(blocks), table, feet, 16, 20);
+    if (!scan.ok) throw new Error(scan.reason);
+    const reach = (p: { x: number; y: number; z: number }): number =>
+      Math.hypot(p.x + 0.5 - feet.x, p.y + 0.5 - (feet.y + 1.62), p.z + 0.5 - feet.z);
+    // In reach: the dirt layer over the head and the grass floor, but never the block the
+    // player stands on.
+    const expected = new Set<string>();
+    for (let x = -6; x <= 6; x++) {
+      for (let z = -6; z <= 6; z++) {
+        if (reach({ x, y: 107, z }) <= MAX_DIG_REACH) expected.add(k(x, 107, z));
+        if (reach({ x, y: 105, z }) <= MAX_DIG_REACH && (x !== 0 || z !== 0))
+          expected.add(k(x, 105, z));
+      }
+    }
+    const key = (r: { position: { x: number; y: number; z: number } }): string =>
+      k(r.position.x, r.position.y, r.position.z);
+    const listed = new Set(scan.resources.map(key));
+    const extra = scan.inReach.map(key);
+    expect(extra.filter((p) => listed.has(p))).toEqual([]);
+    expect(new Set([...[...listed].filter((p) => expected.has(p)), ...extra])).toEqual(expected);
+    const reaches = scan.inReach.map((r) => reach(r.position));
+    expect(reaches).toEqual([...reaches].sort((a, b) => a - b));
+    expect(scan.inReach.length).toBeGreaterThan(scan.resources.length);
   });
 
   it('with more kinds than it may list, leaves out the farthest kind and shrinks the radius', () => {

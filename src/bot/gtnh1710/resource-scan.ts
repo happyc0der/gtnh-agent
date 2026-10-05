@@ -1,6 +1,7 @@
 import { DIGGABLE_BLOCKS, GT_ORE_BLOCK, type DiggableBlock } from '../../domain/blocks.ts';
-import { MAX_REPORTED_RESOURCES } from '../../domain/game-state.ts';
+import { MAX_REPORTED_IN_REACH, MAX_REPORTED_RESOURCES } from '../../domain/game-state.ts';
 import type { ChunkStore } from './chunk-data.ts';
+import { MAX_DIG_REACH, reachTo } from './digging.ts';
 import type { Registry } from './registry.ts';
 import { SIGHT, sightOf } from './world-survey.ts';
 
@@ -29,7 +30,14 @@ const kindOf = (f: FoundResource): string =>
   f.ore === undefined ? f.block : `${f.block}@${f.ore}`;
 
 export type ResourceScan =
-  { ok: true; scanRadius: number; resources: FoundResource[] } | { ok: false; reason: string };
+  | {
+      ok: true;
+      scanRadius: number;
+      resources: FoundResource[];
+      /** The rest within dig reach of the eyes, nearest to them first (NearbyBlocks.inReach). */
+      inReach: FoundResource[];
+    }
+  | { ok: false; reason: string };
 
 /**
  * Registry id -> 1 + index in DIGGABLE_BLOCKS (0 = not diggable). Ids are per world, so this
@@ -96,7 +104,9 @@ export const GROUND_DIRT_SAMPLE = 8;
  * unknown. At most `max` are listed: the nearest within LISTED_FIRST_RADIUS (up to half of
  * them), then the rest shared fairly between kinds (as domain/blocks.ts nearestOfEachKind does): of each kind its
  * nearest, so a kind that is not listed has no visible block within the declared radius. Only when more kinds are found than `max` does that radius shrink, below
- * the nearest block of the first kind left out.
+ * the nearest block of the first kind left out. Every block within dig reach of the eyes that
+ * the list leaves out comes in `inReach`, nearest to the eyes first: what a dig from here may
+ * take (code's own plans dig there).
  */
 export function scanResources(
   store: ChunkStore,
@@ -204,16 +214,18 @@ export function scanResources(
     a.position.x - b.position.x ||
     a.position.y - b.position.y ||
     a.position.z - b.position.z;
+  // Every block seen, the ground's dirt and grass too: what a dig from here may take.
+  const seen = [...found, ...groundDirt];
   found.push(...groundDirt.sort(byDistance).slice(0, GROUND_DIRT_SAMPLE));
   found.sort(byDistance);
   // The nearest in reach first (up to half the list), then the rest shared fairly by kind,
   // those already listed counting for theirs (nearestOfEachKind's ranks, carried on).
-  const inReach = found
+  const nearFirst = found
     .filter((f) => f.distance <= LISTED_FIRST_RADIUS)
     .slice(0, Math.floor(max / 2));
-  const first = new Set(inReach);
+  const first = new Set(nearFirst);
   const shown = new Map<string, number>();
-  for (const f of inReach) shown.set(kindOf(f), (shown.get(kindOf(f)) ?? 0) + 1);
+  for (const f of nearFirst) shown.set(kindOf(f), (shown.get(kindOf(f)) ?? 0) + 1);
   const ranked = found
     .filter((f) => !first.has(f))
     .map((f, order) => {
@@ -223,13 +235,26 @@ export function scanResources(
       return { f, order, rank };
     })
     .sort((a, b) => a.rank - b.rank || a.order - b.order)
-    .slice(0, Math.max(0, max - inReach.length))
+    .slice(0, Math.max(0, max - nearFirst.length))
     .map((r) => r.f);
-  const listed = [...inReach, ...ranked].sort(byDistance);
+  const listed = [...nearFirst, ...ranked].sort(byDistance);
+  /** The blocks within dig reach that `list` leaves out, nearest to the eyes first. */
+  const reachable = (list: FoundResource[]): FoundResource[] => {
+    const listedNow = new Set(list);
+    return seen
+      .filter((f) => !listedNow.has(f))
+      .map((f) => ({ f, reach: reachTo(feet, f.position) }))
+      .filter((r) => r.reach <= MAX_DIG_REACH + 1e-9)
+      .sort((a, b) => a.reach - b.reach || byDistance(a.f, b.f))
+      .slice(0, MAX_REPORTED_IN_REACH)
+      .map((r) => r.f);
+  };
   const kinds = new Set(listed.map(kindOf));
   const leftOut = found.find((f) => !kinds.has(kindOf(f)));
-  if (leftOut === undefined) return { ok: true, scanRadius: radius, resources: listed };
+  if (leftOut === undefined) {
+    return { ok: true, scanRadius: radius, resources: listed, inReach: reachable(listed) };
+  }
   const kept = listed.filter((f) => f.distance < leftOut.distance);
   const coverage = Math.max(0, Math.floor((leftOut.distance - 1e-6) * 1000) / 1000);
-  return { ok: true, scanRadius: coverage, resources: kept };
+  return { ok: true, scanRadius: coverage, resources: kept, inReach: reachable(kept) };
 }

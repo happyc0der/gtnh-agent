@@ -2462,6 +2462,9 @@ export class WorldModel {
       resources: scan.resources.map(({ block, position, ore }) =>
         ore === undefined ? { block, position } : { block, position, ore },
       ),
+      inReach: scan.inReach.map(({ block, position, ore }) =>
+        ore === undefined ? { block, position } : { block, position, ore },
+      ),
       removed: removed.map((p) => ({ ...p })),
       placeable: placeable.map(({ position, takesFalling }) => ({
         position: { ...position },

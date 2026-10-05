@@ -568,6 +568,30 @@ describe("DIG_BLOCK: only observed, allowlisted blocks, never the player's suppo
     expect(codes(dig(2, 64, 1), blind)).toEqual(['UNKNOWN_TARGET']);
   });
 
+  it('allows a block within reach that only `inReach` lists, with the same rules', () => {
+    // Seen live 2026-10-04: a night pit's way out dug a block 2.7 blocks from the eyes that the
+    // list of 64 had left out for the pit's walls; the refusal kept the agent in its pit.
+    const base = makeState();
+    const withReach = (inReach: NearbyBlocks['inReach']): GameState => ({
+      ...base,
+      nearbyBlocks: base.nearbyBlocks.known
+        ? known({ ...base.nearbyBlocks.value, inReach })
+        : base.nearbyBlocks,
+    });
+    expect(codes(dig(3, 64, 0))).toEqual(['NOT_DIGGABLE']);
+    const reach = withReach([{ block: 'minecraft:dirt', position: { x: 3, y: 64, z: 0 } }]);
+    expect(codes(dig(3, 64, 0), reach)).toEqual([]);
+    // Sand on top of it, listed in reach too: it would fall into the hole.
+    const sand = withReach([
+      { block: 'minecraft:dirt', position: { x: 3, y: 64, z: 0 } },
+      { block: 'minecraft:sand', position: { x: 3, y: 65, z: 0 } },
+    ]);
+    expect(codes(dig(3, 64, 0), sand)).toEqual(['UNSAFE_DIG']);
+    // Stone in reach still takes a pickaxe.
+    const stone = withReach([{ block: 'minecraft:stone', position: { x: 3, y: 64, z: 0 } }]);
+    expect(codes(dig(3, 64, 0), stone)).toEqual(['NOT_DIGGABLE']);
+  });
+
   it("refuses a player's build, whatever the block (and the mock never lists one as a resource)", () => {
     const built = makeState((w) => void (w.playerBuiltBlocks = [{ x: 2, y: 64, z: 1 }]));
     const r = evaluateAction(action(dig(2, 64, 1)), built, safetyCtx(), emptyFailureHistory);

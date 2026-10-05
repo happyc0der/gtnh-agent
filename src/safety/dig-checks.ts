@@ -3,7 +3,7 @@ import { FALLING_DIGGABLE_BLOCKS, isGardenBlock } from '../domain/blocks.ts';
 import type { BlockPosition } from '../domain/common.ts';
 import { diggableInfo } from '../domain/dig-time.ts';
 import { carriedHarvester } from '../domain/tools.ts';
-import type { GameState } from '../domain/game-state.ts';
+import { listedBlockAt, type GameState } from '../domain/game-state.ts';
 import { blockCentre, bodyColumns, formatPosition, headBlockY } from '../domain/geometry.ts';
 import {
   isDigDownBlock,
@@ -21,7 +21,8 @@ import { checkHazardClearance } from './coordinate-boundaries.ts';
  * DIG_BLOCK rules that the observation can answer. The live client re-checks all of them
  * (and more: fluids, tile entities and anything else touching the block) on the blocks the
  * server sent, just before and during the dig.
- *  - The block must be an allowlisted diggable block the observation lists.
+ *  - The block must be an allowlisted diggable block the observation lists (`resources`, or
+ *    `inReach`: within dig reach of the eyes).
  *  - Stone and ores only when the player carries a tool that harvests them (NOT_DIGGABLE
  *    otherwise: a hand, or a tool of another kind or too low a level, digs them at a third of
  *    the speed and the block is gone with nothing dropped; tools.ts carriedHarvester). A
@@ -66,7 +67,7 @@ export function digChecks(
     });
     return v;
   }
-  const listed = blocks.resources.find((r) => same(r.position, target));
+  const listed = listedBlockAt(blocks, target);
   if (listed === undefined) {
     v.push({
       code: 'NOT_DIGGABLE',
@@ -121,9 +122,7 @@ export function digChecks(
       });
     }
   }
-  const above = blocks.resources.find((r) =>
-    same(r.position, { x: target.x, y: target.y + 1, z: target.z }),
-  );
+  const above = listedBlockAt(blocks, { x: target.x, y: target.y + 1, z: target.z });
   if (above !== undefined && FALLING_DIGGABLE_BLOCKS.has(above.block)) {
     v.push({
       code: 'UNSAFE_DIG',

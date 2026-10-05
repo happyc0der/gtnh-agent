@@ -506,6 +506,8 @@ export class MockMinecraftClient implements MinecraftClient {
                 : { standAt: r.standAt === null ? null : { ...r.standAt } }),
               ...(r.ore === undefined ? {} : { ore: r.ore }),
             })),
+            // The mock's worlds hold fewer blocks than the list: none in reach is left out.
+            inReach: [],
             removed: removed.map((p) => ({ ...p })),
             placeable: this.#placeableCells().slice(0, MAX_REPORTED_PLACEABLE),
             placed: placed.map((p) => ({ block: p.block, position: { ...p.position } })),

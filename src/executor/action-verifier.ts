@@ -1,6 +1,6 @@
 import type { Action, Postcondition } from '../domain/actions.ts';
 import type { ClientActionResult } from '../bot/minecraft-client.ts';
-import type { GameState, InteractableBlock } from '../domain/game-state.ts';
+import { listedBlockAt, type GameState, type InteractableBlock } from '../domain/game-state.ts';
 import { distance, formatPosition } from '../domain/geometry.ts';
 import { COMPASS } from '../domain/world-memory.ts';
 import type { SafetyContext } from '../safety/safety-policy.ts';
@@ -218,7 +218,7 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
       const blocks = after.nearbyBlocks.value;
       const same = (q: { x: number; y: number; z: number }): boolean =>
         q.x === p.x && q.y === p.y && q.z === p.z;
-      const still = blocks.resources.find((r) => same(r.position));
+      const still = listedBlockAt(blocks, p);
       const removed = blocks.removed.some(same);
       check(
         'block-removed',
@@ -248,7 +248,7 @@ export function verifyPostcondition(input: VerifyInput): VerificationResult {
         const same = (q: { x: number; y: number; z: number }): boolean =>
           q.x === p.x && q.y === p.y && q.z === p.z;
         const removed = blocks.removed.some(same);
-        const still = blocks.resources.find((r) => same(r.position));
+        const still = listedBlockAt(blocks, p);
         check(
           'block-removed',
           removed && still === undefined,

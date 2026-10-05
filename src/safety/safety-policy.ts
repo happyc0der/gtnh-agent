@@ -15,7 +15,7 @@ import {
 } from '../domain/combat.ts';
 import type { BlockPosition, Position } from '../domain/common.ts';
 import { FOOD_TASK_ID, gettingFood } from '../domain/food.ts';
-import { MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
+import { listedBlockAt, MAX_REPORTED_ENTITIES, type GameState } from '../domain/game-state.ts';
 import { distance, formatPosition, isBlockInsideBox } from '../domain/geometry.ts';
 import type { NamedLocation, SafetyConfig, SafetyViolation } from '../domain/safety.ts';
 import { stableStringify } from '../util/json.ts';
@@ -611,9 +611,7 @@ export function getsFood(action: Action, state: GameState): boolean {
   if (action.type === 'MOVE_TO' || action.type === 'EXPLORE') return true;
   if (action.type !== 'DIG_BLOCK' || !state.nearbyBlocks.known) return false;
   const at = action.args.position;
-  const listed = state.nearbyBlocks.value.resources.find(
-    (r) => r.position.x === at.x && r.position.y === at.y && r.position.z === at.z,
-  );
+  const listed = listedBlockAt(state.nearbyBlocks.value, at);
   return listed !== undefined && isGardenBlock(listed.block);
 }
 

@@ -1574,6 +1574,12 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
      reaches (`standSpotOnPath`: the pathfinder's flood with `MOVE_TO`'s own walk policy, see
      [Walking on the pathfinder](#walking-on-the-pathfinder)), so a block walled in by water or
      by blocks no walk may break has none.
+   - `inReach`: every allowlisted block within dig reach of the eyes (4.5 blocks) that
+     `resources` leaves out, nearest to the eyes first (at most 256). `resources` is the view for
+     planning; a dig from where the player stands may take a block of either list, as code's
+     own plans do (a night pit's way out, the next step of a staircase). Seen live 2026-10-04: a
+     way out's dig 2.7 blocks from the eyes had been cut from a list of 64 full of the pit's
+     walls, was refused (`NOT_DIGGABLE`) three times, and the agent stayed in its pit.
    - `removed`: positions where the client saw such a block turn into air, while they stay air.
    - `playerBuilt`: players' builds near the player (at most 64; see
      [Players' builds](#players-builds)).
@@ -1586,12 +1592,13 @@ tools it may hold in `src/domain/tools.ts`, the checks in `src/bot/gtnh1710/digg
 
 2. **The executor validates as usual.**
    - The whole block must be inside the safety boundary.
-   - It must be listed in `nearbyBlocks.resources` (`NOT_DIGGABLE` otherwise, pause), so
-     nothing off the allowlist can even be asked for, and must not be a player's build
+   - It must be listed in `nearbyBlocks.resources` or `inReach` (`NOT_DIGGABLE` otherwise,
+     pause), so nothing off the allowlist can even be asked for, and must not be a player's build
      (`nearbyBlocks.playerBuilt`: `NOT_DIGGABLE`, pause).
    - It must clear known hazards by `hazardAvoidanceRadius`.
    - It must not be under the player or in its body's cells, must not be sand or gravel over
-     the player's head, and must not have a listed sand or gravel block on top (`UNSAFE_DIG`).
+     the player's head, and must not have a listed sand or gravel block on top (`UNSAFE_DIG`;
+     either list).
    - Stone and ores need a carried pickaxe that harvests them (`NOT_DIGGABLE`, pause): judged
      from the inventory names (a vanilla tool's level and wear; a Tinkers' tool counts, its
      level unknown here). The observation carries no block metadata, so for a GT ore any
