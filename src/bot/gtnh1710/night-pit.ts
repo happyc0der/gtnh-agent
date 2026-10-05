@@ -724,6 +724,8 @@ export function shaftSite(world: WalkWorld, feet: Vec3): PitSite | null {
 /** Nodes and milliseconds a climb out of the pit may search (a few blocks around it). */
 const CLIMB_MAX_NODES = 20_000;
 const CLIMB_MAX_MS = 300;
+/** Searches a climb out may take: the first, and one from each place a cut path stops. */
+const CLIMB_MAX_SEARCHES = 6;
 
 /**
  * The way out of the night pit when no wall or staircase can be dug (planShelterExit; seen
@@ -731,9 +733,12 @@ const CLIMB_MAX_MS = 300;
  * pathfinder, with MOVE_TO's own walk policy (`options`: what a walk may break, and the
  * throwaway blocks it may pillar with), to any feet block out of the pit's column no lower
  * than its ground layer (the ground beside a pit may lie a block lower: seen live), as
- * Baritone climbs out of a hole: through the roof, a pillar up, a step out. One MOVE_TO to
- * where the path ends; the walk plans its own path there with the same rules, and checks every
- * break and placement again just before it.
+ * Baritone climbs out of a hole: through the roof, a pillar up, a step out. A path the search
+ * found to the goal but had to cut (a later movement no longer holds once earlier ones changed
+ * blocks) goes on from where the cut leaves the player, on the world as it leaves it, as the
+ * walk itself does (seen live 2026-10-04: a pit 5 blocks deep, refused as "cut after 3
+ * movement(s)"). One MOVE_TO to where the climb ends; the walk plans its own path there with
+ * the same rules, and checks every break and placement again just before it.
  */
 export function planClimbOut(
   world: WalkWorld,
@@ -742,17 +747,39 @@ export function planClimbOut(
   site: PitSite,
   options: PathOptions,
 ): ExitPlan {
-  const found = planPath(world, fence, feet, goalOut(site.x, site.z, site.groundY), {
-    ...options,
-    maxNodes: CLIMB_MAX_NODES,
-    maxTimeMs: CLIMB_MAX_MS,
-  });
-  if (found.status !== 'reached' || found.end === null) {
-    return { ok: false, reason: `no climb out of the pit: ${found.reason}` };
+  const goal = goalOut(site.x, site.z, site.groundY);
+  const w = new PlannedWorld(world);
+  let from = feet;
+  let breaks = 0;
+  let places = 0;
+  let end: BlockPos | null = null;
+  for (let search = 0; search < CLIMB_MAX_SEARCHES && end === null; search++) {
+    const t = options.throwaway;
+    const found = planPath(w, fence, from, goal, {
+      ...options,
+      ...(t === undefined ? {} : { throwaway: { ...t, count: t.count - places } }),
+      maxNodes: CLIMB_MAX_NODES,
+      maxTimeMs: CLIMB_MAX_MS,
+    });
+    const cut = found.status === 'partial' && found.stop === 'goal' && found.movements.length > 0;
+    if ((found.status !== 'reached' && !cut) || found.end === null) {
+      return { ok: false, reason: `no climb out of the pit: ${found.reason}` };
+    }
+    for (const m of found.movements) {
+      for (const b of m.breaks) w.dig(b.cell);
+      if (m.place !== null) w.place(m.place.cell, m.place.block);
+      breaks += m.breaks.length;
+      places += m.place === null ? 0 : 1;
+    }
+    if (cut) from = centreOf(found.end.x, found.end.y, found.end.z);
+    else end = found.end;
   }
-  const end = found.end;
-  const breaks = found.movements.reduce((n, m) => n + m.breaks.length, 0);
-  const places = found.movements.filter((m) => m.place !== null).length;
+  if (end === null) {
+    return {
+      ok: false,
+      reason: `no climb out of the pit: the path was still cut after ${CLIMB_MAX_SEARCHES} searches`,
+    };
+  }
   return {
     ok: true,
     digs: breaks,

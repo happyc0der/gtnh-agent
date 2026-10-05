@@ -17,6 +17,7 @@ import {
 import type { PathOptions } from '../../../src/bot/gtnh1710/pathing/search.ts';
 import type { Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 import type { ShelterStep } from '../../../src/domain/night-shelter.ts';
+import { savedWorld } from './fixtures/saved-world.ts';
 
 const ID = {
   air: 0,
@@ -634,6 +635,41 @@ describe('the way out in the morning', () => {
     // Too few blocks to pillar with: no climb.
     expect(reasonOf(planClimbOut(walled, AREA.fence, BOTTOM, SITE, options(walled, 1)))).toMatch(
       /^no climb out of the pit: /,
+    );
+  });
+
+  it('climbs out of the real hole of 2026-10-04 although the first path is cut (re-plans)', () => {
+    // The saved world around the agent that morning: sealed 5 blocks under the ground, under a
+    // cobblestone roof, beside the sand and dirt of two earlier pits. The way out was refused
+    // ("cut after 3 movement(s)") and the agent stayed in.
+    const world = savedWorld('night-pit-2026-10-04');
+    const feet = { x: -23.5, y: 70, z: 42.5 };
+    expect(sealedIn(world, feet)).toBe(true);
+    const site = shaftSite(world, feet);
+    expect(site).toEqual({ x: -24, z: 42, groundY: 74 });
+    const fence = { min: { ...world.box.min }, max: { ...world.box.max } };
+    const options: PathOptions = {
+      pillar: true,
+      canBreak: (c) => {
+        const id = world.blockAt(c.x, c.y, c.z);
+        const name = id === undefined ? undefined : world.blockName(id);
+        return name !== undefined &&
+          ['minecraft:dirt', 'minecraft:grass', 'minecraft:sand', 'minecraft:cobblestone'].includes(
+            name,
+          )
+          ? 30
+          : null;
+      },
+      canPlace: () => true,
+      throwaway: { count: 64, block: 'minecraft:dirt' },
+    };
+    const r = planClimbOut(world, fence, feet, site as PitSite, options);
+    if (!r.ok) throw new Error(r.reason);
+    const target = specs(r.steps)[0];
+    expect(target?.type).toBe('MOVE_TO');
+    const to = target?.type === 'MOVE_TO' ? target.args.target : null;
+    expect(to !== null && to.y >= 74 && (Math.floor(to.x) !== -24 || Math.floor(to.z) !== 42)).toBe(
+      true,
     );
   });
 });
