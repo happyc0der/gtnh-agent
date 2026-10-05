@@ -205,6 +205,48 @@ describe('a target below', () => {
     if (step.kind !== 'step' || step.spec.type !== 'MOVE_TO') throw new Error(JSON.stringify(step));
     expect(step.spec.args.target.y).toBeLessThan(64);
   });
+
+  it('walks nearer to a target more below than across, rather than explore across to it', () => {
+    // Seen live 2026-10-04: water 19 blocks below and 4 across; a walk down took the bot 8
+    // across, the EXPLORE back up toward the column, and so on until dusk. Here the target lies
+    // below the play area (a search cannot reach it), 8 across and 24 below.
+    const policy = walkPolicy({
+      world: flat(),
+      boundary: null,
+      players: [],
+      fence: AREA.fence ?? undefined,
+      settings: {
+        allowBreak: true,
+        allowPlace: false,
+        allowParkour: false,
+        parkourOverDeepGaps: false,
+        allowSprint: false,
+        allowWater: false,
+        allowDoors: false,
+        allowClimb: false,
+        throwawayReserve: 4,
+      },
+      breaking: true,
+      placing: false,
+      digHeight: 4,
+      digTicks: () => ({ ticks: 20 }),
+      throwaway: null,
+      sprint: false,
+    }).options;
+    const toward = (x: number, y: number) =>
+      planTravelStep(
+        input({
+          path: policy,
+          target: { kind: 'near', point: { x, y, z: 0.5 }, within: 2.5 },
+          searchMs: 5_000,
+        }),
+      );
+    const deep = toward(8.5, 40);
+    if (deep.kind !== 'step' || deep.spec.type !== 'MOVE_TO') throw new Error(JSON.stringify(deep));
+    expect(deep.spec.args.target.y).toBeLessThan(64);
+    // More across than below, beyond the play area: as before, an EXPLORE across.
+    expect(toward(40.5, 40)).toMatchObject({ kind: 'step', spec: { type: 'EXPLORE' } });
+  });
 });
 
 describe('the surface (Baritone #surface)', () => {

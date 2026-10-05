@@ -55,6 +55,11 @@ interface Sim {
   cleared: number;
   /** The fake planner refuses every step. */
   blocked: boolean;
+  /**
+   * Cycles report as runSession's do: the decision (a known step) and the state after it
+   * (the position); otherwise neither.
+   */
+  rich?: boolean;
   time: WorldTime | null;
   food: FoodStatus | null;
   clock: { t: number };
@@ -230,7 +235,21 @@ function fakeSession(repos: Repositories, sim: Sim): PlayDeps['session'] {
         summary = 'REQUEST_PLANNER -> DIG_BLOCK -> succeeded';
       }
       cycles.push({ cycleId: `c${sim.cycles}`, summary });
-      const result = { summary, status: 'succeeded', decision: null, outcome: null };
+      const result =
+        sim.rich === true && step !== null
+          ? {
+              summary,
+              status: 'succeeded',
+              decision: { decision: 'EXECUTE_KNOWN_SAFE_STEP', reasonCodes: ['KNOWN_SAFE_STEP'] },
+              outcome: {
+                execution: { ok: true, message: summary },
+                stateAfter: {
+                  player: { position: { known: true, value: { ...sim.position } } },
+                  time: { known: false },
+                },
+              },
+            }
+          : { summary, status: 'succeeded', decision: null, outcome: null };
       hooks.onCycle(result as unknown as CycleResult, cycles.length);
       sim.cycles += 1;
       sim.afterCycle?.(sim.cycles);
@@ -814,6 +833,36 @@ describe("owners' commands in play", () => {
     await runPlay(deps(repos, sim), LIMITS, noStop);
     expect(said(sim)).toEqual(['OK: going to 40 64 0', 'Failed: no walk gets nearer to there']);
     expect(sim.sleeps).toBe(2); // a moment before each retry
+  });
+
+  it('a travel command whose steps go back and forth fails at once (MAX_VISITS)', async () => {
+    // Seen live 2026-10-04: `!goto water`, 19 blocks below and 4 across, swung between an
+    // EXPLORE up toward its column and a walk down, until dusk.
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!goto 40 64 0')], rich: true });
+    const A = { x: 5.5, y: 64, z: 0.5 };
+    const B = { x: 9.5, y: 60, z: 0.5 };
+    const swing = (): TravelStep => {
+      const to = sim.position.x === A.x ? B : A;
+      return {
+        kind: 'step',
+        spec: { type: 'MOVE_TO', args: { target: to, tolerance: 1 } },
+        text: `walk to ${to.x} ${to.z}`,
+        distance: 30,
+      };
+    };
+    await runPlay(
+      deps(repos, sim, { commands: { ...commandDeps(sim), step: swing } }),
+      { ...LIMITS, session: { ...LIMITS.session, maxCycles: 20 } },
+      noStop,
+    );
+    expect(said(sim)).toEqual([
+      'OK: going to 40 64 0',
+      'Failed: I keep coming back to (5, 64, 0): no way gets me nearer from here',
+    ]);
+    // A, B, A, B, A: the third time at A ends it, with no retries.
+    expect(sim.steps).toHaveLength(5);
+    expect(sim.sleeps).toBe(0);
   });
 
   it('natural language goes to the translator; the structured form never does', async () => {

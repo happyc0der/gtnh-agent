@@ -264,7 +264,10 @@ export function planTravelStep(input: TravelInput): TravelStep {
   });
   const beyondReach = (end: { x: number; y: number; z: number }): boolean =>
     Math.hypot(end.x + 0.5 - feet.x, end.y - feet.y, end.z + 0.5 - feet.z) > input.moveReach;
-  const canExploreThere = input.movement.canExplore && across > EXPLORE_BEYOND;
+  // EXPLORE heads across (any height): for a target more below or above than across from the
+  // player, walks nearer instead (seen live 2026-10-04: water 19 blocks below and 4 across; each
+  // walk down took it across, the EXPLORE back up toward the column, and so on until dusk).
+  const canExploreThere = input.movement.canExplore && across > EXPLORE_BEYOND && across > dy;
 
   let moves: Movement[] = [...found.movements];
   if (target.kind === 'near') {

@@ -177,6 +177,13 @@ function arrivedText(play: PlayState, c: TravelCommand, distance: number): strin
   }
 }
 
+/**
+ * A travel command whose steps end in the same feet cell this many times is going back and
+ * forth, getting nowhere: it fails (seen live 2026-10-04: `!goto water` to water 19 blocks below
+ * and 4 across swung between an EXPLORE up toward its column and a walk down, until dusk).
+ */
+export const MAX_VISITS = 3;
+
 /** Following a player already near: a moment's wait (System 1 still decides first). */
 const waitStep = (distance: number): TravelStep & { kind: 'step' } => ({
   kind: 'step',
@@ -244,6 +251,8 @@ export async function travelRound(
   let hungry: FoodStatus | null = null;
   let preempted: string | null = null;
   let distance = first.distance;
+  /** The steps went back and forth (MAX_VISITS): the command fails at once. */
+  let backAndForth = false;
   /** The last step's failure, in the client's words (the reply says why, not just "failed"). */
   let stepFailure: string | null = null;
   const session = play.sessions + 1;
@@ -268,7 +277,25 @@ export async function travelRound(
       const fed = after === undefined || after === null ? null : (deps.food?.of(after) ?? null);
       if (fed !== null && starving(fed)) hungry = fed;
       // The next step, from what the bot knows now: the player may have moved.
-      const next = plan();
+      let next = plan();
+      // Back and forth: a cell a step of this command ended in again and again (a follow or a
+      // come waits by its player; a reflex such as a retreat is no step of its own, and a step a
+      // mob stopped is told and tried again: mobInTheWay).
+      const at = after?.player.position.known === true ? after.player.position.value : null;
+      const stepped =
+        r.decision?.decision === 'EXECUTE_KNOWN_SAFE_STEP' && stepFailureOf(r) === null;
+      if (next.kind === 'step' && stepped && at !== null && !follow && command.verb !== 'come') {
+        const key = `${Math.floor(at.x)}, ${Math.floor(at.y + 1e-6)}, ${Math.floor(at.z)}`;
+        const times = (run.visits.get(key) ?? 0) + 1;
+        run.visits.set(key, times);
+        if (times >= MAX_VISITS) {
+          backAndForth = true;
+          next = {
+            kind: 'refused',
+            reason: `I keep coming back to (${key}): no way gets me nearer from here`,
+          };
+        }
+      }
       if (next.kind === 'step' || (next.kind === 'arrived' && follow)) {
         distance = next.distance;
         armStep(deps.repos, taskId, goal, next.kind === 'step' ? next : waitStep(next.distance));
@@ -303,7 +330,7 @@ export async function travelRound(
   // and the bot stood idle by the mob).
   const mob = mobPause(result.stopKind, play.lastDecision);
   if (mob !== null) return waitOutMob(play, taskId, mob);
-  if (end?.kind === 'refused') return travelFailed(play, cmd, end.reason);
+  if (end?.kind === 'refused') return travelFailed(play, cmd, end.reason, backAndForth);
   if (dark !== null) {
     sayOnce(
       play,

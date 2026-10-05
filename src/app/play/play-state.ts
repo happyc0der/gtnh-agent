@@ -116,6 +116,8 @@ export interface CommandRun {
   interrupted: boolean;
   /** Walks a hostile stopped in a row (mobInTheWay): not failures of the way. */
   mobStops: number;
+  /** Travel: how often its steps ended in each feet cell (`x,y,z`): going back and forth. */
+  visits: Map<string, number>;
   /** Mine a GregTech ore none of which is in view: the strip mine (strip-mine.ts). */
   strip: StripState | null;
   /** Its ores in view a goal session got none from (`x,y,z`): the strip mine goes on past them. */

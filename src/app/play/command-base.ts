@@ -263,6 +263,7 @@ export function runOf(play: PlayState, id: number): CommandRun {
       worked: false,
       interrupted: false,
       mobStops: 0,
+      visits: new Map(),
     };
     play.commandRuns.set(id, run);
   }
