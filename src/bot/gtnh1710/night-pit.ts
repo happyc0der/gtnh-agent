@@ -16,7 +16,7 @@ import {
   type DigArea,
 } from './digging.ts';
 import { passProblem } from './passable.ts';
-import { goalOut } from './pathing/goals.ts';
+import { goalBlock, goalOut } from './pathing/goals.ts';
 import { planPath, type PathOptions } from './pathing/search.ts';
 import { checkPlace } from './placing.ts';
 import { planTerrainWalk, reachableFeet, standProblem, TERRAIN_SURFACES } from './terrain.ts';
@@ -742,10 +742,12 @@ export const CLIMB_OUT_DISTANCE = 3;
  * block lower: seen live), as
  * Baritone climbs out of a hole: through the roof, a pillar up, a step out. A path the search
  * found to the goal but had to cut (a later movement no longer holds once earlier ones changed
- * blocks) goes on from where the cut leaves the player, on the world as it leaves it, as the
- * walk itself does (seen live 2026-10-04: a pit 5 blocks deep, refused as "cut after 3
- * movement(s)"). One MOVE_TO to where the climb ends; the walk plans its own path there with
- * the same rules, and checks every break and placement again just before it.
+ * blocks) goes on from where the cut leaves the player, on the world as it leaves it (seen live
+ * 2026-10-04: a pit 5 blocks deep, refused as "cut after 3 movement(s)"). One MOVE_TO for each
+ * stretch: to where each cut stops, then to where the climb ends. A MOVE_TO takes no cut path,
+ * so each is checked with the search its walk runs (to that block, from where the stretch
+ * before ends); the walk plans its own path with the same rules, and checks every break and
+ * placement again just before it.
  */
 export function planClimbOut(
   world: WalkWorld,
@@ -756,48 +758,46 @@ export function planClimbOut(
 ): ExitPlan {
   const goal = goalOut(site.x, site.z, site.groundY, CLIMB_OUT_DISTANCE);
   const w = new PlannedWorld(world);
+  const steps: ShelterStep[] = [];
+  const fail = (reason: string): ExitPlan => ({
+    ok: false,
+    reason: `no climb out of the pit: ${reason}`,
+  });
   let from = feet;
-  let breaks = 0;
-  let places = 0;
-  let end: BlockPos | null = null;
-  for (let search = 0; search < CLIMB_MAX_SEARCHES && end === null; search++) {
+  let digs = 0;
+  let placed = 0;
+  for (let search = 0; search < CLIMB_MAX_SEARCHES; search++) {
     const t = options.throwaway;
-    const found = planPath(w, fence, from, goal, {
+    const limited: PathOptions = {
       ...options,
-      ...(t === undefined ? {} : { throwaway: { ...t, count: t.count - places } }),
+      ...(t === undefined ? {} : { throwaway: { ...t, count: t.count - placed } }),
       maxNodes: CLIMB_MAX_NODES,
       maxTimeMs: CLIMB_MAX_MS,
-    });
+    };
+    const found = planPath(w, fence, from, goal, limited);
     const cut = found.status === 'partial' && found.stop === 'goal' && found.movements.length > 0;
-    if ((found.status !== 'reached' && !cut) || found.end === null) {
-      return { ok: false, reason: `no climb out of the pit: ${found.reason}` };
-    }
-    for (const m of found.movements) {
+    if ((found.status !== 'reached' && !cut) || found.end === null) return fail(found.reason);
+    const end = found.end;
+    // The MOVE_TO that runs this stretch plans its own walk to `end` and takes no cut path:
+    // the same search to that block, on the world as the stretches before leave it, must reach.
+    const walk = planPath(w, fence, from, goalBlock(end.x, end.y, end.z), limited);
+    if (walk.status !== 'reached') return fail(`the walk to ${fmt(end)}: ${walk.reason}`);
+    let breaks = 0;
+    let places = 0;
+    for (const m of walk.movements) {
       for (const b of m.breaks) w.dig(b.cell);
       if (m.place !== null) w.place(m.place.cell, m.place.block);
       breaks += m.breaks.length;
       places += m.place === null ? 0 : 1;
     }
-    if (cut) from = centreOf(found.end.x, found.end.y, found.end.z);
-    else end = found.end;
+    digs += breaks;
+    placed += places;
+    steps.push({
+      spec: { type: 'MOVE_TO', args: { target: centreOf(end.x, end.y, end.z), tolerance: 0.5 } },
+      text: `climb ${cut ? 'up' : 'out'} to ${fmt(end)} (breaking ${breaks} block(s), placing ${places})`,
+    });
+    if (!cut) return { ok: true, digs, steps };
+    from = centreOf(end.x, end.y, end.z);
   }
-  if (end === null) {
-    return {
-      ok: false,
-      reason: `no climb out of the pit: the path was still cut after ${CLIMB_MAX_SEARCHES} searches`,
-    };
-  }
-  return {
-    ok: true,
-    digs: breaks,
-    steps: [
-      {
-        spec: {
-          type: 'MOVE_TO',
-          args: { target: centreOf(end.x, end.y, end.z), tolerance: 0.5 },
-        },
-        text: `climb out to ${fmt(end)} (breaking ${breaks} block(s), placing ${places})`,
-      },
-    ],
-  };
+  return fail(`the path was still cut after ${CLIMB_MAX_SEARCHES} searches`);
 }

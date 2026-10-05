@@ -14,7 +14,8 @@ import {
   type PitOptions,
   type PitSite,
 } from '../../../src/bot/gtnh1710/night-pit.ts';
-import type { PathOptions } from '../../../src/bot/gtnh1710/pathing/search.ts';
+import { goalBlock } from '../../../src/bot/gtnh1710/pathing/goals.ts';
+import { planPath, type PathOptions } from '../../../src/bot/gtnh1710/pathing/search.ts';
 import type { Vec3, WalkWorld } from '../../../src/bot/gtnh1710/walking.ts';
 import type { ShelterStep } from '../../../src/domain/night-shelter.ts';
 import { savedWorld } from './fixtures/saved-world.ts';
@@ -666,9 +667,32 @@ describe('the way out in the morning', () => {
     };
     const r = planClimbOut(world, fence, feet, site as PitSite, options);
     if (!r.ok) throw new Error(r.reason);
-    const target = specs(r.steps)[0];
-    expect(target?.type).toBe('MOVE_TO');
-    const to = target?.type === 'MOVE_TO' ? target.args.target : null;
+    // The first search is cut: a MOVE_TO for each stretch. Each is one the walk can run: its own
+    // search (to that block, with a walk's limits and break cap, from where the stretch before
+    // ends, on the world as it leaves it) reaches without a cut. A single MOVE_TO to the end
+    // would have been refused: its search is cut the same way.
+    expect(r.steps.length).toBeGreaterThan(1);
+    const w = new PlannedWorld(world);
+    let from: Vec3 = feet;
+    for (const step of r.steps) {
+      if (step.spec.type !== 'MOVE_TO') throw new Error(`not a walk: ${step.text}`);
+      const t = step.spec.args.target;
+      const walk = planPath(
+        w,
+        fence,
+        from,
+        goalBlock(Math.floor(t.x), Math.floor(t.y), Math.floor(t.z)),
+        { ...options, maxBreaks: 24, maxNodes: 60_000, maxTimeMs: 5_000 },
+      );
+      expect(walk.status, step.text).toBe('reached');
+      for (const m of walk.movements) {
+        for (const b of m.breaks) w.dig(b.cell);
+        if (m.place !== null) w.place(m.place.cell, m.place.block);
+      }
+      from = t;
+    }
+    const last = r.steps.at(-1)?.spec;
+    const to = last?.type === 'MOVE_TO' ? last.args.target : null;
     // On the ground, clear of the hole: the climb that ended in the next column, in the hole an
     // earlier pit had left, sent the day's retreats back into it.
     expect(to).not.toBeNull();
