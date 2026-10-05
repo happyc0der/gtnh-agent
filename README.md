@@ -745,7 +745,8 @@ on the test server.
   places the roof in the y-1 cell, the ground layer it dug through, against the natural ground
   beside it: dirt or a log, which it can dig again (the digs themselves drop dirt).
 - **In the morning** it digs the roof and a staircase out (the upper block of each step first;
-  the terrain walker climbs one block at a time), then walks onto open ground and plays on.
+  the terrain walker climbs one block at a time), then walks onto open ground at the ground
+  layer or above (never onto a step a stopped way out left below it) and plays on.
 - **Code plans both** with the live client's own rules (`src/bot/gtnh1710/night-pit.ts`) and
   runs them as known safe steps (`src/app/loop/known-steps.ts`): each step is still validated,
   executed and verified by the executor; the planner is not asked. Code picks the player's

@@ -305,8 +305,11 @@ it and runs it, step by step, as known safe steps (see
 
 Enclosed, the agent waits for sunrise. In the morning, walled in, code plans the way out with
 the same rules (`planShelterExit`): from the pit, the roof and a staircase (two digs for each
-step up, the upper block first), then a walk onto open ground; from the box, one wall (head
-level first) and a walk out. Play runs it as known steps before the day's goal, and the goal's
+step up, the upper block first), then a walk onto open ground at the pit's ground layer or
+above (open cells below it, a cave or the staircase of a way out that stopped halfway, are no way
+out: seen live 2026-10-04, a restart stopped one after its first step and the next morning's
+plan walked out onto that step, two blocks under the ground, where no retreat could leave); from
+the box, one wall (head level first) and a walk out. Play runs it as known steps before the day's goal, and the goal's
 journal says the walls are open again. Walled in with no way out, play stops and says why,
 unless an owner's command is running or queued: that goes first, since it may be the way out
 (`!surface` and `!home` pillar and dig; seen live 2026-10-04 at the bottom of an 8-deep shaft the
