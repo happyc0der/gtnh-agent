@@ -884,6 +884,56 @@ describe('autonomous play', () => {
     );
   });
 
+  it('in the morning, a mob pause while digging out waits offline (UNDER_ATTACK)', async () => {
+    // Hurt with a mob near, half dug out: offline at once, as any session's mob pause is.
+    const repos = open();
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    const base = deps(repos, world);
+    const exit: ShelterStep[] = [
+      {
+        spec: { type: 'DIG_BLOCK', args: { position: { x: 0, y: 63, z: 0 } } },
+        text: 'dig the minecraft:dirt at (0, 63, 0) (the roof)',
+      },
+    ];
+    const result = await runPlay(
+      {
+        ...base,
+        time: () => Promise.resolve(worldTime(1_000, true)), // morning
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit',
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled: true,
+            exit,
+          }),
+        session: (_limits, hooks) => {
+          const pause = {
+            summary: 'PAUSE_AND_ASK_USER -> paused',
+            decision: {
+              decision: 'PAUSE_AND_ASK_USER',
+              reasonCodes: ['HOSTILES_NEARBY', 'UNDER_ATTACK'],
+            },
+          };
+          hooks.onCycle(pause as unknown as CycleResult, 1);
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: pause.summary }],
+            stopReason: 'paused',
+            stopKind: 'needs-attention',
+            taskId: repos.memory.getValue(CURRENT_TASK_KEY),
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 2 },
+      noStop,
+    );
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY, UNDER_ATTACK');
+  });
+
   it('in the morning waits sealed in its shelter while hostiles are near, then digs out', async () => {
     const repos = open();
     const world: World = { inventory: {}, sessions: [], calls: 0 };

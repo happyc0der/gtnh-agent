@@ -10,7 +10,14 @@ import { setKnownSteps } from '../loop/known-steps.ts';
 import type { CycleResult } from '../loop/agent-loop.ts';
 import type { SessionResult } from '../loop/live-session.ts';
 import { planOf } from './narration.ts';
-import { commandWaiting, done, type PlayState, type RoundEnd } from './play-state.ts';
+import {
+  commandWaiting,
+  done,
+  mobPause,
+  waitOutMob,
+  type PlayState,
+  type RoundEnd,
+} from './play-state.ts';
 import type { PlayDeps, PlayLimits } from './play.ts';
 
 /**
@@ -313,6 +320,10 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         play.exitTries -= 1;
         return 'next-round';
       }
+      // Hurt with a mob near, or a mob near with nowhere to retreat to, half dug out: offline,
+      // as any session's mob pause is (the way out is planned again from where it stopped).
+      const mob = mobPause(result.stopKind, play.lastDecision);
+      if (mob !== null) return waitOutMob(play, LEAVE_SHELTER_TASK_ID, mob);
       if (result.stopKind === 'stop-requested' || result.stopKind === 'needs-attention') {
         return done(play, result.stopReason);
       }
