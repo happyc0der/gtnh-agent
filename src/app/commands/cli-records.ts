@@ -96,13 +96,17 @@ export function commandCommand(cli: Cli): number {
     return 1;
   }
   const parsed = parseOwnerCommand(text, { ore: gtOreByName });
-  if (!parsed.ok && (parsed.kind === 'usage' || isStructured(text))) {
+  // A `!` command that does not parse is refused with its usage; plain words go to the
+  // translator ("come back home" starts like !come but is natural language), as in play.
+  if (!parsed.ok && isStructured(text)) {
     process.stderr.write(`${parsed.kind === 'usage' ? parsed.usage : NOT_UNDERSTOOD}\n`);
     return 1;
   }
   if (!parsed.ok && config.commands.translator === 'none') {
     process.stderr.write(
-      `${NOT_UNDERSTOOD} (natural language needs a translator: AGENT_COMMANDS=ollama)\n`,
+      parsed.kind === 'usage'
+        ? `${parsed.usage}\n`
+        : `${NOT_UNDERSTOOD} (natural language needs a translator: AGENT_COMMANDS=ollama)\n`,
     );
     return 1;
   }

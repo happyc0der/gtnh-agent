@@ -91,7 +91,16 @@ const GOAL_FILLER: ReadonlySet<string> = new Set(['me', 'a', 'an', 'some', 'the'
 /** Words that, before an item with no count, mean one: "get a furnace". */
 const ONE: ReadonlySet<string> = new Set(['a', 'an', 'one']);
 /** Words before a block's name that mean nothing to it: "the chest", "the nearest tree". */
-const BLOCK_FILLER: ReadonlySet<string> = new Set(['the', 'a', 'an', 'nearest', 'closest', 'some']);
+const BLOCK_FILLER: ReadonlySet<string> = new Set([
+  'the',
+  'a',
+  'an',
+  'nearest',
+  'closest',
+  'some',
+  // "find me some coal": the asker, not the block's name.
+  'me',
+]);
 
 /**
  * A waypoint's name: lowercase letters, digits, - and _, at most 32, starting with a letter or

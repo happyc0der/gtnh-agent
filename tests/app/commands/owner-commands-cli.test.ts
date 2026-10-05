@@ -98,6 +98,13 @@ describe('cli command / commands', () => {
     expect(nl.printed[0]).toMatchObject({
       command: 'natural language: the model translates it when play takes it',
     });
+    // Plain words that start like a command but do not fit it: the model's too (seen in soak
+    // 4: "come back home" was refused as "!come takes no arguments"); without a model, the
+    // usage of the command they start like.
+    const home = cli(['command', 'come', 'back', 'home'], { commands: { translator: 'ollama' } });
+    expect(commandCommand(home.cli)).toBe(0);
+    expect(commandCommand(cli(['command', 'come', 'back', 'home']).cli)).toBe(1);
+    expect(err.join('')).toMatch(/usage: !come \(it takes no arguments\)/);
   });
 });
 

@@ -171,6 +171,11 @@ describe('GregTech ores by name (the caller resolves them: src/goals/ore-names.t
       ok: true,
       command: { verb: 'find', block: 'gregtech:gt.blockores' },
     });
+    // Seen in soak 4: "find me some coal" looked for a block named minecraft:me_some_coal.
+    expect(parseOwnerCommand('find me some coal', names)).toMatchObject({
+      ok: true,
+      command: { verb: 'find', block: 'gregtech:gt.blockores' },
+    });
     expect(parseOwnerCommand('!get 16 coal', names)).toMatchObject({
       ok: true,
       command: { verb: 'get', item: 'minecraft:coal' },

@@ -865,6 +865,21 @@ describe("owners' commands in play", () => {
     expect(sim.sleeps).toBe(0);
   });
 
+  it('plain words that start like a command but do not fit it go to the translator', async () => {
+    // Seen in soak 4: "come back home" was refused as "!come takes no arguments".
+    const repos = open();
+    const asked: string[] = [];
+    const translate = (text: string): Promise<CommandTranslation> => {
+      asked.push(text);
+      return Promise.resolve({ ok: true, command: { verb: 'status' }, latencyMs: 5 });
+    };
+    const sim = newSim({ heard: [whisper('come back home'), whisper('!stop that')] });
+    await runPlay(deps(repos, sim, { translate }), LIMITS, noStop);
+    expect(asked).toEqual(['come back home']);
+    expect(said(sim)[0]).toBe('usage: !stop (it takes no arguments)');
+    expect(repos.commands.get(1)?.command).toEqual({ verb: 'status' });
+  });
+
   it('natural language goes to the translator; the structured form never does', async () => {
     const repos = open();
     const asked: string[] = [];

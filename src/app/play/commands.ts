@@ -107,10 +107,11 @@ function intake(play: PlayState): void {
       message: `heard (${heard.via}): ${heard.text}`,
     });
     if (parsed.ok) continue;
-    if (parsed.kind === 'usage') finish(play, record, 'failed', parsed.usage);
-    else if (isStructured(heard.text) || commands.translate === undefined) {
-      finish(play, record, 'failed', NOT_UNDERSTOOD);
-    }
+    // Plain words that start like a command but do not fit it ("come back home", "stop that")
+    // are natural language: the translator takes them. A `!` command gets its usage at once.
+    const plain = !isStructured(heard.text) && commands.translate !== undefined;
+    if (parsed.kind === 'usage' && !plain) finish(play, record, 'failed', parsed.usage);
+    else if (!plain) finish(play, record, 'failed', NOT_UNDERSTOOD);
   }
 }
 
