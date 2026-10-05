@@ -515,12 +515,16 @@ function deleteLocation(play: PlayState, cmd: OwnerCommandRecord, name: string):
  */
 export function chatItemName(item: string): string {
   const path = item.slice(item.indexOf(':') + 1).replace(/@\d+$/, '');
-  return path
-    .replace(/^(item|tile)\./, '')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/[_.]+/g, ' ')
-    .trim()
-    .toLowerCase();
+  return (
+    path
+      .replace(/^(item|tile)\./, '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/[_.]+/g, ' ')
+      .trim()
+      .toLowerCase()
+      // HarvestCraft's produce: harvestcraft:cucumberItem is a cucumber.
+      .replace(/(.) item$/, '$1')
+  );
 }
 
 /** `text` cut to at most `max` characters at a word, with "..." when cut. */

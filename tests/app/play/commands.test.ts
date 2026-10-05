@@ -1839,6 +1839,8 @@ describe('item names in chat', () => {
     expect(chatItemName('minecraft:log@2')).toBe('log');
     expect(chatItemName('dreamcraft:item.CoinForestry')).toBe('coin forestry');
     expect(chatItemName('minecraft:wooden_pickaxe')).toBe('wooden pickaxe');
+    expect(chatItemName('harvestcraft:cucumberItem')).toBe('cucumber');
+    expect(chatItemName('minecraft:item_frame')).toBe('item frame');
   });
 });
 
