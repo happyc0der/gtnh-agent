@@ -5,7 +5,6 @@ import { outbound } from '../packets.ts';
 import { nameItemStack } from '../registry.ts';
 import type { WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
-import { delay } from './shared.ts';
 
 /**
  * Blocks a right-click with an empty hand does nothing to (no window, no state change, no
@@ -55,7 +54,26 @@ export class PlayerActions {
     const clock = this.#opts.clock;
     const start = clock.now().getTime();
     const observedStart = this.#world.lastPacketAt?.getTime() ?? start;
-    await delay(ms);
+    // Hurt while it waits (not by hunger): a mob came up while it rests. The wait ends at once,
+    // so System 1 decides again (under attack, it goes offline): an independent review,
+    // 2026-10-04, found a 30-s REST would stand still while bitten.
+    const healthAtStart = this.#world.health;
+    const hurt = (): boolean => {
+      const health = this.#world.health;
+      return (
+        !this.#core.starving() &&
+        healthAtStart !== null &&
+        health !== null &&
+        health < healthAtStart
+      );
+    };
+    await this.#core.waitFor(hurt, ms);
+    if (hurt()) {
+      return failed(
+        `the wait stopped after ${clock.now().getTime() - start} ms: health dropped from ${healthAtStart} to ${this.#world.health}`,
+        'FAILED',
+      );
+    }
     await this.#core.waitFor(
       () =>
         clock.now().getTime() - start >= ms &&

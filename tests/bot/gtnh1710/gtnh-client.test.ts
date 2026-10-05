@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Gtnh1710Client } from '../../../src/bot/gtnh1710/gtnh-client.ts';
 import { PLAYER_EYE_HEIGHT } from '../../../src/bot/gtnh1710/packets.ts';
 import { runSingleCycle } from '../../../src/app/loop/agent-loop.ts';
@@ -152,6 +152,30 @@ describe('Gtnh1710Client against a scripted GTNH server', () => {
     });
     const after = await client.observe();
     expect(Date.parse(after.timestamp) - Date.parse(before.timestamp)).toBeGreaterThanOrEqual(300);
+  });
+
+  it('WAIT (a REST) ends at once when the player is hurt, so System 1 decides again', async () => {
+    // An independent review, 2026-10-04: a 30-s REST would stand still while a mob bit.
+    const { server, client } = await start();
+    await client.connect();
+    await vi.waitFor(() => expect(client.world.health).toBe(20));
+    const action = createAction(
+      {
+        spec: { type: 'WAIT', args: { durationMs: 10_000 } },
+        reason: 'test',
+        origin: 'test',
+        taskId: null,
+      },
+      { newId: sequentialIds(), now: () => new Date() },
+    );
+    const started = Date.now();
+    const waiting = client.perform(mintValidatedAction(action, null, new Date()));
+    await new Promise((r) => setTimeout(r, 200));
+    server.combatSim.hurtPlayer(3);
+    const r = await waiting;
+    expect(r).toMatchObject({ ok: false, code: 'FAILED' });
+    expect(r.message).toMatch(/the wait stopped after \d+ ms: health dropped from 20 to 17/);
+    expect(Date.now() - started).toBeLessThan(3_000);
   });
 
   it('refuses every world-changing action without sending anything new', async () => {
