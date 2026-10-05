@@ -56,6 +56,8 @@ export interface PlayState {
   shelteredTonight: boolean;
   /** Digging out of last night's shelter (night.ts morningRound): commands wait for it. */
   leavingShelter: boolean;
+  /** Making tonight's shelter (night.ts nightRound): commands wait for the morning. */
+  makingShelter: boolean;
   /** Morning looks at last night's shelter in a row that could not tell (night.ts). */
   morningUnknown: number;
   /**
@@ -186,6 +188,7 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     exitGaveUpAt: null,
     morningUnknown: 0,
     leavingShelter: false,
+    makingShelter: false,
     nights: 0,
     inNight: false,
     shelteredTonight: false,

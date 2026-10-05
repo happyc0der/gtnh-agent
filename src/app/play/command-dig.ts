@@ -186,7 +186,8 @@ export async function tunnelRound(
   const gained = run.tunnelDone === null || plan.done > run.tunnelDone;
   // A session a hostile stopped (mobInTheWay), or a new command, dusk or hunger cut short
   // (digSession), counts neither way.
-  if (run.mobStops === 0 && !run.interrupted) run.stuck = gained ? 0 : run.stuck + 1;
+  if (gained) run.stuck = 0;
+  else if (run.mobStops === 0 && !run.interrupted) run.stuck += 1;
   run.interrupted = false;
   // Cells gained end the failures in a row (an independent review, 2026-10-04: three sessions
   // that each dug before a step failed would have failed a tunnel making progress).

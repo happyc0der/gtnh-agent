@@ -95,12 +95,10 @@ export async function goalCommandRound(
   // ended with a reflex (a retreat from a mob, a fight, a meal, a rest) was interrupted, not
   // stuck: it counts neither way (seen live the same day: three retreats from mobs failed a
   // pickaxe command for "no progress").
-  if (!run.interrupted) {
-    run.stuck =
-      run.missing !== null && left >= run.missing && !play.explored && !run.worked
-        ? run.stuck + 1
-        : 0;
-  }
+  // Progress always counts: a session cut short may have gathered first (a later review, 2026-10-05).
+  const progressed = run.missing === null || left < run.missing || play.explored || run.worked;
+  if (progressed) run.stuck = 0;
+  else if (!run.interrupted) run.stuck += 1;
   run.worked = false;
   run.interrupted = false;
   run.missing = left;
@@ -141,8 +139,9 @@ export async function goalCommandRound(
   }
   if (mobbed === 'retry') run.interrupted = true;
   else if (!run.interrupted) run.mobStops = 0;
-  // Cut short by a new command (any whisper), dusk or a food bar nearly empty: it tried
-  // nothing, and counts neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
+  // Cut short by a new command (any whisper), dusk or a food bar nearly empty: unless it got
+  // something first, it counts neither way (an independent review, 2026-10-05: three quick
+  // !status whispers failed a !get for "no progress in 3 sessions").
   if (ended.preempted !== null || ended.dark !== null || ended.hungry !== null) {
     run.interrupted = true;
   }

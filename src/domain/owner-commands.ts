@@ -313,11 +313,14 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   waypoint: 'usage: !waypoint <name>, !waypoint delete <name> or !waypoints',
 };
 
-/** All of it fits in the three lines a whisper gets (an independent review, 2026-10-05). */
+/**
+ * All of it fits in the three lines a whisper gets, for an owner's name of up to 16 characters
+ * (independent reviews, 2026-10-05).
+ */
 export const HELP_TEXT =
-  '!stop !pause !resume !status !come !follow [player] !goto x [y] z|waypoint|block ' +
+  '!stop !pause !resume !status !come !follow !goto <x [y] z, waypoint or block> ' +
   '!find <block> !explore [dir] [n] !tunnel [dir] [n] [down] !surface !get [n] <item> ' +
-  '!mine [n] <block> !sethome !home !waypoint [delete] <name> !waypoints !quests on|off';
+  '!mine [n] <block> !home !sethome !waypoint(s) !quests on|off';
 
 /**
  * Names the parser cannot know by itself (the domain holds no game data): `ore` resolves a
@@ -432,7 +435,7 @@ export function parseOwnerCommand(text: string, names: CommandNames = {}): Comma
       return none ? ok({ verb: 'sethome' }) : usage(verb);
     case 'get':
     case 'mine':
-      return goalCommand(verb, args, names);
+      return goalCommand(verb, args, names, isStructured(text));
     case 'quests':
       return args.length === 1 && (lower(0) === 'on' || lower(0) === 'off')
         ? ok({ verb: 'quests', on: lower(0) === 'on' })
@@ -578,6 +581,7 @@ function goalCommand(
   verb: 'get' | 'mine',
   args: readonly string[],
   names: CommandNames,
+  structured: boolean,
 ): CommandParse {
   // "get 20 logs", "get logs 20", "get me some logs" (DEFAULT_GOAL_COUNT); an item name may
   // hold spaces ("Natura:N Crops").
@@ -608,8 +612,16 @@ function goalCommand(
   // Words joined by `_` too, as a block's name ("a wooden pickaxe", "2 crafting table": an
   // independent review, 2026-10-05, found them refused with the usage line); never an ore's,
   // which only the caller's names know.
+  // Only in the `!` form: plain words that do not parse go to the translator, which reads
+  // "get a stack of logs" better than "minecraft:stack_of_logs" (a later review, 2026-10-05).
+  // Two plain words, as item names in words are ("wooden pickaxe", "crafting table"): never
+  // "a bunch of planks" (minecraft:bunch_of_planks).
   const joined =
-    /\sores?$/i.test(text) || words.some((w) => AMOUNT_WORDS.has(w.toLowerCase()))
+    !structured ||
+    words.length !== 2 ||
+    !words.every((w) => /^[a-z]+$/i.test(w)) ||
+    /\sores?$/i.test(text) ||
+    words.some((w) => AMOUNT_WORDS.has(w.toLowerCase()))
       ? null
       : resolveItemName(words.join('_'));
   const name = ore === null ? (resolveItemName(text) ?? joined) : ore.item;

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import type { MinecraftConfig } from '../../config/env.ts';
 import type { Position } from '../../domain/common.ts';
 import type { GameState } from '../../domain/game-state.ts';
@@ -205,7 +207,8 @@ export class Gtnh1710Client implements MinecraftClient {
     // Stopped by its owner or operator (a stop, cli halt) rather than failed: it says so, and the
     // failure counts leave it out (an independent review, 2026-10-05: two stops while it dug its
     // night pit had the dig refused as a repeated failure, and the night spent offline).
-    if (!result.ok && this.#core.haltReason !== null) {
+    const stopFile = this.#core.opts.config.movement.stopFile;
+    if (!result.ok && (this.#core.haltReason !== null || existsSync(resolvePath(stopFile)))) {
       return { ...result, data: { ...result.data, interrupted: true } };
     }
     return result;

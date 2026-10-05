@@ -421,6 +421,9 @@ async function leave(play: PlayState, round: PlayResult): Promise<PlayResult> {
   if (play.deps.commands?.flush !== undefined) {
     await play.deps.commands.flush();
     intake(play);
+    // The operator stopped play: what came meanwhile ends with it too, never to run unannounced
+    // at the next play (a later review, 2026-10-05).
+    if (operator !== null) cancelActions(play, 'Stopped: my operator stopped play', { tell: true });
   }
   return result;
 }

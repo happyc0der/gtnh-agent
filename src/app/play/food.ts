@@ -242,9 +242,8 @@ export async function foodRound(play: PlayState): Promise<RoundEnd> {
     play.lastStop = result.stopReason;
     const sawMore = seenBefore !== null && (deps.scouting?.chunksSeen() ?? 0) > seenBefore;
     // A session a new command or dusk cut short counts neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
-    if (preempted === null && foodDark === null) {
-      play.foodStuck = progressed || sawMore ? 0 : play.foodStuck + 1;
-    }
+    if (progressed || sawMore) play.foodStuck = 0;
+    else if (preempted === null && foodDark === null) play.foodStuck += 1;
     emit({
       kind: 'session-end',
       session,

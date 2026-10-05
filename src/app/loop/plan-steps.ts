@@ -501,6 +501,9 @@ export function updatePlanProgress(
       return !isStaleRejection(ref, outcome);
     case 'failed':
     case 'verification_failed': {
+      // Stopped by its owner or operator (data.interrupted): no failure of the step, which runs
+      // again (a later review, 2026-10-05: a stop during quest play failed the plan's step).
+      if (outcome.execution?.data?.['interrupted'] === true) return false;
       const failures = repos.plans.recordStepFailure(ref.planId);
       if (failures <= ref.failureHandling.maxRetriesPerStep) return false; // retry next cycle
       gatherEnds(`its ${outcome.actionType} did not succeed ${failures} time(s) in a row`);

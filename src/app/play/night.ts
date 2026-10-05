@@ -285,8 +285,13 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
       });
       // A step an owner's stop cut short spends no try, and the stop is answered now, not once
       // the shelter is done (an independent review, 2026-10-05).
-      if (interrupted) play.shelterTries -= 1;
-      await play.whileSheltered();
+      if (interrupted) {
+        play.shelterTries -= 1;
+        play.makingShelter = true;
+        await play.whileSheltered().finally(() => {
+          play.makingShelter = false;
+        });
+      }
       if (result.stopKind === 'stop-requested') return done(play, result.stopReason);
       if (result.stopKind === 'needs-attention') {
         // A shelter step that stopped for a person (a refusal, a pause) means no shelter
@@ -413,11 +418,13 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
       });
       // A step an owner's stop cut short spends no try, and the stop is answered now; commands
       // that move it wait until it is out (an independent review, 2026-10-05).
-      if (interrupted) play.exitTries -= 1;
-      play.leavingShelter = true;
-      await play.whileSheltered().finally(() => {
-        play.leavingShelter = false;
-      });
+      if (interrupted) {
+        play.exitTries -= 1;
+        play.leavingShelter = true;
+        await play.whileSheltered().finally(() => {
+          play.leavingShelter = false;
+        });
+      }
       // A hostile came near while the player is still sealed in (System 1's SHELTERED pause), or
       // came back in range while System 1 decided and the safety rules refused the step (seen
       // live 2026-10-05: a Fire Creeper at the edge of the threat radius; the refused dig spent

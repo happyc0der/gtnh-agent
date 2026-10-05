@@ -19,6 +19,8 @@ import {
   QUESTS_OFF_KEY,
 } from '../../persistence/memory-repository.ts';
 import type { DecisionResult } from '../../domain/decisions.ts';
+import { FOOD_TASK_ID } from '../../domain/food.ts';
+import { LEAVE_SHELTER_TASK_ID, NIGHT_SHELTER_TASK_ID } from '../../domain/night-shelter.ts';
 import type { OwnerCommandRecord } from '../../persistence/owner-command-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import { checkWithinBoundary } from '../../safety/coordinate-boundaries.ts';
@@ -89,6 +91,15 @@ const IDLE_POLLS = 6;
 export const IDLE_RETRY_MS = 120_000;
 /** The task the idle bot stands by under, when System 1 must act (standby). */
 export const STANDBY_TASK_ID = 'owner-standby';
+/**
+ * Tasks of play's own rounds that run while it has nothing else to do (the night's shelter, the
+ * way out, a food trip): !status names them, not the idle reason (a later review, 2026-10-05).
+ */
+const BUSY_TASKS: ReadonlySet<string> = new Set([
+  NIGHT_SHELTER_TASK_ID,
+  LEAVE_SHELTER_TASK_ID,
+  FOOD_TASK_ID,
+]);
 
 // ---------------------------------------------------------------------------
 // Hearing commands
@@ -194,7 +205,8 @@ async function handleQueued(
         (c): c is OwnerCommandRecord =>
           c !== null && c.id !== cmd.id && c.command !== null && isActionCommand(c.command),
       )
-      .map((c) => describeFor(c, cmd.sender));
+      .map((c) => describeFor(c, cmd.sender))
+      .filter((d) => d !== describeCommand(command));
     sayOnce(play, cmd, nightKey(play), nightNote(play, command, old));
     return;
   }
@@ -215,6 +227,9 @@ const nightNote = (play: PlayState, c: OwnerCommand, instead: readonly string[] 
   const shelter = play.sheltered;
   const then = `then I ${describeCommand(c)}${instead.length === 0 ? '' : ` (instead of: ${instead.join('; ')})`}`;
   if (play.leavingShelter) return `I am digging out of my shelter first, ${then}`;
+  if (play.makingShelter) {
+    return `It is getting dark: I am making my shelter for the night, and in the morning ${then.replace(/^then /, '')}`;
+  }
   if (shelter !== null && 'mobs' in shelter) {
     return `Hostiles are near my shelter: I stay inside until they go, ${then}`;
   }
@@ -229,9 +244,11 @@ const nightKey = (play: PlayState): string =>
   `${
     play.leavingShelter
       ? 'leaving'
-      : play.sheltered !== null && 'mobs' in play.sheltered
-        ? 'mobs'
-        : 'night'
+      : play.makingShelter
+        ? 'making'
+        : play.sheltered !== null && 'mobs' in play.sheltered
+          ? 'mobs'
+          : 'night'
   }-${play.nights}`;
 
 /**
@@ -677,10 +694,12 @@ function statusText(play: PlayState): string {
         ? off
         : sheltered !== null
           ? sheltered
-          : play.idle !== null
-            ? `idle (${clip(play.idle.reason, 100)})`
-            : task !== null && task.status === 'active'
-              ? `working on: ${clip(task.goal, 80)}`
+          : task !== null &&
+              task.status === 'active' &&
+              (play.idle === null || BUSY_TASKS.has(task.id))
+            ? `working on: ${clip(task.goal, 80)}`
+            : play.idle !== null
+              ? `idle (${clip(play.idle.reason, 100)})`
               : 'idle';
   const items = Object.entries(view.inventory ?? {})
     .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1))
