@@ -391,8 +391,16 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
       }
       return 'next-round';
     }
-    // Out of it: tonight's shelter is done with.
-    if (status !== null && !status.walled) deps.repos.memory.setValue(NIGHT_SHELTER_KEY, null);
+    // Out of it: tonight's shelter is done with, and so is a way out that stopped short (seen
+    // live 2026-10-05: out, its task still read "working on: Morning: dig your way out" all day).
+    if (status !== null && !status.walled) {
+      deps.repos.memory.setValue(NIGHT_SHELTER_KEY, null);
+      const exit = deps.repos.tasks.get(LEAVE_SHELTER_TASK_ID);
+      if (exit != null && exit.status !== 'completed') {
+        setKnownSteps(deps.repos, LEAVE_SHELTER_TASK_ID, null);
+        deps.repos.tasks.setStatus(LEAVE_SHELTER_TASK_ID, 'completed');
+      }
+    }
   }
   play.exitTries = 0;
   play.exitGaveUpAt = null;

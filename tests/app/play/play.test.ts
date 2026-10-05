@@ -1324,6 +1324,54 @@ describe('autonomous play', () => {
     expect(exits).toBe(3);
   });
 
+  it('out of the shelter, a way out that stopped short is closed: no "working on" it all day', async () => {
+    // Seen live 2026-10-05: a dig of the way out was refused (a drop's walk had broken that
+    // block already), the bot was out all the same, and !status said "working on: Morning: dig
+    // your way out of the night shelter" while it idled.
+    const repos = open();
+    nightSpent(repos);
+    let walled = true;
+    let polls = 0;
+    await runPlay(
+      {
+        repos,
+        now: () => 0,
+        listen: true,
+        inventory: () => Promise.resolve({}),
+        time: () => Promise.resolve(worldTime(1_000, true)),
+        sleep: () => {
+          polls += 1;
+          return Promise.resolve();
+        },
+        shelter: () =>
+          Promise.resolve({
+            kind: 'pit' as const,
+            sheltered: false,
+            steps: [],
+            needs: {},
+            problem: null,
+            walled,
+            exit: walled ? EXIT : [],
+          }),
+        session: (): Promise<SessionResult> => {
+          walled = false; // out after all, the session stopped for a person
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'DIG_BLOCK -> rejected [NOT_DIGGABLE]' }],
+            stopReason: 'needs attention after: DIG_BLOCK -> rejected [NOT_DIGGABLE]',
+            stopKind: 'needs-attention',
+            taskId: repos.memory.getValue(CURRENT_TASK_KEY),
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      DEFAULT_PLAY_LIMITS,
+      { stopRequested: () => (polls >= 20 ? 'test over' : null) },
+    );
+    expect(repos.tasks.get('leave-shelter')?.status).toBe('completed');
+    expect(repos.memory.getValue(NIGHT_SHELTER_KEY)).toBeNull();
+  });
+
   it('a shaft a walk dug by day is no shelter to leave: no way out without a night in it', async () => {
     // An independent review, 2026-10-05: at the bottom of a !goto's shaft at noon, play ran
     // "leave the shelter", undoing the command.
