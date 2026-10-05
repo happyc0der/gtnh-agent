@@ -306,8 +306,12 @@ function stuckOn(play: PlayState, current: RoundGoal): PlayResult | null {
   const missingNow = total(current.missing);
   const { last } = play;
   if (last !== null && last.questId === current.id) {
-    // Seeing new ground is progress too: exploring for a block not seen yet gathers none.
-    last.stuck = missingNow < last.missing || play.explored ? 0 : last.stuck + 1;
+    // Seeing new ground is progress too: exploring for a block not seen yet gathers none. A
+    // session a new command, dusk or hunger cut short counts neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
+    if (last.cutShort !== true) {
+      last.stuck = missingNow < last.missing || play.explored ? 0 : last.stuck + 1;
+    }
+    last.cutShort = false;
     last.missing = missingNow;
     if (last.stuck >= play.limits.maxStuckSessions) {
       return done(
@@ -471,6 +475,9 @@ function afterGoalSession(
 ): PlayResult | 'next-round' {
   const { deps } = play;
   const { result, met, dark, hungry, preempted } = ended;
+  if ((dark !== null || hungry !== null || preempted !== null) && play.last !== null) {
+    play.last.cutShort = true;
+  }
   // Interruptions are checkpoints too: the planner reads them in the task's journal.
   if (dark !== null || !['limit', 'task-finished'].includes(result.stopKind)) {
     deps.repos.memory.appendJournal(

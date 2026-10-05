@@ -184,8 +184,10 @@ export async function tunnelRound(
     return fail(`${problem} (${dug})`);
   }
   const gained = run.tunnelDone === null || plan.done > run.tunnelDone;
-  // A session a hostile stopped (mobInTheWay) counts neither way.
-  if (run.mobStops === 0) run.stuck = gained ? 0 : run.stuck + 1;
+  // A session a hostile stopped (mobInTheWay), or a new command, dusk or hunger cut short
+  // (digSession), counts neither way.
+  if (run.mobStops === 0 && !run.interrupted) run.stuck = gained ? 0 : run.stuck + 1;
+  run.interrupted = false;
   // Cells gained end the failures in a row (an independent review, 2026-10-04: three sessions
   // that each dug before a step failed would have failed a tunnel making progress).
   if (gained) run.failures = 0;
@@ -309,11 +311,14 @@ async function digSession(
     },
   });
   play.lastStop = result.stopReason;
+  // Cut short by a new command (any whisper), dusk or a food bar nearly empty: it counts
+  // neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
+  if (preempted !== null || dark !== null || hungry !== null) run.interrupted = true;
   if (dark !== null) {
     sayOnce(
       play,
       cmd,
-      'dusk',
+      `dusk-${play.nights}`,
       `It is getting dark: I shelter for the night, then I ${describeCommand(command)}`,
     );
     return 'next-round';

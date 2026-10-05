@@ -388,15 +388,17 @@ export class ActionLogRepository implements FailureHistory {
    * 'user', e.g. a stopped test walk) do not count against the agent's own attempts, nor do
    * actions the client could not even try (NOT_IMPLEMENTED: seen live, EAT_FOOD before the
    * client could eat, which then refused every meal of a task id reused each night), nor walks
-   * a hostile stopped (NOT_THREAT), nor failures before a human last resumed the task
-   * (task-resume: TaskRepository.resetFailures).
+   * a hostile stopped (NOT_THREAT), nor actions their owner or operator stopped
+   * (NOT_INTERRUPTED), nor failures before a human last resumed the task (task-resume:
+   * TaskRepository.resetFailures).
    */
   countFailures(taskId: string | null, fingerprint: string): number {
     const row = this.#db
       .prepare(
         `SELECT COUNT(*) AS n FROM action_logs
           WHERE task_id IS ? AND fingerprint = ? AND status IN ('failed','verification_failed')
-            AND origin <> 'user' AND ${NOT_UNTRIED} AND ${NOT_THREAT} AND ${SINCE_RESET}`,
+            AND origin <> 'user' AND ${NOT_UNTRIED} AND ${NOT_THREAT} AND ${NOT_INTERRUPTED}
+            AND ${SINCE_RESET}`,
       )
       .get(taskId, fingerprint) as { n: number };
     return row.n;
@@ -410,7 +412,7 @@ export class ActionLogRepository implements FailureHistory {
       .prepare(
         `SELECT action_type AS actionType, fingerprint, COUNT(*) AS failures FROM action_logs
             WHERE task_id IS ? AND status IN ('failed','verification_failed') AND ${NOT_UNTRIED}
-              AND ${NOT_THREAT} AND ${SINCE_RESET}
+              AND ${NOT_THREAT} AND ${NOT_INTERRUPTED} AND ${SINCE_RESET}
             GROUP BY action_type, fingerprint ORDER BY failures DESC, fingerprint LIMIT ?`,
       )
       .all(taskId, limit) as Array<{ actionType: string; fingerprint: string; failures: number }>;
@@ -433,6 +435,14 @@ const NOT_UNTRIED =
  */
 const NOT_THREAT =
   "(execution_json IS NULL OR json_extract(execution_json, '$.data.threat') IS NOT 1)";
+
+/**
+ * SQL: not an action its owner or operator stopped (gtnh-client.ts perform: data.interrupted):
+ * the action was not at fault (an independent review, 2026-10-05: two stops while it dug its
+ * night pit had the dig refused as a repeated failure).
+ */
+const NOT_INTERRUPTED =
+  "(execution_json IS NULL OR json_extract(execution_json, '$.data.interrupted') IS NOT 1)";
 
 function toRecord(raw: unknown): ActionLogRecord {
   const r = ActionLogRowSchema.parse(raw);

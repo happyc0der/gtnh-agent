@@ -88,6 +88,17 @@ export const DEFAULT_GOAL_COUNT = 16;
 const DEFAULT_ONE = /_(pickaxe|axe|shovel|spade|hoe|sword|helmet|chestplate|leggings|boots)$/;
 /** Words before a get's item that mean nothing to it: "get me some logs". */
 const GOAL_FILLER: ReadonlySet<string> = new Set(['me', 'a', 'an', 'some', 'the']);
+/**
+ * Counts and amounts in words ("twenty logs", "a few planks"): an item named in words is never
+ * made of them ("minecraft:twenty_logs").
+ */
+const AMOUNT_WORDS: ReadonlySet<string> = new Set(
+  (
+    'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen ' +
+    'sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty hundred dozen few ' +
+    'couple several many more lots all'
+  ).split(' '),
+);
 /** Words that, before an item with no count, mean one: "get a furnace". */
 const ONE: ReadonlySet<string> = new Set(['a', 'an', 'one']);
 /** Words before a block's name that mean nothing to it: "the chest", "the nearest tree". */
@@ -302,10 +313,11 @@ export const USAGE: Readonly<Partial<Record<string, string>>> = {
   waypoint: 'usage: !waypoint <name>, !waypoint delete <name> or !waypoints',
 };
 
+/** All of it fits in the three lines a whisper gets (an independent review, 2026-10-05). */
 export const HELP_TEXT =
-  'Commands: !stop !pause !resume !status !come !follow [player] !goto <x> [y] <z>|<waypoint>|<block> ' +
-  '!find <block> !explore [dir] [n] !tunnel [dir] [n] [down] !surface ' +
-  '!get [n] <item> !mine [n] <block> !sethome !home !waypoint [delete] [name] !quests on|off';
+  '!stop !pause !resume !status !come !follow [player] !goto x [y] z|waypoint|block ' +
+  '!find <block> !explore [dir] [n] !tunnel [dir] [n] [down] !surface !get [n] <item> ' +
+  '!mine [n] <block> !sethome !home !waypoint [delete] <name> !waypoints !quests on|off';
 
 /**
  * Names the parser cannot know by itself (the domain holds no game data): `ore` resolves a
@@ -593,7 +605,14 @@ function goalCommand(
     : verb === 'mine'
       ? (names.ore?.(`${text} ore`) ?? null)
       : null;
-  const name = ore === null ? resolveItemName(text) : ore.item;
+  // Words joined by `_` too, as a block's name ("a wooden pickaxe", "2 crafting table": an
+  // independent review, 2026-10-05, found them refused with the usage line); never an ore's,
+  // which only the caller's names know.
+  const joined =
+    /\sores?$/i.test(text) || words.some((w) => AMOUNT_WORDS.has(w.toLowerCase()))
+      ? null
+      : resolveItemName(words.join('_'));
+  const name = ore === null ? (resolveItemName(text) ?? joined) : ore.item;
   if (name === null) return usage(verb);
   const n =
     count !== undefined

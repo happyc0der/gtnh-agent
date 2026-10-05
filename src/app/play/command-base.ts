@@ -63,6 +63,12 @@ export interface CommandDeps {
    * rest) or a mob near home has the bot wait offline; else null.
    */
   standby?: () => Promise<StandbyCall | null>;
+  /**
+   * Sends the replies waiting (at the chat rate, a few seconds at most): play calls it before
+   * it goes, then stores what the owners said meanwhile, which the closing connection would
+   * lose (an independent review, 2026-10-05). Absent: nothing waits.
+   */
+  flush?: () => Promise<void>;
 }
 
 /** What an idle bot must do now (live-play.ts standbyReason). */

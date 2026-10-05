@@ -44,6 +44,18 @@ export interface PlayState {
    */
   exitTries: number;
   exitGaveUpAt: number | null;
+  /**
+   * Nights begun in this play (night.ts nightRound), so each night's notes to an owner are said
+   * that night, not once per command (an independent review, 2026-10-05: the second night of a
+   * long follow was silent).
+   */
+  nights: number;
+  /** The last round was in shelter time (nightSoon): the next one that is not ends the night. */
+  inNight: boolean;
+  /** This night play waited in a shelter (night.ts): one that fails later was opened. */
+  shelteredTonight: boolean;
+  /** Digging out of last night's shelter (night.ts morningRound): commands wait for it. */
+  leavingShelter: boolean;
   /** Morning looks at last night's shelter in a row that could not tell (night.ts). */
   morningUnknown: number;
   /**
@@ -56,7 +68,8 @@ export interface PlayState {
   /** The last session saw chunks near that world memory had not seen near before. */
   explored: boolean;
   /** Missing items of the quest worked on last, and sessions in a row without fewer. */
-  last: { questId: string; missing: number; stuck: number } | null;
+  /** The goal's last session: its missing items, sessions without progress, cut short. */
+  last: { questId: string; missing: number; stuck: number; cutShort?: boolean } | null;
   /** Quest-book clicks that failed, by click. */
   readonly failedClicks: Map<string, number>;
   /** Waits in a row for the server's quest loop, with nothing else to do. */
@@ -172,6 +185,10 @@ export function startPlay(deps: PlayDeps, limits: PlayLimits, hooks: PlayHooks):
     exitTries: 0,
     exitGaveUpAt: null,
     morningUnknown: 0,
+    leavingShelter: false,
+    nights: 0,
+    inNight: false,
+    shelteredTonight: false,
     mobWaitSince: null,
     wakeNote: null,
     explored: false,

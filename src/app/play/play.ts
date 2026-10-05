@@ -334,7 +334,7 @@ export async function runPlay(
 
   // GTNH start: look around once before settling (scouting.ts), when the agent can explore.
   const scouted = await scoutingRound(play);
-  if (scouted !== null && (await endsPlay(play, scouted))) return leave(play, scouted);
+  if (scouted !== null && (await endsPlay(play, scouted))) return await leave(play, scouted);
 
   for (;;) {
     // An owner's stop has stopped the session it interrupted: actions may run again.
@@ -343,7 +343,7 @@ export async function runPlay(
     if (play.mobAlarm !== null) {
       const reasons = play.mobAlarm;
       play.mobAlarm = null;
-      return leave(play, {
+      return await leave(play, {
         ...done(play, `a mob is near the player (${reasons}): waiting offline for it to leave`),
         mobNearby: reasons,
       });
@@ -356,7 +356,7 @@ export async function runPlay(
       (await foodRound(play)) ??
       (await idleRound(play)) ??
       (await goalRound(play));
-    if (round !== 'next-round' && (await endsPlay(play, round))) return leave(play, round);
+    if (round !== 'next-round' && (await endsPlay(play, round))) return await leave(play, round);
   }
 }
 
@@ -380,7 +380,7 @@ async function endsPlay(play: PlayState, round: PlayResult): Promise<boolean> {
  * Play ends: its result, or the stop that ended it meanwhile. An owner whose command waits is
  * told when the agent goes offline (the night with no shelter, a mob near home).
  */
-function leave(play: PlayState, round: PlayResult): PlayResult {
+async function leave(play: PlayState, round: PlayResult): Promise<PlayResult> {
   // What the owners said lately is stored before the client goes: the heard lines live only in
   // this connection (an independent review, 2026-10-04: a !stop whispered just before an
   // offline wait was lost, and the trip it stopped went on after).
@@ -411,9 +411,16 @@ function leave(play: PlayState, round: PlayResult): PlayResult {
     );
     const text =
       result.night !== null
-        ? nightReply(result.stopReason)
+        ? nightReply(result.stopReason, play.shelteredTonight)
         : 'A mob is near: I go offline a moment for it to leave';
     for (const sender of senders) play.deps.commands.reply(sender, text);
+  }
+  // The replies go out before the client closes, and while they do, the owners may say more
+  // (a stop, say): that is stored too, or it would be lost with the connection (an independent
+  // review, 2026-10-05).
+  if (play.deps.commands?.flush !== undefined) {
+    await play.deps.commands.flush();
+    intake(play);
   }
   return result;
 }
@@ -422,12 +429,17 @@ function leave(play: PlayState, round: PlayResult): PlayResult {
  * What an owner whose command is running is told as play goes offline for the night: why
  * (an independent review, 2026-10-05: hurt inside its shelter, it said it had none).
  */
-function nightReply(stopReason: string): string {
+function nightReply(stopReason: string, shelteredTonight: boolean): string {
   if (stopReason.includes(STARVING_IN_SHELTER)) {
     return 'I am starving in my shelter: I go offline until sunrise';
   }
   if (stopReason.includes(HURT_IN_SHELTER)) {
     return 'Something hurt me in my shelter: I go offline until sunrise';
+  }
+  // It had a shelter tonight, and it opened (someone dug into it, say) and could not be closed
+  // (an independent review, 2026-10-05: at midnight it said it had no shelter here).
+  if (shelteredTonight) {
+    return 'My shelter is open and I could not close it: I go offline until sunrise';
   }
   return 'It is getting dark and I have no shelter here: I go offline until sunrise';
 }

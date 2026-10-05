@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { gtOreByName } from '../../src/goals/ore-names.ts';
+import { whisperLines } from '../../src/bot/gtnh1710/chat.ts';
 import {
   commandTextOf,
   DEFAULT_GOAL_COUNT,
@@ -348,6 +349,32 @@ describe('the structured form', () => {
     expect(describeCommand(parsed('!follow Steve'))).toBe('follow Steve');
     // 3 lines of 100 characters, less "/tell DankAxon " each.
     expect(HELP_TEXT.length).toBeLessThanOrEqual(3 * 85);
+    // Lines break at spaces: all of it fits all the same (an independent review, 2026-10-05:
+    // it was cut off at "!waypoint [delete] [name...", !quests never shown).
+    const lines = whisperLines('DankAxon', HELP_TEXT);
+    expect(lines.length).toBeLessThanOrEqual(3);
+    expect(lines.join(' ')).toBe(HELP_TEXT);
+    expect(HELP_TEXT).toContain('!quests on|off');
+  });
+
+  it('an item named in words: "!get a wooden pickaxe", "!get 2 crafting table"', () => {
+    // An independent review, 2026-10-05: they gave the usage line.
+    const names = { ore: gtOreByName };
+    const get = (text: string) => parseOwnerCommand(text, names);
+    expect(get('!get a wooden pickaxe')).toEqual({
+      ok: true,
+      command: { verb: 'get', count: 1, item: 'minecraft:wooden_pickaxe' },
+    });
+    expect(get('!get 2 crafting table')).toEqual({
+      ok: true,
+      command: { verb: 'get', count: 2, item: 'minecraft:crafting_table' },
+    });
+    expect(get('!get 4 iron ingot')).toEqual({
+      ok: true,
+      command: { verb: 'get', count: 4, item: 'minecraft:iron_ingot' },
+    });
+    // Never an ore's: those only the caller's names know.
+    expect(get('!mine 2 unobtainium ore')).toMatchObject({ ok: false, kind: 'usage' });
   });
 
   it('resolves item names: aliases, vanilla without its namespace, mod names as typed', () => {

@@ -400,6 +400,7 @@ export function liveCommands(
     configLocations: new Map(Object.entries(config.locations)),
     boundary: config.safety.boundary,
     standby: async () => standbyReason(await client.observe(), config, repos),
+    flush: () => client.flushReplies(),
   };
 }
 

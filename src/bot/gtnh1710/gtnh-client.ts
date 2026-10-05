@@ -146,6 +146,11 @@ export class Gtnh1710Client implements MinecraftClient {
     return this.#core.connection.connect();
   }
 
+  /** Sends the replies to owners still waiting, at the chat rate (at most `timeoutMs`). */
+  flushReplies(timeoutMs = REPLY_FLUSH_MS): Promise<void> {
+    return this.#core.chat.flush(timeoutMs);
+  }
+
   async disconnect(): Promise<void> {
     // The last replies to an owner (a command's "Done: ...") go out first, at the chat rate.
     await this.#core.chat.flush(REPLY_FLUSH_MS);
@@ -195,7 +200,18 @@ export class Gtnh1710Client implements MinecraftClient {
     return this.#core.fence().fence;
   }
 
-  perform(validated: ValidatedAction): Promise<ClientActionResult> {
+  async perform(validated: ValidatedAction): Promise<ClientActionResult> {
+    const result = await this.#perform(validated);
+    // Stopped by its owner or operator (a stop, cli halt) rather than failed: it says so, and the
+    // failure counts leave it out (an independent review, 2026-10-05: two stops while it dug its
+    // night pit had the dig refused as a repeated failure, and the night spent offline).
+    if (!result.ok && this.#core.haltReason !== null) {
+      return { ...result, data: { ...result.data, interrupted: true } };
+    }
+    return result;
+  }
+
+  #perform(validated: ValidatedAction): Promise<ClientActionResult> {
     assertValidatedAction(validated);
     if (this.#core.phase !== 'play') return Promise.resolve(failed('not connected', 'ERROR'));
     const action = validated.action;

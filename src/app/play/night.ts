@@ -183,6 +183,13 @@ export async function blueprintSession(
 export async function nightRound(play: PlayState): Promise<RoundEnd> {
   const { deps, limits, hooks, emit, started, now } = play;
   const clock = (await deps.time?.()) ?? null;
+  if (clock !== null && nightSoon(clock) && !play.inNight) {
+    play.inNight = true;
+    play.nights += 1;
+    play.shelteredTonight = false;
+  } else if (clock !== null && !nightSoon(clock)) {
+    play.inNight = false;
+  }
   if (clock !== null && nightSoon(clock)) {
     // A new night: the next morning's way out has all its tries again (an independent review,
     // 2026-10-05: three that failed one morning left none for any morning after).
@@ -202,6 +209,7 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
           message: `sheltered: waiting for the morning (${untilSunrise(clock)} min)`,
         });
         play.sheltered = { until: now() + untilSunrise(clock) * 60_000 };
+        play.shelteredTonight = true;
         const end = await waitForMorning(
           deps,
           hooks,
@@ -249,6 +257,7 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
       play.shelterTries += 1;
       inShelter(play);
       const pit = status.kind === 'pit';
+      let interrupted = false;
       // What the shelter needs and the inventory lacks (the goal line says "missing").
       const carried = (await deps.inventory()) ?? {};
       const missing = Object.fromEntries(
@@ -270,7 +279,14 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
           : `place ${status.steps.length} blocks`,
         missing,
         maxCycles: status.steps.length * 2 + 2,
+        onCycle: (r) => {
+          interrupted = interruptedCycle(r);
+        },
       });
+      // A step an owner's stop cut short spends no try, and the stop is answered now, not once
+      // the shelter is done (an independent review, 2026-10-05).
+      if (interrupted) play.shelterTries -= 1;
+      await play.whileSheltered();
       if (result.stopKind === 'stop-requested') return done(play, result.stopReason);
       if (result.stopKind === 'needs-attention') {
         // A shelter step that stopped for a person (a refusal, a pause) means no shelter
@@ -375,6 +391,8 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
       const lastStep = status.exit.at(-1)?.spec;
       const out = lastStep?.type === 'MOVE_TO' ? lastStep.args.target : undefined;
       let mobRefused = false;
+      let interrupted = false;
+      play.leavingShelter = true;
       const digs = status.exit.filter((s) => s.spec.type === 'DIG_BLOCK').length;
       const result = await blueprintSession(play, {
         taskId: LEAVE_SHELTER_TASK_ID,
@@ -388,7 +406,17 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
         maxCycles: status.exit.length * 2 + 2,
         onCycle: (r) => {
           mobRefused = refusedForMobs(r);
+          interrupted = interruptedCycle(r);
         },
+      }).finally(() => {
+        play.leavingShelter = false;
+      });
+      // A step an owner's stop cut short spends no try, and the stop is answered now; commands
+      // that move it wait until it is out (an independent review, 2026-10-05).
+      if (interrupted) play.exitTries -= 1;
+      play.leavingShelter = true;
+      await play.whileSheltered().finally(() => {
+        play.leavingShelter = false;
       });
       // A hostile came near while the player is still sealed in (System 1's SHELTERED pause), or
       // came back in range while System 1 decided and the safety rules refused the step (seen
@@ -454,6 +482,11 @@ export async function morningRound(play: PlayState): Promise<RoundEnd> {
   play.exitGaveUpAt = null;
   play.mobWaitSince = null;
   return null;
+}
+
+/** The cycle's action was stopped by its owner or operator (gtnh-client.ts perform). */
+function interruptedCycle(r: CycleResult): boolean {
+  return r.outcome?.execution?.data?.['interrupted'] === true;
 }
 
 /** Dangers a wait in the sealed shelter outlasts: creatures go, and the vitals keep. */

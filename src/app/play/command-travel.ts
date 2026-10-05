@@ -339,7 +339,7 @@ export async function travelRound(
     sayOnce(
       play,
       cmd,
-      'dusk',
+      `dusk-${play.nights}`,
       `It is getting dark: I shelter for the night, then I ${describeCommand(command)}`,
     );
     return 'next-round';

@@ -141,6 +141,11 @@ export async function goalCommandRound(
   }
   if (mobbed === 'retry') run.interrupted = true;
   else if (!run.interrupted) run.mobStops = 0;
+  // Cut short by a new command (any whisper), dusk or a food bar nearly empty: it tried
+  // nothing, and counts neither way (an independent review, 2026-10-05: three quick !status whispers failed a !get for "no progress in 3 sessions").
+  if (ended.preempted !== null || ended.dark !== null || ended.hungry !== null) {
+    run.interrupted = true;
+  }
   // Only a session that ran its course counts: one a new command, dusk, a food bar nearly
   // empty, a reflex or a mob cut short tried nothing (an independent review, 2026-10-04: a
   // !status abandoned a copper ore in view).
@@ -171,7 +176,7 @@ export async function goalCommandRound(
     sayOnce(
       play,
       cmd,
-      'dusk',
+      `dusk-${play.nights}`,
       `It is getting dark: I shelter for the night, then I ${describeCommand(command)}`,
     );
     return 'next-round';

@@ -581,7 +581,10 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   cancels the commands sent before it, never one sent after it ("!stop" then "!come" comes). Before play goes offline (a night with no
   shelter, a mob near), what the owners said is stored first, since the heard lines live only in
   that connection, so a stop whispered just then is taken when play comes back; and each owner
-  whose command runs or waits is told why it goes ("A mob is near: I go offline a moment ..."). The operator's
+  whose command runs or waits is told why it goes ("A mob is near: I go offline a moment ...").
+  Play sends the last replies itself (`flush`, a line a second) and then stores what the owners
+  said meanwhile, since the closing connection would lose it (an independent review,
+  2026-10-05: a stop whispered while the bot logged off was heard by nobody). The operator's
   stop (`cli halt`, the stop file, Ctrl+C) ends the owners' commands with play, and their senders
   are told ("my operator stopped play"); a lost connection or a limit does not, and a restart
   resumes them. A halt while the bot waits offline (a night, a mob, a reconnect) ends them too, in
@@ -620,7 +623,11 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   the player is in sight for a follow (seen live 2026-10-04: a zombie in the forest's shade
   failed a follow in 15 s). Such walks are marked in their result (`data.threat`), and the
   policy's repeated-failure count leaves them out, as it leaves out actions the client could
-  not even try: the same walk to a player standing still is no repeated failure of the way.
+  not even try: the same walk to a player standing still is no repeated failure of the way. So
+  are actions an owner's stop or the operator halted (`data.interrupted`, set by the client's
+  `perform` when it fails while halted): the action was not at fault (an independent review,
+  2026-10-05: two stops while the bot dug its night pit had the dig refused as a repeated
+  failure, and the night spent offline; two while it dug out kept it in its pit for good).
 - **Explore** (Baritone's #explore) is travel to a point fixed when it begins: `distance`
   blocks (default 64, at most 256) toward the compass direction asked, or, with none, the one
   world memory has seen least (`wanderTarget`), no farther than the room left to the safety
@@ -682,12 +689,19 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   first; seen live 2026-10-04, such sessions counted as none and the command failed). A
   session System 1 ended with a reflex (a retreat from a mob, a fight, a meal, a rest) was
   interrupted, not stuck: it counts neither way (seen live the same day: three retreats from
-  mobs failed a pickaxe command for "no progress").
+  mobs failed a pickaxe command for "no progress"). So does a session a new command (any
+  whisper, a !status too), dusk or a food bar nearly empty cut short, for a !get or !mine, a
+  tunnel, play's own goal and a food trip alike (an independent review, 2026-10-05: three
+  quick questions failed a !get that had gathered two logs).
 - **Stop.** The client's `interrupt()` makes `haltReason` (which every walk, EXPLORE hop, dig,
   placement, fight and window checks before it starts and at every step or tick) report the stop,
   without `halt()`'s lasting latch: the action in progress stops at its next tick, and the one a
   cycle in flight was about to start is refused; the play loop clears it at the start of the next
-  round, once the stopped session is over. A stop queued with `cli command` is looked for every
+  round, once the stopped session is over. The night's pit and the morning's way out go on after
+  a stop (the shelter is the bot's own safety), but a session it cut short spends none of their
+  tries, and the stop is answered between their sessions, as are the owners' other words: an
+  action command waits for the shelter, and says so ("I am digging out of my shelter first,
+  then I ..."). A stop queued with `cli command` is looked for every
   second and interrupts the same way. The stop then cancels the command and pauses play's own
   goals (`owner_paused`; `cli play` clears it when it starts; `quests off` is kept).
 - **Idle** (`idleRound`): paused, or with `--listen` nothing left to do, play waits for commands

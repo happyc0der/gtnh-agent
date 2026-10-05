@@ -203,7 +203,7 @@ async function handleQueued(
   // "instead of" it a moment later (two commands waited out the night, say).
   if (newerStarts(play, cmd)) return;
   // One action command at a time: the newest replaces the others, and says so.
-  const replaced = replaceOthers(play, cmd, command);
+  const replaced = replaceOthers(play, cmd, command).filter((d) => d !== describeCommand(command));
   const instead = replaced.length === 0 ? '' : ` (instead of: ${replaced.join('; ')})`;
   const ack = `OK: ${acknowledge(play, cmd, command)}${instead}`;
   repos.commands.start(cmd.id, ack);
@@ -214,6 +214,7 @@ async function handleQueued(
 const nightNote = (play: PlayState, c: OwnerCommand, instead: readonly string[] = []): string => {
   const shelter = play.sheltered;
   const then = `then I ${describeCommand(c)}${instead.length === 0 ? '' : ` (instead of: ${instead.join('; ')})`}`;
+  if (play.leavingShelter) return `I am digging out of my shelter first, ${then}`;
   if (shelter !== null && 'mobs' in shelter) {
     return `Hostiles are near my shelter: I stay inside until they go, ${then}`;
   }
@@ -225,7 +226,13 @@ const nightNote = (play: PlayState, c: OwnerCommand, instead: readonly string[] 
 
 /** The say-once key of nightNote: its words change when the morning's wait is for mobs. */
 const nightKey = (play: PlayState): string =>
-  play.sheltered !== null && 'mobs' in play.sheltered ? 'mobs' : 'night';
+  `${
+    play.leavingShelter
+      ? 'leaving'
+      : play.sheltered !== null && 'mobs' in play.sheltered
+        ? 'mobs'
+        : 'night'
+  }-${play.nights}`;
 
 /**
  * In the shelter at night (night.ts): commands are heard and answered; travel and goals wait
@@ -606,7 +613,11 @@ function deleteLocation(play: PlayState, cmd: OwnerCommandRecord, name: string):
   const commands = play.deps.commands as CommandDeps;
   const fail = (why: string): void => finish(play, cmd, 'failed', `Failed: ${why}`);
   if (name === commands.homeName) {
-    return fail('home is where I retreat to: move it with !sethome, it is never deleted');
+    return fail(
+      commands.configLocations.has(name)
+        ? 'home is where I retreat to, set in agent.config.json (locations): change it there'
+        : 'home is where I retreat to: move it with !sethome, it is never deleted',
+    );
   }
   if (commands.configLocations.has(name)) {
     return fail(`${name} is set in agent.config.json (locations): change it there`);
@@ -666,9 +677,11 @@ function statusText(play: PlayState): string {
         ? off
         : sheltered !== null
           ? sheltered
-          : task !== null && task.status === 'active'
-            ? `working on: ${clip(task.goal, 80)}`
-            : 'idle';
+          : play.idle !== null
+            ? `idle (${clip(play.idle.reason, 100)})`
+            : task !== null && task.status === 'active'
+              ? `working on: ${clip(task.goal, 80)}`
+              : 'idle';
   const items = Object.entries(view.inventory ?? {})
     .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : 1))
     .slice(0, 4)
