@@ -334,8 +334,12 @@ digs whose end a walk that breaks nothing can leave (8 blocks across within 24 b
 walking: `OUT_FREE_DISTANCE`, `walksAway`) wins, and a pit whose way out would end in such a
 hole is refused while the player stands where it can leave (an independent review, 2026-10-05:
 a pit dug in an old staircase's notch had its way out end two blocks under the ground on
-another old staircase, whose next step's floor it had dug: a walk reached four cells there). Play runs it as known steps before the day's goal, and the goal's
-journal says the walls are open again. Walled in with no way out, play stops and says why,
+another old staircase, whose next step's floor it had dug: a walk reached four cells there).
+Beside the pit and below the ground around it (a staircase step a drop's walk broke open), the
+player is out only where such a walk gets away; else the rest of the way out is planned from
+there (the same review). Play runs it as known steps before the day's goal, and the goal's
+journal says the walls are open again; once out, a way out that stopped short is closed, as is
+a night task a night spent offline left behind. Walled in with no way out, play stops and says why,
 unless an owner's command is running or queued: that goes first, since it may be the way out
 (`!surface` and `!home` pillar and dig; seen live 2026-10-04 at the bottom of an 8-deep shaft the
 bot had dug down to stone, play ended every round before the command round and spun at 100%
@@ -532,13 +536,18 @@ actions, each validated by the safety policy, executed and verified, or a goal f
   the commands that came (chat and the database), answers the instant ones (stop, pause, status,
   waypoints...) and starts the newest action command, cancelling any other: one runs at a time.
   A command that cannot even start (out of sight, outside the boundary, no such waypoint) fails
-  at once, by night too, and replaces nothing; a stop cancels the commands sent before it, never
-  one sent after it ("!stop" then "!come" comes). Before play goes offline (a night with no
+  at once, by night too, and replaces nothing; by night only what cannot change by the morning
+  is checked (not whether the owner is in view), and a command waiting for the morning replaces
+  the running one only when it starts (an independent review, 2026-10-05: a !come at night
+  failed when its owner stepped away, after it had replaced the !get). An action command with a
+  newer one waiting that can start too is left to it: one "OK ... (instead of: ...)". A stop
+  cancels the commands sent before it, never one sent after it ("!stop" then "!come" comes). Before play goes offline (a night with no
   shelter, a mob near), what the owners said is stored first, since the heard lines live only in
   that connection, so a stop whispered just then is taken when play comes back. The operator's
   stop (`cli halt`, the stop file, Ctrl+C) ends the owners' commands with play, and their senders
   are told ("my operator stopped play"); a lost connection or a limit does not, and a restart
-  resumes them.
+  resumes them. A halt while the bot waits offline (a night, a mob, a reconnect) ends them too, in
+  the database (`cancelActionRecords`; an independent review, 2026-10-05).
   Owners' commands come before food trips, scouting and quests: every such session checks
   `commandWaiting` before each cycle (in its `stopRequested`), so a new command ends it at its
   next cycle and play goes on with it afterwards. The night shelter and a food trip on a nearly
@@ -870,10 +879,11 @@ anew: no code was taken from Baritone (LGPL-3.0).
   trees, and stopped. It goes on through the 8 nearest places (`GATHER_PLACES`, not the
   planner's two per kind), passing over any in the chunk of one already passed over (a
   chunk's example block moves as the chunk is seen again; a skipped block, a failed dig, is no
-  place): seen live 2026-10-05, with only the
-  nearest place (where it stood) and a much richer one 47 blocks off, "get me 4 logs" went back
-  and forth between far places for 15 minutes past a trunk 16 blocks away. Animals wander, and world memory keeps no animals: a hunt has no such
-  trip. World memory's ore places stand for the ores `DIG_BLOCK` digs (GT ores, emerald ore).
+  place): seen live 2026-10-05, with only the nearest place (where it stood) and a much richer
+  one 47 blocks off, "get me 4 logs" went back and forth between far places for 15 minutes past a
+  trunk 16 blocks away. The places passed over outlast the step: the task keeps them for 30
+  minutes (`GATHER_PASSED_FOR_MS`), so a checkpoint or a new plan does not go back to them.
+  Animals wander, and world memory keeps no animals: a hunt has no such trip. World memory's ore places stand for the ores `DIG_BLOCK` digs (GT ores, emerald ore).
 - **One drop of a block.** `{"block":"gregtech:gt.blockores","item":"gregtech:gt.metaitem.03@5032","count":16}`
   counts only that drop (16 raw iron ore) and digs only blocks that can drop it. Every GT ore
   is that one block, and its material is in its tile entity, so the step digs the GT ores it

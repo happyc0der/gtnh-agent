@@ -685,14 +685,51 @@ describe("owners' commands in play", () => {
     expect(said(sim)).toEqual([
       'It is night: I stay in my shelter until morning (in about 5 min), then I come to you',
       'Failed: 300 64 0 is outside my safety boundary (x -256..256, z -256..256)',
-      'It is night: I stay in my shelter until morning (in about 5 min), then I go to 20 64 0 (instead of: come to you)',
-      'OK: going to 20 64 0',
+      // The owner's whereabouts are not checked by night (they may change by the morning), and
+      // a command replaces another only as it starts (an independent review, 2026-10-05).
+      'It is night: I stay in my shelter until morning (in about 5 min), then I go to 20 64 0',
+      'OK: going to 20 64 0 (instead of: come to you)',
       'Done: at 20 64 0',
     ]);
     expect(repos.commands.get(1)).toMatchObject({
       status: 'cancelled',
       reply: 'Replaced by command #3',
     });
+  });
+
+  it('a !come at night waits for the morning, wherever the owner is meanwhile', async () => {
+    // An independent review, 2026-10-05: checked every 5 s of the night, it failed when the owner
+    // stepped out of view ("I cannot see you"), after it had replaced the running command.
+    const repos = open();
+    const sim = newSim({ heard: [whisper('!come')], time: worldTime(18_000, true), owner: null });
+    sim.onSleep = (n) => {
+      if (n === 2) {
+        sim.time = worldTime(1_000, true); // the morning, and the owner in view again
+        sim.owner = { x: 10.5, y: 64, z: 0.5 };
+      }
+    };
+    const sheltered = {
+      kind: 'pit' as const,
+      sheltered: true,
+      steps: [],
+      needs: {},
+      problem: null,
+      walled: false,
+      exit: [],
+    };
+    await runPlay(
+      deps(repos, sim, {
+        time: () => Promise.resolve(sim.time),
+        shelter: () => Promise.resolve(sheltered),
+      }),
+      LIMITS,
+      noStop,
+    );
+    expect(said(sim)).toEqual([
+      'It is night: I stay in my shelter until morning (in about 5 min), then I come to you',
+      'OK: coming to you',
+      'Done: here, 1 block from you',
+    ]);
   });
 
   it('what the owners said just before play goes offline is stored, and taken after it', async () => {

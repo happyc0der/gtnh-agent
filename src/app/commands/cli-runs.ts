@@ -14,6 +14,7 @@ import { errorMessage } from '../../util/json.ts';
 import { checkLimits, DEFAULT_SESSION_LIMITS } from '../loop/live-session.ts';
 import { runMockScenario } from '../mock/mock-agent.ts';
 import { findScenario, SCENARIOS } from '../mock/scenarios.ts';
+import { cancelActionRecords } from '../play/commands.ts';
 import { runLivePlay } from '../play/live-play.ts';
 import { describePlayEvent } from '../play/narration.ts';
 import { untilSunrise } from '../play/night.ts';
@@ -149,6 +150,20 @@ export async function playCommand(cli: Cli): Promise<number> {
   let interrupted = false;
   const onInterrupt = (): void => void (interrupted = true);
   process.on('SIGINT', onInterrupt);
+  /**
+   * The operator stopped play (Ctrl+C, the stop file) while no play runs (an offline wait, a
+   * reconnect): the owners' commands end with it, as play's leave() ends them (they cannot be
+   * told: the bot is offline; the command's reply says so).
+   */
+  const endCommandsIfOperatorStopped = (): void => {
+    if (!interrupted && !existsSync(stopFile)) return;
+    const db = openDatabase(dbPath);
+    try {
+      cancelActionRecords(createRepositories(db, systemClock), 'Stopped: my operator stopped play');
+    } finally {
+      db.close();
+    }
+  };
   /** Waits `ms`, or less: why it stopped waiting early (Ctrl+C, the stop file, the limit). */
   const waitUnlessStopped = async (ms: number): Promise<string | null> => {
     const wakeAt = Date.now() + ms;
@@ -205,6 +220,7 @@ export async function playCommand(cli: Cli): Promise<number> {
         );
         const stop = await waitUnlessStopped(wait);
         if (stop !== null) {
+          endCommandsIfOperatorStopped();
           print({ stopReason: `${stop} (while reconnecting)`, minutes: minutesSince(started) });
           return 0;
         }
@@ -219,6 +235,7 @@ export async function playCommand(cli: Cli): Promise<number> {
         );
         const stop = await waitUnlessStopped(wait);
         if (stop === null) continue;
+        endCommandsIfOperatorStopped();
         print({ stopReason: `${stop} (while reconnecting)`, minutes: minutesSince(started) });
         return 0;
       }
@@ -275,6 +292,7 @@ export async function playCommand(cli: Cli): Promise<number> {
           : `mob: offline for ${sleepMs / 1000} s for it to leave (${mobWaits <= MAX_MOB_WAITS ? `${mobWaits}/${MAX_MOB_WAITS}` : `wait ${mobWaits}: it stays near`}), then playing on\n`,
       );
       if ((await waitUnlessStopped(sleepMs)) !== null) {
+        endCommandsIfOperatorStopped();
         print({
           ...summary,
           stopReason: `stopped while waiting ${out.night !== null ? 'for sunrise' : 'for the mob to leave'}`,

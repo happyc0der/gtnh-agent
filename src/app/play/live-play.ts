@@ -6,6 +6,8 @@ import type { ConnectionInfo, Gtnh1710Client } from '../../bot/gtnh1710/gtnh-cli
 import {
   continueNightPit,
   enclosedIn,
+  OUT_FREE_DISTANCE,
+  OUT_FREE_WALK,
   planClimbOut,
   planNightPit,
   planShelterExit,
@@ -14,6 +16,7 @@ import {
   type PitOptions,
   type PitSite,
 } from '../../bot/gtnh1710/night-pit.ts';
+import { walksAway } from '../../bot/gtnh1710/terrain.ts';
 import { HAZARD_SCAN_RADIUS } from '../../bot/gtnh1710/hazard-scan.ts';
 import { planTunnel, type TunnelPlan } from '../../bot/gtnh1710/tunnel.ts';
 import { playArea } from '../../bot/gtnh1710/play-area.ts';
@@ -186,8 +189,23 @@ export function liveShelter(
     const fence = client.currentFence();
     const opts = digOptions(client, config, inventory);
     if (purpose === 'morning') {
-      if (site !== null && !inPit) repos.memory.setValue(NIGHT_PIT_KEY, null);
-      if (!walled && !inPit) return base;
+      // Still in the pit's hole (on a step of its staircase, below the ground around: a drop's
+      // walk broke the next step, seen live 2026-10-05) where a walk that breaks nothing
+      // cannot get away: not out yet, and the rest of the way out is planned from here (an
+      // independent review, 2026-10-05: it read as out, the way out closed, retreats stuck).
+      const besidePit =
+        site !== null &&
+        !inPit &&
+        Math.abs(Math.floor(feet.x) - site.x) <= 3 &&
+        Math.abs(Math.floor(feet.z) - site.z) <= 3 &&
+        Math.floor(feet.y + 1e-6) <= site.groundY;
+      const stuckBeside =
+        besidePit &&
+        !walled &&
+        fence !== null &&
+        !walksAway(world, fence, feet, OUT_FREE_DISTANCE, OUT_FREE_WALK);
+      if (site !== null && !inPit && !stuckBeside) repos.memory.setValue(NIGHT_PIT_KEY, null);
+      if (!walled && !inPit && !stuckBeside) return base;
       const safety = buildSafetyContext(config, repos, systemClock.now());
       const mobs = assessDangers(state, safety).filter(
         (v) => v.code === 'HOSTILES_NEARBY' || v.code === 'UNCLASSIFIED_ENTITY_NEARBY',
@@ -206,7 +224,7 @@ export function liveShelter(
         world,
         feet,
         opts,
-        inPit && site !== null ? site.groundY : undefined,
+        (inPit || stuckBeside) && site !== null ? site.groundY : undefined,
       );
       if (exit.ok) return { ...stuck, exit: exit.steps };
       // No wall or staircase it may dig: out of the pit as Baritone leaves a hole, through

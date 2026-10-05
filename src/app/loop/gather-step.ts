@@ -4,7 +4,10 @@ import type { GameState } from '../../domain/game-state.ts';
 import { formatPosition } from '../../domain/geometry.ts';
 import { known } from '../../domain/known.ts';
 import { validateCandidate, type ExecutionOutcome } from '../../executor/action-executor.ts';
-import { TASK_GATHER_PREFIX } from '../../persistence/memory-repository.ts';
+import {
+  TASK_GATHER_PASSED_PREFIX,
+  TASK_GATHER_PREFIX,
+} from '../../persistence/memory-repository.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import {
   chooseGatherAction,
@@ -107,6 +110,64 @@ export function previewCheck(
 
 const progressKey = (taskId: string): string => `${TASK_GATHER_PREFIX}${taskId}`;
 
+/**
+ * How long a remembered place a task's GATHER passed over stays passed over, across its plans:
+ * a step's own list ends with the step (its bound, a new plan), and the next one went back to
+ * the same places (an independent review, 2026-10-05). Long enough for a goal's sessions; a
+ * place may have grown again (saplings) after it.
+ */
+export const GATHER_PASSED_FOR_MS = 30 * 60_000;
+
+interface PassedPlaces {
+  block: string;
+  places: Array<{ x: number; y: number; z: number; at: string }>;
+}
+
+/** The places the task's GATHER steps of `block` passed over lately (GATHER_PASSED_FOR_MS). */
+function loadPassed(
+  repos: Repositories,
+  taskId: string,
+  block: string,
+  now: Date,
+): BlockPosition[] {
+  const raw = repos.memory.getValue(`${TASK_GATHER_PASSED_PREFIX}${taskId}`);
+  if (raw === null) return [];
+  try {
+    const stored = JSON.parse(raw) as PassedPlaces;
+    if (stored.block !== block || !Array.isArray(stored.places)) return [];
+    return stored.places
+      .filter((p) => now.getTime() - Date.parse(p.at) < GATHER_PASSED_FOR_MS)
+      .map(({ x, y, z }) => ({ x, y, z }));
+  } catch {
+    return [];
+  }
+}
+
+/** Adds `more` to the task's passed places of `block` (a step of another block starts over). */
+function savePassed(
+  repos: Repositories,
+  taskId: string,
+  block: string,
+  more: readonly BlockPosition[],
+  now: Date,
+): void {
+  if (more.length === 0) return;
+  const at = now.toISOString();
+  const kept = loadPassed(repos, taskId, block, now);
+  const raw = repos.memory.getValue(`${TASK_GATHER_PASSED_PREFIX}${taskId}`);
+  let stamps: PassedPlaces['places'] = [];
+  try {
+    const stored = raw === null ? null : (JSON.parse(raw) as PassedPlaces);
+    if (stored !== null && stored.block === block && Array.isArray(stored.places)) {
+      stamps = stored.places.filter((p) => kept.some((k) => k.x === p.x && k.z === p.z));
+    }
+  } catch {
+    stamps = [];
+  }
+  const places = [...stamps, ...more.map(({ x, y, z }) => ({ x, y, z, at }))].slice(-64);
+  repos.memory.setValue(`${TASK_GATHER_PASSED_PREFIX}${taskId}`, JSON.stringify({ block, places }));
+}
+
 /** The task's GATHER progress, if it belongs to this plan step. */
 function loadProgress(repos: Repositories, ref: GatherRef): GatherProgress | null {
   const raw = repos.memory.getValue(progressKey(ref.taskId));
@@ -165,7 +226,11 @@ export function gatherTurn(
   wander: NonNullable<GatherOptions['wander']> | null = null,
 ): GatherTurn {
   const saved = loadProgress(repos, ref);
-  const started = saved ?? startGather(ref.planId, ref.stepIndex, ref.gather, state, ctx.now);
+  const fresh = saved ?? startGather(ref.planId, ref.stepIndex, ref.gather, state, ctx.now);
+  // The places this task's earlier GATHER steps of the block passed over stay passed over.
+  const block = 'block' in ref.gather.args ? ref.gather.args.block : null;
+  const carried = block === null ? [] : loadPassed(repos, ref.taskId, block, ctx.now);
+  const started = { ...fresh, passed: withSkipped(fresh.passed, carried) };
   const choice = chooseGatherAction(ref.gather, started, state, {
     reach: ctx.config.interactionReach,
     now: ctx.now,
@@ -179,6 +244,7 @@ export function gatherTurn(
     passed: withSkipped(started.passed, choice.pass ?? []),
     skippedEntities: withSkippedEntities(started.skippedEntities, choice.skipEntities),
   };
+  if (block !== null) savePassed(repos, ref.taskId, block, choice.pass ?? [], ctx.now);
   const gathered = gatheredSoFar(p, state);
   const where = `plan #${ref.planId} step ${ref.stepIndex + 1}`;
   if (choice.kind === 'end') {

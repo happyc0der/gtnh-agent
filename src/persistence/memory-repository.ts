@@ -16,6 +16,11 @@ export const TASK_BLUEPRINT_PREFIX = 'task_blueprint:';
 export const TASK_JOURNAL_PREFIX = 'task_journal:';
 /** agent_state key prefix for the progress of a task's GATHER plan step: `task_gather:<taskId>`. */
 export const TASK_GATHER_PREFIX = 'task_gather:';
+/**
+ * agent_state key prefix for the remembered places a task's GATHER steps passed over, by block
+ * (src/app/loop/gather-step.ts): `task_gather_passed:<taskId>`.
+ */
+export const TASK_GATHER_PASSED_PREFIX = 'task_gather_passed:';
 /** agent_state key prefix for a task's code-made blueprint (known steps): `task_steps:<taskId>`. */
 export const TASK_STEPS_PREFIX = 'task_steps:';
 /** agent_state key: where the night pit the agent started is (src/app/play/live-play.ts). */

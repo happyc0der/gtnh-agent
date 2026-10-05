@@ -287,6 +287,12 @@ export async function nightRound(play: PlayState): Promise<RoundEnd> {
   }
   if (play.shelterTries > 0) setKnownSteps(deps.repos, NIGHT_SHELTER_TASK_ID, null);
   play.shelterTries = 0;
+  // A night task left active by a night spent offline is over by day (an independent review,
+  // 2026-10-05: it read "working on: Night is coming..." all the next day).
+  if (deps.repos.tasks.get(NIGHT_SHELTER_TASK_ID)?.status === 'active') {
+    setKnownSteps(deps.repos, NIGHT_SHELTER_TASK_ID, null);
+    deps.repos.tasks.setStatus(NIGHT_SHELTER_TASK_ID, 'completed');
+  }
   return null;
 }
 

@@ -19,6 +19,7 @@ import {
   QUESTS_OFF_KEY,
 } from '../../persistence/memory-repository.ts';
 import type { OwnerCommandRecord } from '../../persistence/owner-command-repository.ts';
+import type { Repositories } from '../../persistence/repositories.ts';
 import { checkWithinBoundary } from '../../safety/coordinate-boundaries.ts';
 import { starving } from './food.ts';
 import { blueprintSession } from './night.ts';
@@ -174,19 +175,26 @@ async function handleQueued(
   }
   // A command that cannot even start fails at once, by night too (not promised for the
   // morning), and replaces nothing (an independent review, 2026-10-04: a !come out of sight
-  // failed and still cancelled the !get it came after).
-  const problem = checkAction(play, cmd, command);
+  // failed and still cancelled the !get it came after). By night only what cannot change by
+  // the morning is checked (the owner may step out of view and back), and the command waits,
+  // replacing the running one only when it starts (an independent review, 2026-10-05: a !come
+  // at night failed when its owner stepped away, after it had replaced the !get).
+  const problem = checkAction(play, cmd, command, mode);
   if (problem !== null) {
     finish(play, cmd, 'failed', `Failed: ${problem}`);
     return;
   }
+  if (mode === 'night') {
+    sayOnce(play, cmd, nightKey(play), nightNote(play, command));
+    return;
+  }
+  // With a newer action command waiting that can start too, this one waits for it: the newer
+  // replaces it as it starts, one "OK ... (instead of: ...)", rather than "OK" for this one and
+  // "instead of" it a moment later (two commands waited out the night, say).
+  if (newerStarts(play, cmd)) return;
   // One action command at a time: the newest replaces the others, and says so.
   const replaced = replaceOthers(play, cmd.id);
   const instead = replaced.length === 0 ? '' : ` (instead of: ${replaced.join('; ')})`;
-  if (mode === 'night') {
-    sayOnce(play, cmd, nightKey(play), `${nightNote(play, command)}${instead}`);
-    return;
-  }
   const ack = `OK: ${acknowledge(play, cmd, command)}${instead}`;
   repos.commands.start(cmd.id, ack);
   commands.reply(cmd.sender, ack);
@@ -239,11 +247,28 @@ function replaceOthers(play: PlayState, newId: number): string[] {
   return others.map((c) => describeCommand(c.command as OwnerCommand));
 }
 
-/** Why an action command cannot even start, or null. */
+/** A queued action command newer than `cmd` passes its check now (it would replace `cmd`). */
+function newerStarts(play: PlayState, cmd: OwnerCommandRecord): boolean {
+  return play.deps.repos.commands
+    .queued()
+    .some(
+      (q) =>
+        q.id > cmd.id &&
+        q.command !== null &&
+        isActionCommand(q.command) &&
+        checkAction(play, q, q.command) === null,
+    );
+}
+
+/**
+ * Why an action command cannot even start, or null. By night (`mode`), not whether its
+ * player is in view: by the morning, when it starts, that may well have changed.
+ */
 function checkAction(
   play: PlayState,
   cmd: OwnerCommandRecord,
   command: ActionCommand,
+  mode: 'day' | 'night' = 'day',
 ): string | null {
   const commands = play.deps.commands as CommandDeps;
   switch (command.verb) {
@@ -257,6 +282,7 @@ function checkAction(
         return `I follow only my owners (${commands.owners.join(', ')})`;
       }
       // Not seen now (logged off, or out of view): said at once, before any "OK".
+      if (mode === 'night') return null;
       const who =
         command.verb === 'follow' && command.player !== null ? command.player : cmd.sender;
       return commands.view().playerAt(who) === null
@@ -395,8 +421,25 @@ export function cancelActions(
   why: string,
   opts: { before?: number; tell?: boolean } = {},
 ): string[] {
-  const { repos } = play.deps;
-  const before = opts.before ?? Number.POSITIVE_INFINITY;
+  const actions = cancelActionRecords(play.deps.repos, why, opts.before);
+  for (const c of actions) {
+    if (opts.tell === true) play.deps.commands?.reply(c.sender, why);
+    play.commandRuns.delete(c.id);
+  }
+  return actions.map((c) => describeCommand(c.command as OwnerCommand));
+}
+
+/**
+ * The owners' action commands (running, or queued before command `before`) cancelled in the
+ * database, `why` their reply, their tasks ended; what they were. cli play calls it when the
+ * operator stops play while the bot waits offline, where no play is left to (an independent
+ * review, 2026-10-05: a halt during an offline night left the command running for next time).
+ */
+export function cancelActionRecords(
+  repos: Repositories,
+  why: string,
+  before = Number.POSITIVE_INFINITY,
+): OwnerCommandRecord[] {
   const actions = [
     repos.commands.running(),
     ...repos.commands.queued().filter((q) => q.id < before),
@@ -404,12 +447,10 @@ export function cancelActions(
     (c): c is OwnerCommandRecord => c !== null && c.command !== null && isActionCommand(c.command),
   );
   for (const c of actions) {
-    if (opts.tell === true) play.deps.commands?.reply(c.sender, why);
     repos.commands.finish(c.id, 'cancelled', why);
-    play.commandRuns.delete(c.id);
     endCommandTask(repos, c.id, 'cancelled');
   }
-  return actions.map((c) => describeCommand(c.command as OwnerCommand));
+  return actions;
 }
 
 function instant(play: PlayState, cmd: OwnerCommandRecord, c: InstantCommand): void {

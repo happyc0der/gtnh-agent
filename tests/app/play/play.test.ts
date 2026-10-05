@@ -1372,6 +1372,25 @@ describe('autonomous play', () => {
     expect(repos.memory.getValue(NIGHT_SHELTER_KEY)).toBeNull();
   });
 
+  it('by day, a night task a night spent offline left active is over', async () => {
+    // An independent review, 2026-10-05: after a dusk that ended offline, the night task stayed
+    // active with stale steps, and !status said "working on: Night is coming..." all day.
+    const repos = open();
+    repos.tasks.ensure({
+      id: 'night-shelter',
+      goal: 'Night is coming',
+      subgoal: null,
+      status: 'active',
+    });
+    const world: World = { inventory: {}, sessions: [], calls: 0 };
+    await runPlay(
+      { ...deps(repos, world), time: () => Promise.resolve(worldTime(6_000, true)) },
+      { ...DEFAULT_PLAY_LIMITS, maxSessions: 1 },
+      noStop,
+    );
+    expect(repos.tasks.get('night-shelter')?.status).toBe('completed');
+  });
+
   it('a shaft a walk dug by day is no shelter to leave: no way out without a night in it', async () => {
     // An independent review, 2026-10-05: at the bottom of a !goto's shaft at noon, play ran
     // "leave the shelter", undoing the command.
