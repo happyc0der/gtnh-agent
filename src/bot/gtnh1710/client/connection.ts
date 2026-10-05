@@ -118,10 +118,14 @@ export class Connection {
     await this.#join(deadline);
     // Wait (bounded) until health, inventory, a complete entity picture and the chunks the
     // hazard scan needs have arrived: a first observation without them is unreliable, and the
-    // safety policy pauses on it (seen live right after a login).
+    // safety policy pauses on it (seen live right after a login). A player that logs in dead is
+    // respawned first (#onDeath asks a second later): seen live 2026-10-04, play acted on the
+    // dead player's last spot, took a Random Things soul on its corpse for an unidentified mob
+    // and logged off before the respawn was asked, login after login.
     await this.#core.waitFor(
       () =>
         this.#world.hasHealth &&
+        (this.#world.health ?? 0) > 0 &&
         this.#world.hasInventory &&
         this.#world.entitiesReady(this.#opts.clock.now()) &&
         this.#world.surroundingsKnown,

@@ -21,8 +21,8 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function start() {
-  const fake = new FakeGtnhServer({ health: { health: 20, food: 0, saturation: 0 } });
+async function start(health = 20) {
+  const fake = new FakeGtnhServer({ health: { health, food: 0, saturation: 0 } });
   servers.push(fake);
   const config = defaultConfig({
     minecraft: {
@@ -60,5 +60,14 @@ describe('Gtnh1710Client death', () => {
     // Once per death.
     await new Promise((r) => setTimeout(r, 1_200));
     expect(server.clientStatus).toEqual([0]);
+  });
+
+  it('logging in dead, it is respawned before connect() returns (play never acts on a corpse)', async () => {
+    // Seen live 2026-10-04: play acted on the dead player's last spot, took a Random Things
+    // soul on its corpse for an unidentified mob and logged off before the respawn was asked,
+    // login after login.
+    const { server, client } = await start(0);
+    expect(server.clientStatus).toEqual([0]);
+    expect(client.world.health).toBe(20);
   });
 });
