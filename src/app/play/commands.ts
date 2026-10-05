@@ -21,7 +21,14 @@ import type { OwnerCommandRecord } from '../../persistence/owner-command-reposit
 import { checkWithinBoundary } from '../../safety/coordinate-boundaries.ts';
 import { starving } from './food.ts';
 import { blueprintSession } from './night.ts';
-import { autonomyOff, commandWaiting, done, type PlayState, type RoundEnd } from './play-state.ts';
+import {
+  autonomyOff,
+  commandWaiting,
+  done,
+  mobPause,
+  type PlayState,
+  type RoundEnd,
+} from './play-state.ts';
 
 import {
   endCommandTask,
@@ -667,20 +674,12 @@ export async function idleFor(play: PlayState, why: string): Promise<void> {
     maxCycles: 3,
   });
   // A retreat from a mob that could not run (no way home, or refused after failing there
-  // before): the mob is waited out offline, as a pause for one is, not tried again every few
-  // seconds (seen live 2026-10-04: 37 refused retreats in a row, from a pit the morning had
-  // opened).
-  const last = play.lastDecision;
-  // A retreat that failed ends the session 'cycle-failed'; one refused as a repeated failure
-  // (a pause) 'needs-attention' (seen live: the loop went on after the first fix).
-  if (
-    (result.stopKind === 'cycle-failed' || result.stopKind === 'needs-attention') &&
-    last !== null &&
-    last.decision === 'RETREAT_HOME' &&
-    (last.reasonCodes.includes('HOSTILES_NEARBY') ||
-      last.reasonCodes.includes('UNCLASSIFIED_ENTITY_NEARBY'))
-  ) {
-    const reasons = last.reasonCodes.join(', ');
+  // before), or a pause for a mob (under attack, say): the mob is waited out offline, as
+  // after any session, not tried again every few seconds (seen live 2026-10-04: 37 refused
+  // retreats in a row, from a pit the morning had opened). A retreat that failed ends the
+  // session 'cycle-failed'; one refused as a repeated failure, or a pause, 'needs-attention'.
+  const reasons = mobPause(result.stopKind, play.lastDecision);
+  if (reasons !== null) {
     play.emit({
       kind: 'idle',
       message: `a mob is near and no retreat works (${reasons}): waiting offline`,

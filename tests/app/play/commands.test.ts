@@ -1937,6 +1937,55 @@ describe("owners' commands in play", () => {
     expect(result.mobNearby).toBe('HOSTILES_NEARBY');
   });
 
+  it('idle, a pause under attack in the standby session is waited out offline at once', async () => {
+    // An independent review, 2026-10-04: only a failed retreat went offline; an UNDER_ATTACK
+    // pause left the bot idling beside the mob until the next standby check.
+    const sim = newSim({ heard: [whisper('!pause')] });
+    const base = deps(open(), sim, { listen: true });
+    let sessions = 0;
+    const result = await runPlay(
+      {
+        ...base,
+        commands: {
+          ...(base.commands as CommandDeps),
+          standby: () =>
+            Promise.resolve({ kind: 'reflex', text: 'RETREAT_HOME [HOSTILES_NEARBY]' }),
+        },
+        session: (_limits, hooks) => {
+          sessions += 1;
+          hooks.onCycle(
+            {
+              summary: 'PAUSE_AND_ASK_USER -> paused',
+              status: 'paused',
+              decision: {
+                decision: 'PAUSE_AND_ASK_USER',
+                confidence: 0.95,
+                reasonCodes: ['HOSTILES_NEARBY', 'UNDER_ATTACK'],
+                factsUsed: {},
+                requiresHumanConfirmation: true,
+                provider: 'test',
+              },
+              outcome: null,
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'paused' }],
+            stopReason: 'needs attention',
+            stopKind: 'needs-attention',
+            taskId: 'owner-standby',
+            taskStatus: 'active',
+            elapsedMs: 1,
+          });
+        },
+      },
+      LIMITS,
+      noStop,
+    );
+    expect(sessions).toBe(1);
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY, UNDER_ATTACK');
+  });
+
   it('a food bar nearly empty keeps priority: the food trip first, then the command', async () => {
     const repos = open();
     const sim = newSim({

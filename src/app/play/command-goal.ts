@@ -164,6 +164,9 @@ export async function goalCommandRound(
     }
     saveProgress(play, cmd.id);
   }
+  // A mob pause first: only its offline wait sets the task active again (see goal-round.ts).
+  const mob = mobPause(ended.result.stopKind, play.lastDecision);
+  if (mob !== null) return waitOutMob(play, adopted.taskId, mob);
   if (ended.dark !== null) {
     sayOnce(
       play,
@@ -174,8 +177,6 @@ export async function goalCommandRound(
     return 'next-round';
   }
   if (ended.met || ended.preempted !== null || ended.hungry !== null) return 'next-round';
-  const mob = mobPause(ended.result.stopKind, play.lastDecision);
-  if (mob !== null) return waitOutMob(play, adopted.taskId, mob);
   if (ended.result.stopKind === 'needs-attention' || ended.result.stopKind === 'task-halted') {
     finish(play, cmd, 'failed', `Failed: ${ended.result.stopReason}`);
   }

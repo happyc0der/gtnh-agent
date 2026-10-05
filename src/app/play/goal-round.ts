@@ -478,6 +478,11 @@ function afterGoalSession(
       `interrupted: ${dark !== null ? nightReason(dark) : result.stopReason}`,
     );
   }
+  // A mob pause first: only its offline wait sets the task (which the pause left paused) active
+  // again; dusk or hunger seen in the same session wait for the next play (an independent
+  // review, 2026-10-04: a pause whose cycle first saw dusk left the task needing a person).
+  const mob = mobPause(result.stopKind, play.lastDecision);
+  if (mob !== null) return waitOutMob(play, taskId, mob);
   if (dark !== null) {
     if (deps.shelter === undefined) return done(play, nightReason(dark), dark);
     return 'next-round'; // the next round builds the shelter
@@ -486,8 +491,6 @@ function afterGoalSession(
   // An owner's command comes first; the goal goes on after it.
   if (preempted !== null && result.stopKind === 'stop-requested') return 'next-round';
   if (result.stopKind === 'stop-requested' && !met) return done(play, result.stopReason);
-  const mob = mobPause(result.stopKind, play.lastDecision);
-  if (mob !== null) return waitOutMob(play, taskId, mob);
   if (!CONTINUE_AFTER.has(result.stopKind)) return done(play, result.stopReason);
   return 'next-round';
 }

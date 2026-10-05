@@ -174,11 +174,12 @@ export async function scoutingRound(play: PlayState): Promise<PlayResult | null>
         cycles: r.session.cycles.length,
         system1: r.session.system1,
       });
+      // A mob pause first: only its offline wait sets the task active again (see goal-round.ts).
+      const mob = mobPause(r.session.stopKind, play.lastDecision);
+      if (mob !== null) return waitOutMob(play, SCOUT_TASK_ID, mob);
       if (r.dark !== null) return done(play, nightReason(r.dark), r.dark);
       // An owner's command comes first: scouting waits for the next play.
       if (preempted !== null && r.session.stopKind === 'stop-requested') return null;
-      const mob = mobPause(r.session.stopKind, play.lastDecision);
-      if (mob !== null) return waitOutMob(play, SCOUT_TASK_ID, mob);
       if (r.session.stopKind === 'stop-requested' && !r.scouted) {
         return done(play, r.session.stopReason);
       }

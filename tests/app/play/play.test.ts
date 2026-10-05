@@ -884,6 +884,65 @@ describe('autonomous play', () => {
     );
   });
 
+  it('a goal session paused for a mob in the cycle that sees dusk waits the mob out first', async () => {
+    // An independent review, 2026-10-04: dusk was checked first, so the task the pause had left
+    // paused stayed paused, and the next play stopped for a person.
+    const repos = open();
+    const goal = {
+      taskId: 'goal-dirt',
+      name: 'get 10 minecraft:dirt',
+      requirements: { 'minecraft:dirt': 10 },
+    };
+    const result = await runPlay(
+      {
+        repos,
+        now: () => 0,
+        goal,
+        inventory: () => Promise.resolve({}),
+        time: () => Promise.resolve(worldTime(1_000, true)), // day as each round starts
+        sleep: () => Promise.resolve(),
+        session: (_limits, hooks): Promise<SessionResult> => {
+          const taskId = repos.memory.getValue(CURRENT_TASK_KEY);
+          if (taskId !== null) repos.tasks.setStatus(taskId, 'paused'); // as a pause leaves it
+          hooks.onCycle(
+            {
+              summary: 'PAUSE_AND_ASK_USER -> paused',
+              status: 'paused',
+              decision: {
+                decision: 'PAUSE_AND_ASK_USER',
+                confidence: 0.95,
+                reasonCodes: ['HOSTILES_NEARBY', 'UNDER_ATTACK'],
+                factsUsed: {},
+                requiresHumanConfirmation: true,
+                provider: 'deterministic-router',
+              },
+              // The pause's own observation: the evening has just begun.
+              outcome: {
+                stateAfter: {
+                  time: { known: true, value: worldTime(12_100, true) },
+                  inventory: { known: false },
+                },
+              },
+            } as unknown as CycleResult,
+            1,
+          );
+          return Promise.resolve({
+            cycles: [{ cycleId: 'c1', summary: 'paused' }],
+            stopReason: 'needs attention after: PAUSE_AND_ASK_USER',
+            stopKind: 'needs-attention',
+            taskId,
+            taskStatus: 'paused',
+            elapsedMs: 1,
+          });
+        },
+      },
+      { ...DEFAULT_PLAY_LIMITS, session: { maxCycles: 3, maxMinutes: 5, pauseMs: 0 } },
+      noStop,
+    );
+    expect(result.mobNearby).toBe('HOSTILES_NEARBY, UNDER_ATTACK');
+    expect(repos.tasks.get('goal-dirt')?.status).toBe('active');
+  });
+
   it('in the morning, a mob pause while digging out waits offline (UNDER_ATTACK)', async () => {
     // Hurt with a mob near, half dug out: offline at once, as any session's mob pause is.
     const repos = open();
