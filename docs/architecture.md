@@ -292,8 +292,8 @@ it and runs it, step by step, as known safe steps (see
   block each time, to feet at y-3; then the roof, placed in the y-1 cell (the ground layer it
   dug through) against the natural ground beside it, whose inner faces look at the eyes
   (y-1.38). The roof is dirt or a log, which the agent digs again in the morning (the digs
-  themselves give dirt). Code picks the spot (the player's column, or one next to it the
-  walker reaches) and checks before digging, with the live client's own rules on a what-if copy
+  themselves give dirt). Code picks the spot (the player's column, one next to it the walker
+  reaches, else one up to 24 blocks' walk away: `PIT_SEARCH_WALK`) and checks before digging, with the live client's own rules on a what-if copy
   of the world (`src/bot/gtnh1710/night-pit.ts`): every dig down (exactly one block, no fluid,
   hazard or unloaded block near), natural walls (the 3 x 3 columns around plain full blocks
   down to y-3, sand and gravel only on solid ground), the roof's placement, and a way out for

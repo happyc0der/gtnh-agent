@@ -454,10 +454,15 @@ export function planNightPit(
   };
 }
 
-/** How far the agent walks, at most, to a spot for its night pit. */
-export const PIT_SEARCH_WALK = 12;
+/**
+ * How far the agent walks, at most, to a spot for its night pit. 12 left it offline night after
+ * night on a mountainside of caves and ores and at home in the desert (seen live 2026-10-05),
+ * where the saved world has spots 13 to 14 blocks' walk off; at 24 the plan took 63 and 105 ms
+ * there.
+ */
+export const PIT_SEARCH_WALK = 24;
 /** Spots beyond the neighbours it looks at, nearest first (each plans a walk and the pit). */
-export const PIT_SEARCH_SPOTS = 40;
+export const PIT_SEARCH_SPOTS = 80;
 
 /**
  * The rest of a pit the agent started at `site`, when the player is in its column below the

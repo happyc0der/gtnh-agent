@@ -328,7 +328,7 @@ describe('the night pit plan', () => {
   it('refuses where the ground is not natural, solid ground down to the floor all around', () => {
     // Stone at the top: DIG_DOWN takes only dirt, grass, sand, gravel and clay.
     expect(reasonOf(planNightPit(land({}, { top: ID.stone }), FEET, {}, OPTS))).toMatch(
-      /no spot for a pit within 12 blocks' walk \(here: digging down at \(0, 63, 0\): .*minecraft:stone/,
+      /no spot for a pit within 24 blocks' walk \(here: digging down at \(0, 63, 0\): .*minecraft:stone/,
     );
     // A pond in the wall: not natural ground.
     const pond: Record<string, number> = {};
