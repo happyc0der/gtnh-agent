@@ -106,6 +106,19 @@ function wall(x: number, id: number, high = 2): Map<string, number> {
 }
 
 describe('walking over terrain on the pathfinder', { timeout: 30_000 }, () => {
+  it('a walk that starts in a cobweb steps out of it first, every move accepted', async () => {
+    // Seen live 2026-10-05: a web spider spun a web into a retreat's way; the agent stood in
+    // it, and every walk was refused ("cannot walk from here: blocked by minecraft:web").
+    const web = new Map([[`-5,${FEET_Y},-8`, BLOCK.web]]);
+    const { server, client } = await start({ blocks: web });
+    const r = await perform(client, moveTo(-1.5, FEET_Y, -7.5));
+    expect(r, r.message).toMatchObject({ ok: true, code: 'OK', data: { reached: true } });
+    expect(await positionOf(client)).toEqual({ x: -1.5, y: FEET_Y, z: -7.5 });
+    // Out of the web at a quarter of the pace the server allows, no move reset.
+    expect(server.moveSim.webMoves).toBeGreaterThan(0);
+    expect(server.moveSim.corrections).toEqual([]);
+  });
+
   it('falls three blocks down a cliff (the old walker stopped at two), every move accepted, no damage', async () => {
     const { server, client } = await start();
     const r = await perform(client, moveTo(2.5, LOW_FEET_Y, -7.5));

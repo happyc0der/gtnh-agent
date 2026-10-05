@@ -28,6 +28,7 @@ export const BLOCK = {
   leaves: 18,
   glass: 20,
   tallgrass: 31,
+  web: 30,
   torch: 50,
   clay: 82,
   leaves2: 161,
@@ -76,6 +77,7 @@ export const DIG_TEST_BLOCK_REGISTRY: Array<[number, string]> = [
   [BLOCK.clay, 'minecraft:clay'],
   [BLOCK.leaves2, 'minecraft:leaves2'],
   [BLOCK.log2, 'minecraft:log2'],
+  [BLOCK.web, 'minecraft:web'],
 ];
 
 /** The digging registry plus the blocks the placing tests use. */

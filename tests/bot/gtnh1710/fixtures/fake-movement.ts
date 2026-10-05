@@ -23,6 +23,9 @@ import { PASSABLE_BLOCKS, PASSABLE_BY_METADATA } from '../../../../src/bot/gtnh1
  * one edge, by the facing, the open bit and the upper half's hinge bit; BlockFenceGate: a bar
  * 1.5 high across the middle when closed, nothing when open); so do ladders (BlockLadder
  * func_149797_b: a 1/8 slab along the edge by its metadata, 2 south, 3 north, 4 east, 5 west).
+ * Cobwebs have no box (BlockWeb), and a move that starts with the box in one (Entity.isInWeb,
+ * which the move before set: BlockWeb.onEntityCollidedWithBlock) goes a quarter of the way
+ * across and a twentieth up or down (Entity.moveEntity).
  * Not modelled: the step-up assist (no block here is a slab), the "moved too quickly" check
  * (no walk comes near it) and the floating kick (the test server allows flight).
  */
@@ -67,6 +70,7 @@ const NO_BOX: ReadonlySet<string> = new Set([
   'minecraft:fire',
   'minecraft:snow_layer',
   'minecraft:torch',
+  'minecraft:web',
 ]);
 const WATER: ReadonlySet<string> = new Set(['minecraft:water', 'minecraft:flowing_water']);
 
@@ -104,6 +108,8 @@ export class FakeMoveSim {
   readonly falls: Array<{ distance: number; damage: number }> = [];
   /** Position packets the server ignored while it waited for the echo of a placement. */
   ignored = 0;
+  /** Moves made with the box in a cobweb (slowed to a quarter). */
+  webMoves = 0;
   readonly #world: FakeMoveWorld;
   /** Where the server has the player (its feet), and whether it waits for an echo. */
   #last: { x: number; y: number; z: number } | null = null;
@@ -256,6 +262,20 @@ export class FakeMoveSim {
     return id !== 0 && this.#world.blockName(id) === 'minecraft:ladder';
   }
 
+  /** Entity.isInWeb: the box (shrunk by 0.001, as doBlockCollisions takes it) is in a cobweb. */
+  #inWeb(p: { x: number; y: number; z: number }): boolean {
+    const e = 0.001;
+    for (let cx = Math.floor(p.x - HALF + e); cx <= Math.floor(p.x + HALF - e); cx++) {
+      for (let cy = Math.floor(p.y + e); cy <= Math.floor(p.y + HEIGHT - e); cy++) {
+        for (let cz = Math.floor(p.z - HALF + e); cz <= Math.floor(p.z + HALF - e); cz++) {
+          const id = this.#world.blockAt(cx, cy, cz);
+          if (id !== 0 && this.#world.blockName(id) === 'minecraft:web') return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /** Entity.handleWaterMovement: the box shrunk by 0.4 at top and bottom touches water. */
   #inWater(p: { x: number; y: number; z: number }): boolean {
     for (let cx = Math.floor(p.x - HALF + 0.001); cx <= Math.floor(p.x + HALF - 0.001); cx++) {
@@ -295,7 +315,15 @@ export class FakeMoveSim {
       }
     }
     const clearBefore = !this.#colliding(last.x, last.y, last.z);
-    const moved = this.#move(last, p.x - last.x, p.feetY - last.y, p.z - last.z);
+    const web = this.#inWeb(last);
+    if (web) this.webMoves += 1;
+    const slow = (d: number, f: number): number => (web ? d * f : d);
+    const moved = this.#move(
+      last,
+      slow(p.x - last.x, 0.25),
+      slow(p.feetY - last.y, 0.05),
+      slow(p.z - last.z, 0.25),
+    );
     const off = (p.x - moved.x) ** 2 + (p.z - moved.z) ** 2;
     const wrong = off > 0.0625;
     const collidingAfter = this.#colliding(p.x, p.feetY, p.z);

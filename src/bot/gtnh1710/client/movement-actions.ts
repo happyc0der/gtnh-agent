@@ -30,6 +30,7 @@ import {
   type WalkPlan,
   type WalkWorld,
 } from '../walking.ts';
+import { webExit, websAt } from '../web.ts';
 import type { WorldModel } from '../world-model.ts';
 import type { ClientCore } from './core.ts';
 import { delay, ON_GROUND, SETTLE_TICKS, THREAT_STOP, WALK_TICK_MS } from './shared.ts';
@@ -421,6 +422,15 @@ export class MovementActions {
       }
       return;
     }
+    // Standing in a cobweb (a web spider spun it on the player): out of it first, as walks do.
+    if (websAt(world, feet).length > 0 && Math.abs(feet.y - Math.round(feet.y)) < 1e-6) {
+      const why = await this.leaveWeb();
+      if (why !== null && this.#floatingNote !== why) {
+        this.#floatingNote = why;
+        this.#core.log(`at (${feet.x}, ${feet.y.toFixed(2)}, ${feet.z}): ${why}`);
+      }
+      return;
+    }
     const support = checkSupport(world, feet);
     if (support.kind === 'unknown') return;
     // Held up for the server, the feet may still hang a little above the ground, or just past
@@ -474,6 +484,52 @@ export class MovementActions {
       }
       this.#floatingNote = null;
       this.#core.log(`fell ${(feet.y - landY).toFixed(2)} blocks onto the ground at y=${landY}`);
+    } finally {
+      this.#core.walking = false;
+      if (this.#core.phase === 'play') this.startIdle();
+    }
+  }
+
+  /**
+   * Out of the cobweb the player stands in (web.ts webExit): one short level step onto a cell
+   * beside it, as a walk of its own. Null when it is in no web or stepped out; else why it
+   * stays. Every walk on the pathfinder calls it first (path-actions.ts), and idle gravity does.
+   */
+  async leaveWeb(): Promise<string | null> {
+    if (this.#core.phase !== 'play' || this.#core.walking) return null;
+    const world = this.#world.walkWorld();
+    const feet = this.#world.ownPosition;
+    const fence = this.#core.fence().fence;
+    if (world === null || feet === null || fence === null) return null;
+    const exit = webExit(world, fence, feet);
+    if (exit === null) return null;
+    const where = exit.webs.map((w) => `(${w.x}, ${w.y}, ${w.z})`).join(', ');
+    if (!exit.ok) return `in the cobweb at ${where}: ${exit.reason}`;
+    this.#core.walking = true;
+    this.stopIdle();
+    const placements = this.#core.confirmedPositions;
+    try {
+      const yaw = yawTowards(feet, exit.to);
+      this.#core.lastYaw = yaw;
+      for (const step of exit.steps) {
+        if (this.#core.phase !== 'play')
+          return `the step out of the cobweb at ${where}: the connection closed`;
+        if (this.#core.confirmedPositions !== placements) {
+          return `the step out of the cobweb at ${where}: ${this.#core.corrected()}`;
+        }
+        this.#core.send(
+          outbound.playerMove(
+            { x: step.pos.x, feetY: step.pos.y, z: step.pos.z, yaw, pitch: 0 },
+            step.onGround,
+          ),
+        );
+        this.#world.setOwnPosition(step.pos);
+        await delay(WALK_TICK_MS);
+      }
+      this.#core.log(
+        `stepped out of the cobweb at ${where} to (${exit.to.x}, ${exit.to.y}, ${exit.to.z})`,
+      );
+      return null;
     } finally {
       this.#core.walking = false;
       if (this.#core.phase === 'play') this.startIdle();
