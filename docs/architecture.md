@@ -357,6 +357,16 @@ an owner's command waiting is told ("A mob is near: I go offline a moment for it
 goes on after (seen live the same day: a trip into a ravine of mobs gave up after its retreats
 failed, and the bot stood there idle until it was killed).
 
+**Under attack.** Hurt within the last 5 s (`UNDER_ATTACK_MS`) with a hostile near, no hazard
+near and no fight back chosen, System 1 pauses with `UNDER_ATTACK`, a mob pause that play waits
+out offline at once, wherever the bot is: an offline player cannot be hurt, and a walk away is
+slower than a spider (seen live 2026-10-04: a Special Mobs Mother Spider took the bot from 20
+health to 0 while a command waited 2 s to try its walk again and System 1 then set off on a
+38-block retreat on foot). A morning's way out paused so waits offline too. A player that logs
+in dead is respawned before play acts (`connect` waits, bounded, for health above 0): after that
+death, every login found the bot dead at the spot it died, a Random Things soul on the corpse
+counted as an unidentified mob, and it logged off again before its respawn was asked.
+
 **Food** (`src/app/play/food.ts`, `src/domain/food.ts`; approved 2026-10-01). Seen live: food 9/20
 with nothing to eat, its only apple eaten. Below food 6 with no food System 1 retreats or
 pauses, so within a game day or two the agent would starve its own play. GTNH's quest "Sticks
